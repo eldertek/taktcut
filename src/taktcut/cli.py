@@ -13,6 +13,7 @@ from taktcut.mcp_server import serve_stdio
 from taktcut.models import AscCdlParams, RationalFrameRate, RenderProfile
 from taktcut.qa import run_qa_gate
 from taktcut.render import build_render_plan, execute_render_plan
+from taktcut.ui.server import serve_ui
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -65,6 +66,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p_qa.add_argument("--no-faststart-check", action="store_true")
 
     sub.add_parser("mcp", help="Start the taktcut MCP server over stdio")
+
+    p_ui = sub.add_parser("ui", help="Launch the local taktcut Web Studio GUI on 127.0.0.1")
+    p_ui.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Loopback interface to bind (default: 127.0.0.1)",
+    )
+    p_ui.add_argument(
+        "--port",
+        type=int,
+        default=8741,
+        help="TCP port to listen on (0 for ephemeral port, default: 8741)",
+    )
+    p_ui.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not open a web browser tab automatically",
+    )
+    p_ui.add_argument(
+        "--workspace-dir",
+        type=Path,
+        default=None,
+        help="Confined workspace directory for media, timelines, and LUTs (default: cwd)",
+    )
     return parser
 
 
@@ -132,6 +157,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "mcp":
         serve_stdio()
         return 0
+
+    if args.command == "ui":
+        try:
+            return serve_ui(
+                host=args.host,
+                port=args.port,
+                workspace_dir=args.workspace_dir,
+                open_browser=not args.no_open,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+            return 2
 
     return 1
 

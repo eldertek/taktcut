@@ -53,6 +53,7 @@ dev = [
 
 [project.scripts]
 taktcut = "taktcut.cli:main"
+taktcut-ui = "taktcut.ui:main"
 
 [project.urls]
 Homepage = "https://github.com/eldertek/taktcut"
@@ -82,5 +83,5 @@ mypy_path = "src"
 packages = ["taktcut"]
 
 [[tool.mypy.overrides]]
-module = ["opentimelineio"]
+module = ["opentimelineio", "opentimelineio.*"]
 ignore_missing_imports = true

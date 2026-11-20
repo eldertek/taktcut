@@ -564,11 +564,28 @@ def to_otio(doc: TimelineDocument) -> otio.schema.Timeline:
     return tl
 
 
-def export_otio(doc: TimelineDocument, out_path: Path) -> Path:
+def export_otio(
+    doc: TimelineDocument,
+    out_path: Path,
+    *,
+    bundle_missing_only: bool = False,
+) -> Path:
     """Serialize TimelineDocument to .otio or .otioz."""
     tl = to_otio(doc)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    otio.adapters.write_to_file(tl, str(out_path))
+    if out_path.suffix.lower() == ".otioz":
+        from opentimelineio.adapters import file_bundle_utils
+
+        if out_path.exists():
+            out_path.unlink()
+        policy = (
+            file_bundle_utils.MediaReferencePolicy.AllMissing
+            if bundle_missing_only
+            else file_bundle_utils.MediaReferencePolicy.MissingIfNotFile
+        )
+        otio.adapters.write_to_file(tl, str(out_path), media_policy=policy)
+    else:
+        otio.adapters.write_to_file(tl, str(out_path))
     return out_path
 
 

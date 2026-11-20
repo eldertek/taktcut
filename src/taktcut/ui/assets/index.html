@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>taktcut Studio - Post-Production Pipeline &amp; Broadcast QA</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <img class="brand-icon" src="/favicon.svg" alt="taktcut logo" width="32" height="32">
+        <div class="brand-text">
+          <div class="brand-title-row">
+            <span class="brand-name">taktcut</span>
+            <span class="badge badge-indigo">STUDIO</span>
+            <span id="version-badge" class="badge badge-muted mono">v0.1.0</span>
+          </div>
+          <p class="brand-subtitle" data-i18n="app.subtitle">Clean-Room OTIO, ASC CDL &amp; FFmpeg/NVENC Broadcast QA</p>
+        </div>
+      </div>
+
+      <div class="topbar-meta">
+        <div class="workspace-pill" id="workspace-pill" title="">
+          <span class="pill-label" data-i18n="topbar.workspace">WORKSPACE</span>
+          <span class="pill-value mono" id="workspace-path-label">.</span>
+        </div>
+        <div class="status-group">
+          <span id="ffmpeg-status-pill" class="badge badge-muted mono">FFmpeg: ...</span>
+          <div class="lang-switch" role="group" aria-label="Language">
+            <button type="button" id="lang-en" class="lang-btn is-active" data-lang="en">EN</button>
+            <button type="button" id="lang-fr" class="lang-btn" data-lang="fr">FR</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <nav class="workspace-nav" role="tablist" aria-label="Studio Workspaces">
+      <button type="button" role="tab" id="tab-timeline" class="nav-tab is-active" data-tab="timeline" aria-selected="true" aria-controls="panel-timeline">
+        <span class="nav-step mono">01</span>
+        <span data-i18n="tabs.timeline">Timeline &amp; OTIO</span>
+      </button>
+      <button type="button" role="tab" id="tab-color" class="nav-tab" data-tab="color" aria-selected="false" aria-controls="panel-color">
+        <span class="nav-step mono">02</span>
+        <span data-i18n="tabs.color">Color &amp; CDL LUT</span>
+      </button>
+      <button type="button" role="tab" id="tab-render" class="nav-tab" data-tab="render" aria-selected="false" aria-controls="panel-render">
+        <span class="nav-step mono">03</span>
+        <span data-i18n="tabs.render">Render &amp; FFmpeg</span>
+      </button>
+      <button type="button" role="tab" id="tab-qa" class="nav-tab" data-tab="qa" aria-selected="false" aria-controls="panel-qa">
+        <span class="nav-step mono">04</span>
+        <span data-i18n="tabs.qa">Broadcast QA Gate</span>
+      </button>
+    </nav>
+
+    <div id="status-banner" class="status-banner is-hidden" role="status" aria-live="polite">
+      <span id="status-banner-text"></span>
+      <button type="button" id="status-banner-close" class="btn-icon" aria-label="Dismiss">x</button>
+    </div>
+
+    <main class="studio-main">
+      <!-- WORKSPACE 1: TIMELINE INSPECTOR & OTIO CONVERTER -->
+      <section id="panel-timeline" class="workspace-panel" role="tabpanel" aria-labelledby="tab-timeline">
+        <div class="panel-grid panel-grid-controls">
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="timeline.source.title">Timeline Source &amp; Loader</h2>
+              <span class="badge badge-muted mono">.drp / .drt / .fcpxml / .otio</span>
+            </div>
+            <div class="btn-row">
+              <button type="button" id="btn-load-sample-clean" class="btn btn-primary" data-i18n="timeline.btn.sampleClean">Load Sample Timeline</button>
+              <button type="button" id="btn-load-sample-issues" class="btn btn-secondary" data-i18n="timeline.btn.sampleIssues">Load Diagnostic (Issues)</button>
+            </div>
+            <div class="form-row">
+              <label for="timeline-workspace-select" data-i18n="timeline.label.workspaceFile">Workspace Timeline File</label>
+              <div class="input-group">
+                <select id="timeline-workspace-select" class="input-control"></select>
+                <button type="button" id="btn-refresh-workspace" class="btn btn-secondary" data-i18n="common.refresh">Refresh</button>
+                <button type="button" id="btn-inspect-workspace" class="btn btn-secondary" data-i18n="timeline.btn.inspect">Inspect</button>
+              </div>
+            </div>
+            <div class="form-row-two">
+              <div class="form-row">
+                <label for="timeline-file-input" data-i18n="timeline.label.upload">Open Local File (.drp, .drt, .fcpxml, .otio)</label>
+                <input type="file" id="timeline-file-input" class="input-control file-input" accept=".drp,.drt,.fcpxml,.xml,.otio,.otioz">
+              </div>
+              <div class="form-row">
+                <label for="timeline-name-filter" data-i18n="timeline.label.seqName">Sequence Name (Optional for .drp)</label>
+                <input type="text" id="timeline-name-filter" class="input-control mono" placeholder="Main Cut">
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="timeline.export.title">Validation &amp; OTIO Export</h2>
+              <span id="timeline-validation-pill" class="badge badge-muted mono">--</span>
+            </div>
+            <div class="form-row-two">
+              <div class="form-row">
+                <label for="otio-format-select" data-i18n="timeline.label.exportFormat">Export Format</label>
+                <select id="otio-format-select" class="input-control mono">
+                  <option value="otio">.otio (OpenTimelineIO JSON)</option>
+                  <option value="otioz">.otioz (OTIO Bundle Archive)</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label for="otio-workspace-out" data-i18n="timeline.label.savePath">Workspace Output Path</label>
+                <input type="text" id="otio-workspace-out" class="input-control mono" value="exports/timeline.otio">
+              </div>
+            </div>
+            <div class="btn-row">
+              <button type="button" id="btn-timeline-validate" class="btn btn-secondary" data-i18n="timeline.btn.validate">Validate Continuity</button>
+              <button type="button" id="btn-timeline-download" class="btn btn-primary" data-i18n="timeline.btn.downloadOtio">Download .otio / .otioz</button>
+              <button type="button" id="btn-timeline-save" class="btn btn-secondary" data-i18n="timeline.btn.saveWorkspace">Save to Workspace</button>
+            </div>
+            <div id="timeline-export-feedback" class="telemetry-note mono"></div>
+          </div>
+        </div>
+
+        <!-- TELEMETRY STRIP -->
+        <div class="telemetry-strip" id="timeline-telemetry">
+          <div class="metric-tile">
+            <span class="metric-label" data-i18n="timeline.metric.name">Timeline</span>
+            <span class="metric-value" id="tl-meta-name">--</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-label" data-i18n="timeline.metric.format">Format</span>
+            <span class="metric-value mono" id="tl-meta-format">--</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-label" data-i18n="timeline.metric.fps">Rational FPS</span>
+            <span class="metric-value mono" id="tl-meta-fps">--</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-label" data-i18n="timeline.metric.resolution">Raster</span>
+            <span class="metric-value mono" id="tl-meta-res">--</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-label" data-i18n="timeline.metric.duration">Duration</span>
+            <span class="metric-value mono" id="tl-meta-dur">--</span>
+          </div>
+          <div class="metric-tile">
+            <span class="metric-label" data-i18n="timeline.metric.counts">Tracks / Clips</span>
+            <span class="metric-value mono" id="tl-meta-counts">--</span>
+          </div>
+        </div>
+
+        <!-- VISUAL MULTI-TRACK TIMELINE VIEWER -->
+        <div class="card">
+          <div class="card-header">
+            <h2 data-i18n="timeline.viewer.title">Multi-Track Rational Frame Viewer</h2>
+            <div class="viewer-controls">
+              <label class="inline-label" for="timeline-zoom" data-i18n="timeline.viewer.zoom">Zoom</label>
+              <input type="range" id="timeline-zoom" min="1" max="6" step="0.25" value="1">
+              <span id="timeline-zoom-label" class="mono badge badge-muted">1.0x</span>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="timeline-canvas" class="studio-canvas" aria-label="Interactive multi-track timeline"></canvas>
+          </div>
+          <p class="hint-text" data-i18n="timeline.viewer.hint">Click any clip or marker in the timeline canvas to inspect exact integer frames and media metadata.</p>
+        </div>
+
+        <div class="panel-grid panel-grid-details">
+          <div class="card">
+            <div class="card-header">
+              <h3 data-i18n="timeline.inspector.title">Selected Clip / Marker Telemetry</h3>
+            </div>
+            <div id="timeline-selection-detail" class="kv-grid mono"></div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <h3 data-i18n="timeline.issues.title">Validation Issues &amp; Markers</h3>
+            </div>
+            <div id="timeline-issues-list" class="issue-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- WORKSPACE 2: COLOR GRADING & ASC CDL .CUBE STUDIO -->
+      <section id="panel-color" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-color">
+        <div class="panel-grid panel-grid-color">
+          <div class="stack-col">
+            <div class="card">
+              <div class="card-header">
+                <h2 data-i18n="color.preview.title">Rec.709 Before / After CDL Monitor</h2>
+                <div class="viewer-controls">
+                  <label class="inline-label" for="cdl-wipe-slider" data-i18n="color.preview.wipe">Split Wipe</label>
+                  <input type="range" id="cdl-wipe-slider" min="0" max="1" step="0.01" value="0.5">
+                  <span id="cdl-wipe-label" class="mono badge badge-muted">50%</span>
+                </div>
+              </div>
+              <div class="canvas-wrap">
+                <canvas id="color-preview-canvas" class="studio-canvas"></canvas>
+              </div>
+              <div class="preset-bar">
+                <span class="pill-label" data-i18n="color.presets.label">LOOK PRESETS</span>
+                <button type="button" class="btn btn-chip" data-cdl-preset="neutral" data-i18n="color.preset.neutral">Neutral</button>
+                <button type="button" class="btn btn-chip" data-cdl-preset="warm" data-i18n="color.preset.warm">Warm Editorial</button>
+                <button type="button" class="btn btn-chip" data-cdl-preset="teal" data-i18n="color.preset.teal">Teal &amp; Amber</button>
+                <button type="button" class="btn btn-chip" data-cdl-preset="bleach" data-i18n="color.preset.bleach">Crisp Contrast</button>
+                <button type="button" class="btn btn-chip" data-cdl-preset="cool" data-i18n="color.preset.cool">Cool Broadcast</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3 data-i18n="color.scopes.title">RGB Transfer Curves &amp; Rec.709 Vector Shift</h3>
+              </div>
+              <div class="canvas-wrap">
+                <canvas id="color-scope-canvas" class="studio-canvas"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack-col">
+            <div class="card">
+              <div class="card-header">
+                <h2 data-i18n="color.controls.title">ASC CDL v1.2 Primary Wheels</h2>
+                <button type="button" id="btn-cdl-reset" class="btn btn-secondary" data-i18n="color.btn.reset">Reset Neutral</button>
+              </div>
+
+              <div class="cdl-group">
+                <h3 class="cdl-group-title" data-i18n="color.group.slope">Slope (Gain)</h3>
+                <div class="cdl-slider-row">
+                  <label class="ch-r mono" for="slope-r-range">R</label>
+                  <input type="range" id="slope-r-range" min="0.2" max="2.5" step="0.01" value="1.06">
+                  <input type="number" id="slope-r-num" class="input-num mono" min="0.1" max="4" step="0.01" value="1.06">
+                </div>
+                <div class="cdl-slider-row">
+                  <label class="ch-g mono" for="slope-g-range">G</label>
+                  <input type="range" id="slope-g-range" min="0.2" max="2.5" step="0.01" value="1.00">
+                  <input type="number" id="slope-g-num" class="input-num mono" min="0.1" max="4" step="0.01" value="1.00">
+                </div>
+                <div class="cdl-slider-row">
+                  <label class="ch-b mono" for="slope-b-range">B</label>
+                  <input type="range" id="slope-b-range" min="0.2" max="2.5" step="0.01" value="0.94">
+                  <input type="number" id="slope-b-num" class="input-num mono" min="0.1" max="4" step="0.01" value="0.94">
+                </div>
+              </div>
+
+              <div class="cdl-group">
+                <h3 class="cdl-group-title" data-i18n="color.group.offset">Offset (Lift)</h3>
+                <div class="cdl-slider-row">
+                  <label class="ch-r mono" for="offset-r-range">R</label>
+                  <input type="range" id="offset-r-range" min="-0.3" max="0.3" step="0.005" value="0.010">
+                  <input type="number" id="offset-r-num" class="input-num mono" min="-1" max="1" step="0.005" value="0.010">
+                </div>
+                <div class="cdl-slider-row">
+                  <label class="ch-g mono" for="offset-g-range">G</label>
+                  <input type="range" id="offset-g-range" min="-0.3" max="0.3" step="0.005" value="0.000">
+                  <input type="number" id="offset-g-num" class="input-num mono" min="-1" max="1" step="0.005" value="0.000">
+                </div>
+                <div class="cdl-slider-row">
+                  <label class="ch-b mono" for="offset-b-range">B</label>
+                  <input type="range" id="offset-b-range" min="-0.3" max="0.3" step="0.005" value="-0.010">
+                  <input type="number" id="offset-b-num" class="input-num mono" min="-1" max="1" step="0.005" value="-0.010">
+                </div>
+              </div>
+
+              <div class="cdl-group">
+                <h3 class="cdl-group-title" data-i18n="color.group.power">Power (Gamma)</h3>
+                <div class="cdl-slider-row">
+                  <label class="ch-r mono" for="power-r-range">R</label>
+                  <input type="range" id="power-r-range" min="0.2" max="2.5" step="0.01" value="0.96">
+                  <input type="number" id="power-r-num" class="input-num mono" min="0.05" max="4" step="0.01" value="0.96">
+                </div>
+                <div class="cdl-slider-row">
+                  <label class="ch-g mono" for="power-g-range">G</label>
+                  <input type="range" id="power-g-range" min="0.2" max="2.5" step="0.01" value="0.98">
+                  <input type="number" id="power-g-num" class="input-num mono" min="0.05" max="4" step="0.01" value="0.98">
+                </div>
+                <div class="cdl-slider-row">
+                  <label class="ch-b mono" for="power-b-range">B</label>
+                  <input type="range" id="power-b-range" min="0.2" max="2.5" step="0.01" value="1.03">
+                  <input type="number" id="power-b-num" class="input-num mono" min="0.05" max="4" step="0.01" value="1.03">
+                </div>
+              </div>
+
+              <div class="cdl-group">
+                <h3 class="cdl-group-title" data-i18n="color.group.sat">Rec.709 Luma Saturation</h3>
+                <div class="cdl-slider-row">
+                  <label class="mono" for="sat-range">SAT</label>
+                  <input type="range" id="sat-range" min="0" max="2.2" step="0.01" value="1.12">
+                  <input type="number" id="sat-num" class="input-num mono" min="0" max="4" step="0.01" value="1.12">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <label for="cdl-file-input" data-i18n="color.label.importCdl">Import ASC CDL XML (.cdl / .cc)</label>
+                <input type="file" id="cdl-file-input" class="input-control file-input" accept=".cdl,.cc,.ccc,.xml">
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h2 data-i18n="color.bake.title">3D .cube LUT Baker</h2>
+                <span id="cube-info-badge" class="badge badge-muted mono">33x33x33</span>
+              </div>
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="cube-title-input" data-i18n="color.label.lutTitle">LUT Title</label>
+                  <input type="text" id="cube-title-input" class="input-control mono" value="taktcut_editorial_look">
+                </div>
+                <div class="form-row">
+                  <label for="cube-size-select" data-i18n="color.label.gridSize">3D Grid Size</label>
+                  <select id="cube-size-select" class="input-control mono">
+                    <option value="17">17 (4,913 pts)</option>
+                    <option value="33" selected>33 (35,937 pts)</option>
+                    <option value="65">65 (274,625 pts)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <label for="cube-out-path" data-i18n="color.label.workspaceOut">Optional Workspace Save Path (.cube)</label>
+                <input type="text" id="cube-out-path" class="input-control mono" placeholder="luts/editorial_look.cube">
+              </div>
+              <div class="btn-row">
+                <button type="button" id="btn-bake-cube" class="btn btn-primary" data-i18n="color.btn.bake">Bake &amp; Validate .cube</button>
+                <button type="button" id="btn-download-cube" class="btn btn-secondary" data-i18n="color.btn.download">Download .cube</button>
+                <button type="button" id="btn-send-lut-render" class="btn btn-secondary" data-i18n="color.btn.sendRender">Use in Render Plan</button>
+              </div>
+              <pre id="cube-preview-output" class="code-box mono" aria-live="polite"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- WORKSPACE 3: RENDER PLAN & FFMPEG / NVENC BUILDER -->
+      <section id="panel-render" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-render">
+        <div class="card">
+          <div class="card-header">
+            <h2 data-i18n="render.caps.title">Host FFmpeg &amp; Hardware Encoder Probe</h2>
+            <button type="button" id="btn-verify-nvenc" class="btn btn-secondary" data-i18n="render.btn.verifyGpu">Verify GPU Runtime</button>
+          </div>
+          <div id="render-caps-strip" class="badge-strip mono"></div>
+        </div>
+
+        <div class="panel-grid panel-grid-controls">
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="render.config.title">Deterministic Render Plan Configuration</h2>
+              <button type="button" id="btn-generate-sample-clip" class="btn btn-secondary" data-i18n="render.btn.genSample">Generate Test Clip</button>
+            </div>
+
+            <div class="form-row">
+              <label for="render-input-select" data-i18n="render.label.pickMedia">Workspace Media Shortcut</label>
+              <select id="render-input-select" class="input-control mono"></select>
+            </div>
+
+            <div class="form-row-two">
+              <div class="form-row">
+                <label for="render-input-path" data-i18n="render.label.inputPath">Input Media Path (Workspace)</label>
+                <input type="text" id="render-input-path" class="input-control mono" value=".taktcut-samples/sample_rec709.mp4">
+              </div>
+              <div class="form-row">
+                <label for="render-output-path" data-i18n="render.label.outputPath">Output Media Path (Workspace)</label>
+                <input type="text" id="render-output-path" class="input-control mono" value="renders/delivery_web.mp4">
+              </div>
+            </div>
+
+            <div class="form-row-two">
+              <div class="form-row">
+                <label for="render-profile" data-i18n="render.label.profile">Delivery Profile</label>
+                <select id="render-profile" class="input-control mono">
+                  <option value="web_h264">web_h264 (H.264 + AAC + faststart)</option>
+                  <option value="master_hevc">master_hevc (HEVC + AAC + faststart)</option>
+                  <option value="prores_hq">prores_hq (ProRes 422 HQ + 24-bit PCM)</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label for="render-fps" data-i18n="render.label.fps">Target Rational FPS</label>
+                <input type="text" id="render-fps" class="input-control mono" value="25" placeholder="25 or 24000/1001">
+              </div>
+            </div>
+
+            <div class="form-row-two">
+              <div class="form-row">
+                <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
+                <input type="text" id="render-lut-path" class="input-control mono" placeholder="luts/editorial_look.cube">
+              </div>
+              <div class="form-row">
+                <label for="render-lufs" data-i18n="render.label.lufs">Target Loudness (LUFS, optional)</label>
+                <input type="number" id="render-lufs" class="input-control mono" step="0.5" value="-14.0" placeholder="-14.0">
+              </div>
+            </div>
+
+            <div class="checkbox-row">
+              <label class="check-label">
+                <input type="checkbox" id="render-use-studio-cdl">
+                <span data-i18n="render.check.studioCdl">Bake &amp; apply active Studio CDL grade when LUT path is empty</span>
+              </label>
+              <label class="check-label">
+                <input type="checkbox" id="render-prefer-hw" checked>
+                <span data-i18n="render.check.preferHw">Prefer GPU NVENC encoder (fallback to CPU libx264/libx265)</span>
+              </label>
+            </div>
+
+            <div class="btn-row">
+              <button type="button" id="btn-build-render-plan" class="btn btn-primary" data-i18n="render.btn.buildPlan">Build Plan (Dry-Run)</button>
+              <button type="button" id="btn-execute-render" class="btn btn-secondary" data-i18n="render.btn.execute">Execute Render</button>
+              <button type="button" id="btn-copy-ffmpeg-cmd" class="btn btn-secondary" data-i18n="render.btn.copyCmd">Copy Command</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2 data-i18n="render.plan.title">Compiled Render Plan &amp; Execution Telemetry</h2>
+              <span id="render-encoder-badge" class="badge badge-muted mono">--</span>
+            </div>
+            <div id="render-plan-kv" class="kv-grid mono"></div>
+            <h3 class="subhead" data-i18n="render.plan.argv">FFmpeg Command Line</h3>
+            <pre id="render-argv-output" class="code-box mono"></pre>
+            <div id="render-exec-result" class="exec-result is-hidden">
+              <div class="card-header">
+                <h3 data-i18n="render.exec.title">Execution Result</h3>
+                <button type="button" id="btn-send-render-qa" class="btn btn-primary" data-i18n="render.btn.sendQa">Run QA Gate on Output</button>
+              </div>
+              <pre id="render-exec-output" class="code-box mono"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- WORKSPACE 4: BROADCAST QA GATE -->
+      <section id="panel-qa" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-qa">
+        <div class="card">
+          <div class="card-header">
+            <h2 data-i18n="qa.config.title">Broadcast QA Gate (ffprobe + EBU R128 + Faststart + Frames)</h2>
+            <span id="qa-overall-badge" class="badge badge-muted mono">READY</span>
+          </div>
+          <div class="form-row-two">
+            <div class="form-row">
+              <label for="qa-media-select" data-i18n="qa.label.pickMedia">Workspace Media File</label>
+              <select id="qa-media-select" class="input-control mono"></select>
+            </div>
+            <div class="form-row">
+              <label for="qa-media-path" data-i18n="qa.label.mediaPath">Media Path (Workspace)</label>
+              <input type="text" id="qa-media-path" class="input-control mono" value=".taktcut-samples/sample_rec709.mp4">
+            </div>
+          </div>
+          <div class="form-row-three">
+            <div class="form-row">
+              <label for="qa-target-lufs" data-i18n="qa.label.targetLufs">Target LUFS</label>
+              <input type="number" id="qa-target-lufs" class="input-control mono" step="0.5" value="-14.0">
+            </div>
+            <div class="form-row">
+              <label for="qa-tolerance-lu" data-i18n="qa.label.tolerance">Tolerance (LU)</label>
+              <input type="number" id="qa-tolerance-lu" class="input-control mono" step="0.5" value="1.5">
+            </div>
+            <div class="form-row">
+              <label for="qa-max-tp" data-i18n="qa.label.maxTp">Max True Peak (dBTP)</label>
+              <input type="number" id="qa-max-tp" class="input-control mono" step="0.1" value="-1.0">
+            </div>
+          </div>
+          <div class="checkbox-row">
+            <label class="check-label">
+              <input type="checkbox" id="qa-require-faststart" checked>
+              <span data-i18n="qa.check.faststart">Require MP4 moov atom before mdat (+faststart)</span>
+            </label>
+          </div>
+          <div class="btn-row">
+            <button type="button" id="btn-run-qa" class="btn btn-primary" data-i18n="qa.btn.run">Run Broadcast QA Gate</button>
+            <button type="button" id="btn-qa-gen-sample" class="btn btn-secondary" data-i18n="qa.btn.genSample">Generate Sample Clip</button>
+          </div>
+        </div>
+
+        <div id="qa-failures-box" class="card is-hidden">
+          <div class="card-header">
+            <h3 data-i18n="qa.failures.title">Detected Gate Failures</h3>
+          </div>
+          <ul id="qa-failures-list" class="issue-list"></ul>
+        </div>
+
+        <div class="panel-grid panel-grid-qa">
+          <div class="card">
+            <div class="card-header">
+              <h3 data-i18n="qa.probe.title">Container &amp; Stream Probe</h3>
+              <span id="qa-cfr-badge" class="badge badge-muted mono">--</span>
+            </div>
+            <div id="qa-probe-kv" class="kv-grid mono"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 data-i18n="qa.loudness.title">EBU R128 Loudness &amp; True Peak</h3>
+              <span id="qa-loudness-badge" class="badge badge-muted mono">--</span>
+            </div>
+            <div id="qa-loudness-kv" class="kv-grid mono"></div>
+            <div class="canvas-wrap">
+              <canvas id="qa-loudness-canvas" class="studio-canvas"></canvas>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 data-i18n="qa.frames.title">Frame Signalstats (Start / Mid / End)</h3>
+            </div>
+            <div id="qa-frames-list" class="kv-grid mono"></div>
+            <div class="canvas-wrap">
+              <canvas id="qa-frames-canvas" class="studio-canvas"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
