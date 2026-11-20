@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "taktcut"
+version = "0.1.0"
+description = "Clean-room OpenTimelineIO, DaVinci Resolve project/timeline interchange, ASC CDL/.cube color, and deterministic FFmpeg/NVENC broadcast QA toolkit with MCP server."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+  { name = "Eclipse Technology", email = "andre.lauret@eclipse-technology.eu" },
+]
+keywords = [
+  "davinci-resolve",
+  "opentimelineio",
+  "ffmpeg",
+  "nvenc",
+  "color-grading",
+  "asc-cdl",
+  "cube-lut",
+  "ebur128",
+  "mcp",
+  "broadcast",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Video",
+  "Typing :: Typed",
+]
+dependencies = [
+  "defusedxml>=0.7.1",
+  "mcp>=2.0.0",
+  "opentimelineio>=0.17.0",
+  "pydantic>=2.7.0",
+  "zstandard>=0.23.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.11.0",
+  "pytest>=8.0.0",
+  "ruff>=0.6.0",
+  "types-defusedxml>=0.7.0",
+]
+
+[project.scripts]
+taktcut = "taktcut.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/eldertek/taktcut"
+Repository = "https://github.com/eldertek/taktcut"
+Issues = "https://github.com/eldertek/taktcut/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/taktcut"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+mypy_path = "src"
+packages = ["taktcut"]
+
+[[tool.mypy.overrides]]
+module = ["opentimelineio"]
+ignore_missing_imports = true
