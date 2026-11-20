@@ -40,7 +40,7 @@ taktcut ui --desktop --workspace-dir /path/to/your/project
 # (standalone entrypoint: taktcut-ui --desktop)
 ```
 
-Your workstation opens at `http://127.0.0.1:8741/`. The static ESM frontend (`src/taktcut/ui/assets/`) also supports zero-backend static web deployment (for example `eclipse-technology.eu/demos/taktcut/`) via `window.__TAKTCUT_CONFIG__` and the client-side demo adapter.
+Your workstation opens at `http://127.0.0.1:8741/`. The static ESM frontend (`src/taktcut/ui/assets/`) also supports zero-backend static web deployment (live demo at [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)) via `window.__TAKTCUT_CONFIG__` and the client-side demo adapter.
 
 ## Clean-Room & Security Design
 

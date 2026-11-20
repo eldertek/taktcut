@@ -40,7 +40,7 @@ taktcut ui --desktop --workspace-dir /chemin/vers/votre/projet
 # (ou via la commande dediee : taktcut-ui --desktop)
 ```
 
-Le studio s'ouvre sur `http://127.0.0.1:8741/`. Utilisez le selecteur **EN / FR** en haut a droite pour basculer toute l'interface en francais. Les ressources statiques ESM (`src/taktcut/ui/assets/`) peuvent aussi etre deployees sur un hebergement web statique (ex. `eclipse-technology.eu/demos/taktcut/`) grace a `window.__TAKTCUT_CONFIG__` et l'adaptateur client.
+Le studio s'ouvre sur `http://127.0.0.1:8741/`. Utilisez le selecteur **EN / FR** en haut a droite pour basculer toute l'interface en francais. Les ressources statiques ESM (`src/taktcut/ui/assets/`) peuvent aussi etre deployees sur un hebergement web statique (demo en ligne sur [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)) grace a `window.__TAKTCUT_CONFIG__` et l'adaptateur client.
 
 ## Principes Clean-Room & Securite
 

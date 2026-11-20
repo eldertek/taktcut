@@ -29,7 +29,7 @@ In the top menu bar, switch between **EN** and **FR** at any time, inspect the a
 
 ### Static Web Deployment Mode (Eclipse Demo)
 
-All frontend assets in `src/taktcut/ui/assets/` use relative module URLs (`./`) and support `window.__TAKTCUT_CONFIG__` (`apiBase`, `mode`: `"auto" | "server" | "static-demo"`, `adapter`). When hosted statically without a Python backend (such as `eclipse-technology.eu/demos/taktcut/`), the studio automatically activates its client-side demo engine for timeline inspection, `.otio` export, ASC CDL grading, `.cube` baking, and FFmpeg dry-run command generation.
+All frontend assets in `src/taktcut/ui/assets/` use relative module URLs (`./`) and support `window.__TAKTCUT_CONFIG__` (`apiBase`, `mode`: `"auto" | "server" | "static-demo"`, `adapter`). When hosted statically without a Python backend (such as [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)), the studio automatically activates its client-side demo engine for timeline inspection, `.otio` export, ASC CDL grading, `.cube` baking, and FFmpeg dry-run command generation.
 
 ---
 

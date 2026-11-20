@@ -29,7 +29,7 @@ En haut a droite, **EN / FR** bascule toute l'interface entre anglais et francai
 
 ### Deploiement Web Statique (Demo Eclipse)
 
-Les ressources front-end (`src/taktcut/ui/assets/`) utilisent des chemins relatifs (`./`) et lisent `window.__TAKTCUT_CONFIG__` (`apiBase`, `mode`: `"auto" | "server" | "static-demo"`, `adapter`). Lors d'un deploiement statique sans backend Python (ex. `eclipse-technology.eu/demos/taktcut/`), l'application active automatiquement son moteur client de demonstration (inspection timeline, export `.otio`, etalonnage ASC CDL, generation `.cube` et plan FFmpeg dry-run).
+Les ressources front-end (`src/taktcut/ui/assets/`) utilisent des chemins relatifs (`./`) et lisent `window.__TAKTCUT_CONFIG__` (`apiBase`, `mode`: `"auto" | "server" | "static-demo"`, `adapter`). Lors d'un deploiement statique sans backend Python (ex. [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)), l'application active automatiquement son moteur client de demonstration (inspection timeline, export `.otio`, etalonnage ASC CDL, generation `.cube` et plan FFmpeg dry-run).
 
 ---
 

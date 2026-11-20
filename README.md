@@ -4,6 +4,8 @@ Clean-room OpenTimelineIO interchange, ASC CDL / `.cube` color pipeline, determi
 
 `taktcut` inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via FFmpeg/NVENC, and runs an EBU R128 + faststart QA gate from the **Web Studio GUI**, **CLI**, or **MCP** without opening a desktop NLE.
 
+Live browser demo: [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)
+
 ![taktcut Web Studio GUI](docs/assets/taktcut-ui-desktop.png)
 
 ## Why taktcut
@@ -55,7 +57,7 @@ Four docked workstation pages:
 3. **Deliver**: Host NVENC/CPU encoder probe, deterministic Rec.709 FFmpeg render planning & execution, studio LUT linking, and EBU R128 loudnorm.
 4. **Broadcast QA**: `ffprobe` CFR/faststart audit, EBU R128 LUFS/dBTP gauges, and start/mid/end frame signalstats verification.
 
-Static frontend assets (`src/taktcut/ui/assets/`) also run standalone on static web hosting (via relative imports, `window.__TAKTCUT_CONFIG__`, and a client-side demo adapter).
+Static frontend assets (`src/taktcut/ui/assets/`) also run standalone on static web hosting (via relative imports, `window.__TAKTCUT_CONFIG__`, and a client-side demo adapter), as hosted at [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/).
 
 See the full visual walkthrough in [Web Studio & Desktop Guide (EN)](docs/gui-guide.md) | [Guide Interface Graphique (FR)](docs/fr/gui-guide.md).
 
