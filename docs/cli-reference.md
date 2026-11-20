@@ -150,17 +150,18 @@ taktcut qa delivery.mp4 --lufs -14 --max-tp -1.0 --tolerance 1.5
 
 ## `taktcut ui` and `taktcut-ui`
 
-Start the local Web Studio GUI over `ThreadingHTTPServer` bound strictly to loopback.
+Start the local DaVinci-style Studio GUI over `ThreadingHTTPServer` bound strictly to loopback.
 
 ```bash
-taktcut ui [--host HOST] [--port PORT] [--no-open] [--workspace-dir DIR]
-taktcut-ui [--host HOST] [--port PORT] [--no-open] [--workspace-dir DIR]
+taktcut ui [--host HOST] [--port PORT] [--no-open] [--desktop] [--workspace-dir DIR]
+taktcut-ui [--host HOST] [--port PORT] [--no-open] [--desktop] [--workspace-dir DIR]
 ```
 
 Flags and defaults:
 - `--host`: Loopback bind host (`127.0.0.1`, `localhost`, or `::1`; default `127.0.0.1`). Non-loopback hosts are rejected.
 - `--port`: TCP port (`0` selects an ephemeral OS port; default `8741`).
-- `--no-open`: Do not open the default web browser automatically.
+- `--no-open`: Do not open a browser or desktop window automatically.
+- `--desktop`: Open as a frameless desktop application window (Edge/Chrome `--app` or `pywebview` with browser fallback).
 - `--workspace-dir`: Confined workspace root directory (default: current working directory).
 
 ---

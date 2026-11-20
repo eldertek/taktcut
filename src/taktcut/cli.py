@@ -82,7 +82,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument(
         "--no-open",
         action="store_true",
-        help="Do not open a web browser tab automatically",
+        help="Do not open a browser or desktop window automatically",
+    )
+    p_ui.add_argument(
+        "--desktop",
+        action="store_true",
+        help="Open as a frameless desktop application window (Edge/Chrome --app or pywebview)",
     )
     p_ui.add_argument(
         "--workspace-dir",
@@ -165,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
                 port=args.port,
                 workspace_dir=args.workspace_dir,
                 open_browser=not args.no_open,
+                desktop=args.desktop,
             )
         except ValueError as exc:
             parser.error(str(exc))

@@ -29,19 +29,18 @@ Requirements:
 - Python 3.10+
 - `ffmpeg` and `ffprobe` available on `PATH` (optional for timeline/LUT workflows, required for Render & Broadcast QA Gate).
 
-### 2. Launch the Visual Studio GUI
+### 2. Launch the DaVinci-Style Studio GUI
 
 ```bash
+# Launch in your default web browser:
 taktcut ui --workspace-dir /path/to/your/project
+
+# Or launch as a standalone frameless desktop application window:
+taktcut ui --desktop --workspace-dir /path/to/your/project
+# (standalone entrypoint: taktcut-ui --desktop)
 ```
 
-Or using the standalone entrypoint:
-
-```bash
-taktcut-ui --workspace-dir /path/to/your/project
-```
-
-Your browser opens automatically at `http://127.0.0.1:8741/`. Click **Load Sample Timeline** or pick a timeline file from your workspace to inspect tracks, validate frame continuity, grade with ASC CDL sliders, build FFmpeg/NVENC commands, and verify broadcast QA metrics.
+Your workstation opens at `http://127.0.0.1:8741/`. The static ESM frontend (`src/taktcut/ui/assets/`) also supports zero-backend static web deployment (for example `eclipse-technology.eu/demos/taktcut/`) via `window.__TAKTCUT_CONFIG__` and the client-side demo adapter.
 
 ## Clean-Room & Security Design
 

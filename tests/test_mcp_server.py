@@ -62,18 +62,33 @@ def test_mcp_stdio_jsonrpc_handshake() -> None:
         {"jsonrpc": "2.0", "method": "notifications/initialized"}
     )
     list_req = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-    stdin_payload = f"{init_req}\n{initialized_notif}\n{list_req}\n"
-
-    proc = subprocess.run(
+    with subprocess.Popen(
         [sys.executable, "-m", "taktcut.cli", "mcp"],
-        input=stdin_payload,
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=10,
-        check=False,
-    )
-    assert proc.returncode == 0, proc.stderr
-    responses = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    ) as proc:
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+
+        proc.stdin.write(init_req + "\n")
+        proc.stdin.flush()
+        init_line = proc.stdout.readline()
+        assert init_line, proc.stderr.read()
+
+        proc.stdin.write(initialized_notif + "\n" + list_req + "\n")
+        proc.stdin.flush()
+        list_line = proc.stdout.readline()
+        assert list_line, proc.stderr.read()
+
+        proc.stdin.close()
+        stderr_out = proc.stderr.read()
+        ret = proc.wait(timeout=10)
+        assert ret == 0, stderr_out
+        responses = [json.loads(init_line), json.loads(list_line)]
+
     ids = {msg.get("id"): msg for msg in responses}
     assert 1 in ids
     assert 2 in ids

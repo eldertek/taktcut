@@ -29,19 +29,18 @@ Prerequis :
 - Python 3.10+
 - `ffmpeg` et `ffprobe` dans le `PATH` (requis pour le Rendu et le Portail QA Broadcast ; optionnel pour l'inspection de timelines et les LUT `.cube`).
 
-### 2. Lancer l'Interface Graphique Locale
+### 2. Lancer l'Interface Graphique Style NLE
 
 ```bash
+# Ouvrir dans votre navigateur par defaut :
 taktcut ui --workspace-dir /chemin/vers/votre/projet
+
+# Ou ouvrir en fenetre bureau autonome sans barre navigateur :
+taktcut ui --desktop --workspace-dir /chemin/vers/votre/projet
+# (ou via la commande dediee : taktcut-ui --desktop)
 ```
 
-Ou via le raccourci dedie :
-
-```bash
-taktcut-ui --workspace-dir /chemin/vers/votre/projet
-```
-
-Votre navigateur s'ouvre automatiquement sur `http://127.0.0.1:8741/`. Utilisez le selecteur **EN / FR** en haut a droite pour basculer toute l'interface en francais.
+Le studio s'ouvre sur `http://127.0.0.1:8741/`. Utilisez le selecteur **EN / FR** en haut a droite pour basculer toute l'interface en francais. Les ressources statiques ESM (`src/taktcut/ui/assets/`) peuvent aussi etre deployees sur un hebergement web statique (ex. `eclipse-technology.eu/demos/taktcut/`) grace a `window.__TAKTCUT_CONFIG__` et l'adaptateur client.
 
 ## Principes Clean-Room & Securite
 

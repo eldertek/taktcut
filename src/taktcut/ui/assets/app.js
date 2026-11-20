@@ -3,9 +3,15 @@ import {
   drawColorScopeCanvas,
   drawFramesCanvas,
   drawLoudnessCanvas,
-  drawTimelineCanvas
-} from "/canvas.js";
-import { TRANSLATIONS } from "/i18n.js";
+  drawProgramMonitorCanvas,
+  drawTimelineCanvas,
+  framesToSmpte
+} from "./canvas.js";
+import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
+import { createApiClient } from "./demo_adapter.js";
+import { TRANSLATIONS } from "./i18n.js";
+
+const api = createApiClient();
 
 const CDL_PRESETS = {
   neutral: {
@@ -46,8 +52,11 @@ const state = {
   timelineDoc: null,
   timelineValidation: null,
   timelineHitboxes: [],
+  timelineXToFrame: null,
   timelineSelected: null,
   timelineZoom: 1,
+  playheadFrame: 25,
+  timelineMaxFrame: 500,
   cdl: {
     slope: [1.06, 1.0, 0.94],
     offset: [0.01, 0.0, -0.01],
@@ -99,29 +108,6 @@ function renderKv(container, pairs) {
   container.replaceChildren(...nodes);
 }
 
-async function apiJson(url, options = {}) {
-  const init = {
-    method: options.method || "GET",
-    headers: { Accept: "application/json" }
-  };
-  if (options.body !== undefined) {
-    init.headers["Content-Type"] = "application/json";
-    init.body = JSON.stringify(options.body);
-  }
-  const resp = await fetch(url, init);
-  let data = null;
-  try {
-    data = await resp.json();
-  } catch {
-    data = null;
-  }
-  if (!resp.ok) {
-    const errMsg = data && data.error ? data.error : `HTTP ${resp.status}`;
-    throw new Error(errMsg);
-  }
-  return data;
-}
-
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -163,7 +149,7 @@ function setLanguage(lang) {
 
 function switchTab(tabName) {
   state.activeTab = tabName;
-  for (const btn of document.querySelectorAll(".nav-tab")) {
+  for (const btn of document.querySelectorAll(".page-tab")) {
     const isMatch = btn.getAttribute("data-tab") === tabName;
     btn.classList.toggle("is-active", isMatch);
     btn.setAttribute("aria-selected", isMatch ? "true" : "false");
@@ -175,24 +161,40 @@ function switchTab(tabName) {
   window.requestAnimationFrame(redrawActiveCanvases);
 }
 
+function updatePlayheadReadout() {
+  const doc = state.timelineDoc;
+  const fpsNum = doc ? doc.fps.num : 25;
+  const fpsDen = doc ? doc.fps.den : 1;
+  byId("program-tc").textContent = framesToSmpte(state.playheadFrame, fpsNum, fpsDen);
+  byId("program-frame-counter").textContent = `${state.playheadFrame}f / ${state.timelineMaxFrame}f`;
+  byId("playhead-slider").max = String(Math.max(1, state.timelineMaxFrame));
+  byId("playhead-slider").value = String(state.playheadFrame);
+}
+
 function redrawActiveCanvases() {
   if (state.activeTab === "timeline") {
-    state.timelineHitboxes = drawTimelineCanvas(
+    drawProgramMonitorCanvas(byId("timeline-program-canvas"), state.timelineDoc, state.playheadFrame, state.cdl);
+    const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
       state.timelineDoc,
       state.timelineValidation,
-      { zoom: state.timelineZoom, selected: state.timelineSelected }
+      { zoom: state.timelineZoom, selected: state.timelineSelected, playheadFrame: state.playheadFrame }
     );
+    state.timelineHitboxes = tlDraw.hitboxes;
+    state.timelineXToFrame = tlDraw.xToFrame;
   } else if (state.activeTab === "color") {
     drawColorPreviewCanvas(byId("color-preview-canvas"), state.cdl, state.wipeRatio);
     drawColorScopeCanvas(byId("color-scope-canvas"), state.cdl);
+    drawColorWheel(byId("wheel-offset"), "offset", state.cdl.offset);
+    drawColorWheel(byId("wheel-power"), "power", state.cdl.power);
+    drawColorWheel(byId("wheel-slope"), "slope", state.cdl.slope);
   } else if (state.activeTab === "qa" && state.lastQaReport) {
     drawLoudnessCanvas(byId("qa-loudness-canvas"), state.lastQaReport.loudness);
     drawFramesCanvas(byId("qa-frames-canvas"), state.lastQaReport.frame_samples);
   }
 }
 
-/* WORKSPACE 1: TIMELINE */
+/* PAGE 1: TIMELINE */
 function setTimelineData(payload) {
   state.timelineDoc = payload.document;
   state.timelineValidation = payload.validation;
@@ -200,6 +202,15 @@ function setTimelineData(payload) {
 
   const doc = state.timelineDoc;
   if (doc) {
+    let maxEnd = doc.start_frame || 0;
+    for (const trk of doc.tracks || []) {
+      for (const c of trk.clips || []) {
+        if (c.start_frame + c.duration_frames > maxEnd) maxEnd = c.start_frame + c.duration_frames;
+      }
+    }
+    state.timelineMaxFrame = Math.max(1, maxEnd);
+    state.playheadFrame = Math.min(state.playheadFrame, state.timelineMaxFrame);
+
     const cleanStem = (doc.name || "timeline").replace(/[^A-Za-z0-9._-]/g, "_");
     const fmt = byId("otio-format-select").value;
     byId("otio-workspace-out").value = `exports/${cleanStem}.${fmt}`;
@@ -213,6 +224,8 @@ function renderTimelineUI() {
   const pill = byId("timeline-validation-pill");
 
   if (!doc) {
+    byId("topbar-project-name").textContent = "taktcut";
+    byId("topbar-seq-meta").textContent = "--";
     byId("tl-meta-name").textContent = "--";
     byId("tl-meta-format").textContent = "--";
     byId("tl-meta-fps").textContent = "--";
@@ -220,7 +233,7 @@ function renderTimelineUI() {
     byId("tl-meta-dur").textContent = "--";
     byId("tl-meta-counts").textContent = "--";
     pill.textContent = "--";
-    pill.className = "badge badge-muted mono";
+    pill.className = "nle-tag mono";
     byId("timeline-selection-detail").replaceChildren(
       dom("span", "kv-val", t("timeline.empty.selection"))
     );
@@ -243,6 +256,9 @@ function renderTimelineUI() {
   const durSec = (durFrames / fpsFloat).toFixed(2);
   const fpsStr = doc.fps.den === 1 ? String(doc.fps.num) : `${doc.fps.num}/${doc.fps.den}`;
 
+  byId("topbar-project-name").textContent = doc.name;
+  byId("topbar-seq-meta").textContent = `${fpsStr}fps | ${doc.width}x${doc.height} | ${durFrames}f`;
+
   byId("tl-meta-name").textContent = doc.name;
   byId("tl-meta-format").textContent = doc.source_format.toUpperCase();
   byId("tl-meta-fps").textContent = `${fpsStr} (${fpsFloat.toFixed(3)})`;
@@ -254,9 +270,10 @@ function renderTimelineUI() {
     pill.textContent = val.valid
       ? `${t("common.pass")} (0 issues)`
       : `${t("common.fail")} (${val.issues.length} issues)`;
-    pill.className = val.valid ? "badge badge-pass mono" : "badge badge-fail mono";
+    pill.className = val.valid ? "nle-tag is-pass mono" : "nle-tag is-fail mono";
   }
 
+  updatePlayheadReadout();
   renderTimelineSelection();
   renderTimelineIssues();
   if (state.activeTab === "timeline") {
@@ -282,13 +299,9 @@ function renderTimelineSelection() {
       ["Type", `Clip (${c.media_type.toUpperCase()})`],
       ["Name", c.name],
       ["Track", `${c.media_type === "audio" ? "A" : "V"}${c.track_index}`],
-      ["Start Frame", `${c.start_frame}f`],
-      ["Duration", `${c.duration_frames}f`],
-      ["End Exclusive", `${c.start_frame + c.duration_frames}f`],
-      ["Source In", `${c.source_in_frame}f`],
-      ["Source FPS", srcFps],
-      ["Source Path", c.source_path || t("common.none")],
-      ["Enabled", String(c.enabled)]
+      ["Range", `${c.start_frame}f .. ${c.start_frame + c.duration_frames}f (${c.duration_frames}f)`],
+      ["Source In", `${c.source_in_frame}f (${srcFps})`],
+      ["Source Path", c.source_path || t("common.none")]
     ]);
     return;
   }
@@ -296,8 +309,7 @@ function renderTimelineSelection() {
   renderKv(box, [
     ["Type", "Marker"],
     ["Name", mk.name],
-    ["Frame", `${mk.frame}f`],
-    ["Duration", `${mk.duration_frames}f`],
+    ["Frame", `${mk.frame}f (${mk.duration_frames}f)`],
     ["Color", mk.color],
     ["Note", mk.note || t("common.none")]
   ]);
@@ -313,7 +325,7 @@ function renderTimelineIssues() {
     for (const issue of val.issues) {
       const li = dom("div", `issue-item ${issue.kind === "gap" ? "is-warn" : "is-error"}`);
       const head = dom("div", "issue-head");
-      const badge = dom("span", `badge mono ${issue.kind === "gap" ? "badge-warn" : "badge-fail"}`, issue.kind.toUpperCase());
+      const badge = dom("span", `nle-tag mono ${issue.kind === "gap" ? "is-warn" : "is-fail"}`, issue.kind.toUpperCase());
       const span = dom("span", "mono", `${issue.track_kind.toUpperCase()}${issue.track_index} [${issue.start_frame}..${issue.end_frame}f]`);
       head.replaceChildren(badge, span);
       li.replaceChildren(head, dom("span", "", issue.detail));
@@ -328,7 +340,7 @@ function renderTimelineIssues() {
       const li = dom("div", "issue-item");
       const head = dom("div", "issue-head");
       head.replaceChildren(
-        dom("span", "badge badge-indigo mono", `MARKER @ ${mk.frame}f`),
+        dom("span", "nle-tag is-blue mono", `MARKER @ ${mk.frame}f`),
         dom("span", "mono", mk.color)
       );
       li.replaceChildren(head, dom("span", "", `${mk.name}${mk.note ? " - " + mk.note : ""}`));
@@ -339,7 +351,7 @@ function renderTimelineIssues() {
   if (doc && doc.lut_refs && doc.lut_refs.length > 0) {
     const li = dom("div", "issue-item");
     li.replaceChildren(
-      dom("span", "badge badge-muted mono", "LUT REFS"),
+      dom("span", "nle-tag mono", "LUT REFS"),
       dom("span", "mono", doc.lut_refs.join(", "))
     );
     items.push(li);
@@ -350,7 +362,7 @@ function renderTimelineIssues() {
 
 async function loadSampleTimeline(preset) {
   try {
-    const data = await apiJson(`/api/sample?preset=${encodeURIComponent(preset)}`);
+    const data = await api.getSampleTimeline(preset);
     setTimelineData(data);
     byId("timeline-export-feedback").textContent = "";
     hideBanner();
@@ -359,7 +371,7 @@ async function loadSampleTimeline(preset) {
   }
 }
 
-/* WORKSPACE 2: COLOR CDL & CUBE */
+/* PAGE 2: COLOR WHEELS, BARS, SCOPES & .CUBE */
 const CDL_BINDINGS = [
   { group: "slope", idx: 0, range: "slope-r-range", num: "slope-r-num", decimals: 2 },
   { group: "slope", idx: 1, range: "slope-g-range", num: "slope-g-num", decimals: 2 },
@@ -380,7 +392,7 @@ function syncCdlInputsFromState() {
   }
   byId("sat-range").value = String(state.cdl.saturation);
   byId("sat-num").value = state.cdl.saturation.toFixed(2);
-  if (state.activeTab === "color") {
+  if (state.activeTab === "color" || state.activeTab === "timeline") {
     redrawActiveCanvases();
   }
 }
@@ -404,6 +416,23 @@ function wireCdlInputs() {
         rangeEl.value = String(val);
         redrawActiveCanvases();
       }
+    });
+  }
+
+  for (const group of ["offset", "power", "slope"]) {
+    const wheelCanvas = byId(`wheel-${group}`);
+    bindColorWheelEvents(
+      wheelCanvas,
+      group,
+      () => state.cdl[group],
+      (nextRgb) => {
+        state.cdl[group] = nextRgb;
+        syncCdlInputsFromState();
+      }
+    );
+    byId(`btn-reset-${group}`).addEventListener("click", () => {
+      state.cdl[group] = group === "offset" ? [0.0, 0.0, 0.0] : [1.0, 1.0, 1.0];
+      syncCdlInputsFromState();
     });
   }
 
@@ -476,10 +505,10 @@ async function bakeCubeLut() {
       title,
       out_path: outPath || null
     };
-    const data = await apiJson("/api/color/bake", { method: "POST", body: payload });
+    const data = await api.bakeCube(payload);
     const info = data.info;
     byId("cube-info-badge").textContent = `${info.dimension} ${info.size}^3 (${info.entry_count} pts)`;
-    byId("cube-info-badge").className = "badge badge-pass mono";
+    byId("cube-info-badge").className = "nle-tag is-pass mono";
 
     const lines = data.cube_text.split(/\r?\n/).filter((ln) => ln.trim() !== "");
     const snippet = [
@@ -489,7 +518,7 @@ async function bakeCubeLut() {
     ].join("\n");
     byId("cube-preview-output").textContent = snippet;
 
-    if (data.saved_path) {
+    if (data.saved_path && !api.isStaticDemo()) {
       state.lastBakedCubePath = data.saved_path;
       showBanner(`Saved 3D .cube LUT to ${data.saved_path}`, "success");
       await refreshWorkspaceFiles();
@@ -505,16 +534,7 @@ async function downloadCubeLut() {
   try {
     const size = Number.parseInt(byId("cube-size-select").value, 10);
     const title = byId("cube-title-input").value.trim() || "taktcut_cdl";
-    const resp = await fetch("/api/color/download-cube", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...state.cdl, size, title, filename: `${title}.cube` })
-    });
-    if (!resp.ok) {
-      const errData = await resp.json().catch(() => ({}));
-      throw new Error(errData.error || `HTTP ${resp.status}`);
-    }
-    const blob = await resp.blob();
+    const blob = await api.downloadCubeBlob({ ...state.cdl, size, title, filename: `${title}.cube` });
     const safeStem = title.replace(/[^A-Za-z0-9._-]/g, "_") || "taktcut_cdl";
     triggerBlobDownload(blob, `${safeStem}.cube`);
     showBanner(`Downloaded ${safeStem}.cube`, "success");
@@ -523,22 +543,25 @@ async function downloadCubeLut() {
   }
 }
 
-/* WORKSPACE 3: RENDER & FFMPEG */
-function renderCapabilitiesStrip(caps, ffmpegError) {
+/* PAGE 3: DELIVER / RENDER */
+function renderCapabilitiesStrip(caps, ffmpegError, isDemo) {
   const strip = byId("render-caps-strip");
   const pill = byId("ffmpeg-status-pill");
-  if (!caps) {
+  if (isDemo) {
+    pill.textContent = "Static Web Demo";
+    pill.className = "nle-tag is-blue mono";
+  } else if (!caps) {
     pill.textContent = "FFmpeg: missing";
-    pill.className = "badge badge-fail mono";
+    pill.className = "nle-tag is-fail mono";
     strip.replaceChildren(
-      dom("span", "badge badge-fail", ffmpegError || "ffmpeg not found on PATH")
+      dom("span", "nle-tag is-fail", ffmpegError || "ffmpeg not found on PATH")
     );
     return;
+  } else {
+    const hasNvenc = caps.h264_nvenc || caps.hevc_nvenc;
+    pill.textContent = hasNvenc ? "FFmpeg + NVENC" : "FFmpeg (CPU)";
+    pill.className = hasNvenc ? "nle-tag is-pass mono" : "nle-tag is-blue mono";
   }
-
-  const hasNvenc = caps.h264_nvenc || caps.hevc_nvenc;
-  pill.textContent = hasNvenc ? "FFmpeg + NVENC" : "FFmpeg (CPU)";
-  pill.className = hasNvenc ? "badge badge-pass mono" : "badge badge-indigo mono";
 
   const items = [
     ["h264_nvenc", caps.h264_nvenc],
@@ -548,9 +571,9 @@ function renderCapabilitiesStrip(caps, ffmpegError) {
     ["prores_ks", caps.prores_ks]
   ];
   const badges = items.map(([label, ok]) =>
-    dom("span", `badge ${ok ? "badge-pass" : "badge-muted"}`, `${label}: ${ok ? "ON" : "OFF"}`)
+    dom("span", `nle-tag ${ok ? "is-pass" : ""}`, `${label}: ${ok ? "ON" : "OFF"}`)
   );
-  badges.push(dom("span", "badge badge-muted", caps.ffmpeg_path));
+  badges.push(dom("span", "nle-tag", caps.ffmpeg_path));
   strip.replaceChildren(...badges);
 }
 
@@ -577,12 +600,12 @@ async function buildOrExecuteRender(execute) {
       prefer_hw: preferHw,
       execute
     };
-    const data = await apiJson("/api/render/plan", { method: "POST", body });
+    const data = await api.buildOrExecuteRender(body);
     const plan = data.plan;
     state.lastRenderCommand = data.shell_command || plan.argv.join(" ");
 
     byId("render-encoder-badge").textContent = `${plan.encoder} / ${plan.pix_fmt}`;
-    byId("render-encoder-badge").className = "badge badge-indigo mono";
+    byId("render-encoder-badge").className = "nle-tag is-active mono";
 
     const fpsLabel = plan.fps.den === 1 ? String(plan.fps.num) : `${plan.fps.num}/${plan.fps.den}`;
     renderKv(byId("render-plan-kv"), [
@@ -626,12 +649,12 @@ async function buildOrExecuteRender(execute) {
   }
 }
 
-/* WORKSPACE 4: BROADCAST QA GATE */
+/* PAGE 4: BROADCAST QA GATE */
 function renderQaReport(report) {
   state.lastQaReport = report;
   const overall = byId("qa-overall-badge");
   overall.textContent = report.passed ? t("common.pass") : t("common.fail");
-  overall.className = `badge mono ${report.passed ? "badge-pass" : "badge-fail"}`;
+  overall.className = `nle-tag mono ${report.passed ? "is-pass" : "is-fail"}`;
 
   const failBox = byId("qa-failures-box");
   const failList = byId("qa-failures-list");
@@ -648,7 +671,7 @@ function renderQaReport(report) {
   const p = report.probe;
   const cfrBadge = byId("qa-cfr-badge");
   cfrBadge.textContent = p.is_cfr ? "CFR LOCKED" : "VFR";
-  cfrBadge.className = `badge mono ${p.is_cfr ? "badge-pass" : "badge-fail"}`;
+  cfrBadge.className = `nle-tag mono ${p.is_cfr ? "is-pass" : "is-fail"}`;
 
   const faststartLabel =
     p.has_faststart === true ? "PASS (moov < mdat)" : p.has_faststart === false ? "FAIL (moov after mdat)" : "N/A";
@@ -667,7 +690,7 @@ function renderQaReport(report) {
   const loudBadge = byId("qa-loudness-badge");
   if (l) {
     loudBadge.textContent = l.passed ? `${l.integrated_lufs.toFixed(1)} LUFS` : "OUT OF SPEC";
-    loudBadge.className = `badge mono ${l.passed ? "badge-pass" : "badge-fail"}`;
+    loudBadge.className = `nle-tag mono ${l.passed ? "is-pass" : "is-fail"}`;
     renderKv(byId("qa-loudness-kv"), [
       ["Integrated", `${l.integrated_lufs.toFixed(2)} LUFS`],
       ["Target", `${l.target_lufs.toFixed(1)} +/- ${l.tolerance_lu.toFixed(1)} LU`],
@@ -676,7 +699,7 @@ function renderQaReport(report) {
     ]);
   } else {
     loudBadge.textContent = "NO AUDIO";
-    loudBadge.className = "badge badge-muted mono";
+    loudBadge.className = "nle-tag mono";
     renderKv(byId("qa-loudness-kv"), [["Audio Stream", t("common.none")]]);
   }
 
@@ -703,7 +726,7 @@ async function runBroadcastQa() {
       max_true_peak_dbtp: Number.parseFloat(byId("qa-max-tp").value),
       require_faststart: byId("qa-require-faststart").checked
     };
-    const data = await apiJson("/api/qa/verify", { method: "POST", body });
+    const data = await api.verifyQa(body);
     renderQaReport(data.report);
     showBanner(
       data.report.passed ? "Broadcast QA Gate PASSED." : "Broadcast QA Gate FAILED (see anomalies).",
@@ -716,7 +739,7 @@ async function runBroadcastQa() {
 
 async function generateSampleClip() {
   try {
-    const data = await apiJson("/api/sample/generate-clip", { method: "POST", body: {} });
+    const data = await api.generateSampleClip();
     byId("render-input-path").value = data.path;
     byId("qa-media-path").value = data.path;
     await refreshWorkspaceFiles();
@@ -738,11 +761,19 @@ function populateSelectOptions(selectEl, items, emptyLabel) {
 }
 
 async function refreshWorkspaceFiles() {
-  const data = await apiJson("/api/workspace/files");
+  const data = await api.getWorkspaceFiles();
   const files = data.files || {};
   populateSelectOptions(byId("timeline-workspace-select"), files.timelines || [], "-- select timeline --");
   populateSelectOptions(byId("render-input-select"), files.media || [], "-- select media --");
   populateSelectOptions(byId("qa-media-select"), files.media || [], "-- select media --");
+}
+
+function setPlayhead(frame) {
+  state.playheadFrame = Math.max(0, Math.min(state.timelineMaxFrame, Math.round(frame)));
+  updatePlayheadReadout();
+  if (state.activeTab === "timeline") {
+    redrawActiveCanvases();
+  }
 }
 
 function wireEvents() {
@@ -750,11 +781,11 @@ function wireEvents() {
   byId("lang-en").addEventListener("click", () => setLanguage("en"));
   byId("lang-fr").addEventListener("click", () => setLanguage("fr"));
 
-  for (const tabBtn of document.querySelectorAll(".nav-tab")) {
+  for (const tabBtn of document.querySelectorAll(".page-tab")) {
     tabBtn.addEventListener("click", () => switchTab(tabBtn.getAttribute("data-tab")));
   }
 
-  // Timeline workspace events
+  // Timeline page events
   byId("btn-load-sample-clean").addEventListener("click", () => loadSampleTimeline("clean"));
   byId("btn-load-sample-issues").addEventListener("click", () => loadSampleTimeline("issues"));
   byId("btn-refresh-workspace").addEventListener("click", () => {
@@ -766,10 +797,7 @@ function wireEvents() {
       const path = byId("timeline-workspace-select").value;
       if (!path) throw new Error("Select a timeline file from the workspace dropdown first.");
       const seqName = byId("timeline-name-filter").value.trim() || null;
-      const data = await apiJson("/api/timeline/inspect", {
-        method: "POST",
-        body: { path, timeline_name: seqName }
-      });
+      const data = await api.inspectTimeline({ path, timeline_name: seqName });
       setTimelineData(data);
       showBanner(`Inspected ${path}`, "success");
     } catch (err) {
@@ -784,9 +812,10 @@ function wireEvents() {
       const buf = await file.arrayBuffer();
       const b64 = arrayBufferToBase64(buf);
       const seqName = byId("timeline-name-filter").value.trim() || null;
-      const data = await apiJson("/api/timeline/inspect", {
-        method: "POST",
-        body: { filename: file.name, content_base64: b64, timeline_name: seqName }
+      const data = await api.inspectTimeline({
+        filename: file.name,
+        content_base64: b64,
+        timeline_name: seqName
       });
       setTimelineData(data);
       showBanner(`Loaded local file ${file.name}`, "success");
@@ -798,10 +827,7 @@ function wireEvents() {
   byId("btn-timeline-validate").addEventListener("click", async () => {
     try {
       if (!state.timelineDoc) throw new Error("Load or inspect a timeline first.");
-      const data = await apiJson("/api/timeline/validate", {
-        method: "POST",
-        body: { document: state.timelineDoc }
-      });
+      const data = await api.validateTimeline({ document: state.timelineDoc });
       setTimelineData(data);
       showBanner(
         data.validation.valid
@@ -824,16 +850,7 @@ function wireEvents() {
     try {
       if (!state.timelineDoc) throw new Error("Load or inspect a timeline first.");
       const fmt = byId("otio-format-select").value;
-      const resp = await fetch("/api/timeline/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ document: state.timelineDoc, format: fmt })
-      });
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${resp.status}`);
-      }
-      const blob = await resp.blob();
+      const blob = await api.downloadOtioBlob(state.timelineDoc, fmt);
       const stem = (state.timelineDoc.name || "timeline").replace(/[^A-Za-z0-9._-]/g, "_");
       triggerBlobDownload(blob, `${stem}.${fmt}`);
       byId("timeline-export-feedback").textContent = `Downloaded ${stem}.${fmt} (${blob.size} bytes)`;
@@ -846,10 +863,7 @@ function wireEvents() {
     try {
       if (!state.timelineDoc) throw new Error("Load or inspect a timeline first.");
       const outPath = byId("otio-workspace-out").value.trim();
-      const data = await apiJson("/api/timeline/convert", {
-        method: "POST",
-        body: { document: state.timelineDoc, out_path: outPath }
-      });
+      const data = await api.saveOtioToWorkspace({ document: state.timelineDoc, out_path: outPath });
       byId("timeline-export-feedback").textContent = `Saved ${data.output_path} (${data.bytes_written} bytes)`;
       showBanner(`Exported OTIO to ${data.output_path}`, "success");
       await refreshWorkspaceFiles();
@@ -864,11 +878,23 @@ function wireEvents() {
     redrawActiveCanvases();
   });
 
+  byId("playhead-slider").addEventListener("input", () => {
+    setPlayhead(Number.parseInt(byId("playhead-slider").value, 10));
+  });
+  byId("btn-tc-start").addEventListener("click", () => setPlayhead(0));
+  byId("btn-tc-prev").addEventListener("click", () => setPlayhead(state.playheadFrame - 1));
+  byId("btn-tc-next").addEventListener("click", () => setPlayhead(state.playheadFrame + 1));
+  byId("btn-tc-end").addEventListener("click", () => setPlayhead(state.timelineMaxFrame));
+
   byId("timeline-canvas").addEventListener("click", (ev) => {
     const canvas = byId("timeline-canvas");
     const rect = canvas.getBoundingClientRect();
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
+    if (y <= 32 && state.timelineXToFrame) {
+      setPlayhead(state.timelineXToFrame(x));
+      return;
+    }
     const boxes = state.timelineHitboxes || [];
     let match = null;
     for (let i = boxes.length - 1; i >= 0; i--) {
@@ -879,11 +905,21 @@ function wireEvents() {
       }
     }
     state.timelineSelected = match;
+    if (match && match.kind === "clip") {
+      state.playheadFrame = match.data.start_frame;
+      updatePlayheadReadout();
+    } else if (match && match.kind === "marker") {
+      state.playheadFrame = match.data.frame;
+      updatePlayheadReadout();
+    } else if (state.timelineXToFrame) {
+      state.playheadFrame = state.timelineXToFrame(x);
+      updatePlayheadReadout();
+    }
     renderTimelineSelection();
     redrawActiveCanvases();
   });
 
-  // Color workspace events
+  // Color page events
   wireCdlInputs();
   byId("btn-bake-cube").addEventListener("click", bakeCubeLut);
   byId("btn-download-cube").addEventListener("click", downloadCubeLut);
@@ -893,10 +929,7 @@ function wireEvents() {
     if (!file) return;
     try {
       const xmlContent = await file.text();
-      const data = await apiJson("/api/color/parse-cdl", {
-        method: "POST",
-        body: { xml_content: xmlContent }
-      });
+      const data = await api.parseCdlXml(xmlContent);
       state.cdl = {
         slope: [...data.cdl.slope],
         offset: [...data.cdl.offset],
@@ -919,10 +952,10 @@ function wireEvents() {
       byId("render-use-studio-cdl").checked = true;
     }
     switchTab("render");
-    showBanner("Active Studio CDL grade linked to Render Plan.", "success");
+    showBanner("Active Color Page CDL grade linked to Deliver page.", "success");
   });
 
-  // Render workspace events
+  // Deliver page events
   byId("render-input-select").addEventListener("change", () => {
     const val = byId("render-input-select").value;
     if (val) byId("render-input-path").value = val;
@@ -935,8 +968,8 @@ function wireEvents() {
   });
   byId("btn-verify-nvenc").addEventListener("click", async () => {
     try {
-      const data = await apiJson("/api/render/capabilities?verify_nvenc=true&refresh=true");
-      renderCapabilitiesStrip(data.capabilities, data.error);
+      const data = await api.verifyRenderCapabilities();
+      renderCapabilitiesStrip(data.capabilities, data.error, api.isStaticDemo());
       showBanner("Hardware encoder runtime verification complete.", "success");
     } catch (err) {
       showBanner(err.message, "error");
@@ -962,7 +995,7 @@ function wireEvents() {
     runBroadcastQa();
   });
 
-  // QA workspace events
+  // QA page events
   byId("qa-media-select").addEventListener("change", () => {
     const val = byId("qa-media-select").value;
     if (val) byId("qa-media-path").value = val;
@@ -986,11 +1019,14 @@ async function bootstrap() {
   setLanguage(state.lang);
 
   try {
-    const health = await apiJson("/api/health");
+    const health = await api.initHealth();
     byId("version-badge").textContent = `v${health.version}`;
     byId("workspace-path-label").textContent = health.workspace_dir;
     byId("workspace-pill").title = health.workspace_dir;
-    renderCapabilitiesStrip(health.capabilities, health.ffmpeg_error);
+    byId("runtime-mode-pill").textContent = api.isStaticDemo()
+      ? "STATIC WEB DEMO (CLIENT-SIDE ENGINE)"
+      : "LOCAL STUDIO SERVER (127.0.0.1)";
+    renderCapabilitiesStrip(health.capabilities, health.ffmpeg_error, api.isStaticDemo());
   } catch (err) {
     showBanner(`Health check failed: ${err.message}`, "error");
   }

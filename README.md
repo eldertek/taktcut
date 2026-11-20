@@ -35,23 +35,29 @@ cd taktcut
 pip install -e ".[dev]"
 ```
 
-## Quickstart: Web Studio GUI
+## Quickstart: NLE Studio GUI & Desktop Mode
 
-Launch the local dark studio interface (EN/FR toggle included) confined to your project directory:
+Launch the docked DaVinci-style workstation interface (EN/FR toggle included) in your browser or as a standalone frameless desktop window (`--desktop`):
 
 ```bash
+# Browser mode:
 taktcut ui --workspace-dir /path/to/your/project
+
+# Frameless Desktop App mode (Edge/Chrome --app or pywebview):
+taktcut ui --desktop --workspace-dir /path/to/your/project
 # or standalone command:
-taktcut-ui --workspace-dir /path/to/your/project
+taktcut-ui --desktop --workspace-dir /path/to/your/project
 ```
 
-Inside the browser (`http://127.0.0.1:8741/`):
-1. **Timeline & OTIO**: Load a `.drp`, `.drt`, `.fcpxml`, `.otio`/`.otioz` file or click **Load Sample Timeline**, inspect rational frames & validation issues on the multi-track canvas, and export `.otio`/`.otioz`.
-2. **Color & CDL LUT**: Adjust Slope/Offset/Power/Saturation with live Rec.709 before/after split preview & vectorscope, then bake and download 3D `.cube` LUTs.
-3. **Render & FFmpeg**: Probe NVENC/CPU encoders, build deterministic Rec.709 commands (`--dry-run` or execute), and apply active studio LUTs & LUFS normalization.
-4. **Broadcast QA Gate**: Run `ffprobe` CFR/faststart, EBU R128 loudness, and start/mid/end frame luminance verification with instant pass/fail gauges.
+Four docked workstation pages:
+1. **Timeline**: Media Pool loader (`.drp`, `.drt`, `.fcpxml`, `.otio`/`.otioz`, or sample fixture), Program Monitor with SMPTE timecode scrub, Docked Multi-Track Timeline (`V1`, `V2`, `A1`, `A2`), continuity validation, and `.otio`/`.otioz` export.
+2. **Color**: Interactive **Lift / Gamma / Gain** DaVinci Color Wheels & Primary Bars, Rec.709 Before/After split monitor, live RGB curves & vectorscope, `.cdl` import, and 3D `.cube` LUT baking.
+3. **Deliver**: Host NVENC/CPU encoder probe, deterministic Rec.709 FFmpeg render planning & execution, studio LUT linking, and EBU R128 loudnorm.
+4. **Broadcast QA**: `ffprobe` CFR/faststart audit, EBU R128 LUFS/dBTP gauges, and start/mid/end frame signalstats verification.
 
-See the full visual walkthrough in [Web Studio GUI Guide (EN)](docs/gui-guide.md) | [Guide Interface Graphique (FR)](docs/fr/gui-guide.md).
+Static frontend assets (`src/taktcut/ui/assets/`) also run standalone on static web hosting (via relative imports, `window.__TAKTCUT_CONFIG__`, and a client-side demo adapter).
+
+See the full visual walkthrough in [Web Studio & Desktop Guide (EN)](docs/gui-guide.md) | [Guide Interface Graphique (FR)](docs/fr/gui-guide.md).
 
 ## Quickstart: CLI
 

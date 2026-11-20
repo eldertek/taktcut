@@ -144,17 +144,18 @@ Codes de retour : `0` si `passed` est `true`, `2` si au moins un controle echoue
 
 ## `taktcut ui` et `taktcut-ui`
 
-Demarre l'interface graphique locale Web Studio sur un `ThreadingHTTPServer` confine au loopback.
+Demarre l'interface graphique locale style NLE sur un `ThreadingHTTPServer` confine au loopback.
 
 ```bash
-taktcut ui [--host HOTE] [--port PORT] [--no-open] [--workspace-dir DOSSIER]
-taktcut-ui [--host HOTE] [--port PORT] [--no-open] [--workspace-dir DOSSIER]
+taktcut ui [--host HOTE] [--port PORT] [--no-open] [--desktop] [--workspace-dir DOSSIER]
+taktcut-ui [--host HOTE] [--port PORT] [--no-open] [--desktop] [--workspace-dir DOSSIER]
 ```
 
 Options :
 - `--host` : Adresse loopback (`127.0.0.1`, `localhost`, ou `::1` ; defaut `127.0.0.1`). Les adresses non-loopback sont refusees.
 - `--port` : Port TCP (`0` choisit un port libre ; defaut `8741`).
-- `--no-open` : N'ouvre pas automatiquement le navigateur.
+- `--no-open` : N'ouvre pas automatiquement le navigateur ou la fenetre bureau.
+- `--desktop` : Ouvre une fenetre applicative sans bordure (`Edge/Chrome --app` ou `pywebview`, avec repli navigateur).
 - `--workspace-dir` : Repertoire confine pour la lecture/ecriture de fichiers (defaut : repertoire courant).
 
 ---

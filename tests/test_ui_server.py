@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from taktcut.drp import create_sample_drt_bytes
+from taktcut.ui.desktop import build_desktop_app_command
 from taktcut.ui.server import create_ui_server
 
 
@@ -68,6 +69,8 @@ def test_ui_static_assets_and_csp_headers(ui_server: tuple[str, Path]) -> None:
         ("/app.js", "application/javascript"),
         ("/i18n.js", "application/javascript"),
         ("/canvas.js", "application/javascript"),
+        ("/color_wheels.js", "application/javascript"),
+        ("/demo_adapter.js", "application/javascript"),
         ("/favicon.svg", "image/svg+xml"),
     ):
         status, headers, body = _http_call(f"{base_url}{path}")
@@ -384,7 +387,17 @@ def test_ui_cli_help_and_non_loopback_rejection() -> None:
     assert help_proc.returncode == 0
     assert "--workspace-dir" in help_proc.stdout
     assert "--no-open" in help_proc.stdout
+    assert "--desktop" in help_proc.stdout
     assert "--port" in help_proc.stdout
+
+    cmd = build_desktop_app_command(
+        Path("msedge.exe"),
+        "http://127.0.0.1:8741/",
+        Path("/tmp/profile"),
+    )
+    assert cmd[0] == "msedge.exe"
+    assert "--app=http://127.0.0.1:8741/" in cmd
+    assert "--window-size=1440,900" in cmd
 
     non_loopback = subprocess.run(
         [sys.executable, "-m", "taktcut.ui", "--host", "0.0.0.0", "--no-open"],

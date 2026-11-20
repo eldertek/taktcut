@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import webbrowser
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +33,7 @@ from taktcut.models import (
 )
 from taktcut.qa import run_qa_gate
 from taktcut.render import build_render_plan, execute_render_plan, probe_hardware_capabilities
+from taktcut.ui.desktop import has_pywebview, open_studio_window, run_with_pywebview
 from taktcut.ui.samples import build_sample_timeline, generate_synthetic_sample_clip
 from taktcut.ui.security import (
     CDL_SUFFIXES,
@@ -60,6 +60,8 @@ STATIC_ROUTE_MAP: dict[str, tuple[str, str]] = {
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/i18n.js": ("i18n.js", "application/javascript; charset=utf-8"),
     "/canvas.js": ("canvas.js", "application/javascript; charset=utf-8"),
+    "/color_wheels.js": ("color_wheels.js", "application/javascript; charset=utf-8"),
+    "/demo_adapter.js": ("demo_adapter.js", "application/javascript; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
 }
 
@@ -72,6 +74,7 @@ class UiServerConfig:
     port: int = 8741
     workspace_dir: Path | None = None
     open_browser: bool = True
+    desktop: bool = False
 
 
 @dataclass
@@ -675,6 +678,7 @@ def serve_ui(
     port: int = 8741,
     workspace_dir: Path | None = None,
     open_browser: bool = True,
+    desktop: bool = False,
 ) -> int:
     """Start the taktcut studio web UI server until interrupted."""
     server = create_ui_server(host=host, port=port, workspace_dir=workspace_dir)
@@ -686,8 +690,19 @@ def serve_ui(
     print(f"Workspace directory (confined): {server.app_state.workspace_root}", flush=True)
     print("Press Ctrl+C to stop.", flush=True)
 
+    if open_browser and desktop and has_pywebview():
+        def _stop_server() -> None:
+            server.shutdown()
+            server.server_close()
+
+        return run_with_pywebview(
+            url,
+            start_server=server.serve_forever,
+            stop_server=_stop_server,
+        )
+
     if open_browser:
-        threading.Timer(0.25, webbrowser.open, args=(url,)).start()
+        threading.Timer(0.25, open_studio_window, args=(url,), kwargs={"desktop": desktop}).start()
 
     try:
         server.serve_forever()
@@ -702,7 +717,7 @@ def build_ui_arg_parser(prog: str = "taktcut-ui") -> argparse.ArgumentParser:
     """Build argument parser shared by taktcut-ui and taktcut ui."""
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="Launch the local taktcut Web Studio GUI bound to 127.0.0.1.",
+        description="Launch the local taktcut DaVinci-style Studio GUI bound to 127.0.0.1.",
     )
     parser.add_argument(
         "--host",
@@ -718,7 +733,12 @@ def build_ui_arg_parser(prog: str = "taktcut-ui") -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-open",
         action="store_true",
-        help="Do not open a web browser tab automatically",
+        help="Do not open a browser or desktop window automatically",
+    )
+    parser.add_argument(
+        "--desktop",
+        action="store_true",
+        help="Open as a standalone frameless desktop app window (Edge/Chrome --app or pywebview)",
     )
     parser.add_argument(
         "--workspace-dir",
@@ -739,6 +759,7 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             workspace_dir=args.workspace_dir,
             open_browser=not args.no_open,
+            desktop=args.desktop,
         )
     except ValueError as exc:
         parser.error(str(exc))
