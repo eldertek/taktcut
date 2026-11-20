@@ -492,8 +492,19 @@ body {
 
 .input-control:focus,
 .input-num:focus {
-  outline: none;
   border-color: var(--accent-blue);
+}
+
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[role="tab"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: 2px;
 }
 
 .file-input {
@@ -883,6 +894,19 @@ input[type="range"] {
   }
   .pane-scroll {
     max-height: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-tab,
+  .btn,
+  .btn-mini,
+  .btn-chip,
+  .lang-btn,
+  .input-control,
+  .input-select,
+  .input-num {
+    min-height: 44px;
   }
 }
 

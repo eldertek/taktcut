@@ -408,3 +408,53 @@ def test_ui_cli_help_and_non_loopback_rejection() -> None:
     )
     assert non_loopback.returncode != 0
     assert "loopback" in non_loopback.stderr.lower()
+
+
+def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+    css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
+    assert css_status == 200
+    css_text = css_raw.decode("utf-8")
+    assert ":focus-visible" in css_text
+    assert "min-height: 44px" in css_text
+    assert "\u2013" not in css_text and "\u2014" not in css_text
+
+    i18n_status, _, i18n_raw = _http_call(f"{base_url}/i18n.js")
+    assert i18n_status == 200
+    i18n_text = i18n_raw.decode("utf-8")
+    assert "\u2013" not in i18n_text and "\u2014" not in i18n_text
+    assert '"Étalonnage"' in i18n_text
+    assert '"Télécharger OTIO"' in i18n_text
+    assert "innerHTML" not in i18n_text
+
+
+def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        pytest.skip("Playwright not installed in this environment")
+
+    base_url, _ = ui_server
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            for width, height in ((375, 812), (1440, 900)):
+                ctx = browser.new_context(viewport={"width": width, "height": height})
+                page = ctx.new_page()
+                errors: list[str] = []
+                bad_http: list[str] = []
+                page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+                page.on("pageerror", lambda e: errors.append(str(e)))
+                page.on("response", lambda r: bad_http.append(f"{r.status} {r.url}") if r.status >= 400 else None)
+                resp = page.goto(f"{base_url}/", wait_until="networkidle", timeout=15000)
+                assert resp and resp.status == 200
+                overflow = page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
+                assert overflow <= 0, f"Horizontal overflow at {width}x{height}: {overflow}px"
+                assert not errors, f"Console/page errors at {width}x{height}: {errors}"
+                assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"
+                ctx.close()
+            browser.close()
+    except Exception as exc:
+        if "Executable doesn't exist" in str(exc):
+            pytest.skip("Playwright Chromium browser binary unavailable")
+        raise
