@@ -1,24 +1,23 @@
 # taktcut
 
-**Headless, clean-room timeline interchange, color pipeline, and deterministic FFmpeg/NVENC broadcast QA for DaVinci Resolve, Premiere Pro, and OpenTimelineIO workflows.**
+Headless, clean-room timeline interchange, ASC CDL / `.cube` color pipeline, and deterministic FFmpeg/NVENC broadcast QA for DaVinci Resolve, Premiere Pro, and OpenTimelineIO workflows.
 
-`taktcut` bridges the gap between editorial project files (`.drp`, `.drt`, `.fcpxml`, `.otio`) and deterministic media delivery without requiring a running DaVinci Resolve Studio license, an active desktop session, or proprietary runtime APIs.
+`taktcut` inspects `.drp`, `.drt`, `.fcpxml`, and `.otio` exports, bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via FFmpeg/NVENC, and runs an EBU R128 + faststart QA gate from the CLI or MCP without opening a desktop NLE.
 
 ## Why taktcut
 
-- **Works headlessly with Free or Studio exports**: Inspect `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` files, convert timelines with exact rational frame math (`RationalTime`), and detect gaps or overlaps before rendering.
-- **Zero cumulative frame drift**: All timeline offsets and clip durations use exact integer frames and rational framerates (`24000/1001`, `25/1`, `30000/1001`, `50/1`), preventing floating-point rounding drift across long sequences.
-- **Portable color pipeline**: Parse ASC CDL parameters (`Slope`, `Offset`, `Power`, `Saturation`), validate 1D/3D `.cube` LUTs, bake CDL transforms into `.cube` 3D LUTs, and apply them via FFmpeg `lut3d` with explicit Rec.709 color tagging.
-- **Deterministic FFmpeg & NVENC rendering**: Generates explicit FFmpeg command plans with `-pix_fmt yuv420p`, CFR lock, `2*fps` GOP sizing, `-movflags +faststart` MP4 streaming headers, and automatic `h264_nvenc` / `hevc_nvenc` detection with clean `libx264` fallback (plus `prores_ks` HQ MOV).
-- **Automated broadcast QA gate**: Audits rendered files using `ffprobe` (codec, resolution, CFR parity, video vs. container duration, MP4 `moov`-before-`mdat` faststart check), `ebur128` loudness (`I`, `LRA`, `TruePeak <= -1.0 dBTP`), and multi-timestamp frame verification (start, mid, end).
-- **Native CLI & MCP server**: Use directly from the command line or expose typed tools over `stdio` JSON-RPC via the Model Context Protocol (`mcp`).
+| Workflow | Proprietary paywalls | taktcut (MIT) |
+| :--- | :--- | :--- |
+| Headless timeline inspection & conversion | DaVinci Resolve Studio ($295) requires an active desktop GUI session for scripting | Headless `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` parser with exact `RationalTime` frame math |
+| Color look baking & Rec.709 delivery | Desktop NLE lock-in (Premiere Pro $22.99/mo, Resolve Studio $295) | ASC CDL parser, 33-point `.cube` 3D LUT baker, and FFmpeg `lut3d` Rec.709 render plans |
+| Broadcast loudness & streaming QA | Manual NLE export checks or paid QC suites | Automated `ffprobe` CFR/faststart check, `ebur128` loudness audit, and start/mid/end frame verification |
+| CI & agent integration | Closed desktop plugins | Scriptable CLI and `stdio` JSON-RPC MCP server |
 
 ## Clean-Room Guarantee
 
-`taktcut` is strictly clean-room:
 - Zero binary inspection, decompilation, or symbol extraction from proprietary NLE executables.
 - Zero DRM or license bypasses.
-- Operates exclusively on user-exported project/timeline/color files and open standards (ZIP, `defusedxml` XML parsing, ASWF OpenTimelineIO, ASC CDL, Adobe `.cube` LUTs, FFmpeg, EBU R128).
+- Operates strictly on user-exported project/timeline/color files and open standards (ZIP, `defusedxml` XML parsing, ASWF OpenTimelineIO, ASC CDL, Adobe `.cube` LUTs, FFmpeg, EBU R128).
 
 ## Requirements
 
@@ -28,18 +27,14 @@
 ## Installation
 
 ```bash
+git clone https://github.com/eldertek/taktcut.git
+cd taktcut
 pip install -e ".[dev]"
-```
-
-Or run directly with `uv`:
-
-```bash
-uv pip install -e ".[dev]"
 ```
 
 ## Quickstart CLI
 
-Inspect a DaVinci Resolve `.drp` / `.drt`, `.fcpxml`, or `.otio` timeline:
+Inspect, validate, and convert a `.drp` / `.drt`, `.fcpxml`, or `.otio` timeline:
 
 ```bash
 taktcut inspect timeline.drt
@@ -47,20 +42,14 @@ taktcut validate timeline.fcpxml
 taktcut convert timeline.drt --out sequence.otio
 ```
 
-Bake an ASC CDL grade into a portable 33-point `.cube` 3D LUT:
+Bake an ASC CDL grade into a 33-point `.cube` 3D LUT and build a Rec.709 render plan:
 
 ```bash
 taktcut bake-lut --out look.cube --slope 1.05 1.0 0.96 --power 0.98 0.98 1.0 --sat 1.12
-```
-
-Build or execute a deterministic Rec.709 render plan:
-
-```bash
 taktcut render input.mov --out delivery.mp4 --profile web_h264 --lut look.cube --lufs -14 --dry-run
-taktcut render input.mov --out delivery.mp4 --profile web_h264 --lut look.cube --lufs -14
 ```
 
-Run the broadcast QA gate (`ffprobe` + `ebur128` + faststart + start/mid/end frame check):
+Run the broadcast QA gate (`ffprobe` + `ebur128` + `moov`-before-`mdat` faststart + start/mid/end frame verification):
 
 ```bash
 taktcut qa delivery.mp4 --lufs -14 --max-tp -1.0
@@ -76,13 +65,19 @@ taktcut mcp
 
 Exposed MCP tools:
 - `drp_inspect`: Parse `.drp`, `.drt`, `.fcpxml`, or `.otio`/`.otioz` timelines and metadata.
-- `drp_to_otio`: Convert `.drp`, `.drt`, or `.fcpxml` timelines into OpenTimelineIO (`.otio`).
-- `timeline_validate`: Check exact rational continuity, unintended black gaps, overlaps, and mixed framerates.
-- `lut_bake_cdl`: Bake ASC CDL parameters into a validated 3D `.cube` LUT.
-- `grade_apply_lut`: Render a graded clip using `.cube` LUT and/or ASC CDL with Rec.709 tagging.
-- `render_plan`: Generate (and optionally execute) a deterministic FFmpeg/NVENC/x264/ProRes render plan.
-- `qa_probe_loudness`: Measure EBU R128 integrated loudness, LRA, and true peak (`dBTP`).
+- `drp_to_otio`: Convert `.drp`, `.drt`, or `.fcpxml` timelines into OpenTimelineIO (`.otio` or `.otioz`).
+- `timeline_validate`: Check integer-frame continuity, gaps, overlaps, and framerate parity.
+- `lut_bake_cdl`: Bake ASC CDL parameters (`slope`, `offset`, `power`, `saturation`) into a 3D `.cube` LUT.
+- `grade_apply_lut`: Render a graded clip using a `.cube` LUT or ASC CDL with Rec.709 tags.
+- `render_plan`: Build (and optionally execute) a deterministic FFmpeg/NVENC/`libx264`/`prores_ks` render plan.
+- `qa_probe_loudness`: Measure EBU R128 integrated loudness (`LUFS`), `LRA`, and true peak (`dBTP`).
 - `qa_verify_media`: Run the full `ffprobe` + `ebur128` + `faststart` + multi-timestamp frame QA gate.
+
+## v0.1 Scope and Known Limitations
+
+- `.drp` / `.drt` XML inspection targets timeline tracks, clip timing, framerates, and metadata; proprietary Fusion node graphs, Fairlight DSP plugins, and third-party OFX effects are not rendered.
+- Color pipeline covers ASC CDL and 1D/3D `.cube` LUTs in Rec.709; full OpenColorIO ACES config graphs are not bundled in v0.1.
+- Hardware encoding (`h264_nvenc` / `hevc_nvenc`) requires an NVIDIA GPU and an NVENC-enabled FFmpeg build; otherwise `taktcut` falls back to `libx264` (`--no-hw` forces CPU encoding).
 
 ## Development & Tests
 
@@ -92,6 +87,10 @@ mypy
 pytest -v
 ```
 
+## Commercial Support & Custom Pipelines
+
+Need custom post-production automation, CI media pipelines, or dedicated maintenance? See [Eclipse Technology Open Source Pro](https://eclipse-technology.eu/open-source-pro.html).
+
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE).
