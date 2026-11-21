@@ -1010,12 +1010,15 @@ async function bootstrap() {
   wireEvents();
   syncCdlInputsFromState();
 
+  const urlLang = new URLSearchParams(window.location.search).get("lang");
+  let savedLang = null;
   try {
-    const savedLang = window.localStorage.getItem("taktcut.lang");
-    if (savedLang === "fr" || savedLang === "en") state.lang = savedLang;
+    savedLang = window.localStorage.getItem("taktcut.lang");
   } catch {
     // Ignore storage access failures
   }
+  if (urlLang === "fr" || urlLang === "en") state.lang = urlLang;
+  else if (savedLang === "fr" || savedLang === "en") state.lang = savedLang;
   setLanguage(state.lang);
 
   try {
