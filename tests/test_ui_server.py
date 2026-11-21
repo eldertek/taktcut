@@ -443,12 +443,26 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 page = ctx.new_page()
                 errors: list[str] = []
                 bad_http: list[str] = []
-                page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-                page.on("pageerror", lambda e: errors.append(str(e)))
-                page.on("response", lambda r: bad_http.append(f"{r.status} {r.url}") if r.status >= 400 else None)
+
+                def on_console(msg: Any, sink: list[str] = errors) -> None:
+                    if msg.type == "error":
+                        sink.append(msg.text)
+
+                def on_pageerror(err: Any, sink: list[str] = errors) -> None:
+                    sink.append(str(err))
+
+                def on_response(resp_obj: Any, sink: list[str] = bad_http) -> None:
+                    if resp_obj.status >= 400:
+                        sink.append(f"{resp_obj.status} {resp_obj.url}")
+
+                page.on("console", on_console)
+                page.on("pageerror", on_pageerror)
+                page.on("response", on_response)
                 resp = page.goto(f"{base_url}/", wait_until="networkidle", timeout=15000)
                 assert resp and resp.status == 200
-                overflow = page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
+                overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
                 assert overflow <= 0, f"Horizontal overflow at {width}x{height}: {overflow}px"
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"

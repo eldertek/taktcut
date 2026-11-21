@@ -42,7 +42,7 @@ Si `taktcut` est installe dans un environnement virtuel dedie (recommande) :
 {
   "mcpServers": {
     "taktcut": {
-      "command": "C:\\Workspace\\05_Ressources\\taktcut\\.venv\\Scripts\\taktcut.exe",
+      "command": "C:\\chemin\\vers\\taktcut\\.venv\\Scripts\\taktcut.exe",
       "args": ["mcp"]
     }
   }

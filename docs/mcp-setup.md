@@ -42,7 +42,7 @@ If `taktcut` is installed inside a project virtual environment (recommended for 
 {
   "mcpServers": {
     "taktcut": {
-      "command": "C:\\Workspace\\05_Ressources\\taktcut\\.venv\\Scripts\\taktcut.exe",
+      "command": "C:\\path\\to\\taktcut\\.venv\\Scripts\\taktcut.exe",
       "args": ["mcp"]
     }
   }
