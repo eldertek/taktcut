@@ -30,6 +30,8 @@ AUDIO_GAIN_DB_MIN: float = -24.0
 AUDIO_GAIN_DB_MAX: float = 12.0
 AUDIO_FADE_S_MIN: float = 0.0
 AUDIO_FADE_S_MAX: float = 5.0
+RETIME_SPEED_MIN: float = 0.25
+RETIME_SPEED_MAX: float = 4.0
 CLIP_DURATION_MAX_S: float = 86400.0
 TARGET_LUFS_MIN: float = -70.0
 TARGET_LUFS_MAX: float = -5.0
@@ -174,6 +176,94 @@ def compile_audio_filter_result(
     )
 
 
+class ClipRetimeParams(BaseModel):
+    """Per-clip speed multiplier (0.25x..4.0x) and reverse direction parameters."""
+
+    speed_rate: float = 1.0
+    reverse: bool = False
+
+    @field_validator("speed_rate", mode="before")
+    @classmethod
+    def _validate_speed_rate(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "speed_rate", RETIME_SPEED_MIN, RETIME_SPEED_MAX)
+
+    def is_identity(self) -> bool:
+        """Return True when speed_rate is 1.0x and reverse is False."""
+        return not self.reverse and math.isclose(self.speed_rate, 1.0, abs_tol=1e-6)
+
+
+class RetimeCompileResult(BaseModel):
+    """Compiled FFmpeg video and audio filtergraphs for clip retime."""
+
+    video_filtergraph: str
+    audio_filtergraph: str
+    ffmpeg_vf_args: list[str]
+    ffmpeg_af_args: list[str]
+    is_identity: bool
+    params: ClipRetimeParams
+
+
+def build_atempo_stages(speed_rate: float) -> list[float]:
+    """Decompose speed_rate in [0.25, 4.0] into safe FFmpeg atempo stages within [0.5, 2.0]."""
+    rate = _validate_bounded_float(speed_rate, "speed_rate", RETIME_SPEED_MIN, RETIME_SPEED_MAX)
+    if math.isclose(rate, 1.0, abs_tol=1e-6):
+        return []
+    stages: list[float] = []
+    rem = rate
+    if rem < 1.0:
+        while rem < 0.5 - 1e-9:
+            stages.append(0.5)
+            rem /= 0.5
+        if not math.isclose(rem, 1.0, abs_tol=1e-6):
+            stages.append(rem)
+    else:
+        while rem > 2.0 + 1e-9:
+            stages.append(2.0)
+            rem /= 2.0
+        if not math.isclose(rem, 1.0, abs_tol=1e-6):
+            stages.append(rem)
+    return stages
+
+
+def compile_retime_filter(params: ClipRetimeParams) -> tuple[str | None, str | None]:
+    """Compile validated clip speed_rate and reverse into FFmpeg (vf, af) filter strings."""
+    if params.is_identity():
+        return (None, None)
+
+    vf_parts: list[str] = []
+    af_parts: list[str] = []
+
+    if not math.isclose(params.speed_rate, 1.0, abs_tol=1e-6):
+        pts_scale = 1.0 / params.speed_rate
+        vf_parts.append(f"setpts={pts_scale:.6f}*PTS")
+        for stage in build_atempo_stages(params.speed_rate):
+            af_parts.append(f"atempo={stage:.4f}")
+
+    if params.reverse:
+        vf_parts.append("reverse")
+        af_parts.append("areverse")
+
+    return (
+        ",".join(vf_parts) if vf_parts else None,
+        ",".join(af_parts) if af_parts else None,
+    )
+
+
+def compile_retime_filter_result(params: ClipRetimeParams) -> RetimeCompileResult:
+    """Compile clip retime parameters into structured video/audio filtergraphs and argv slices."""
+    vf, af = compile_retime_filter(params)
+    vf_str = vf or ""
+    af_str = af or ""
+    return RetimeCompileResult(
+        video_filtergraph=vf_str,
+        audio_filtergraph=af_str,
+        ffmpeg_vf_args=["-vf", vf_str] if vf_str else [],
+        ffmpeg_af_args=["-af", af_str] if af_str else [],
+        is_identity=params.is_identity(),
+        params=params,
+    )
+
+
 def _probe_media_duration_s(media_path: Path) -> float | None:
     """Best-effort ffprobe container duration lookup for real files."""
     ffprobe_bin = shutil.which("ffprobe")
@@ -294,6 +384,7 @@ def build_render_plan(
     fx_filtergraph: str | None = None,
     title_overlay: TitleOverlayParams | None = None,
     audio_params: ClipAudioParams | None = None,
+    retime_params: ClipRetimeParams | None = None,
     clip_duration_s: float | None = None,
     target_lufs: float | None = None,
     prefer_hw: bool = True,
@@ -310,7 +401,14 @@ def build_render_plan(
     pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
     faststart = not is_prores
 
+    retime_vf: str | None = None
+    retime_af: str | None = None
+    if retime_params is not None and not retime_params.is_identity():
+        retime_vf, retime_af = compile_retime_filter(retime_params)
+
     vf_parts: list[str] = []
+    if retime_vf is not None:
+        vf_parts.append(retime_vf)
     if fx_filtergraph:
         vf_parts.append(fx_filtergraph)
     if color_grade is not None and not color_grade.is_identity():
@@ -330,9 +428,14 @@ def build_render_plan(
         and not audio_params.muted
         and audio_params.fade_out_s > 1e-6
     ):
-        resolved_clip_dur = _probe_media_duration_s(input_path)
+        probed_dur = _probe_media_duration_s(input_path)
+        if probed_dur is not None:
+            rate = retime_params.speed_rate if retime_params is not None else 1.0
+            resolved_clip_dur = probed_dur / rate
 
     af_parts: list[str] = []
+    if retime_af is not None:
+        af_parts.append(retime_af)
     if audio_params is not None:
         clip_af = compile_audio_filter(audio_params, clip_duration_s=resolved_clip_dur)
         if clip_af is not None:

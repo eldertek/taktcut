@@ -41,6 +41,7 @@ from taktcut.models import (
 )
 from taktcut.render import (
     ClipAudioParams,
+    ClipRetimeParams,
     build_render_plan,
     execute_render_plan,
     probe_hardware_capabilities,
@@ -222,6 +223,7 @@ class RemoteRenderJobRequest(BaseModel):
     lut_cube_text: str | None = None
     title_overlay: TitleOverlayParams | None = None
     audio_params: ClipAudioParams | None = None
+    retime_params: ClipRetimeParams | None = None
     clip_duration_s: float | None = None
 
     @field_validator("input_filename", "output_filename")
@@ -494,6 +496,7 @@ class RemoteRenderState:
             fx_filtergraph=fx_filtergraph,
             title_overlay=req.title_overlay,
             audio_params=req.audio_params,
+            retime_params=req.retime_params,
             clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,
             prefer_hw=req.prefer_hw,

@@ -171,6 +171,37 @@
                 </div>
                 <div id="track-mixer-strip" class="track-mixer-strip" role="group" aria-label="Track Mute and Solo Mixer"></div>
               </div>
+
+              <div id="timeline-retime-inspector" class="retime-inspector-dock">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.retime.title">Clip Speed / Retime</span>
+                  <div class="viewer-controls">
+                    <span id="clip-retime-badge" class="nle-tag mono">1.0x NORMAL</span>
+                    <button type="button" id="btn-clip-retime-to-deliver" class="btn btn-mini" data-i18n="timeline.retime.sendDeliver">Use in Deliver</button>
+                  </div>
+                </div>
+                <div id="clip-retime-controls" class="retime-ctrl-box mono">
+                  <div id="clip-retime-presets" class="retime-preset-strip" role="group" aria-label="Speed Presets">
+                    <button type="button" class="btn btn-mini retime-preset-btn" data-retime-preset="0.5" aria-pressed="false" data-i18n="timeline.retime.presetSlow">0.5x Slow-Mo</button>
+                    <button type="button" class="btn btn-mini retime-preset-btn" data-retime-preset="1.0" aria-pressed="false" data-i18n="timeline.retime.presetNormal">1.0x Normal</button>
+                    <button type="button" class="btn btn-mini retime-preset-btn" data-retime-preset="2.0" aria-pressed="false" data-i18n="timeline.retime.presetFast">2.0x Fast</button>
+                    <button type="button" class="btn btn-mini retime-preset-btn" data-retime-preset="4.0" aria-pressed="false" data-i18n="timeline.retime.presetTimelapse">4.0x Timelapse</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-retime-speed-range" data-i18n="timeline.retime.speed">Speed (x)</label>
+                    <input type="range" id="clip-retime-speed-range" min="0.25" max="4.0" step="0.05" value="1">
+                    <input type="number" id="clip-retime-speed-num" class="input-num" min="0.25" max="4.0" step="0.05" value="1.00" aria-label="Clip speed multiplier">
+                    <button type="button" id="btn-clip-retime-reset" class="btn btn-mini" aria-label="Reset clip speed">Rst</button>
+                  </div>
+                  <div class="retime-meta-row">
+                    <button type="button" id="btn-clip-retime-reverse" class="btn btn-mini retime-reverse-btn" aria-pressed="false">
+                      <span class="retime-rev-arrow" aria-hidden="true">&lt;&lt;</span>
+                      <span data-i18n="timeline.retime.reverse">Reverse</span>
+                    </button>
+                    <span id="clip-retime-dur-note" class="telemetry-note mono">--</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -823,6 +854,10 @@
                 <label class="check-label">
                   <input type="checkbox" id="render-use-clip-audio" checked>
                   <span data-i18n="render.check.clipAudio">Apply selected clip audio gain, fades &amp; track mute/solo</span>
+                </label>
+                <label class="check-label">
+                  <input type="checkbox" id="render-use-clip-retime" checked>
+                  <span data-i18n="render.check.clipRetime">Apply selected clip speed / retime (setpts + atempo + reverse)</span>
                 </label>
                 <label class="check-label">
                   <input type="checkbox" id="render-prefer-hw" checked>

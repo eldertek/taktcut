@@ -3,6 +3,8 @@ export const AUDIO_GAIN_DB_MIN = -24;
 export const AUDIO_GAIN_DB_MAX = 12;
 export const AUDIO_FADE_S_MIN = 0;
 export const AUDIO_FADE_S_MAX = 5;
+export const RETIME_SPEED_MIN = 0.25;
+export const RETIME_SPEED_MAX = 4.0;
 
 function clampNum(val, minVal, maxVal) {
   return Math.min(maxVal, Math.max(minVal, val));
@@ -16,6 +18,96 @@ export function normalizeClipAudio(clip) {
     gainDb: clampNum(rawGain, AUDIO_GAIN_DB_MIN, AUDIO_GAIN_DB_MAX),
     fadeInS: clampNum(rawIn, AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX),
     fadeOutS: clampNum(rawOut, AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+  };
+}
+
+export function normalizeClipRetime(clip) {
+  const rawSpeed =
+    clip && clip.speed_rate !== undefined && clip.speed_rate !== null && Number.isFinite(Number(clip.speed_rate))
+      ? Number(clip.speed_rate)
+      : 1.0;
+  return {
+    speedRate: Number(clampNum(rawSpeed, RETIME_SPEED_MIN, RETIME_SPEED_MAX).toFixed(2)),
+    reverse: Boolean(clip && clip.reverse)
+  };
+}
+
+export function formatRetimeSpeedValue(speedRate) {
+  const clamped = clampNum(
+    Number.isFinite(Number(speedRate)) ? Number(speedRate) : 1.0,
+    RETIME_SPEED_MIN,
+    RETIME_SPEED_MAX
+  );
+  const rounded = Number(clamped.toFixed(2));
+  return Number.isInteger(rounded * 10) ? `${rounded.toFixed(1)}x` : `${rounded.toFixed(2)}x`;
+}
+
+export function formatRetimeBadgeText(speedRate, reverse) {
+  const speedText = formatRetimeSpeedValue(speedRate);
+  return reverse ? `${speedText} REV` : speedText;
+}
+
+export function buildAtempoStagesClient(speedRate) {
+  const rate = clampNum(
+    Number.isFinite(Number(speedRate)) ? Number(speedRate) : 1.0,
+    RETIME_SPEED_MIN,
+    RETIME_SPEED_MAX
+  );
+  if (Math.abs(rate - 1.0) <= 1e-6) return [];
+  const stages = [];
+  let rem = rate;
+  if (rem < 1.0) {
+    while (rem < 0.5 - 1e-9) {
+      stages.push(0.5);
+      rem /= 0.5;
+    }
+    if (Math.abs(rem - 1.0) > 1e-6) {
+      stages.push(rem);
+    }
+  } else {
+    while (rem > 2.0 + 1e-9) {
+      stages.push(2.0);
+      rem /= 2.0;
+    }
+    if (Math.abs(rem - 1.0) > 1e-6) {
+      stages.push(rem);
+    }
+  }
+  return stages;
+}
+
+export function compileRetimeFilterClient(params) {
+  const p = params || {};
+  const norm = normalizeClipRetime(p);
+  const speedRate = norm.speedRate;
+  const reverse = norm.reverse;
+  const isIdentity = !reverse && Math.abs(speedRate - 1.0) <= 1e-6;
+
+  const vfParts = [];
+  const afParts = [];
+  if (!isIdentity) {
+    if (Math.abs(speedRate - 1.0) > 1e-6) {
+      const ptsScale = 1.0 / speedRate;
+      vfParts.push(`setpts=${ptsScale.toFixed(6)}*PTS`);
+      for (const stage of buildAtempoStagesClient(speedRate)) {
+        afParts.push(`atempo=${stage.toFixed(4)}`);
+      }
+    }
+    if (reverse) {
+      vfParts.push("reverse");
+      afParts.push("areverse");
+    }
+  }
+
+  const videoFiltergraph = vfParts.join(",");
+  const audioFiltergraph = afParts.join(",");
+  return {
+    video_filtergraph: videoFiltergraph,
+    audio_filtergraph: audioFiltergraph,
+    ffmpeg_vf_args: videoFiltergraph ? ["-vf", videoFiltergraph] : [],
+    ffmpeg_af_args: audioFiltergraph ? ["-af", audioFiltergraph] : [],
+    is_identity: isIdentity,
+    params: { speed_rate: speedRate, reverse }
   };
 }
 
@@ -359,6 +451,38 @@ export function trimClipInDocument(doc, trackKind, trackIndex, clipIndex, edge, 
   return { doc, clip: null, changed: false };
 }
 
+function _buildSplitClipPair(clip, cut, fps, fpsRate) {
+  const origEnd = clip.start_frame + clip.duration_frames;
+  const leftDur = cut - clip.start_frame;
+  const rightDur = origEnd - cut;
+  const audioNorm = normalizeClipAudio(clip);
+  const retimeNorm = normalizeClipRetime(clip);
+  const baseSrcDelta = computeSourceFrameDelta(leftDur, clip.source_fps, fps);
+  const srcDelta = Math.round(baseSrcDelta * retimeNorm.speedRate);
+
+  const leftClip = {
+    ...clip,
+    duration_frames: leftDur,
+    audio_gain_db: audioNorm.gainDb,
+    fade_in_s: Number(Math.min(audioNorm.fadeInS, leftDur / fpsRate).toFixed(2)),
+    fade_out_s: 0,
+    speed_rate: retimeNorm.speedRate,
+    reverse: retimeNorm.reverse
+  };
+  const rightClip = {
+    ...clip,
+    start_frame: cut,
+    duration_frames: rightDur,
+    source_in_frame: Math.max(0, (clip.source_in_frame || 0) + srcDelta),
+    audio_gain_db: audioNorm.gainDb,
+    fade_in_s: 0,
+    fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2)),
+    speed_rate: retimeNorm.speedRate,
+    reverse: retimeNorm.reverse
+  };
+  return { leftClip, rightClip };
+}
+
 export function splitClipInDocument(doc, trackKind, trackIndex, clipIndex, splitFrame) {
   const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
   if (!foundOrig) return { doc, leftClip: null, rightClip: null, split: false };
@@ -375,28 +499,8 @@ export function splitClipInDocument(doc, trackKind, trackIndex, clipIndex, split
   if (!found) return { doc, leftClip: null, rightClip: null, split: false };
 
   const { trk, clip } = found;
-  const leftDur = cut - clip.start_frame;
-  const rightDur = origEnd - cut;
-  const srcDelta = computeSourceFrameDelta(leftDur, clip.source_fps, nextDoc.fps);
   const fpsRate = nextDoc.fps ? Math.max(1, nextDoc.fps.num / Math.max(1, nextDoc.fps.den)) : 25;
-  const audioNorm = normalizeClipAudio(clip);
-
-  const leftClip = {
-    ...clip,
-    duration_frames: leftDur,
-    audio_gain_db: audioNorm.gainDb,
-    fade_in_s: Number(Math.min(audioNorm.fadeInS, leftDur / fpsRate).toFixed(2)),
-    fade_out_s: 0
-  };
-  const rightClip = {
-    ...clip,
-    start_frame: cut,
-    duration_frames: rightDur,
-    source_in_frame: Math.max(0, (clip.source_in_frame || 0) + srcDelta),
-    audio_gain_db: audioNorm.gainDb,
-    fade_in_s: 0,
-    fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2))
-  };
+  const { leftClip, rightClip } = _buildSplitClipPair(clip, cut, nextDoc.fps, fpsRate);
 
   trk.clips.splice(clipIndex, 1, leftClip, rightClip);
   return { doc: nextDoc, leftClip, rightClip, split: true };
@@ -437,26 +541,7 @@ export function splitClipsAtPlayhead(doc, playheadFrame, selectedClip = null) {
     for (const clip of trk.clips || []) {
       const endF = clip.start_frame + clip.duration_frames;
       if (cut > clip.start_frame && cut < endF) {
-        const leftDur = cut - clip.start_frame;
-        const rightDur = endF - cut;
-        const srcDelta = computeSourceFrameDelta(leftDur, clip.source_fps, nextDoc.fps);
-        const audioNorm = normalizeClipAudio(clip);
-        const leftClip = {
-          ...clip,
-          duration_frames: leftDur,
-          audio_gain_db: audioNorm.gainDb,
-          fade_in_s: Number(Math.min(audioNorm.fadeInS, leftDur / fpsRate).toFixed(2)),
-          fade_out_s: 0
-        };
-        const rightClip = {
-          ...clip,
-          start_frame: cut,
-          duration_frames: rightDur,
-          source_in_frame: Math.max(0, (clip.source_in_frame || 0) + srcDelta),
-          audio_gain_db: audioNorm.gainDb,
-          fade_in_s: 0,
-          fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2))
-        };
+        const { leftClip, rightClip } = _buildSplitClipPair(clip, cut, nextDoc.fps, fpsRate);
         newClips.push(leftClip, rightClip);
         splitCount += 1;
         if (!focusClip) focusClip = rightClip;
@@ -513,6 +598,34 @@ export function updateClipAudioInDocument(doc, trackKind, trackIndex, clipIndex,
   found.clip.audio_gain_db = Number(nextGain.toFixed(2));
   found.clip.fade_in_s = Number(nextIn.toFixed(2));
   found.clip.fade_out_s = Number(nextOut.toFixed(2));
+  return { doc: nextDoc, clip: found.clip, changed: true };
+}
+
+export function updateClipRetimeInDocument(doc, trackKind, trackIndex, clipIndex, patch) {
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origNorm = normalizeClipRetime(foundOrig.clip);
+  const rawNextSpeed =
+    patch.speed_rate !== undefined ? Number(patch.speed_rate) : origNorm.speedRate;
+  if (!Number.isFinite(rawNextSpeed)) {
+    return { doc, clip: null, changed: false };
+  }
+  const nextSpeed = Number(clampNum(rawNextSpeed, RETIME_SPEED_MIN, RETIME_SPEED_MAX).toFixed(2));
+  const nextReverse =
+    patch.reverse !== undefined ? Boolean(patch.reverse) : origNorm.reverse;
+
+  const unchanged =
+    Math.abs(nextSpeed - origNorm.speedRate) < 1e-6 &&
+    nextReverse === origNorm.reverse;
+  if (unchanged) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) return { doc, clip: null, changed: false };
+  found.clip.speed_rate = nextSpeed;
+  found.clip.reverse = nextReverse;
   return { doc: nextDoc, clip: found.clip, changed: true };
 }
 

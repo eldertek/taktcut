@@ -16,24 +16,30 @@ import {
   AUDIO_FADE_S_MIN,
   AUDIO_GAIN_DB_MAX,
   AUDIO_GAIN_DB_MIN,
+  RETIME_SPEED_MAX,
+  RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
   cloneTimelineDoc,
   collectSnapTargets,
   compileAudioFilterClient,
+  compileRetimeFilterClient,
   computeTimelineMaxFrame,
   findClipIndex,
   findMagneticSnap,
   findTrackAndClip,
+  formatRetimeBadgeText,
   getClipTrimBounds,
   hasSplittableClipAtFrame,
   isTrackAudiblyMuted,
   normalizeClipAudio,
+  normalizeClipRetime,
   splitClipInDocument,
   splitClipsAtPlayhead,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
   updateClipAudioInDocument,
+  updateClipRetimeInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -630,6 +636,21 @@ function getSelectedClipAudioPayload() {
   };
 }
 
+function getSelectedClipRetimePayload() {
+  const doc = state.timelineDoc;
+  const info = getSelectedClipTrack();
+  if (!doc || !info) return null;
+  const norm = normalizeClipRetime(info.clip);
+  const isIdentity = !norm.reverse && Math.abs(norm.speedRate - 1.0) <= 1e-6;
+  return {
+    isIdentity,
+    retime_params: {
+      speed_rate: norm.speedRate,
+      reverse: norm.reverse
+    }
+  };
+}
+
 function toggleTrackMuteAction(trackKind, trackIndex) {
   if (!state.timelineDoc) return;
   const res = toggleTrackMuteInDocument(state.timelineDoc, trackKind, trackIndex);
@@ -766,17 +787,100 @@ function renderTimelineAudioInspector() {
   }
 }
 
+function renderTimelineRetimeInspector() {
+  const ctrlBox = byId("clip-retime-controls");
+  const badge = byId("clip-retime-badge");
+  const sendBtn = byId("btn-clip-retime-to-deliver");
+  const speedRange = byId("clip-retime-speed-range");
+  const speedNum = byId("clip-retime-speed-num");
+  const rstBtn = byId("btn-clip-retime-reset");
+  const revBtn = byId("btn-clip-retime-reverse");
+  const durNote = byId("clip-retime-dur-note");
+  const presetBtns = document.querySelectorAll(".retime-preset-btn");
+
+  if (!ctrlBox) return;
+
+  const info = getSelectedClipTrack();
+  const hasClip = Boolean(info);
+  ctrlBox.classList.toggle("is-disabled", !hasClip);
+  for (const el of [speedRange, speedNum, rstBtn, revBtn, sendBtn, ...presetBtns]) {
+    if (el) el.disabled = !hasClip;
+  }
+
+  if (!info) {
+    if (speedRange) speedRange.value = "1";
+    if (speedNum && document.activeElement !== speedNum) speedNum.value = "1.00";
+    if (revBtn) {
+      revBtn.classList.remove("is-active");
+      revBtn.setAttribute("aria-pressed", "false");
+    }
+    for (const btn of presetBtns) {
+      btn.classList.remove("is-active");
+      btn.setAttribute("aria-pressed", "false");
+    }
+    if (badge) {
+      badge.textContent = "NO CLIP";
+      badge.className = "nle-tag mono";
+    }
+    if (durNote) durNote.textContent = "--";
+    return;
+  }
+
+  const norm = normalizeClipRetime(info.clip);
+  if (speedRange) speedRange.value = String(norm.speedRate);
+  if (speedNum && document.activeElement !== speedNum) {
+    speedNum.value = norm.speedRate.toFixed(2);
+  }
+  if (revBtn) {
+    revBtn.classList.toggle("is-active", norm.reverse);
+    revBtn.setAttribute("aria-pressed", norm.reverse ? "true" : "false");
+  }
+  for (const btn of presetBtns) {
+    const presetVal = Number.parseFloat(btn.getAttribute("data-retime-preset") || "1");
+    const isMatch = Math.abs(presetVal - norm.speedRate) < 0.005;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+
+  const fpsRate = getTimelineFps();
+  const baseDurS = info.clip.duration_frames / fpsRate;
+  const srcFramesUsed = Math.max(1, Math.round(info.clip.duration_frames * norm.speedRate));
+  const srcDurS = srcFramesUsed / fpsRate;
+  if (durNote) {
+    durNote.textContent = `${info.clip.duration_frames}f (${baseDurS.toFixed(2)}s) | SRC ${srcFramesUsed}f (${srcDurS.toFixed(2)}s)`;
+  }
+
+  if (badge) {
+    const compiled = compileRetimeFilterClient({
+      speed_rate: norm.speedRate,
+      reverse: norm.reverse
+    });
+    if (compiled.is_identity) {
+      badge.textContent = "1.0x NORMAL";
+      badge.className = "nle-tag mono";
+    } else {
+      const parts = [];
+      if (compiled.video_filtergraph) parts.push(compiled.video_filtergraph);
+      if (compiled.audio_filtergraph) parts.push(compiled.audio_filtergraph);
+      badge.textContent = parts.join(" | ");
+      badge.className = norm.reverse ? "nle-tag mono is-warn" : "nle-tag mono is-pass";
+    }
+  }
+}
+
 function renderTimelineSelection() {
   const box = byId("timeline-selection-detail");
   const sel = state.timelineSelected;
   if (!sel) {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
     renderTimelineAudioInspector();
+    renderTimelineRetimeInspector();
     return;
   }
   if (sel.kind === "clip") {
     const c = sel.data;
     const norm = normalizeClipAudio(c);
+    const retimeNorm = normalizeClipRetime(c);
     const srcFps = c.source_fps
       ? c.source_fps.den === 1
         ? String(c.source_fps.num)
@@ -784,16 +888,19 @@ function renderTimelineSelection() {
       : "inherit";
     const gainLabel = `${norm.gainDb >= 0 ? "+" : ""}${norm.gainDb.toFixed(1)} dB`;
     const fadeLabel = `In ${norm.fadeInS.toFixed(2)}s / Out ${norm.fadeOutS.toFixed(2)}s`;
+    const retimeLabel = formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse);
     renderKv(box, [
       ["Type", `Clip (${c.media_type.toUpperCase()})`],
       ["Name", c.name],
       ["Track", `${c.media_type === "audio" ? "A" : "V"}${c.track_index}`],
       ["Range", `${c.start_frame}f .. ${c.start_frame + c.duration_frames}f (${c.duration_frames}f)`],
+      ["Retime", retimeLabel],
       ["Audio", `${gainLabel} | ${fadeLabel}`],
       ["Source In", `${c.source_in_frame}f (${srcFps})`],
       ["Source Path", c.source_path || t("common.none")]
     ]);
     renderTimelineAudioInspector();
+    renderTimelineRetimeInspector();
     return;
   }
   const mk = sel.data;
@@ -805,6 +912,7 @@ function renderTimelineSelection() {
     ["Note", mk.note || t("common.none")]
   ]);
   renderTimelineAudioInspector();
+  renderTimelineRetimeInspector();
 }
 
 function renderTimelineIssues() {
@@ -2070,6 +2178,12 @@ async function buildOrExecuteRender(execute) {
     const clipDurationPayload =
       audioParamsPayload && clipAudioInfo ? clipAudioInfo.clipDurationS : null;
 
+    const useClipRetimeEl = byId("render-use-clip-retime");
+    const clipRetimeInfo =
+      useClipRetimeEl && useClipRetimeEl.checked ? getSelectedClipRetimePayload() : null;
+    const retimeParamsPayload =
+      clipRetimeInfo && !clipRetimeInfo.isIdentity ? clipRetimeInfo.retime_params : null;
+
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
       const bearer_token = byId("remote-bearer-token").value.trim();
@@ -2085,6 +2199,7 @@ async function buildOrExecuteRender(execute) {
         fx_stack: fxPayload,
         title_overlay: titlePayload,
         audio_params: audioParamsPayload,
+        retime_params: retimeParamsPayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
         prefer_hw: preferHw
@@ -2128,6 +2243,7 @@ async function buildOrExecuteRender(execute) {
       fx_stack: fxPayload,
       title_overlay: titlePayload,
       audio_params: audioParamsPayload,
+      retime_params: retimeParamsPayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
       prefer_hw: preferHw,
@@ -3517,6 +3633,163 @@ function wireClipAudioInspector() {
   }
 }
 
+function wireClipRetimeInspector() {
+  const rangeEl = byId("clip-retime-speed-range");
+  const numEl = byId("clip-retime-speed-num");
+  const rstEl = byId("btn-clip-retime-reset");
+  const revEl = byId("btn-clip-retime-reverse");
+  const sendBtn = byId("btn-clip-retime-to-deliver");
+  const presetBtns = document.querySelectorAll(".retime-preset-btn");
+  let dragSnap = null;
+
+  const liveUpdateRetime = (patch) => {
+    const info = getSelectedClipTrack();
+    if (!info) return;
+    const res = updateClipRetimeInDocument(
+      state.timelineDoc,
+      info.ref.trackKind,
+      info.ref.trackIndex,
+      info.ref.clipIndex,
+      patch
+    );
+    if (!res.changed) return;
+    state.timelineDoc = res.doc;
+    state.timelineSelected = { kind: "clip", data: res.clip };
+    renderTimelineSelection();
+    if (state.activeTab === "timeline") redrawActiveCanvases();
+  };
+
+  for (const btn of presetBtns) {
+    btn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const speedVal = Number.parseFloat(btn.getAttribute("data-retime-preset") || "1");
+      if (!Number.isFinite(speedVal)) return;
+      const res = updateClipRetimeInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { speed_rate: speedVal }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (rangeEl) {
+    rangeEl.addEventListener("pointerdown", () => {
+      dragSnap = captureTimelineSnapshot();
+    });
+    rangeEl.addEventListener("input", () => {
+      const val = Number.parseFloat(rangeEl.value);
+      if (!Number.isFinite(val)) return;
+      if (!dragSnap) dragSnap = captureTimelineSnapshot();
+      liveUpdateRetime({ speed_rate: val });
+    });
+    rangeEl.addEventListener("change", () => {
+      const val = Number.parseFloat(rangeEl.value);
+      if (Number.isFinite(val) && dragSnap) {
+        const info = getSelectedClipTrack();
+        if (info) {
+          pushUndoSnapshot(dragSnap);
+          updateTimelineToolbarUI();
+        }
+      }
+      dragSnap = null;
+    });
+  }
+
+  if (numEl) {
+    numEl.addEventListener("focus", () => {
+      dragSnap = captureTimelineSnapshot();
+    });
+    numEl.addEventListener("input", () => {
+      const val = Number.parseFloat(numEl.value);
+      if (Number.isFinite(val) && val >= RETIME_SPEED_MIN && val <= RETIME_SPEED_MAX) {
+        if (!dragSnap) dragSnap = captureTimelineSnapshot();
+        liveUpdateRetime({ speed_rate: val });
+      }
+    });
+    numEl.addEventListener("change", () => {
+      const raw = Number.parseFloat(numEl.value);
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      if (!Number.isFinite(raw)) {
+        renderTimelineRetimeInspector();
+        dragSnap = null;
+        return;
+      }
+      const clamped = Math.min(RETIME_SPEED_MAX, Math.max(RETIME_SPEED_MIN, raw));
+      const baseDoc = dragSnap && dragSnap.doc ? dragSnap.doc : state.timelineDoc;
+      const baseRef = dragSnap && dragSnap.selected && dragSnap.selected.kind === "clip"
+        ? findClipIndex(baseDoc, dragSnap.selected.data)
+        : info.ref;
+      if (baseRef) {
+        const res = updateClipRetimeInDocument(
+          baseDoc,
+          baseRef.trackKind,
+          baseRef.trackIndex,
+          baseRef.clipIndex,
+          { speed_rate: clamped }
+        );
+        if (res.changed) {
+          commitTimelineMutation(res.doc, { kind: "clip", data: res.clip }, dragSnap);
+        } else {
+          renderTimelineSelection();
+        }
+      }
+      numEl.value = clamped.toFixed(2);
+      dragSnap = null;
+    });
+  }
+
+  if (revEl) {
+    revEl.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const norm = normalizeClipRetime(info.clip);
+      const res = updateClipRetimeInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { reverse: !norm.reverse }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (rstEl) {
+    rstEl.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const res = updateClipRetimeInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { speed_rate: 1.0, reverse: false }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (sendBtn) {
+    sendBtn.addEventListener("click", () => {
+      const chk = byId("render-use-clip-retime");
+      if (chk) chk.checked = true;
+      switchTab("render");
+      showBanner("Selected clip speed / retime linked to Deliver page.", "success");
+    });
+  }
+}
+
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   const updateBtn = byId("update-banner-btn");
@@ -3657,6 +3930,7 @@ function wireEvents() {
 
   bindTimelineCanvasScrub(byId("timeline-canvas"));
   wireClipAudioInspector();
+  wireClipRetimeInspector();
 
   // FX page events
   for (const btn of document.querySelectorAll("[data-fx-preset]")) {

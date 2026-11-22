@@ -115,8 +115,10 @@ class TimelineClip(BaseModel):
     audio_gain_db: float = Field(default=0.0, ge=-24.0, le=12.0)
     fade_in_s: float = Field(default=0.0, ge=0.0, le=5.0)
     fade_out_s: float = Field(default=0.0, ge=0.0, le=5.0)
+    speed_rate: float = Field(default=1.0, ge=0.25, le=4.0)
+    reverse: bool = False
 
-    @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", mode="before")
+    @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", "speed_rate", mode="before")
     @classmethod
     def _validate_audio_float(cls, raw: Any, info: Any) -> float:
         return _check_finite_number(raw, str(info.field_name))

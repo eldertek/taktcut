@@ -392,6 +392,71 @@ def test_ui_audio_compile_and_render_plan_audio_filters(ui_server: tuple[str, Pa
     )
 
 
+def test_ui_retime_compile_and_render_plan(ui_server: tuple[str, Path]) -> None:
+    base_url, workspace = ui_server
+    sample_clip = workspace / ".taktcut-samples" / "sample_rec709.mp4"
+    sample_clip.parent.mkdir(parents=True, exist_ok=True)
+    sample_clip.write_bytes(b"fake-mp4")
+
+    status, _, raw = _http_call(
+        f"{base_url}/api/retime/compile",
+        method="POST",
+        payload={"speed_rate": 4.0, "reverse": True},
+    )
+    assert status == 200
+    data = json.loads(raw.decode("utf-8"))
+    assert data["is_identity"] is False
+    assert data["video_filtergraph"] == "setpts=0.250000*PTS,reverse"
+    assert data["audio_filtergraph"] == "atempo=2.0000,atempo=2.0000,areverse"
+    assert data["ffmpeg_vf_args"] == ["-vf", "setpts=0.250000*PTS,reverse"]
+    assert data["ffmpeg_af_args"] == ["-af", "atempo=2.0000,atempo=2.0000,areverse"]
+
+    id_status, _, id_raw = _http_call(
+        f"{base_url}/api/retime/compile",
+        method="POST",
+        payload={"speed_rate": 1.0, "reverse": False},
+    )
+    assert id_status == 200
+    id_data = json.loads(id_raw.decode("utf-8"))
+    assert id_data["is_identity"] is True
+    assert id_data["video_filtergraph"] == ""
+    assert id_data["audio_filtergraph"] == ""
+
+    for bad_payload in (
+        {"speed_rate": 0.1},
+        {"speed_rate": 5.0},
+        {"speed_rate": True},
+        {"speed_rate": 2.0, "reverse": "yes"},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/retime/compile",
+            method="POST",
+            payload=bad_payload,
+        )
+        assert bad_status == 400
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/retime_mix.mp4",
+            "profile": "web_h264",
+            "retime_params": {"speed_rate": 0.25, "reverse": True},
+            "audio_params": {"gain_db": -3.0, "fade_in_s": 0.0, "fade_out_s": 0.0, "muted": False},
+            "target_lufs": -14.0,
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan_data = json.loads(plan_raw.decode("utf-8"))
+    assert plan_data["plan"]["video_filter"] == "setpts=4.000000*PTS,reverse"
+    assert plan_data["plan"]["audio_filter"] == (
+        "atempo=0.5000,atempo=0.5000,areverse,volume=-3.00dB,loudnorm=I=-14.0:TP=-1.0:LRA=11.0"
+    )
+
+
 def test_ui_render_plan_execute_and_qa_gate_roundtrip(ui_server: tuple[str, Path]) -> None:
     base_url, workspace = ui_server
 
@@ -637,17 +702,22 @@ def test_timeline_ops_js_unit_suite() -> None:
     script = f"""
 import assert from "node:assert/strict";
 import {{
+  buildAtempoStagesClient,
   collectSnapTargets,
   compileAudioFilterClient,
+  compileRetimeFilterClient,
   findMagneticSnap,
+  formatRetimeBadgeText,
   isTrackAudiblyMuted,
   normalizeClipAudio,
+  normalizeClipRetime,
   splitClipInDocument,
   splitClipsAtPlayhead,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
   updateClipAudioInDocument,
+  updateClipRetimeInDocument,
   validateTimelineClient
 }} from {json.dumps(ops_path)};
 
@@ -752,6 +822,37 @@ assert.equal(
   compiledAf.filtergraph,
   "volume=-6.00dB,afade=t=in:st=0.000:d=1.000,afade=t=out:st=8.500:d=1.500"
 );
+
+const retimeNormDefault = normalizeClipRetime(doc.tracks[0].clips[0]);
+assert.equal(retimeNormDefault.speedRate, 1);
+assert.equal(retimeNormDefault.reverse, false);
+assert.equal(formatRetimeBadgeText(0.5, false), "0.5x");
+assert.equal(formatRetimeBadgeText(2.0, true), "2.0x REV");
+assert.equal(formatRetimeBadgeText(0.25, false), "0.25x");
+
+const retimeDoc = updateClipRetimeInDocument(doc, "video", 1, 0, {{
+  speed_rate: 2.0,
+  reverse: true
+}});
+assert.equal(retimeDoc.changed, true);
+assert.equal(retimeDoc.clip.speed_rate, 2);
+assert.equal(retimeDoc.clip.reverse, true);
+
+const splitRetimed = splitClipInDocument(retimeDoc.doc, "video", 1, 0, 40);
+assert.equal(splitRetimed.split, true);
+assert.equal(splitRetimed.leftClip.speed_rate, 2);
+assert.equal(splitRetimed.leftClip.reverse, true);
+assert.equal(splitRetimed.rightClip.speed_rate, 2);
+assert.equal(splitRetimed.rightClip.reverse, true);
+assert.equal(splitRetimed.rightClip.source_in_frame, 90);
+
+assert.deepEqual(buildAtempoStagesClient(0.25), [0.5, 0.5]);
+assert.deepEqual(buildAtempoStagesClient(4.0), [2, 2]);
+
+const compiledRt = compileRetimeFilterClient({{ speed_rate: 4.0, reverse: true }});
+assert.equal(compiledRt.is_identity, false);
+assert.equal(compiledRt.video_filtergraph, "setpts=0.250000*PTS,reverse");
+assert.equal(compiledRt.audio_filtergraph, "atempo=2.0000,atempo=2.0000,areverse");
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -932,6 +1033,18 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert page.locator("#track-mixer-summary").text_content() == "SOLO ACTIVE"
                     page.locator('[data-track-solo="A2"]').click()
                     assert page.locator("#track-mixer-summary").text_content() == "ALL ACTIVE"
+
+                    # Verify Clip Speed / Retime Inspector presets & Reverse toggle
+                    page.locator('[data-retime-preset="2.0"]').click()
+                    rt_badge = page.locator("#clip-retime-badge").text_content() or ""
+                    assert "setpts=0.500000*PTS" in rt_badge
+                    assert "atempo=2.0000" in rt_badge
+                    page.locator("#btn-clip-retime-reverse").click()
+                    rt_badge_rev = page.locator("#clip-retime-badge").text_content() or ""
+                    assert "reverse" in rt_badge_rev
+                    assert "areverse" in rt_badge_rev
+                    page.locator("#btn-clip-retime-reset").click()
+                    assert page.locator("#clip-retime-badge").text_content() == "1.0x NORMAL"
 
                 # Verify Color Grading Panel responsiveness and 4 presets at all viewports
                 page.locator("#tab-color").click()

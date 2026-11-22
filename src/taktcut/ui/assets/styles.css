@@ -1469,6 +1469,88 @@ input[type="range"] {
   color: #ffd166;
 }
 
+/* CLIP SPEED / RETIME INSPECTOR */
+.retime-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.retime-inspector-dock .pane-subheader {
+  flex-wrap: wrap;
+}
+
+#clip-retime-badge {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
+.retime-ctrl-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.retime-ctrl-box.is-disabled {
+  opacity: 0.55;
+}
+
+.retime-preset-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.retime-preset-btn {
+  text-align: center;
+  white-space: normal;
+  line-height: 1.2;
+}
+
+.retime-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: var(--accent-amber-bright);
+}
+
+.retime-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.retime-reverse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.retime-reverse-btn.is-active {
+  background: var(--status-warn-soft);
+  border-color: var(--status-warn);
+  color: #ffd166;
+}
+
+.retime-rev-arrow {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
 .issue-list {
   display: flex;
   flex-direction: column;
@@ -1757,6 +1839,9 @@ input[type="range"] {
   }
   .audio-ctrl-row label {
     grid-column: 1 / -1;
+  }
+  .retime-preset-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .title-param-row {
     grid-template-columns: minmax(0, 1fr) 64px;

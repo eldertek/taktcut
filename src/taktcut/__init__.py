@@ -18,7 +18,14 @@ from taktcut.models import (
     TimelineTrack,
     TimelineValidationResult,
 )
-from taktcut.render import ClipAudioParams, compile_audio_filter
+from taktcut.render import (
+    ClipAudioParams,
+    ClipRetimeParams,
+    RetimeCompileResult,
+    compile_audio_filter,
+    compile_retime_filter,
+    compile_retime_filter_result,
+)
 
 __version__ = "0.1.2"
 
@@ -26,7 +33,10 @@ __all__ = [
     "__version__",
     "AscCdlParams",
     "ClipAudioParams",
+    "ClipRetimeParams",
     "compile_audio_filter",
+    "compile_retime_filter",
+    "compile_retime_filter_result",
     "CubeLutInfo",
     "GapIssue",
     "HardwareCapabilities",
@@ -36,6 +46,7 @@ __all__ = [
     "RenderPlan",
     "RenderProfile",
     "RenderResult",
+    "RetimeCompileResult",
     "StreamProbe",
     "TimelineClip",
     "TimelineDocument",

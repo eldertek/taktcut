@@ -156,6 +156,7 @@ def build_sample_timeline(preset: str = "clean") -> TimelineDocument:
                         source_path="media/A002_Studio_Detail.mov",
                         media_ref="m-02",
                         source_fps=fps_25,
+                        speed_rate=0.5,
                     ),
                     TimelineClip(
                         name="A003_Talent_Close",
@@ -178,6 +179,8 @@ def build_sample_timeline(preset: str = "clean") -> TimelineDocument:
                         source_path="media/A004_End_Packshot.mov",
                         media_ref="m-04",
                         source_fps=fps_25,
+                        speed_rate=2.0,
+                        reverse=True,
                     ),
                 ],
             ),

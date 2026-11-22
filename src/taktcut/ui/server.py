@@ -65,8 +65,10 @@ from taktcut.remote_render import (
 )
 from taktcut.render import (
     ClipAudioParams,
+    ClipRetimeParams,
     build_render_plan,
     compile_audio_filter_result,
+    compile_retime_filter_result,
     execute_render_plan,
     probe_hardware_capabilities,
 )
@@ -302,6 +304,40 @@ def _build_audio_params_from_payload(
             clip_duration_s,
         )
     return None, clip_duration_s
+
+
+def _build_retime_params_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> ClipRetimeParams | None:
+    raw_retime = payload.get("retime_params")
+    if raw_retime is None:
+        raw_retime = payload.get("retime")
+    if raw_retime is not None:
+        if not isinstance(raw_retime, dict):
+            raise ValueError("'retime_params' must be a JSON object")
+        rev_raw = raw_retime.get("reverse", False)
+        if not isinstance(rev_raw, bool):
+            raise ValueError("reverse must be a boolean")
+        return ClipRetimeParams.model_validate(
+            {
+                "speed_rate": raw_retime.get("speed_rate", 1.0),
+                "reverse": rev_raw,
+            }
+        )
+
+    if allow_top_level:
+        rev_raw = payload.get("reverse", False)
+        if not isinstance(rev_raw, bool):
+            raise ValueError("reverse must be a boolean")
+        return ClipRetimeParams.model_validate(
+            {
+                "speed_rate": payload.get("speed_rate", 1.0),
+                "reverse": rev_raw,
+            }
+        )
+    return None
 
 
 def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayParams:
@@ -937,6 +973,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     fx_filtergraph = compiled_fx.filtergraph
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+            retime_params = _build_retime_params_from_payload(payload)
 
             title_overlay_obj: TitleOverlayParams | None = None
             raw_title_overlay = payload.get("title_overlay")
@@ -957,6 +994,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 fx_filtergraph=fx_filtergraph,
                 title_overlay=title_overlay_obj,
                 audio_params=audio_params,
+                retime_params=retime_params,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
                 prefer_hw=prefer_hw,
@@ -994,6 +1032,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 target_lufs=target_lufs_val,
             )
             self._send_json(HTTPStatus.OK, compiled_audio.model_dump(mode="json"))
+            return
+
+        if route == "/api/retime/compile":
+            retime_params = _build_retime_params_from_payload(payload, allow_top_level=True)
+            assert retime_params is not None
+            compiled_retime = compile_retime_filter_result(retime_params)
+            self._send_json(HTTPStatus.OK, compiled_retime.model_dump(mode="json"))
             return
 
         if route == "/api/fx/compile":
@@ -1152,6 +1197,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 fx_nodes = [FxNode.model_validate(item) for item in raw_fx]
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+            retime_params = _build_retime_params_from_payload(payload)
             title_overlay_remote: TitleOverlayParams | None = None
             if isinstance(payload.get("title_overlay"), dict):
                 title_overlay_remote = _build_title_overlay_from_payload(
@@ -1172,6 +1218,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 lut_cube_text=lut_cube_text,
                 title_overlay=title_overlay_remote,
                 audio_params=audio_params,
+                retime_params=retime_params,
                 clip_duration_s=clip_duration_s,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)

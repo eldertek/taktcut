@@ -20,9 +20,13 @@ from taktcut.models import (
 from taktcut.qa import audit_loudness, check_mp4_faststart, probe_media, run_qa_gate
 from taktcut.render import (
     ClipAudioParams,
+    ClipRetimeParams,
+    build_atempo_stages,
     build_render_plan,
     compile_audio_filter,
     compile_audio_filter_result,
+    compile_retime_filter,
+    compile_retime_filter_result,
     execute_render_plan,
 )
 
@@ -211,3 +215,121 @@ def test_real_render_with_clip_audio_gain_and_fades(tmp_path: Path) -> None:
     result = execute_render_plan(plan)
     assert result.success is True, result.stderr_tail
     assert result.bytes_written > 0
+
+
+def test_compile_retime_filter_and_strict_bounds() -> None:
+    identity = ClipRetimeParams()
+    assert identity.is_identity() is True
+    assert compile_retime_filter(identity) == (None, None)
+    identity_res = compile_retime_filter_result(identity)
+    assert identity_res.is_identity is True
+    assert identity_res.video_filtergraph == ""
+    assert identity_res.audio_filtergraph == ""
+    assert identity_res.ffmpeg_vf_args == []
+    assert identity_res.ffmpeg_af_args == []
+
+    slow = ClipRetimeParams(speed_rate=0.5)
+    assert slow.is_identity() is False
+    assert compile_retime_filter(slow) == ("setpts=2.000000*PTS", "atempo=0.5000")
+
+    quarter = ClipRetimeParams(speed_rate=0.25)
+    assert compile_retime_filter(quarter) == (
+        "setpts=4.000000*PTS",
+        "atempo=0.5000,atempo=0.5000",
+    )
+
+    fast = ClipRetimeParams(speed_rate=2.0)
+    assert compile_retime_filter(fast) == ("setpts=0.500000*PTS", "atempo=2.0000")
+
+    timelapse = ClipRetimeParams(speed_rate=4.0)
+    assert compile_retime_filter(timelapse) == (
+        "setpts=0.250000*PTS",
+        "atempo=2.0000,atempo=2.0000",
+    )
+
+    rev_only = ClipRetimeParams(speed_rate=1.0, reverse=True)
+    assert rev_only.is_identity() is False
+    assert compile_retime_filter(rev_only) == ("reverse", "areverse")
+
+    rev_3x = compile_retime_filter_result(ClipRetimeParams(speed_rate=3.0, reverse=True))
+    assert rev_3x.video_filtergraph == "setpts=0.333333*PTS,reverse"
+    assert rev_3x.audio_filtergraph == "atempo=2.0000,atempo=1.5000,areverse"
+    assert rev_3x.ffmpeg_vf_args == ["-vf", "setpts=0.333333*PTS,reverse"]
+    assert rev_3x.ffmpeg_af_args == ["-af", "atempo=2.0000,atempo=1.5000,areverse"]
+
+    for rate in (0.25, 0.3, 0.5, 0.75, 1.5, 2.0, 2.5, 3.0, 4.0):
+        stages = build_atempo_stages(rate)
+        assert len(stages) >= 1
+        assert all(0.5 <= s <= 2.0 for s in stages)
+        assert math.isclose(math.prod(stages), rate, rel_tol=1e-6)
+
+    for bad_rate in (0.24, 4.01, 0.0, -1.0, math.nan, math.inf, -math.inf, True, False):
+        with pytest.raises((ValidationError, ValueError)):
+            ClipRetimeParams(speed_rate=bad_rate)  # type: ignore[arg-type]
+        with pytest.raises((ValidationError, ValueError)):
+            TimelineClip(
+                name="Bad_Retime",
+                track_index=1,
+                media_type="video",
+                start_frame=0,
+                duration_frames=50,
+                speed_rate=bad_rate,  # type: ignore[arg-type]
+            )
+
+    clip = TimelineClip(
+        name="B001_SlowMo",
+        track_index=1,
+        media_type="video",
+        start_frame=0,
+        duration_frames=100,
+        speed_rate=0.5,
+        reverse=True,
+    )
+    assert clip.speed_rate == 0.5
+    assert clip.reverse is True
+
+
+def test_real_render_with_clip_retime_and_reverse(tmp_path: Path) -> None:
+    src = tmp_path / "retime_source.mp4"
+    _generate_synthetic_clip(src)
+
+    out_fast_rev = tmp_path / "retime_2x_rev.mp4"
+    plan_fast = build_render_plan(
+        input_path=src,
+        output_path=out_fast_rev,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        retime_params=ClipRetimeParams(speed_rate=2.0, reverse=True),
+        audio_params=ClipAudioParams(gain_db=-2.0),
+        target_lufs=-14.0,
+        prefer_hw=False,
+    )
+    assert plan_fast.video_filter == "setpts=0.500000*PTS,reverse"
+    assert plan_fast.audio_filter == (
+        "atempo=2.0000,areverse,volume=-2.00dB,loudnorm=I=-14.0:TP=-1.0:LRA=11.0"
+    )
+    res_fast = execute_render_plan(plan_fast)
+    assert res_fast.success is True, res_fast.stderr_tail
+    assert res_fast.bytes_written > 0
+
+    probe_fast = probe_media(out_fast_rev)
+    assert probe_fast.is_cfr is True
+    assert 0.8 <= probe_fast.video_duration_s <= 1.2
+
+    out_quarter = tmp_path / "retime_025x.mp4"
+    plan_quarter = build_render_plan(
+        input_path=src,
+        output_path=out_quarter,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        retime_params=ClipRetimeParams(speed_rate=0.25, reverse=False),
+        prefer_hw=False,
+    )
+    assert plan_quarter.video_filter == "setpts=4.000000*PTS"
+    assert plan_quarter.audio_filter == "atempo=0.5000,atempo=0.5000"
+    res_quarter = execute_render_plan(plan_quarter)
+    assert res_quarter.success is True, res_quarter.stderr_tail
+    assert res_quarter.bytes_written > 0
+
+    probe_quarter = probe_media(out_quarter)
+    assert probe_quarter.video_duration_s >= 7.5

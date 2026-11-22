@@ -1,3 +1,5 @@
+import { formatRetimeBadgeText, normalizeClipRetime } from "./timeline_ops.js";
+
 export function evaluateEasing(tNorm, easing = "linear") {
   const u = clamp01(Number.isFinite(tNorm) ? tNorm : 0);
   if (easing === "ease_in") return u * u;
@@ -362,14 +364,23 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
 
   if (activeClips.length > 0) {
     const top = activeClips[activeClips.length - 1];
-    const relOffset = playheadFrame - top.clip.start_frame + (top.clip.source_in_frame || 0);
+    const retimeNorm = normalizeClipRetime(top.clip);
+    const isRetimed = Math.abs(retimeNorm.speedRate - 1.0) > 0.005 || retimeNorm.reverse;
+    const localPos = playheadFrame - top.clip.start_frame;
+    const retimedLocal = retimeNorm.reverse
+      ? (Math.max(1, top.clip.duration_frames) - 1 - localPos) * retimeNorm.speedRate
+      : localPos * retimeNorm.speedRate;
+    const relOffset = (top.clip.source_in_frame || 0) + Math.round(retimedLocal);
+    const retimeSlateTag = isRetimed
+      ? ` | ${formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse)}`
+      : "";
     ctx.fillStyle = "#d8d8de";
     ctx.font = "600 11px ui-monospace, monospace";
     ctx.fillText(`${top.track}: ${top.clip.name}`, 22, h - 31);
     ctx.fillStyle = "#8e8e98";
     ctx.font = "10px ui-monospace, monospace";
     ctx.fillText(
-      `SRC+${relOffset}f | ${doc.width}x${doc.height} | ${activeClips.length} active layer(s)`,
+      `SRC+${relOffset}f${retimeSlateTag} | ${doc.width}x${doc.height} | ${activeClips.length} active layer(s)`,
       22,
       h - 18
     );
@@ -1220,22 +1231,58 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         }
       }
 
+      const retimeNorm = normalizeClipRetime(clip);
+      const hasRetime = Math.abs(retimeNorm.speedRate - 1.0) > 0.005 || retimeNorm.reverse;
+      let speedBadgeW = 0;
+      if (hasRetime && drawW >= 42) {
+        const badgeText = formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse);
+        ctx.font = "700 9px ui-monospace, monospace";
+        const measuredW = Math.ceil(ctx.measureText(badgeText).width) + 8;
+        const rightReserve = showFadeHandles ? 14 : 5;
+        if (measuredW + rightReserve + 18 <= drawW) {
+          speedBadgeW = measuredW;
+          const badgeX = drawX + drawW - rightReserve - speedBadgeW;
+          const badgeY = clipY + 3;
+          const badgeH = 14;
+          ctx.fillStyle = retimeNorm.reverse
+            ? "rgba(224, 123, 57, 0.28)"
+            : "rgba(210, 153, 34, 0.24)";
+          roundRectPath(ctx, badgeX, badgeY, speedBadgeW, badgeH, 2);
+          ctx.fill();
+          ctx.strokeStyle = retimeNorm.reverse ? "#e68442" : "#d29922";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = retimeNorm.reverse ? "#ffd8a8" : "#ffd166";
+          ctx.fillText(badgeText, badgeX + 4, badgeY + 10);
+        }
+      }
+
       if (drawW > 34) {
+        const textClipW = Math.max(8, drawW - 8 - (speedBadgeW > 0 ? speedBadgeW + 10 : 0));
         ctx.save();
         ctx.beginPath();
-        ctx.rect(drawX + 4, clipY, drawW - 8, clipH);
+        ctx.rect(drawX + 4, clipY, textClipW, clipH);
         ctx.clip();
         ctx.fillStyle = trackAudiblyMuted ? "#9696a0" : "#e6e6eb";
         ctx.font = "600 11px system-ui, sans-serif";
         ctx.fillText(clip.name, drawX + 6, rowY + 19);
+        ctx.restore();
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(drawX + 4, clipY + 20, drawW - 8, clipH - 20);
+        ctx.clip();
         ctx.fillStyle = "#a2a2ad";
         ctx.font = "10px ui-monospace, monospace";
         const gainTag = Math.abs(gainDb) >= 0.05
           ? ` | ${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)}dB`
           : "";
         const muteTag = trackAudiblyMuted ? " | MUTED" : "";
+        const retimeTag = hasRetime && speedBadgeW === 0
+          ? ` | ${formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse)}`
+          : "";
         ctx.fillText(
-          `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${gainTag}${muteTag}`,
+          `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${gainTag}${muteTag}${retimeTag}`,
           drawX + 6,
           rowY + 32
         );

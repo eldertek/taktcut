@@ -1,5 +1,9 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
-import { compileAudioFilterClient, validateTimelineClient } from "./timeline_ops.js";
+import {
+  compileAudioFilterClient,
+  compileRetimeFilterClient,
+  validateTimelineClient
+} from "./timeline_ops.js";
 
 function buildDemoTimeline(preset) {
   const fps25 = { num: 25, den: 1 };
@@ -57,9 +61,9 @@ function buildDemoTimeline(preset) {
         name: "V1 Main Picture",
         clips: [
           { name: "A001_Opening_Wide", track_index: 1, media_type: "video", start_frame: 0, duration_frames: 125, source_in_frame: 24, source_path: "media/A001_Opening_Wide.mov", source_fps: fps25, enabled: true },
-          { name: "A002_Studio_Detail", track_index: 1, media_type: "video", start_frame: 125, duration_frames: 100, source_in_frame: 10, source_path: "media/A002_Studio_Detail.mov", source_fps: fps25, enabled: true },
+          { name: "A002_Studio_Detail", track_index: 1, media_type: "video", start_frame: 125, duration_frames: 100, source_in_frame: 10, source_path: "media/A002_Studio_Detail.mov", source_fps: fps25, enabled: true, speed_rate: 0.5 },
           { name: "A003_Talent_Close", track_index: 1, media_type: "video", start_frame: 225, duration_frames: 150, source_in_frame: 48, source_path: "media/A003_Talent_Close.mov", source_fps: fps25, enabled: true },
-          { name: "A004_End_Packshot", track_index: 1, media_type: "video", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "media/A004_End_Packshot.mov", source_fps: fps25, enabled: true }
+          { name: "A004_End_Packshot", track_index: 1, media_type: "video", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "media/A004_End_Packshot.mov", source_fps: fps25, enabled: true, speed_rate: 2.0, reverse: true }
         ]
       },
       {
@@ -592,6 +596,14 @@ export function createApiClient() {
         const pixFmt = isProres ? "yuv422p10le" : "yuv420p";
         const gop = Math.max(2, Math.round((2 * fpsNum) / fpsDen));
         const vfParts = [];
+        const afParts = [];
+        if (body.retime_params) {
+          const compiledRetime = compileRetimeFilterClient(body.retime_params);
+          if (!compiledRetime.is_identity) {
+            if (compiledRetime.video_filtergraph) vfParts.push(compiledRetime.video_filtergraph);
+            if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
+          }
+        }
         if (Array.isArray(body.fx_stack) && body.fx_stack.length > 0) {
           const compiledFx = compileFxClient(body.fx_stack, { pix_fmt: pixFmt, use_gpu: Boolean(body.prefer_hw) });
           if (compiledFx.filtergraph) vfParts.push(compiledFx.filtergraph);
@@ -610,17 +622,19 @@ export function createApiClient() {
           }
         }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
-        let af = null;
         if (body.audio_params) {
           const compiledAudio = compileAudioFilterClient(
             body.audio_params,
             body.clip_duration_s ?? null,
             body.target_lufs ?? null
           );
-          af = compiledAudio.filtergraph || null;
+          if (compiledAudio.filtergraph) afParts.push(compiledAudio.filtergraph);
         } else if (body.target_lufs !== null && body.target_lufs !== undefined) {
-          af = `loudnorm=I=${Number(body.target_lufs).toFixed(1)}:TP=-1.0:LRA=11.0`;
+          const lufs = Number(body.target_lufs);
+          const lra = lufs >= -16.0 ? 11.0 : 7.0;
+          afParts.push(`loudnorm=I=${lufs.toFixed(1)}:TP=-1.0:LRA=${lra.toFixed(1)}`);
         }
+        const af = afParts.length > 0 ? afParts.join(",") : null;
         const argv = ["ffmpeg", "-hide_banner", "-y", "-i", body.input_path, "-fps_mode", "cfr", "-r", body.fps || "25", "-c:v", encoder, "-pix_fmt", pixFmt, "-g", String(gop)];
         if (vf) argv.push("-vf", vf);
         if (af) argv.push("-af", af);
@@ -723,6 +737,12 @@ export function createApiClient() {
         );
       }
       return requestJson("/api/audio/compile", { method: "POST", body: payload });
+    },
+    async compileRetimeFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileRetimeFilterClient(payload.retime_params || payload);
+      }
+      return requestJson("/api/retime/compile", { method: "POST", body: payload });
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {
