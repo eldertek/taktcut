@@ -61,15 +61,13 @@
                   <button type="button" id="btn-inspect-workspace" class="btn btn-secondary" data-i18n="timeline.btn.inspect">Inspect</button>
                 </div>
               </div>
-              <div class="form-row-two">
-                <div class="form-row">
-                  <label for="timeline-file-input" data-i18n="timeline.label.upload">Import Local File</label>
-                  <input type="file" id="timeline-file-input" class="input-control file-input" accept=".drp,.drt,.fcpxml,.xml,.otio,.otioz">
-                </div>
-                <div class="form-row">
-                  <label for="timeline-name-filter" data-i18n="timeline.label.seqName">Sequence (.drp)</label>
-                  <input type="text" id="timeline-name-filter" class="input-control mono" placeholder="Main Cut">
-                </div>
+              <div class="form-row">
+                <label for="timeline-file-input" data-i18n="timeline.label.upload">Import Local File</label>
+                <input type="file" id="timeline-file-input" class="input-control file-input" accept=".drp,.drt,.fcpxml,.xml,.otio,.otioz">
+              </div>
+              <div class="form-row">
+                <label for="timeline-name-filter" data-i18n="timeline.label.seqName">Sequence (.drp)</label>
+                <input type="text" id="timeline-name-filter" class="input-control mono" placeholder="Main Cut">
               </div>
 
               <div class="pane-divider"></div>
@@ -151,7 +149,7 @@
         </div>
 
         <!-- BOTTOM DOCKED MULTI-TRACK TIMELINE -->
-        <section class="nle-pane">
+        <section class="nle-pane nle-timeline-dock">
           <div class="pane-header">
             <h2 data-i18n="timeline.viewer.title">Docked Multi-Track Timeline</h2>
             <div class="viewer-controls">

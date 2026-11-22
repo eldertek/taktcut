@@ -203,13 +203,28 @@ function setTimelineData(payload) {
   const doc = state.timelineDoc;
   if (doc) {
     let maxEnd = doc.start_frame || 0;
+    let firstClip = null;
     for (const trk of doc.tracks || []) {
       for (const c of trk.clips || []) {
+        if (!firstClip) firstClip = c;
         if (c.start_frame + c.duration_frames > maxEnd) maxEnd = c.start_frame + c.duration_frames;
       }
     }
     state.timelineMaxFrame = Math.max(1, maxEnd);
     state.playheadFrame = Math.min(state.playheadFrame, state.timelineMaxFrame);
+
+    let activeAtPlayhead = null;
+    for (const trk of doc.tracks || []) {
+      if (trk.kind !== "video") continue;
+      for (const c of trk.clips || []) {
+        if (state.playheadFrame >= c.start_frame && state.playheadFrame < c.start_frame + c.duration_frames) {
+          activeAtPlayhead = c;
+        }
+      }
+    }
+    if (activeAtPlayhead || firstClip) {
+      state.timelineSelected = { kind: "clip", data: activeAtPlayhead || firstClip };
+    }
 
     const cleanStem = (doc.name || "timeline").replace(/[^A-Za-z0-9._-]/g, "_");
     const fmt = byId("otio-format-select").value;
@@ -891,7 +906,7 @@ function wireEvents() {
     const rect = canvas.getBoundingClientRect();
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
-    if (y <= 32 && state.timelineXToFrame) {
+    if (y <= 36 && state.timelineXToFrame) {
       setPlayhead(state.timelineXToFrame(x));
       return;
     }

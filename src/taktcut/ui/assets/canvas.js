@@ -68,7 +68,7 @@ function toCssRgb(r, g, b) {
 }
 
 export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl) {
-  const { ctx, width, height } = setupCanvas(canvas, 210);
+  const { ctx, width, height } = setupCanvas(canvas, 244);
   ctx.fillStyle = "#141416";
   ctx.fillRect(0, 0, width, height);
 
@@ -176,9 +176,9 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl) {
 export function drawTimelineCanvas(canvas, doc, validation, opts) {
   const tracks = doc ? doc.tracks || [] : [];
   const rowCount = Math.max(1, tracks.length);
-  const rulerHeight = 32;
-  const trackHeight = 38;
-  const padBottom = 10;
+  const rulerHeight = 36;
+  const trackHeight = 44;
+  const padBottom = 12;
   const totalHeight = rulerHeight + rowCount * trackHeight + padBottom;
 
   const { ctx, width, height } = setupCanvas(canvas, totalHeight);
@@ -234,9 +234,9 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 
   ctx.fillStyle = "#8e8e98";
   ctx.font = "600 10px ui-monospace, monospace";
-  ctx.fillText("TRACKS", 10, 20);
+  ctx.fillText("TRACKS", 10, 22);
 
-  // Ruler ticks clipped to track area
+  // Ruler ticks clipped to track area (upper band, clear of lower playhead cap)
   const minTickPx = width < 500 ? 68 : 94;
   const rawStep = Math.max(1, Math.ceil(minTickPx / Math.max(0.01, pxPerFrame)));
   const niceSteps = [1, 5, 10, 25, 50, 100, 125, 250, 500, 1000, 2500, 5000];
@@ -252,14 +252,14 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     if (x < timelineX || x > timelineX + timelineW - 4) continue;
     ctx.strokeStyle = "#34343c";
     ctx.beginPath();
-    ctx.moveTo(x, rulerHeight - 8);
+    ctx.moveTo(x, 18);
     ctx.lineTo(x, rulerHeight);
     ctx.stroke();
 
-    ctx.fillStyle = "#8e8e98";
+    ctx.fillStyle = "#9696a0";
     const label = width < 520 ? `${f}f` : `${framesToSmpte(f, doc.fps.num, doc.fps.den)} (${f}f)`;
     if (x + ctx.measureText(label).width + 6 <= timelineX + timelineW) {
-      ctx.fillText(label, x + 4, 15);
+      ctx.fillText(label, x + 4, 13);
     }
   }
   ctx.restore();
@@ -285,7 +285,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 
     // Track tag
     ctx.fillStyle = isAudio ? "#255c4e" : "#2c4e7c";
-    roundRectPath(ctx, 8, rowY + 9, 24, 19, 2);
+    roundRectPath(ctx, 8, rowY + 12, 24, 20, 2);
     ctx.fill();
     ctx.strokeStyle = isAudio ? "#3d8c78" : "#4c74ab";
     ctx.stroke();
@@ -293,13 +293,13 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.fillStyle = "#d8d8de";
     ctx.font = "700 10px ui-monospace, monospace";
     const shortCode = `${isAudio ? "A" : "V"}${trk.index}`;
-    ctx.fillText(shortCode, 13, rowY + 22);
+    ctx.fillText(shortCode, 13, rowY + 26);
 
     if (width >= 480) {
       ctx.fillStyle = "#b4b4be";
       ctx.font = "500 11px system-ui, sans-serif";
       const tName = (trk.name || shortCode).slice(0, 11);
-      ctx.fillText(tName, 38, rowY + 22);
+      ctx.fillText(tName, 38, rowY + 26);
     }
 
     // Clips
@@ -341,10 +341,10 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         ctx.clip();
         ctx.fillStyle = "#e6e6eb";
         ctx.font = "600 11px system-ui, sans-serif";
-        ctx.fillText(clip.name, drawX + 6, rowY + 17);
+        ctx.fillText(clip.name, drawX + 6, rowY + 19);
         ctx.fillStyle = "#a2a2ad";
         ctx.font = "10px ui-monospace, monospace";
-        ctx.fillText(`${clip.start_frame}-${clip.start_frame + clip.duration_frames}f`, drawX + 6, rowY + 29);
+        ctx.fillText(`${clip.start_frame}-${clip.start_frame + clip.duration_frames}f`, drawX + 6, rowY + 32);
         ctx.restore();
       }
 
@@ -407,24 +407,24 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     });
   }
 
-  // DaVinci Playhead Needle
+  // DaVinci Playhead Needle (lower ruler band so tick labels remain unobstructed)
   const playheadFrame = opts && typeof opts.playheadFrame === "number" ? opts.playheadFrame : startFrame;
   const phX = frameToX(playheadFrame);
   if (phX >= timelineX && phX <= timelineX + timelineW) {
-    ctx.strokeStyle = "#e07b39";
+    ctx.strokeStyle = "#e68442";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(phX, 12);
+    ctx.moveTo(phX, 20);
     ctx.lineTo(phX, height);
     ctx.stroke();
 
-    ctx.fillStyle = "#e07b39";
+    ctx.fillStyle = "#e68442";
     ctx.beginPath();
-    ctx.moveTo(phX - 6, 4);
-    ctx.lineTo(phX + 6, 4);
-    ctx.lineTo(phX + 6, 11);
-    ctx.lineTo(phX, 17);
-    ctx.lineTo(phX - 6, 11);
+    ctx.moveTo(phX - 6, 20);
+    ctx.lineTo(phX + 6, 20);
+    ctx.lineTo(phX + 6, 28);
+    ctx.lineTo(phX, 35);
+    ctx.lineTo(phX - 6, 28);
     ctx.closePath();
     ctx.fill();
   }
