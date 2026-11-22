@@ -425,7 +425,10 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert "\u2013" not in i18n_text and "\u2014" not in i18n_text
     assert '"Étalonnage"' in i18n_text
     assert '"Télécharger OTIO"' in i18n_text
+    assert '"statusbar.shortcuts"' in i18n_text
     assert "innerHTML" not in i18n_text
+    assert "\u2013" not in _http_call(f"{base_url}/app.js")[2].decode("utf-8")
+    assert "\u2014" not in _http_call(f"{base_url}/app.js")[2].decode("utf-8")
 
 
 def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None:
@@ -438,7 +441,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            for width, height in ((375, 812), (1440, 900)):
+            for width, height in ((375, 812), (390, 844), (1440, 900)):
                 ctx = browser.new_context(viewport={"width": width, "height": height})
                 page = ctx.new_page()
                 errors: list[str] = []
@@ -464,6 +467,25 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     "() => document.documentElement.scrollWidth - window.innerWidth"
                 )
                 assert overflow <= 0, f"Horizontal overflow at {width}x{height}: {overflow}px"
+                if width == 1440:
+                    page.keyboard.press("ArrowRight")
+                    assert page.locator("#program-frame-counter").text_content() == "26f / 500f"
+                    page.keyboard.press("ArrowLeft")
+                    assert page.locator("#program-frame-counter").text_content() == "25f / 500f"
+                    page.keyboard.press("l")
+                    assert page.locator("#transport-state-pill").text_content() == "PLAY 1x"
+                    page.keyboard.press("l")
+                    assert page.locator("#transport-state-pill").text_content() == "PLAY 2x"
+                    page.keyboard.press("k")
+                    assert page.locator("#transport-state-pill").text_content() == "STOP"
+                    page.keyboard.press("j")
+                    assert page.locator("#transport-state-pill").text_content() == "REV 1x"
+                    page.keyboard.press("Space")
+                    assert page.locator("#transport-state-pill").text_content() == "STOP"
+                    page.locator("#timeline-name-filter").focus()
+                    page.keyboard.press("l")
+                    page.keyboard.press("Space")
+                    assert page.locator("#transport-state-pill").text_content() == "STOP"
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"
                 ctx.close()

@@ -57,6 +57,10 @@ const state = {
   timelineZoom: 1,
   playheadFrame: 25,
   timelineMaxFrame: 500,
+  playbackSpeed: 0,
+  playbackRafId: null,
+  playbackLastTs: 0,
+  playbackAccumFrames: 0,
   cdl: {
     slope: [1.06, 1.0, 0.94],
     offset: [0.01, 0.0, -0.01],
@@ -143,11 +147,15 @@ function setLanguage(lang) {
     const key = node.getAttribute("data-i18n");
     if (key) node.textContent = t(key);
   }
+  updateTransportStatusUI();
   renderTimelineUI();
   if (state.lastQaReport) renderQaReport(state.lastQaReport);
 }
 
 function switchTab(tabName) {
+  if (tabName !== "timeline" && state.playbackSpeed !== 0) {
+    stopPlayback();
+  }
   state.activeTab = tabName;
   for (const btn of document.querySelectorAll(".page-tab")) {
     const isMatch = btn.getAttribute("data-tab") === tabName;
@@ -196,6 +204,7 @@ function redrawActiveCanvases() {
 
 /* PAGE 1: TIMELINE */
 function setTimelineData(payload) {
+  stopPlayback();
   state.timelineDoc = payload.document;
   state.timelineValidation = payload.validation;
   state.timelineSelected = null;
@@ -791,6 +800,183 @@ function setPlayhead(frame) {
   }
 }
 
+function getTimelineFps() {
+  const doc = state.timelineDoc;
+  if (!doc || !doc.fps) return 25;
+  return Math.max(1, doc.fps.num / Math.max(1, doc.fps.den));
+}
+
+function updateTransportStatusUI() {
+  const playBtn = byId("btn-tc-play");
+  const pill = byId("transport-state-pill");
+  const isPlaying = state.playbackSpeed !== 0;
+
+  if (playBtn) {
+    playBtn.textContent = isPlaying ? t("timeline.transport.pause") : t("timeline.transport.play");
+    playBtn.setAttribute("aria-pressed", isPlaying ? "true" : "false");
+    playBtn.classList.toggle("is-playing", isPlaying);
+  }
+  if (pill) {
+    if (state.playbackSpeed > 0) {
+      pill.textContent = `PLAY ${state.playbackSpeed}x`;
+      pill.className = "statusbar-state is-playing";
+    } else if (state.playbackSpeed < 0) {
+      pill.textContent = `REV ${Math.abs(state.playbackSpeed)}x`;
+      pill.className = "statusbar-state is-reverse";
+    } else {
+      pill.textContent = "STOP";
+      pill.className = "statusbar-state";
+    }
+  }
+}
+
+function stopPlayback() {
+  if (state.playbackRafId !== null) {
+    window.cancelAnimationFrame(state.playbackRafId);
+    state.playbackRafId = null;
+  }
+  state.playbackSpeed = 0;
+  state.playbackLastTs = 0;
+  state.playbackAccumFrames = 0;
+  updateTransportStatusUI();
+}
+
+function playbackTick(ts) {
+  if (state.playbackSpeed === 0) {
+    state.playbackRafId = null;
+    return;
+  }
+  if (!state.playbackLastTs) {
+    state.playbackLastTs = ts;
+  }
+  const dtSec = Math.min(0.25, Math.max(0, (ts - state.playbackLastTs) / 1000));
+  state.playbackLastTs = ts;
+
+  const fps = getTimelineFps();
+  state.playbackAccumFrames += dtSec * fps * state.playbackSpeed;
+  const wholeDelta =
+    state.playbackAccumFrames >= 0
+      ? Math.floor(state.playbackAccumFrames)
+      : Math.ceil(state.playbackAccumFrames);
+
+  if (wholeDelta !== 0) {
+    state.playbackAccumFrames -= wholeDelta;
+    const next = state.playheadFrame + wholeDelta;
+    if (next >= state.timelineMaxFrame) {
+      setPlayhead(state.timelineMaxFrame);
+      stopPlayback();
+      return;
+    }
+    if (next <= 0) {
+      setPlayhead(0);
+      stopPlayback();
+      return;
+    }
+    setPlayhead(next);
+  }
+  state.playbackRafId = window.requestAnimationFrame(playbackTick);
+}
+
+function startShuttle(speed) {
+  if (speed === 0) {
+    stopPlayback();
+    return;
+  }
+  if (speed > 0 && state.playheadFrame >= state.timelineMaxFrame) {
+    setPlayhead(0);
+  } else if (speed < 0 && state.playheadFrame <= 0) {
+    setPlayhead(state.timelineMaxFrame);
+  }
+  state.playbackSpeed = speed;
+  state.playbackLastTs = 0;
+  state.playbackAccumFrames = 0;
+  updateTransportStatusUI();
+  if (state.playbackRafId === null) {
+    state.playbackRafId = window.requestAnimationFrame(playbackTick);
+  }
+}
+
+function togglePlayPause() {
+  if (state.playbackSpeed !== 0) {
+    stopPlayback();
+  } else {
+    startShuttle(1);
+  }
+}
+
+function stepShuttle(direction) {
+  if (direction > 0) {
+    const next = state.playbackSpeed <= 0 ? 1 : Math.min(8, state.playbackSpeed * 2);
+    startShuttle(next);
+  } else {
+    const next = state.playbackSpeed >= 0 ? 1 : Math.min(8, Math.abs(state.playbackSpeed) * 2);
+    startShuttle(-next);
+  }
+}
+
+function isEditableTarget(target) {
+  if (!target || !(target instanceof Element)) return false;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  ) {
+    return true;
+  }
+  if (target instanceof HTMLElement && target.isContentEditable) {
+    return true;
+  }
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function handleTransportKeydown(ev) {
+  if (ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (isEditableTarget(ev.target)) return;
+  if (state.activeTab !== "timeline") return;
+
+  if (ev.code === "Space" || ev.key === " ") {
+    if (
+      ev.target instanceof Element &&
+      (ev.target.tagName === "BUTTON" ||
+        ev.target.tagName === "A" ||
+        ev.target.getAttribute("role") === "tab")
+    ) {
+      return;
+    }
+    ev.preventDefault();
+    togglePlayPause();
+    return;
+  }
+
+  const lower = ev.key.toLowerCase();
+  if (lower === "k") {
+    ev.preventDefault();
+    stopPlayback();
+    return;
+  }
+  if (lower === "l") {
+    ev.preventDefault();
+    stepShuttle(1);
+    return;
+  }
+  if (lower === "j") {
+    ev.preventDefault();
+    stepShuttle(-1);
+    return;
+  }
+  if (ev.key === "ArrowLeft") {
+    ev.preventDefault();
+    stopPlayback();
+    setPlayhead(state.playheadFrame - (ev.shiftKey ? 10 : 1));
+    return;
+  }
+  if (ev.key === "ArrowRight") {
+    ev.preventDefault();
+    stopPlayback();
+    setPlayhead(state.playheadFrame + (ev.shiftKey ? 10 : 1));
+  }
+}
+
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   byId("lang-en").addEventListener("click", () => setLanguage("en"));
@@ -894,14 +1080,29 @@ function wireEvents() {
   });
 
   byId("playhead-slider").addEventListener("input", () => {
+    stopPlayback();
     setPlayhead(Number.parseInt(byId("playhead-slider").value, 10));
   });
-  byId("btn-tc-start").addEventListener("click", () => setPlayhead(0));
-  byId("btn-tc-prev").addEventListener("click", () => setPlayhead(state.playheadFrame - 1));
-  byId("btn-tc-next").addEventListener("click", () => setPlayhead(state.playheadFrame + 1));
-  byId("btn-tc-end").addEventListener("click", () => setPlayhead(state.timelineMaxFrame));
+  byId("btn-tc-start").addEventListener("click", () => {
+    stopPlayback();
+    setPlayhead(0);
+  });
+  byId("btn-tc-prev").addEventListener("click", () => {
+    stopPlayback();
+    setPlayhead(state.playheadFrame - 1);
+  });
+  byId("btn-tc-play").addEventListener("click", togglePlayPause);
+  byId("btn-tc-next").addEventListener("click", () => {
+    stopPlayback();
+    setPlayhead(state.playheadFrame + 1);
+  });
+  byId("btn-tc-end").addEventListener("click", () => {
+    stopPlayback();
+    setPlayhead(state.timelineMaxFrame);
+  });
 
   byId("timeline-canvas").addEventListener("click", (ev) => {
+    stopPlayback();
     const canvas = byId("timeline-canvas");
     const rect = canvas.getBoundingClientRect();
     const x = ev.clientX - rect.left;
@@ -1018,6 +1219,7 @@ function wireEvents() {
   byId("btn-run-qa").addEventListener("click", runBroadcastQa);
   byId("btn-qa-gen-sample").addEventListener("click", generateSampleClip);
 
+  document.addEventListener("keydown", handleTransportKeydown);
   window.addEventListener("resize", redrawActiveCanvases);
 }
 

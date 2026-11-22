@@ -1,12 +1,34 @@
 # taktcut
 
+[![CI](https://github.com/eldertek/taktcut/actions/workflows/ci.yml/badge.svg)](https://github.com/eldertek/taktcut/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-e68442.svg)](LICENSE)
+
 Clean-room OpenTimelineIO interchange, ASC CDL / `.cube` color pipeline, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local Web Studio GUI, CLI, and MCP server.
 
 `taktcut` inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via FFmpeg/NVENC, and runs an EBU R128 + faststart QA gate from the **Web Studio GUI**, **CLI**, or **MCP** without opening a desktop NLE.
 
 Live browser demo: [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)
 
-![taktcut Web Studio GUI](docs/assets/taktcut-ui-desktop.png)
+![taktcut Web Studio GUI](docs/screenshot-desktop.png)
+
+## 30-Second Quickstart
+
+```bash
+git clone https://github.com/eldertek/taktcut.git && cd taktcut
+pip install -e ".[dev]"
+
+# 1. Open the docked NLE Web Studio (Space, J/K/L, Left/Right transport shortcuts):
+taktcut ui
+
+# 2. Or inspect a timeline, bake a 33-pt .cube LUT, and run the Broadcast QA gate:
+taktcut inspect timeline.drt
+taktcut bake-lut --out look.cube --slope 1.05 1.0 0.96 --sat 1.12
+taktcut qa delivery.mp4 --lufs -14 --max-tp -1.0
+
+# 3. Or expose all 8 tools over stdio MCP:
+taktcut mcp
+```
 
 ## Why taktcut
 

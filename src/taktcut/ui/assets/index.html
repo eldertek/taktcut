@@ -113,9 +113,10 @@
               </div>
               <div class="transport-bar">
                 <div class="btn-row">
-                  <button type="button" id="btn-tc-start" class="btn btn-mini mono" title="Start">|&lt;</button>
-                  <button type="button" id="btn-tc-prev" class="btn btn-mini mono" title="-1 frame">&lt;</button>
-                  <button type="button" id="btn-tc-next" class="btn btn-mini mono" title="+1 frame">&gt;</button>
+                  <button type="button" id="btn-tc-start" class="btn btn-mini mono" title="Start (Home)">|&lt;</button>
+                  <button type="button" id="btn-tc-prev" class="btn btn-mini mono" title="-1 frame (ArrowLeft)">&lt;</button>
+                  <button type="button" id="btn-tc-play" class="btn btn-mini mono" title="Play / Pause (Space / J-K-L)" aria-pressed="false" data-i18n="timeline.transport.play">Play</button>
+                  <button type="button" id="btn-tc-next" class="btn btn-mini mono" title="+1 frame (ArrowRight)">&gt;</button>
                   <button type="button" id="btn-tc-end" class="btn btn-mini mono" title="End">&gt;|</button>
                 </div>
                 <input type="range" id="playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="0" aria-label="Timeline playhead">
@@ -554,6 +555,10 @@
     <!-- STATUS BAR -->
     <footer class="nle-statusbar mono">
       <span id="runtime-mode-pill">LOCAL STUDIO</span>
+      <span id="transport-shortcut-hint" class="statusbar-hint">
+        <span id="transport-state-pill" class="statusbar-state">STOP</span>
+        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | Left/Right: +/-1f</span>
+      </span>
       <span id="version-badge">v0.1.0</span>
     </footer>
   </div>
