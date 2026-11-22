@@ -341,12 +341,89 @@ body {
 }
 
 /* FX WORKBENCH (SAPPHIRE LIBRARY + EFFECT CONTROLS + PROGRAM MONITOR) */
-.nle-fx-top {
+.nle-fx-top,
+.nle-titles-top {
   display: grid;
   grid-template-columns: 380px minmax(0, 1fr);
   gap: 1px;
   background: var(--bg-hairline);
   min-width: 0;
+}
+
+.title-preset-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.title-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 9px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  color: var(--text-primary);
+  text-align: left;
+  min-width: 0;
+}
+
+.title-preset-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-amber);
+}
+
+.title-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+}
+
+.title-preset-btn.is-active .fx-preset-name {
+  color: #f4a46b;
+}
+
+.title-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.title-color-picker {
+  width: 44px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.title-param-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.title-param-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.title-param-row label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
 }
 
 .nle-fx-bottom {
@@ -1565,6 +1642,7 @@ input[type="range"] {
   .nle-color-top,
   .nle-color-bottom,
   .nle-fx-top,
+  .nle-titles-top,
   .nle-fx-bottom,
   .nle-qa-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1615,6 +1693,8 @@ input[type="range"] {
   .engine-btn,
   .fx-bypass-btn,
   .fx-color-input,
+  .title-preset-btn,
+  .title-color-picker,
   .mixer-btn,
   .lang-btn,
   .input-control,
@@ -1677,6 +1757,16 @@ input[type="range"] {
   }
   .audio-ctrl-row label {
     grid-column: 1 / -1;
+  }
+  .title-param-row {
+    grid-template-columns: minmax(0, 1fr) 64px;
+    gap: 5px;
+  }
+  .title-param-row label {
+    grid-column: 1 / -1;
+  }
+  .title-param-row input[type="range"] {
+    min-height: 44px;
   }
   .kv-grid {
     grid-template-columns: minmax(0, 1fr);

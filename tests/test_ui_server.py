@@ -763,6 +763,81 @@ assert.equal(
     assert proc.returncode == 0, f"Node timeline_ops tests failed:\n{proc.stderr}\n{proc.stdout}"
 
 
+def test_ui_titles_endpoints_and_render_integration(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    p_status, _, p_raw = _http_call(f"{base_url}/api/titles/presets")
+    assert p_status == 200
+    presets_data = json.loads(p_raw.decode("utf-8"))
+    assert [p["id"] for p in presets_data["presets"]] == [
+        "broadcast_lower_third",
+        "center_title_card",
+        "minimal_subtitle",
+    ]
+    assert presets_data["positions"] == ["bottom-left", "center", "bottom-center"]
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/titles/compile",
+        method="POST",
+        payload={
+            "title_overlay": {
+                "preset_id": "broadcast_lower_third",
+                "title": "Test: 'Quote' \\ 100%\nLine2",
+                "subtitle": "Sub: Unit",
+                "position": "bottom-left",
+                "accent_color": "#e68442",
+                "start_s": 0.5,
+                "end_s": 4.5,
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["is_active"] is True
+    assert "drawbox=" in compiled["filtergraph"]
+    assert "drawtext=" in compiled["filtergraph"]
+    assert "expansion=none" in compiled["filtergraph"]
+    assert "\n" not in compiled["filtergraph"]
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/titles/compile",
+        method="POST",
+        payload={
+            "title_overlay": {
+                "title": "Broken",
+                "start_s": 5.0,
+                "end_s": 2.0,
+            }
+        },
+    )
+    assert bad_status == 400
+
+    r_status, _, r_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": "inputs/in.mp4",
+            "output_path": "renders/out.mp4",
+            "profile": "web_h264",
+            "prefer_hw": False,
+            "execute": False,
+            "title_overlay": {
+                "preset_id": "center_title_card",
+                "title": "TITLE CARD",
+                "subtitle": "REC.709",
+                "position": "center",
+                "accent_color": "#689cff",
+                "start_s": 0.0,
+                "end_s": 3.0,
+            },
+        },
+    )
+    assert r_status == 200
+    plan_data = json.loads(r_raw.decode("utf-8"))
+    vf = plan_data["plan"]["video_filter"] or ""
+    assert "drawbox=" in vf
+    assert "drawtext=" in vf
+
 
 def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None:
     try:
@@ -885,6 +960,27 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     fg_text = page.locator("#color-filtergraph-output").text_content() or ""
                     assert "colorbalance=" in fg_text
                     assert "eq=contrast=1.1400:saturation=1.1800" in fg_text
+
+                # Verify Titles & Lower-Thirds page responsiveness and compilation
+                page.locator("#tab-titles").click()
+                page.wait_for_selector("#panel-titles:not(.is-hidden)")
+                titles_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert titles_overflow <= 0, (
+                    f"Titles page horizontal overflow at {width}x{height}: {titles_overflow}px"
+                )
+                if width == 1440:
+                    page.locator('[data-title-preset="center_title_card"]').click()
+                    page.wait_for_function(
+                        "() => document.getElementById('title-position-select').value === 'center'"
+                    )
+                    assert (
+                        page.locator("#title-text-input").input_value() == "ECLIPSE SHOWREEL 2026"
+                    )
+                    title_fg = page.locator("#title-filtergraph-output").text_content() or ""
+                    assert "drawbox=" in title_fg
+                    assert "drawtext=" in title_fg
 
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"

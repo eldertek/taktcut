@@ -53,6 +53,7 @@ from taktcut.security import (
     resolve_workspace_root,
     sanitize_download_filename,
 )
+from taktcut.titles import TitleOverlayParams
 
 MAX_REMOTE_JOB_BYTES: int = 64 * 1024 * 1024
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -219,6 +220,7 @@ class RemoteRenderJobRequest(BaseModel):
     cdl: AscCdlParams | None = None
     color_grade: ColorGradeParams | None = None
     lut_cube_text: str | None = None
+    title_overlay: TitleOverlayParams | None = None
     audio_params: ClipAudioParams | None = None
     clip_duration_s: float | None = None
 
@@ -490,6 +492,7 @@ class RemoteRenderState:
             lut_path=lut_file,
             color_grade=req.color_grade if lut_file is None else None,
             fx_filtergraph=fx_filtergraph,
+            title_overlay=req.title_overlay,
             audio_params=req.audio_params,
             clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,

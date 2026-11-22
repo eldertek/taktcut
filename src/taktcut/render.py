@@ -24,6 +24,7 @@ from taktcut.models import (
     RenderProfile,
     RenderResult,
 )
+from taktcut.titles import TitleOverlayParams, compile_title_filter
 
 AUDIO_GAIN_DB_MIN: float = -24.0
 AUDIO_GAIN_DB_MAX: float = 12.0
@@ -291,6 +292,7 @@ def build_render_plan(
     lut_path: Path | None = None,
     color_grade: ColorGradeParams | None = None,
     fx_filtergraph: str | None = None,
+    title_overlay: TitleOverlayParams | None = None,
     audio_params: ClipAudioParams | None = None,
     clip_duration_s: float | None = None,
     target_lufs: float | None = None,
@@ -315,6 +317,10 @@ def build_render_plan(
         vf_parts.append(compile_color_grade_filter(color_grade, pix_fmt=pix_fmt))
     if lut_path is not None:
         vf_parts.append(build_rec709_lut_filter(lut_path, target_pix_fmt=pix_fmt))
+    if title_overlay is not None and title_overlay.is_active():
+        title_fg = compile_title_filter(title_overlay, pix_fmt=pix_fmt)
+        if title_fg:
+            vf_parts.append(title_fg)
     video_filter = ",".join(vf_parts) if vf_parts else None
 
     resolved_clip_dur = clip_duration_s

@@ -101,6 +101,72 @@ function cloneGradeParams(p) {
   };
 }
 
+const TITLE_PRESETS_FALLBACK = {
+  broadcast_lower_third: {
+    id: "broadcast_lower_third",
+    name: "Broadcast Lower-Third",
+    params: {
+      preset_id: "broadcast_lower_third",
+      title: "ALEXANDRE MOREAU",
+      subtitle: "Lead Colorist | Studio Paris",
+      position: "bottom-left",
+      accent_color: "#e68442",
+      start_s: 0.5,
+      end_s: 5.5,
+      font_size: 34,
+      box_opacity: 0.82,
+      enabled: true
+    }
+  },
+  center_title_card: {
+    id: "center_title_card",
+    name: "Center Title Card",
+    params: {
+      preset_id: "center_title_card",
+      title: "ECLIPSE SHOWREEL 2026",
+      subtitle: "REC.709 BROADCAST MASTER",
+      position: "center",
+      accent_color: "#689cff",
+      start_s: 0.0,
+      end_s: 4.0,
+      font_size: 48,
+      box_opacity: 0.80,
+      enabled: true
+    }
+  },
+  minimal_subtitle: {
+    id: "minimal_subtitle",
+    name: "Minimal Subtitle",
+    params: {
+      preset_id: "minimal_subtitle",
+      title: "Clean-room timeline interchange",
+      subtitle: "",
+      position: "bottom-center",
+      accent_color: "#d8d8de",
+      start_s: 1.0,
+      end_s: 6.0,
+      font_size: 26,
+      box_opacity: 0.72,
+      enabled: true
+    }
+  }
+};
+
+function cloneTitleParams(p) {
+  return {
+    preset_id: p.preset_id || "broadcast_lower_third",
+    title: String(p.title ?? ""),
+    subtitle: String(p.subtitle ?? ""),
+    position: p.position || "bottom-left",
+    accent_color: p.accent_color || "#e68442",
+    start_s: Number(p.start_s ?? 0.5),
+    end_s: Number(p.end_s ?? 5.5),
+    font_size: Number(p.font_size ?? 34),
+    box_opacity: Number(p.box_opacity ?? 0.82),
+    enabled: p.enabled !== false
+  };
+}
+
 const state = {
   lang: "en",
   activeTab: "timeline",
@@ -151,6 +217,10 @@ const state = {
   fxActivePresetId: "",
   fxLastCompile: null,
   fxCompileTimer: null,
+  titleOverlay: cloneTitleParams(TITLE_PRESETS_FALLBACK.broadcast_lower_third.params),
+  titlePresetsCatalog: null,
+  titleLastCompile: null,
+  titleCompileTimer: null,
   renderEngine: "local",
   remotePollTimer: null
 };
@@ -232,7 +302,9 @@ function setLanguage(lang) {
   renderUpdateButton();
   renderTimelineUI();
   renderFxStack();
+  updateTitleTimingBadges();
   if (state.fxLastCompile) renderFxCompileResult(state.fxLastCompile);
+  if (state.titleLastCompile) renderTitleCompileResult(state.titleLastCompile);
   if (state.lastQaReport) renderQaReport(state.lastQaReport);
 }
 
@@ -282,7 +354,7 @@ async function applyStudioUpdate() {
 }
 
 function switchTab(tabName) {
-  if (tabName !== "timeline" && tabName !== "fx" && state.playbackSpeed !== 0) {
+  if (tabName !== "timeline" && tabName !== "fx" && tabName !== "titles" && state.playbackSpeed !== 0) {
     stopPlayback();
   }
   state.activeTab = tabName;
@@ -305,6 +377,13 @@ function getEffectiveFxState() {
   };
 }
 
+function getEffectiveTitleState(showBadge = false) {
+  return {
+    ...state.titleOverlay,
+    showBadge
+  };
+}
+
 function updatePlayheadReadout() {
   const doc = state.timelineDoc;
   const fpsNum = doc ? doc.fps.num : 25;
@@ -322,6 +401,19 @@ function updatePlayheadReadout() {
     fxSlider.max = String(Math.max(1, state.timelineMaxFrame));
     fxSlider.value = String(state.playheadFrame);
   }
+
+  const titlesTc = byId("titles-program-tc");
+  const titlesSlider = byId("titles-playhead-slider");
+  const titlesCounter = byId("titles-frame-counter");
+  if (titlesTc) titlesTc.textContent = smpte;
+  if (titlesSlider) {
+    titlesSlider.max = String(Math.max(1, state.timelineMaxFrame));
+    titlesSlider.value = String(state.playheadFrame);
+  }
+  if (titlesCounter) {
+    titlesCounter.textContent = `${state.playheadFrame}f / ${state.timelineMaxFrame}f`;
+  }
+  updateTitleTimingBadges();
 }
 
 function redrawActiveCanvases() {
@@ -331,7 +423,8 @@ function redrawActiveCanvases() {
       state.timelineDoc,
       state.playheadFrame,
       state.colorGrade,
-      getEffectiveFxState()
+      getEffectiveFxState(),
+      getEffectiveTitleState(false)
     );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
@@ -365,9 +458,19 @@ function redrawActiveCanvases() {
       state.timelineDoc,
       state.playheadFrame,
       state.colorGrade,
-      getEffectiveFxState()
+      getEffectiveFxState(),
+      getEffectiveTitleState(false)
     );
     redrawFxKeyframeCanvases();
+  } else if (state.activeTab === "titles") {
+    drawProgramMonitorCanvas(
+      byId("titles-program-canvas"),
+      state.timelineDoc,
+      state.playheadFrame,
+      state.colorGrade,
+      getEffectiveFxState(),
+      getEffectiveTitleState(true)
+    );
   } else if (state.activeTab === "color") {
     drawColorPreviewCanvas(byId("color-preview-canvas"), state.colorGrade, state.wipeRatio);
     drawColorScopeCanvas(byId("color-scope-canvas"), state.colorGrade);
@@ -1374,7 +1477,161 @@ function addFxNode(effect) {
   compileFxNow();
 }
 
-/* PAGE 3: COLOR WHEELS, LUMETRI TONE, SCOPES, FFMPEG & .CUBE */
+/* PAGE 3: TITLES & LOWER-THIRDS GENERATOR */
+function updateTitleTimingBadges() {
+  const ov = state.titleOverlay;
+  const fps = getTimelineFps();
+  const tSec = state.playheadFrame / fps;
+  const hasText = Boolean(ov.title.trim() || ov.subtitle.trim());
+  const inWindow = ov.enabled && hasText && tSec >= ov.start_s && tSec <= ov.end_s;
+
+  const onAirBadge = byId("title-onair-badge");
+  if (onAirBadge) {
+    if (!ov.enabled) {
+      onAirBadge.textContent = "BYPASSED";
+      onAirBadge.className = "nle-tag mono";
+    } else if (!hasText) {
+      onAirBadge.textContent = "EMPTY";
+      onAirBadge.className = "nle-tag is-warn mono";
+    } else if (inWindow) {
+      onAirBadge.textContent = "ON AIR";
+      onAirBadge.className = "nle-tag is-pass mono";
+    } else {
+      onAirBadge.textContent = "STANDBY";
+      onAirBadge.className = "nle-tag is-blue mono";
+    }
+  }
+
+  const toggleBtn = byId("btn-title-toggle");
+  if (toggleBtn) {
+    toggleBtn.textContent = ov.enabled ? t("titles.btn.enabled") : t("titles.btn.bypassed");
+    toggleBtn.setAttribute("aria-pressed", ov.enabled ? "true" : "false");
+    toggleBtn.classList.toggle("is-active", ov.enabled);
+  }
+
+  const winBadge = byId("titles-window-badge");
+  if (winBadge) {
+    winBadge.textContent = `${ov.start_s.toFixed(2)}s - ${ov.end_s.toFixed(2)}s`;
+  }
+
+  const kv = byId("title-window-kv");
+  if (kv) {
+    const dur = Math.max(0, ov.end_s - ov.start_s);
+    renderKv(kv, [
+      ["Preset", ov.preset_id],
+      ["Position", ov.position],
+      ["Accent", ov.accent_color],
+      ["Playhead", `${tSec.toFixed(2)}s (${inWindow ? "VISIBLE" : "HIDDEN"})`],
+      ["Window", `${ov.start_s.toFixed(2)}s .. ${ov.end_s.toFixed(2)}s (${dur.toFixed(2)}s)`]
+    ]);
+  }
+}
+
+function updateTitlePresetButtons() {
+  for (const btn of document.querySelectorAll("[data-title-preset]")) {
+    const pid = btn.getAttribute("data-title-preset");
+    const isMatch = pid === state.titleOverlay.preset_id;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function syncTitleInputsFromState() {
+  const ov = state.titleOverlay;
+  const titleEl = byId("title-text-input");
+  const subEl = byId("title-subtitle-input");
+  const posEl = byId("title-position-select");
+  const colEl = byId("title-accent-color");
+  const hexEl = byId("title-accent-hex");
+  const startEl = byId("title-start-input");
+  const endEl = byId("title-end-input");
+  const fsRange = byId("title-font-size-range");
+  const fsNum = byId("title-font-size-num");
+  const opRange = byId("title-opacity-range");
+  const opNum = byId("title-opacity-num");
+
+  if (titleEl) titleEl.value = ov.title;
+  if (subEl) subEl.value = ov.subtitle;
+  if (posEl) posEl.value = ov.position;
+  if (colEl) colEl.value = ov.accent_color;
+  if (hexEl) hexEl.textContent = ov.accent_color;
+  if (startEl) startEl.value = String(ov.start_s);
+  if (endEl) endEl.value = String(ov.end_s);
+  if (fsRange) fsRange.value = String(ov.font_size);
+  if (fsNum) fsNum.value = String(ov.font_size);
+  if (opRange) opRange.value = String(ov.box_opacity);
+  if (opNum) opNum.value = ov.box_opacity.toFixed(2);
+  updateTitlePresetButtons();
+  updateTitleTimingBadges();
+}
+
+function applyTitlePreset(presetId) {
+  let presetParams = null;
+  if (state.titlePresetsCatalog) {
+    const found = state.titlePresetsCatalog.find((p) => p.id === presetId);
+    if (found && found.params) presetParams = found.params;
+  }
+  if (!presetParams && TITLE_PRESETS_FALLBACK[presetId]) {
+    presetParams = TITLE_PRESETS_FALLBACK[presetId].params;
+  }
+  if (!presetParams) return;
+  state.titleOverlay = cloneTitleParams(presetParams);
+  syncTitleInputsFromState();
+  redrawActiveCanvases();
+  compileTitleNow();
+}
+
+function renderTitleCompileResult(res) {
+  state.titleLastCompile = res;
+  const badge = byId("title-compile-badge");
+  const out = byId("title-filtergraph-output");
+  const kv = byId("title-compile-kv");
+  if (!badge || !out || !kv) return;
+
+  if (!res || !res.is_active || !res.filtergraph) {
+    badge.textContent = "INACTIVE";
+    badge.className = "nle-tag mono";
+    out.textContent = t("titles.compiler.empty");
+    renderKv(kv, [
+      ["Status", state.titleOverlay.enabled ? "EMPTY TEXT" : "BYPASSED"],
+      ["Position", state.titleOverlay.position]
+    ]);
+    return;
+  }
+  badge.textContent = "COMPILED";
+  badge.className = "nle-tag is-active mono";
+  out.textContent = res.filtergraph;
+  renderKv(kv, [
+    ["Status", "ACTIVE"],
+    ["Escaped Title", res.escaped_title || t("common.none")],
+    ["Escaped Subtitle", res.escaped_subtitle || t("common.none")],
+    ["Time Gate", `between(t,${res.params.start_s.toFixed(3)},${res.params.end_s.toFixed(3)})`]
+  ]);
+}
+
+function scheduleTitleCompile() {
+  if (state.titleCompileTimer !== null) {
+    window.clearTimeout(state.titleCompileTimer);
+  }
+  state.titleCompileTimer = window.setTimeout(compileTitleNow, 110);
+}
+
+async function compileTitleNow() {
+  try {
+    const res = await api.compileTitle({ title_overlay: state.titleOverlay });
+    renderTitleCompileResult(res);
+  } catch (err) {
+    const badge = byId("title-compile-badge");
+    const out = byId("title-filtergraph-output");
+    if (badge) {
+      badge.textContent = "ERROR";
+      badge.className = "nle-tag is-fail mono";
+    }
+    if (out) out.textContent = `# ${err.message}`;
+  }
+}
+
+/* PAGE 4: COLOR WHEELS, LUMETRI TONE, SCOPES, FFMPEG & .CUBE */
 const COLOR_WHEEL_BINDINGS = [
   { group: "lift", idx: 0, range: "lift-r-range", num: "lift-r-num", min: -1, max: 1, decimals: 2 },
   { group: "lift", idx: 1, range: "lift-g-range", num: "lift-g-num", min: -1, max: 1, decimals: 2 },
@@ -1790,11 +2047,19 @@ async function buildOrExecuteRender(execute) {
     const useStudioCdl = byId("render-use-studio-cdl").checked;
     const useStudioFxEl = byId("render-use-studio-fx");
     const useStudioFx = useStudioFxEl ? useStudioFxEl.checked : false;
+    const useStudioTitleEl = byId("render-use-studio-title");
+    const useStudioTitle = useStudioTitleEl ? useStudioTitleEl.checked : false;
     const preferHw = byId("render-prefer-hw").checked;
 
     const fxPayload =
       useStudioFx && !state.fxBypassAll && state.fxStack.length > 0
         ? serializeFxStackForApi(false)
+        : null;
+    const titlePayload =
+      useStudioTitle &&
+      state.titleOverlay.enabled &&
+      (state.titleOverlay.title.trim() || state.titleOverlay.subtitle.trim())
+        ? state.titleOverlay
         : null;
 
     const useClipAudioEl = byId("render-use-clip-audio");
@@ -1818,6 +2083,7 @@ async function buildOrExecuteRender(execute) {
         lut_path: lutPath,
         color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
         fx_stack: fxPayload,
+        title_overlay: titlePayload,
         audio_params: audioParamsPayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
@@ -1860,6 +2126,7 @@ async function buildOrExecuteRender(execute) {
       lut_path: lutPath,
       color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
       fx_stack: fxPayload,
+      title_overlay: titlePayload,
       audio_params: audioParamsPayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
@@ -2190,7 +2457,11 @@ function setPlayhead(frame) {
   state.playheadFrame = Math.max(0, Math.min(state.timelineMaxFrame, Math.round(frame)));
   updatePlayheadReadout();
   updateTimelineToolbarUI();
-  if (state.activeTab === "timeline" || state.activeTab === "fx") {
+  if (
+    state.activeTab === "timeline" ||
+    state.activeTab === "fx" ||
+    state.activeTab === "titles"
+  ) {
     redrawActiveCanvases();
   }
 }
@@ -2204,6 +2475,7 @@ function getTimelineFps() {
 function updateTransportStatusUI() {
   const playBtn = byId("btn-tc-play");
   const fxPlayBtn = byId("btn-fx-play");
+  const titlesPlayBtn = byId("btn-titles-play");
   const pill = byId("transport-state-pill");
   const isPlaying = state.playbackSpeed !== 0;
 
@@ -2216,6 +2488,11 @@ function updateTransportStatusUI() {
     fxPlayBtn.textContent = isPlaying ? t("timeline.transport.pause") : t("timeline.transport.play");
     fxPlayBtn.setAttribute("aria-pressed", isPlaying ? "true" : "false");
     fxPlayBtn.classList.toggle("is-playing", isPlaying);
+  }
+  if (titlesPlayBtn) {
+    titlesPlayBtn.textContent = isPlaying ? t("timeline.transport.pause") : t("timeline.transport.play");
+    titlesPlayBtn.setAttribute("aria-pressed", isPlaying ? "true" : "false");
+    titlesPlayBtn.classList.toggle("is-playing", isPlaying);
   }
   if (pill) {
     if (state.playbackSpeed > 0) {
@@ -2351,7 +2628,13 @@ function handleTransportKeydown(ev) {
     return;
   }
   if (ev.altKey) return;
-  if (state.activeTab !== "timeline" && state.activeTab !== "fx") return;
+  if (
+    state.activeTab !== "timeline" &&
+    state.activeTab !== "fx" &&
+    state.activeTab !== "titles"
+  ) {
+    return;
+  }
 
   if (ev.code === "Space" || ev.key === " ") {
     if (
@@ -3435,6 +3718,168 @@ function wireEvents() {
     showBanner("Active FX Studio filtergraph linked to Deliver page.", "success");
   });
 
+  // Titles & Lower-Thirds page events
+  for (const btn of document.querySelectorAll("[data-title-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-title-preset");
+      if (pid) applyTitlePreset(pid);
+    });
+  }
+  byId("btn-title-toggle").addEventListener("click", () => {
+    state.titleOverlay.enabled = !state.titleOverlay.enabled;
+    updateTitleTimingBadges();
+    redrawActiveCanvases();
+    compileTitleNow();
+  });
+  byId("title-text-input").addEventListener("input", () => {
+    state.titleOverlay.title = byId("title-text-input").value;
+    updateTitleTimingBadges();
+    redrawActiveCanvases();
+    scheduleTitleCompile();
+  });
+  byId("title-subtitle-input").addEventListener("input", () => {
+    state.titleOverlay.subtitle = byId("title-subtitle-input").value;
+    updateTitleTimingBadges();
+    redrawActiveCanvases();
+    scheduleTitleCompile();
+  });
+  byId("title-position-select").addEventListener("change", () => {
+    state.titleOverlay.position = byId("title-position-select").value;
+    updateTitleTimingBadges();
+    redrawActiveCanvases();
+    compileTitleNow();
+  });
+  byId("title-accent-color").addEventListener("input", () => {
+    const hex = byId("title-accent-color").value;
+    state.titleOverlay.accent_color = hex;
+    const hexEl = byId("title-accent-hex");
+    if (hexEl) hexEl.textContent = hex;
+    updateTitleTimingBadges();
+    redrawActiveCanvases();
+    scheduleTitleCompile();
+  });
+  byId("title-start-input").addEventListener("input", () => {
+    const val = Number.parseFloat(byId("title-start-input").value);
+    if (Number.isFinite(val) && val >= 0 && val < state.titleOverlay.end_s) {
+      state.titleOverlay.start_s = val;
+      updateTitleTimingBadges();
+      redrawActiveCanvases();
+      scheduleTitleCompile();
+    }
+  });
+  byId("title-start-input").addEventListener("blur", () => {
+    const raw = Number.parseFloat(byId("title-start-input").value);
+    if (!Number.isFinite(raw) || raw < 0 || raw >= state.titleOverlay.end_s) {
+      byId("title-start-input").value = String(state.titleOverlay.start_s);
+    }
+  });
+  byId("title-end-input").addEventListener("input", () => {
+    const val = Number.parseFloat(byId("title-end-input").value);
+    if (Number.isFinite(val) && val > state.titleOverlay.start_s && val <= 86400) {
+      state.titleOverlay.end_s = val;
+      updateTitleTimingBadges();
+      redrawActiveCanvases();
+      scheduleTitleCompile();
+    }
+  });
+  byId("title-end-input").addEventListener("blur", () => {
+    const raw = Number.parseFloat(byId("title-end-input").value);
+    if (!Number.isFinite(raw) || raw <= state.titleOverlay.start_s || raw > 86400) {
+      byId("title-end-input").value = String(state.titleOverlay.end_s);
+    }
+  });
+  byId("btn-title-set-start").addEventListener("click", () => {
+    const tSec = Number((state.playheadFrame / getTimelineFps()).toFixed(2));
+    state.titleOverlay.start_s = tSec;
+    if (state.titleOverlay.end_s <= tSec) {
+      state.titleOverlay.end_s = Number((tSec + 2.0).toFixed(2));
+    }
+    syncTitleInputsFromState();
+    redrawActiveCanvases();
+    compileTitleNow();
+  });
+  byId("btn-title-set-end").addEventListener("click", () => {
+    const tSec = Number((state.playheadFrame / getTimelineFps()).toFixed(2));
+    if (tSec <= state.titleOverlay.start_s) {
+      showBanner("End time must be after Start time.", "error");
+      return;
+    }
+    state.titleOverlay.end_s = tSec;
+    syncTitleInputsFromState();
+    redrawActiveCanvases();
+    compileTitleNow();
+  });
+  byId("title-font-size-range").addEventListener("input", () => {
+    const val = Number.parseInt(byId("title-font-size-range").value, 10);
+    state.titleOverlay.font_size = val;
+    byId("title-font-size-num").value = String(val);
+    redrawActiveCanvases();
+    scheduleTitleCompile();
+  });
+  byId("title-font-size-num").addEventListener("input", () => {
+    const val = Number.parseInt(byId("title-font-size-num").value, 10);
+    if (Number.isFinite(val) && val >= 14 && val <= 96) {
+      state.titleOverlay.font_size = val;
+      byId("title-font-size-range").value = String(val);
+      redrawActiveCanvases();
+      scheduleTitleCompile();
+    }
+  });
+  byId("title-font-size-num").addEventListener("blur", () => {
+    const raw = Number.parseInt(byId("title-font-size-num").value, 10);
+    if (!Number.isFinite(raw) || raw < 14 || raw > 96) {
+      byId("title-font-size-num").value = String(state.titleOverlay.font_size);
+    }
+  });
+  byId("title-opacity-range").addEventListener("input", () => {
+    const val = Number.parseFloat(byId("title-opacity-range").value);
+    state.titleOverlay.box_opacity = val;
+    byId("title-opacity-num").value = val.toFixed(2);
+    redrawActiveCanvases();
+    scheduleTitleCompile();
+  });
+  byId("title-opacity-num").addEventListener("input", () => {
+    const val = Number.parseFloat(byId("title-opacity-num").value);
+    if (Number.isFinite(val) && val >= 0 && val <= 1) {
+      state.titleOverlay.box_opacity = val;
+      byId("title-opacity-range").value = String(val);
+      redrawActiveCanvases();
+      scheduleTitleCompile();
+    }
+  });
+  byId("title-opacity-num").addEventListener("blur", () => {
+    const raw = Number.parseFloat(byId("title-opacity-num").value);
+    if (!Number.isFinite(raw) || raw < 0 || raw > 1) {
+      byId("title-opacity-num").value = state.titleOverlay.box_opacity.toFixed(2);
+    }
+  });
+  byId("btn-titles-play").addEventListener("click", togglePlayPause);
+  byId("btn-titles-step").addEventListener("click", () => {
+    stopPlayback();
+    setPlayhead(state.playheadFrame + 1);
+  });
+  byId("titles-playhead-slider").addEventListener("input", () => {
+    stopPlayback();
+    setPlayhead(Number.parseInt(byId("titles-playhead-slider").value, 10));
+  });
+  byId("btn-title-compile").addEventListener("click", compileTitleNow);
+  byId("btn-title-copy-fg").addEventListener("click", async () => {
+    const fg = state.titleLastCompile ? state.titleLastCompile.filtergraph : "";
+    if (!fg) return;
+    try {
+      await navigator.clipboard.writeText(fg);
+      showBanner("Copied Title FFmpeg filtergraph to clipboard.", "success");
+    } catch {
+      showBanner("Clipboard unavailable; copy directly from filtergraph box.", "error");
+    }
+  });
+  byId("btn-title-send-render").addEventListener("click", () => {
+    const chk = byId("render-use-studio-title");
+    if (chk) chk.checked = true;
+    switchTab("render");
+    showBanner("Active Title / Lower-Third overlay linked to Deliver page.", "success");
+  });
+
   // Color page events
   wireColorInputs();
   byId("btn-color-copy-fg").addEventListener("click", async () => {
@@ -3570,10 +4015,23 @@ async function loadColorCatalog() {
   }
 }
 
+async function loadTitlesCatalog() {
+  try {
+    const data = await api.getTitlePresets();
+    if (data && Array.isArray(data.presets) && data.presets.length > 0) {
+      state.titlePresetsCatalog = data.presets;
+    }
+  } catch {
+    // Fallback to built-in TITLE_PRESETS_FALLBACK constants
+  }
+}
+
 async function bootstrap() {
   wireEvents();
   syncColorInputsFromState();
   compileColorNow();
+  syncTitleInputsFromState();
+  compileTitleNow();
   renderFxStack();
   renderFxCompileResult(null);
 
@@ -3606,7 +4064,8 @@ async function bootstrap() {
     loadSampleTimeline("clean"),
     checkForStudioUpdate(),
     loadFxCatalog(),
-    loadColorCatalog()
+    loadColorCatalog(),
+    loadTitlesCatalog()
   ]);
 }
 

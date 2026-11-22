@@ -380,7 +380,139 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   }
 }
 
-export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxState = null) {
+function fitCanvasText(ctx, text, maxWidth) {
+  if (!text) return "";
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let clipped = text;
+  while (clipped.length > 1 && ctx.measureText(`${clipped}...`).width > maxWidth) {
+    clipped = clipped.slice(0, -1);
+  }
+  return `${clipped}...`;
+}
+
+export function drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState, tSec) {
+  if (!titleState || titleState.enabled === false) return false;
+  const rawTitle = typeof titleState.title === "string" ? titleState.title.replace(/[\r\n\t]+/g, " ").trim() : "";
+  const rawSub = typeof titleState.subtitle === "string" ? titleState.subtitle.replace(/[\r\n\t]+/g, " ").trim() : "";
+  if (!rawTitle && !rawSub) return false;
+
+  const startS = Number.isFinite(Number(titleState.start_s)) ? Number(titleState.start_s) : 0;
+  const endS = Number.isFinite(Number(titleState.end_s)) ? Number(titleState.end_s) : 5;
+  if (tSec < startS || tSec > endS) return false;
+
+  const pos = titleState.position || "bottom-left";
+  const accent = /^#[0-9a-fA-F]{6}$/.test(String(titleState.accent_color || "").trim())
+    ? String(titleState.accent_color).trim()
+    : "#e68442";
+  const [ar, ag, ab] = hexToRgbTuple(accent);
+  const accentCss = `rgb(${ar}, ${ag}, ${ab})`;
+  const opacity = Math.max(0, Math.min(1, Number.isFinite(Number(titleState.box_opacity)) ? Number(titleState.box_opacity) : 0.8));
+  const refFontSize = Math.max(14, Math.min(96, Number.isFinite(Number(titleState.font_size)) ? Number(titleState.font_size) : 34));
+  const titlePx = Math.max(10, Math.round(frameH * (refFontSize / 1080)));
+  const subPx = Math.max(8, Math.round(frameH * (Math.max(12, refFontSize * 0.64) / 1080)));
+
+  ctx.save();
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.72)";
+  ctx.shadowBlur = 2;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+
+  if (pos === "bottom-left") {
+    const px = fx + frameW * 0.05;
+    const py = fy + frameH * 0.76;
+    const pw = frameW * 0.46;
+    const ph = frameH * 0.14;
+    if (opacity > 0) {
+      ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
+      ctx.fillRect(px, py, pw, ph);
+    }
+    ctx.fillStyle = accentCss;
+    ctx.fillRect(px, py, Math.max(3, frameW * 0.0045), ph);
+
+    const tx = fx + frameW * 0.068;
+    const maxTextW = Math.max(40, pw - frameW * 0.032);
+    ctx.textAlign = "left";
+    if (rawTitle) {
+      ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = "#d8d8de";
+      const yPos = rawSub ? fy + frameH * 0.805 : fy + frameH * 0.83;
+      ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), tx, yPos);
+    }
+    if (rawSub) {
+      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+      ctx.fillStyle = accentCss;
+      const yPos = rawTitle ? fy + frameH * 0.86 : fy + frameH * 0.83;
+      ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), tx, yPos);
+    }
+  } else if (pos === "center") {
+    const px = fx + frameW * 0.14;
+    const py = fy + frameH * 0.34;
+    const pw = frameW * 0.72;
+    const ph = frameH * 0.32;
+    if (opacity > 0) {
+      ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
+      ctx.fillRect(px, py, pw, ph);
+    }
+    ctx.fillStyle = accentCss;
+    ctx.fillRect(fx + frameW * 0.42, py, frameW * 0.16, Math.max(2, frameH * 0.006));
+
+    const cx = fx + frameW * 0.5;
+    const maxTextW = Math.max(60, pw - frameW * 0.06);
+    ctx.textAlign = "center";
+    if (rawTitle) {
+      ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = "#d8d8de";
+      const yPos = rawSub ? fy + frameH * 0.455 : fy + frameH * 0.5;
+      ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cx, yPos);
+    }
+    if (rawSub) {
+      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+      ctx.fillStyle = accentCss;
+      const yPos = rawTitle ? fy + frameH * 0.56 : fy + frameH * 0.5;
+      ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cx, yPos);
+    }
+  } else {
+    const px = fx + frameW * 0.16;
+    const py = fy + frameH * 0.81;
+    const pw = frameW * 0.68;
+    const ph = frameH * 0.11;
+    if (opacity > 0) {
+      ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
+      ctx.fillRect(px, py, pw, ph);
+    }
+    ctx.fillStyle = accentCss;
+    ctx.fillRect(fx + frameW * 0.44, fy + frameH * 0.916, frameW * 0.12, Math.max(2, frameH * 0.004));
+
+    const cx = fx + frameW * 0.5;
+    const maxTextW = Math.max(60, pw - frameW * 0.05);
+    ctx.textAlign = "center";
+    if (rawTitle) {
+      ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = "#d8d8de";
+      const yPos = rawSub ? fy + frameH * 0.842 : fy + frameH * 0.865;
+      ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cx, yPos);
+    }
+    if (rawSub) {
+      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+      ctx.fillStyle = accentCss;
+      const yPos = rawTitle ? fy + frameH * 0.885 : fy + frameH * 0.865;
+      ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cx, yPos);
+    }
+  }
+
+  ctx.restore();
+  return true;
+}
+
+export function drawProgramMonitorCanvas(
+  canvas,
+  doc,
+  playheadFrame,
+  cdl,
+  fxState = null,
+  titleState = null
+) {
   const { ctx, width, height } = setupCanvas(canvas, 244);
   ctx.fillStyle = "#141416";
   ctx.fillRect(0, 0, width, height);
@@ -661,6 +793,23 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxStat
         }
       }
     }
+  }
+
+  // Composite Title & Lower-Third overlay over graded/FX video
+  const titleOnAir = drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState, tSec);
+
+  if (titleState && titleState.showBadge) {
+    const label = titleState.enabled === false
+      ? "TITLE: BYPASSED"
+      : titleOnAir
+        ? "TITLE: ON AIR"
+        : `TITLE: ${Number(titleState.start_s ?? 0).toFixed(1)}s-${Number(titleState.end_s ?? 0).toFixed(1)}s`;
+    ctx.font = "700 10px ui-monospace, monospace";
+    const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
+    ctx.fillStyle = titleOnAir ? "rgba(63, 185, 80, 0.90)" : "rgba(20, 20, 22, 0.84)";
+    ctx.fillRect(fx + 8, fy + 16, tw, 17);
+    ctx.fillStyle = titleOnAir ? "#111114" : "#a4a4ae";
+    ctx.fillText(label, fx + 14, fy + 28);
   }
 
   // FX telemetry pill inside Program Monitor corner

@@ -264,6 +264,81 @@ function compileFxClient(nodes, opts = {}) {
   };
 }
 
+function escapeDrawtextClient(raw) {
+  const cleaned = String(raw || "")
+    .replace(/\r\n|\r|\n|\t/g, " ")
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .trim();
+  let out = "";
+  for (const ch of cleaned) {
+    if (ch === "\\") out += "\\\\";
+    else if (ch === "'") out += "'\\\\\\''";
+    else if (ch === ":") out += "\\:";
+    else out += ch;
+  }
+  return out;
+}
+
+function compileTitleClient(payload, opts = {}) {
+  const src = payload && payload.title_overlay ? payload.title_overlay : payload || {};
+  const enabled = src.enabled !== false;
+  const title = String(src.title ?? "ALEXANDRE MOREAU").slice(0, 200);
+  const subtitle = String(src.subtitle ?? "").slice(0, 200);
+  const position = ["bottom-left", "center", "bottom-center"].includes(src.position)
+    ? src.position
+    : "bottom-left";
+  const accentColor = /^#[0-9a-fA-F]{6}$/.test(String(src.accent_color || "").trim())
+    ? String(src.accent_color).trim().toLowerCase()
+    : "#e68442";
+  const startS = Number.isFinite(Number(src.start_s)) ? Math.max(0, Number(src.start_s)) : 0.5;
+  const endS = Number.isFinite(Number(src.end_s)) ? Math.max(startS + 0.1, Number(src.end_s)) : startS + 5.0;
+  const fontSize = Math.min(96, Math.max(14, Math.round(Number(src.font_size ?? 34))));
+  const boxOpacity = Math.min(1, Math.max(0, Number(src.box_opacity ?? 0.8)));
+
+  const escTitle = escapeDrawtextClient(title);
+  const escSub = escapeDrawtextClient(subtitle);
+  const active = enabled && Boolean(escTitle || escSub);
+  if (!active) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      is_active: false,
+      escaped_title: escTitle,
+      escaped_subtitle: escSub,
+      params: { preset_id: src.preset_id || "broadcast_lower_third", title, subtitle, position, accent_color: accentColor, start_s: startS, end_s: endS, font_size: fontSize, box_opacity: boxOpacity, enabled }
+    };
+  }
+  const accent = `0x${accentColor.slice(1)}`;
+  const en = `enable='between(t,${startS.toFixed(3)},${endS.toFixed(3)})'`;
+  const segs = [];
+  if (position === "bottom-left") {
+    if (boxOpacity > 0) segs.push(`drawbox=x=round(iw*0.05):y=round(ih*0.76):w=round(iw*0.46):h=round(ih*0.14):color=0x141416@${boxOpacity.toFixed(2)}:t=fill:${en}`);
+    segs.push(`drawbox=x=round(iw*0.05):y=round(ih*0.76):w='max(4,round(iw*0.004))':h=round(ih*0.14):color=${accent}@1.00:t=fill:${en}`);
+    if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=round(w*0.068):y=round(h*0.782):fontsize='max(14,round(h*${(fontSize / 1080).toFixed(5)}))':fontcolor=0xd8d8de:${en}`);
+    if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=round(w*0.068):y=round(h*0.838):fontsize='max(11,round(h*${(Math.max(12, fontSize * 0.64) / 1080).toFixed(5)}))':fontcolor=${accent}:${en}`);
+  } else if (position === "center") {
+    if (boxOpacity > 0) segs.push(`drawbox=x=round(iw*0.14):y=round(ih*0.34):w=round(iw*0.72):h=round(ih*0.32):color=0x141416@${boxOpacity.toFixed(2)}:t=fill:${en}`);
+    segs.push(`drawbox=x=round(iw*0.42):y=round(ih*0.34):w=round(iw*0.16):h='max(3,round(ih*0.004))':color=${accent}@1.00:t=fill:${en}`);
+    if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=(w-tw)/2:y=round(h*0.455-th/2):fontsize='max(14,round(h*${(fontSize / 1080).toFixed(5)}))':fontcolor=0xd8d8de:${en}`);
+    if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=(w-tw)/2:y=round(h*0.560-th/2):fontsize='max(11,round(h*${(Math.max(12, fontSize * 0.64) / 1080).toFixed(5)}))':fontcolor=${accent}:${en}`);
+  } else {
+    if (boxOpacity > 0) segs.push(`drawbox=x=round(iw*0.16):y=round(ih*0.81):w=round(iw*0.68):h=round(ih*0.11):color=0x141416@${boxOpacity.toFixed(2)}:t=fill:${en}`);
+    segs.push(`drawbox=x=round(iw*0.44):y=round(ih*0.916):w=round(iw*0.12):h='max(2,round(ih*0.003))':color=${accent}@1.00:t=fill:${en}`);
+    if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=(w-tw)/2:y=round(h*0.842-th/2):fontsize='max(14,round(h*${(fontSize / 1080).toFixed(5)}))':fontcolor=0xd8d8de:${en}`);
+    if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=(w-tw)/2:y=round(h*0.885-th/2):fontsize='max(11,round(h*${(Math.max(12, fontSize * 0.64) / 1080).toFixed(5)}))':fontcolor=${accent}:${en}`);
+  }
+  if (opts.pix_fmt) segs.push(`format=${opts.pix_fmt}`);
+  const fg = segs.join(",");
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: ["-vf", fg],
+    is_active: true,
+    escaped_title: escTitle,
+    escaped_subtitle: escSub,
+    params: { preset_id: src.preset_id || "broadcast_lower_third", title, subtitle, position, accent_color: accentColor, start_s: startS, end_s: endS, font_size: fontSize, box_opacity: boxOpacity, enabled }
+  };
+}
+
 export function createApiClient() {
   const cfg = typeof window !== "undefined" && window.__TAKTCUT_CONFIG__ ? window.__TAKTCUT_CONFIG__ : {};
   const apiBase = typeof cfg.apiBase === "string" ? cfg.apiBase.replace(/\/+$/, "") : "";
@@ -528,6 +603,12 @@ export function createApiClient() {
         if (body.lut_path || body.cdl) {
           vfParts.push(`lut3d=file='${body.lut_path || "studio_grade.cube"}':interp=tetrahedral,format=${pixFmt}`);
         }
+        if (body.title_overlay) {
+          const compiledTitle = compileTitleClient(body.title_overlay, { pix_fmt: pixFmt });
+          if (compiledTitle.is_active && compiledTitle.filtergraph) {
+            vfParts.push(compiledTitle.filtergraph);
+          }
+        }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
         let af = null;
         if (body.audio_params) {
@@ -666,6 +747,18 @@ export function createApiClient() {
         return compileFxClient(payload.nodes || [], payload);
       }
       return requestJson("/api/fx/compile", { method: "POST", body: payload });
+    },
+    async getTitlePresets() {
+      if (resolvedMode === "static-demo") {
+        return { presets: [], positions: ["bottom-left", "center", "bottom-center"], bounds: {} };
+      }
+      return requestJson("/api/titles/presets");
+    },
+    async compileTitle(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileTitleClient(payload, payload);
+      }
+      return requestJson("/api/titles/compile", { method: "POST", body: payload });
     },
     async probeRemoteNode(payload) {
       if (resolvedMode === "static-demo") {

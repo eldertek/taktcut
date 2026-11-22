@@ -70,6 +70,17 @@ from taktcut.render import (
     execute_render_plan,
     probe_hardware_capabilities,
 )
+from taktcut.titles import (
+    TITLE_FONT_SIZE_MAX,
+    TITLE_FONT_SIZE_MIN,
+    TITLE_MAX_LEN,
+    TITLE_POSITIONS,
+    TITLE_TIME_MAX_S,
+    TitleOverlayParams,
+    apply_title_preset,
+    compile_title_overlay,
+    list_title_presets,
+)
 from taktcut.ui.desktop import has_pywebview, open_studio_window, run_with_pywebview
 from taktcut.ui.samples import build_sample_timeline, generate_synthetic_sample_clip
 from taktcut.ui.security import (
@@ -291,6 +302,36 @@ def _build_audio_params_from_payload(
             clip_duration_s,
         )
     return None, clip_duration_s
+
+
+def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayParams:
+    preset_only = payload.get("preset")
+    if preset_only is not None and "title" not in payload and "title_overlay" not in payload:
+        if not isinstance(preset_only, str) or not preset_only.strip():
+            raise ValueError("preset must be a non-empty string")
+        return apply_title_preset(preset_only)
+
+    raw_title = payload.get("title_overlay")
+    if raw_title is not None and not isinstance(raw_title, dict):
+        raise ValueError("'title_overlay' must be a JSON object")
+    source: dict[str, Any] = raw_title if isinstance(raw_title, dict) else payload
+    preset_id = source.get("preset_id") or source.get("preset") or "broadcast_lower_third"
+    if not isinstance(preset_id, str) or not preset_id.strip():
+        raise ValueError("preset_id must be a non-empty string")
+    base = apply_title_preset(preset_id)
+    merged: dict[str, Any] = {
+        "preset_id": base.preset_id,
+        "title": source.get("title", base.title),
+        "subtitle": source.get("subtitle", base.subtitle),
+        "position": source.get("position", base.position),
+        "accent_color": source.get("accent_color", base.accent_color),
+        "start_s": source.get("start_s", base.start_s),
+        "end_s": source.get("end_s", base.end_s),
+        "font_size": source.get("font_size", base.font_size),
+        "box_opacity": source.get("box_opacity", base.box_opacity),
+        "enabled": bool(source.get("enabled", base.enabled)),
+    }
+    return TitleOverlayParams.model_validate(merged)
 
 
 def _resolve_timeline_from_payload(
@@ -543,6 +584,23 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                             "max": TEMPERATURE_MAX,
                             "default": 0.0,
                         },
+                    },
+                },
+            )
+            return
+
+        if route == "/api/titles/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_title_presets()],
+                    "positions": list(TITLE_POSITIONS),
+                    "bounds": {
+                        "max_len": TITLE_MAX_LEN,
+                        "start_s": {"min": 0.0, "max": TITLE_TIME_MAX_S},
+                        "end_s": {"min": 0.0, "max": TITLE_TIME_MAX_S},
+                        "font_size": {"min": TITLE_FONT_SIZE_MIN, "max": TITLE_FONT_SIZE_MAX},
+                        "box_opacity": {"min": 0.0, "max": 1.0},
                     },
                 },
             )
@@ -880,6 +938,15 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
 
+            title_overlay_obj: TitleOverlayParams | None = None
+            raw_title_overlay = payload.get("title_overlay")
+            if raw_title_overlay is not None:
+                if not isinstance(raw_title_overlay, dict):
+                    raise ValueError("'title_overlay' must be a JSON object")
+                title_overlay_obj = _build_title_overlay_from_payload(
+                    {"title_overlay": raw_title_overlay}
+                )
+
             plan = build_render_plan(
                 input_path=in_file,
                 output_path=out_file,
@@ -888,6 +955,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 lut_path=lut_file,
                 color_grade=color_grade_obj,
                 fx_filtergraph=fx_filtergraph,
+                title_overlay=title_overlay_obj,
                 audio_params=audio_params,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
@@ -903,6 +971,14 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 result = execute_render_plan(plan)
                 response["result"] = result.model_dump(mode="json")
             self._send_json(HTTPStatus.OK, response)
+            return
+
+        if route == "/api/titles/compile":
+            title_params = _build_title_overlay_from_payload(payload)
+            raw_pix_fmt = payload.get("pix_fmt")
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            compiled_title = compile_title_overlay(title_params, pix_fmt=pix_fmt)
+            self._send_json(HTTPStatus.OK, compiled_title.model_dump(mode="json"))
             return
 
         if route == "/api/audio/compile":
@@ -1076,6 +1152,11 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 fx_nodes = [FxNode.model_validate(item) for item in raw_fx]
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+            title_overlay_remote: TitleOverlayParams | None = None
+            if isinstance(payload.get("title_overlay"), dict):
+                title_overlay_remote = _build_title_overlay_from_payload(
+                    {"title_overlay": payload["title_overlay"]}
+                )
 
             job_req = RemoteRenderJobRequest(
                 input_filename=in_file.name,
@@ -1089,6 +1170,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 cdl=cdl_params,
                 color_grade=color_grade_remote,
                 lut_cube_text=lut_cube_text,
+                title_overlay=title_overlay_remote,
                 audio_params=audio_params,
                 clip_duration_s=clip_duration_s,
             )

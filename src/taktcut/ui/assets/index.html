@@ -388,7 +388,142 @@
         </div>
       </section>
 
-      <!-- PAGE 3: COLOR (DAVINCI COLOR WHEELS + LUMETRI TONE + SCOPES + FFMPEG + .CUBE) -->
+      <!-- PAGE 3: TITLES & LOWER-THIRDS (DAVINCI FUSION TITLES / PREMIERE ESSENTIAL GRAPHICS) -->
+      <section id="panel-titles" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-titles">
+        <div class="nle-titles-top">
+          <!-- LEFT DOCK: ESSENTIAL GRAPHICS PRESETS & TITLE INSPECTOR -->
+          <aside class="nle-pane">
+            <div class="pane-header">
+              <h2 data-i18n="titles.inspector.title">Titles &amp; Lower-Thirds Generator</h2>
+              <div class="viewer-controls">
+                <span id="title-onair-badge" class="nle-tag is-pass mono">ON AIR</span>
+                <button type="button" id="btn-title-toggle" class="btn btn-mini is-active" aria-pressed="true" data-i18n="titles.btn.enabled">Enabled</button>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div class="pane-subheader">
+                <span data-i18n="titles.presets.title">Broadcast Presets</span>
+              </div>
+              <div id="title-preset-grid" class="title-preset-grid" role="group" aria-label="Broadcast title presets">
+                <button type="button" class="btn title-preset-btn is-active" data-title-preset="broadcast_lower_third" aria-pressed="true">
+                  <span class="fx-preset-name" data-i18n="titles.preset.lowerThird">Broadcast Lower-Third</span>
+                  <span class="fx-preset-meta mono">bottom-left | #e68442</span>
+                </button>
+                <button type="button" class="btn title-preset-btn" data-title-preset="center_title_card" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.preset.centerCard">Center Title Card</span>
+                  <span class="fx-preset-meta mono">center | #689cff</span>
+                </button>
+                <button type="button" class="btn title-preset-btn" data-title-preset="minimal_subtitle" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.preset.minimalSub">Minimal Subtitle</span>
+                  <span class="fx-preset-meta mono">bottom-center | #d8d8de</span>
+                </button>
+              </div>
+
+              <div class="pane-divider"></div>
+
+              <div class="form-row">
+                <label for="title-text-input" data-i18n="titles.label.titleText">Title Text</label>
+                <input type="text" id="title-text-input" class="input-control" maxlength="200" value="ALEXANDRE MOREAU" placeholder="Primary headline">
+              </div>
+              <div class="form-row">
+                <label for="title-subtitle-input" data-i18n="titles.label.subtitleText">Subtitle / Role Text</label>
+                <input type="text" id="title-subtitle-input" class="input-control" maxlength="200" value="Lead Colorist | Studio Paris" placeholder="Optional secondary line">
+              </div>
+
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="title-position-select" data-i18n="titles.label.position">Position</label>
+                  <select id="title-position-select" class="input-control mono">
+                    <option value="bottom-left" selected>bottom-left</option>
+                    <option value="center">center</option>
+                    <option value="bottom-center">bottom-center</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label for="title-accent-color" data-i18n="titles.label.accentColor">Accent Color</label>
+                  <div class="title-color-row">
+                    <input type="color" id="title-accent-color" class="title-color-picker" value="#e68442" aria-label="Title accent color">
+                    <span id="title-accent-hex" class="nle-tag mono">#e68442</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="title-start-input" data-i18n="titles.label.startTime">Start Time (s)</label>
+                  <input type="number" id="title-start-input" class="input-control mono" min="0" max="86400" step="0.1" value="0.5">
+                </div>
+                <div class="form-row">
+                  <label for="title-end-input" data-i18n="titles.label.endTime">End Time (s)</label>
+                  <input type="number" id="title-end-input" class="input-control mono" min="0.1" max="86400" step="0.1" value="5.5">
+                </div>
+              </div>
+
+              <div class="btn-row">
+                <button type="button" id="btn-title-set-start" class="btn btn-mini" data-i18n="titles.btn.setStartPh">Set Start @ Playhead</button>
+                <button type="button" id="btn-title-set-end" class="btn btn-mini" data-i18n="titles.btn.setEndPh">Set End @ Playhead</button>
+              </div>
+
+              <div class="title-param-grid mono">
+                <div class="title-param-row">
+                  <label for="title-font-size-range" data-i18n="titles.label.fontSize">Size (px)</label>
+                  <input type="range" id="title-font-size-range" min="14" max="96" step="1" value="34">
+                  <input type="number" id="title-font-size-num" class="input-num" min="14" max="96" step="1" value="34" aria-label="Title font size">
+                </div>
+                <div class="title-param-row">
+                  <label for="title-opacity-range" data-i18n="titles.label.boxOpacity">Plate Opacity</label>
+                  <input type="range" id="title-opacity-range" min="0" max="1" step="0.02" value="0.82">
+                  <input type="number" id="title-opacity-num" class="input-num" min="0" max="1" step="0.02" value="0.82" aria-label="Title plate opacity">
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <!-- RIGHT DOCK: LIVE PROGRAM MONITOR & TIMING TRANSPORT -->
+          <section class="nle-pane">
+            <div class="pane-header">
+              <h2 data-i18n="titles.monitor.title">Program Monitor (Live Title Preview)</h2>
+              <div class="tc-group mono">
+                <span id="titles-program-tc" class="tc-readout">00:00:01:00</span>
+                <span id="titles-window-badge" class="nle-tag mono">0.50s - 5.50s</span>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div class="viewer-well">
+                <canvas id="titles-program-canvas" class="studio-canvas" aria-label="Titles Program Monitor preview"></canvas>
+              </div>
+              <div class="transport-bar">
+                <div class="btn-row">
+                  <button type="button" id="btn-titles-play" class="btn btn-mini mono" aria-pressed="false" data-i18n="timeline.transport.play">Play</button>
+                  <button type="button" id="btn-titles-step" class="btn btn-mini mono" title="+1 frame">+1f</button>
+                </div>
+                <input type="range" id="titles-playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="25" aria-label="Titles preview frame">
+                <span id="titles-frame-counter" class="nle-tag mono">25f / 500f</span>
+              </div>
+              <div id="title-window-kv" class="kv-grid mono"></div>
+            </div>
+          </section>
+        </div>
+
+        <!-- BOTTOM DOCK: SAFE FFMPEG DRAWTEXT + DRAWBOX COMPILER -->
+        <section class="nle-pane">
+          <div class="pane-header">
+            <h2 data-i18n="titles.compiler.title">Safe FFmpeg drawtext + drawbox Filtergraph</h2>
+            <span id="title-compile-badge" class="nle-tag is-active mono">ACTIVE</span>
+          </div>
+          <div class="pane-body">
+            <div class="btn-row">
+              <button type="button" id="btn-title-compile" class="btn btn-primary" data-i18n="titles.compiler.btnCompile">Compile Filtergraph</button>
+              <button type="button" id="btn-title-copy-fg" class="btn btn-secondary" data-i18n="titles.compiler.btnCopy">Copy Filtergraph</button>
+              <button type="button" id="btn-title-send-render" class="btn btn-secondary" data-i18n="titles.compiler.btnDeliver">Use in Deliver</button>
+            </div>
+            <div id="title-compile-kv" class="kv-grid mono"></div>
+            <pre id="title-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+          </div>
+        </section>
+      </section>
+
+      <!-- PAGE 4: COLOR (DAVINCI COLOR WHEELS + LUMETRI TONE + SCOPES + FFMPEG + .CUBE) -->
       <section id="panel-color" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-color">
         <div class="nle-color-top">
           <section class="nle-pane">
@@ -682,6 +817,10 @@
                   <span data-i18n="render.check.studioFx">Apply active FX Studio filtergraph stack</span>
                 </label>
                 <label class="check-label">
+                  <input type="checkbox" id="render-use-studio-title">
+                  <span data-i18n="render.check.studioTitle">Burn in active Title / Lower-Third overlay (drawbox + drawtext)</span>
+                </label>
+                <label class="check-label">
                   <input type="checkbox" id="render-use-clip-audio" checked>
                   <span data-i18n="render.check.clipAudio">Apply selected clip audio gain, fades &amp; track mute/solo</span>
                 </label>
@@ -822,16 +961,20 @@
         <span class="page-idx mono">02</span>
         <span data-i18n="tabs.fx">FX</span>
       </button>
-      <button type="button" role="tab" id="tab-color" class="page-tab" data-tab="color" aria-selected="false" aria-controls="panel-color">
+      <button type="button" role="tab" id="tab-titles" class="page-tab" data-tab="titles" aria-selected="false" aria-controls="panel-titles">
         <span class="page-idx mono">03</span>
+        <span data-i18n="tabs.titles">Titles</span>
+      </button>
+      <button type="button" role="tab" id="tab-color" class="page-tab" data-tab="color" aria-selected="false" aria-controls="panel-color">
+        <span class="page-idx mono">04</span>
         <span data-i18n="tabs.color">Color</span>
       </button>
       <button type="button" role="tab" id="tab-render" class="page-tab" data-tab="render" aria-selected="false" aria-controls="panel-render">
-        <span class="page-idx mono">04</span>
+        <span class="page-idx mono">05</span>
         <span data-i18n="tabs.render">Deliver</span>
       </button>
       <button type="button" role="tab" id="tab-qa" class="page-tab" data-tab="qa" aria-selected="false" aria-controls="panel-qa">
-        <span class="page-idx mono">05</span>
+        <span class="page-idx mono">06</span>
         <span data-i18n="tabs.qa">Broadcast QA</span>
       </button>
     </nav>
