@@ -637,7 +637,17 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.fillStyle = "#8e8e98";
     ctx.font = "11px ui-monospace, monospace";
     ctx.fillText("No timeline loaded.", 14, 24);
-    return { hitboxes, frameToX: null, xToFrame: null, rulerHeight, labelColW: 0 };
+    return {
+      hitboxes,
+      frameToX: null,
+      xToFrame: null,
+      xToRawFrame: null,
+      pxPerFrame: 0,
+      startFrame: 0,
+      maxFrame: 0,
+      rulerHeight,
+      labelColW: 0
+    };
   }
 
   const labelColW = width < 480 ? 58 : 118;
@@ -657,14 +667,18 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       maxFrame = mk.frame + (mk.duration_frames || 1);
     }
   }
+  if (opts && typeof opts.fixedMaxFrame === "number" && opts.fixedMaxFrame > maxFrame) {
+    maxFrame = opts.fixedMaxFrame;
+  }
   const startFrame = doc.start_frame || 0;
   const spanFrames = Math.max(25, maxFrame - startFrame);
   const visibleSpan = spanFrames / zoom;
   const pxPerFrame = timelineW / visibleSpan;
 
   const frameToX = (f) => timelineX + (f - startFrame) * pxPerFrame;
+  const xToRawFrame = (x) => startFrame + (x - timelineX) / pxPerFrame;
   const xToFrame = (x) =>
-    Math.max(startFrame, Math.min(maxFrame, Math.round(startFrame + (x - timelineX) / pxPerFrame)));
+    Math.max(startFrame, Math.min(maxFrame, Math.round(xToRawFrame(x))));
 
   // Ruler header background
   ctx.fillStyle = "#252529";
@@ -749,7 +763,9 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     }
 
     // Clips
-    for (const clip of trk.clips || []) {
+    const clipList = trk.clips || [];
+    for (let clipIndex = 0; clipIndex < clipList.length; clipIndex++) {
+      const clip = clipList[clipIndex];
       const cx = frameToX(clip.start_frame);
       const cw = Math.max(5, clip.duration_frames * pxPerFrame);
       if (cx + cw < timelineX || cx > timelineX + timelineW) continue;
@@ -762,8 +778,16 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         selected.kind === "clip" &&
         selected.data.name === clip.name &&
         selected.data.start_frame === clip.start_frame &&
+        selected.data.duration_frames === clip.duration_frames &&
         selected.data.track_index === clip.track_index &&
         selected.data.media_type === clip.media_type;
+
+      const trimTarget = (opts && (opts.activeTrim || opts.hoverTrim)) || null;
+      const isTrimClip =
+        trimTarget &&
+        trimTarget.trackKind === trk.kind &&
+        trimTarget.trackIndex === trk.index &&
+        trimTarget.clipIndex === clipIndex;
 
       const baseFill = isAudio
         ? clip.enabled ? "#214f44" : "#252529"
@@ -779,6 +803,21 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.strokeStyle = borderCol;
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.stroke();
+
+      // Trim handle brackets on selected or hovered trim edge
+      const trimHandleW = drawW >= 12 ? Math.min(8, Math.max(4, drawW * 0.22)) : 0;
+      if (trimHandleW > 0 && (isSelected || isTrimClip)) {
+        const leftActive = isTrimClip && trimTarget.edge === "left";
+        const rightActive = isTrimClip && trimTarget.edge === "right";
+        if (isSelected || leftActive) {
+          ctx.fillStyle = leftActive ? "#ffd166" : "rgba(255, 216, 168, 0.72)";
+          ctx.fillRect(drawX + 1, rowY + 6, leftActive ? 3 : 2, trackHeight - 12);
+        }
+        if (isSelected || rightActive) {
+          ctx.fillStyle = rightActive ? "#ffd166" : "rgba(255, 216, 168, 0.72)";
+          ctx.fillRect(drawX + drawW - (rightActive ? 4 : 3), rowY + 6, rightActive ? 3 : 2, trackHeight - 12);
+        }
+      }
 
       if (drawW > 34) {
         ctx.save();
@@ -800,6 +839,10 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         y: rowY + 4,
         w: drawW,
         h: trackHeight - 8,
+        trackKind: trk.kind,
+        trackIndex: trk.index,
+        clipIndex,
+        trimHandleW,
         data: clip
       });
     }
@@ -875,7 +918,93 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.fill();
   }
 
-  return { hitboxes, frameToX, xToFrame, rulerHeight, labelColW };
+  // Crisp Vertical Magnetic Snap Guide Line
+  if (opts && typeof opts.snapGuideFrame === "number") {
+    const gxRaw = frameToX(opts.snapGuideFrame);
+    if (gxRaw >= timelineX && gxRaw <= timelineX + timelineW) {
+      const gx = Math.round(gxRaw) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = "#39c5cf";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, height);
+      ctx.stroke();
+
+      // Snap diamond marker on ruler seam
+      ctx.fillStyle = "#39c5cf";
+      ctx.beginPath();
+      ctx.moveTo(gx, rulerHeight - 5);
+      ctx.lineTo(gx + 4, rulerHeight);
+      ctx.lineTo(gx, rulerHeight + 5);
+      ctx.lineTo(gx - 4, rulerHeight);
+      ctx.closePath();
+      ctx.fill();
+
+      // Compact SNAP frame pill
+      const snapLabel = `SNAP ${opts.snapGuideFrame}f`;
+      ctx.font = "700 9px ui-monospace, monospace";
+      const tw = ctx.measureText(snapLabel).width + 8;
+      const pillX = Math.min(timelineX + timelineW - tw - 2, Math.max(timelineX + 2, gx + 5));
+      ctx.fillStyle = "rgba(17, 17, 20, 0.9)";
+      ctx.fillRect(pillX, 2, tw, 13);
+      ctx.strokeStyle = "#39c5cf";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(pillX, 2, tw, 13);
+      ctx.fillStyle = "#8de8ef";
+      ctx.fillText(snapLabel, pillX + 4, 11.5);
+      ctx.restore();
+    }
+  }
+
+  // Blade / Razor Cut Preview Guide
+  if (opts && opts.tool === "blade" && opts.bladePreview && typeof opts.bladePreview.frame === "number") {
+    const bxRaw = frameToX(opts.bladePreview.frame);
+    if (bxRaw >= timelineX && bxRaw <= timelineX + timelineW) {
+      const bx = Math.round(bxRaw) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = "rgba(248, 113, 113, 0.35)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(bx, rulerHeight);
+      ctx.lineTo(bx, height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (opts.bladePreview.valid) {
+        const cy0 = opts.bladePreview.y - 2;
+        const cy1 = opts.bladePreview.y + opts.bladePreview.h + 2;
+        ctx.strokeStyle = "#f87171";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(bx, cy0);
+        ctx.lineTo(bx, cy1);
+        ctx.stroke();
+
+        ctx.fillStyle = "#f87171";
+        ctx.beginPath();
+        ctx.moveTo(bx - 4, cy0 - 2);
+        ctx.lineTo(bx + 4, cy0 - 2);
+        ctx.lineTo(bx, cy0 + 4);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  return {
+    hitboxes,
+    frameToX,
+    xToFrame,
+    xToRawFrame,
+    pxPerFrame,
+    startFrame,
+    maxFrame,
+    rulerHeight,
+    labelColW
+  };
 }
 
 const SMPTE_BARS = [

@@ -70,6 +70,7 @@ def test_ui_static_assets_and_csp_headers(ui_server: tuple[str, Path]) -> None:
         ("/i18n.js", "application/javascript"),
         ("/canvas.js", "application/javascript"),
         ("/color_wheels.js", "application/javascript"),
+        ("/timeline_ops.js", "application/javascript"),
         ("/demo_adapter.js", "application/javascript"),
         ("/favicon.svg", "image/svg+xml"),
     ):
@@ -412,6 +413,21 @@ def test_ui_cli_help_and_non_loopback_rejection() -> None:
 
 def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) -> None:
     base_url, _ = ui_server
+    html_status, _, html_raw = _http_call(f"{base_url}/")
+    assert html_status == 200
+    html_text = html_raw.decode("utf-8")
+    assert "\u2013" not in html_text and "\u2014" not in html_text
+    for elem_id in (
+        "btn-tool-select",
+        "btn-tool-blade",
+        "btn-timeline-split",
+        "btn-timeline-snap",
+        "btn-timeline-undo",
+        "btn-timeline-redo",
+        "timeline-tool-badge",
+    ):
+        assert elem_id in html_text
+
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
     css_text = css_raw.decode("utf-8")
@@ -425,12 +441,118 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert "\u2013" not in i18n_text and "\u2014" not in i18n_text
     assert '"Étalonnage"' in i18n_text
     assert '"Télécharger OTIO"' in i18n_text
+    assert '"Sélection"' in i18n_text
+    assert '"Rasoir"' in i18n_text
+    assert '"Magnétisme"' in i18n_text
     assert '"statusbar.shortcuts"' in i18n_text
     assert "innerHTML" not in i18n_text
-    assert "\u2013" not in _http_call(f"{base_url}/app.js")[2].decode("utf-8")
-    assert "\u2014" not in _http_call(f"{base_url}/app.js")[2].decode("utf-8")
-    assert "\u2013" not in _http_call(f"{base_url}/canvas.js")[2].decode("utf-8")
-    assert "\u2014" not in _http_call(f"{base_url}/canvas.js")[2].decode("utf-8")
+    for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
+        asset_text = _http_call(f"{base_url}{asset_path}")[2].decode("utf-8")
+        assert "\u2013" not in asset_text
+        assert "\u2014" not in asset_text
+        assert "innerHTML" not in asset_text
+
+
+def test_timeline_ops_js_unit_suite() -> None:
+    import shutil
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js runtime not installed")
+
+    ops_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "taktcut"
+        / "ui"
+        / "assets"
+        / "timeline_ops.js"
+    ).as_uri()
+    script = f"""
+import assert from "node:assert/strict";
+import {{
+  collectSnapTargets,
+  findMagneticSnap,
+  splitClipInDocument,
+  splitClipsAtPlayhead,
+  trimClipInDocument,
+  validateTimelineClient
+}} from {json.dumps(ops_path)};
+
+const doc = {{
+  name: "Unit_Test_Cut",
+  source_format: "drt",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [
+        {{
+          name: "C1", track_index: 1, media_type: "video",
+          start_frame: 0, duration_frames: 100, source_in_frame: 10
+        }},
+        {{
+          name: "C2", track_index: 1, media_type: "video",
+          start_frame: 100, duration_frames: 100, source_in_frame: 0
+        }}
+      ]
+    }}
+  ],
+  markers: [
+    {{ name: "M1", frame: 50, duration_frames: 1, color: "Blue", note: "" }}
+  ]
+}};
+
+const targets = collectSnapTargets(doc, {{ includePlayhead: true, playheadFrame: 75 }});
+const snapMarker = findMagneticSnap(51.5, targets, 2.0, 10, 0, 200);
+assert.equal(snapMarker.snapped, true);
+assert.equal(snapMarker.frame, 50);
+
+const snapNone = findMagneticSnap(30, targets, 2.0, 10, 0, 200);
+assert.equal(snapNone.snapped, false);
+assert.equal(snapNone.frame, 30);
+
+const splitRes = splitClipInDocument(doc, "video", 1, 0, 40);
+assert.equal(splitRes.split, true);
+assert.equal(splitRes.doc.tracks[0].clips.length, 3);
+assert.equal(splitRes.leftClip.duration_frames, 40);
+assert.equal(splitRes.rightClip.start_frame, 40);
+assert.equal(splitRes.rightClip.duration_frames, 60);
+assert.equal(splitRes.rightClip.source_in_frame, 50);
+assert.equal(validateTimelineClient(splitRes.doc).valid, true);
+
+const edgeSplit = splitClipInDocument(doc, "video", 1, 0, 0);
+assert.equal(edgeSplit.split, false);
+
+const phSplit = splitClipsAtPlayhead(doc, 150);
+assert.equal(phSplit.splitCount, 1);
+assert.equal(phSplit.doc.tracks[0].clips.length, 3);
+
+const trimRight = trimClipInDocument(doc, "video", 1, 0, "right", 80);
+assert.equal(trimRight.changed, true);
+assert.equal(trimRight.clip.duration_frames, 80);
+assert.equal(validateTimelineClient(trimRight.doc).issues[0].kind, "gap");
+
+const trimLeft = trimClipInDocument(doc, "video", 1, 1, "left", 120);
+assert.equal(trimLeft.changed, true);
+assert.equal(trimLeft.clip.start_frame, 120);
+assert.equal(trimLeft.clip.duration_frames, 80);
+assert.equal(trimLeft.clip.source_in_frame, 20);
+"""
+    proc = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node timeline_ops tests failed:\n{proc.stderr}\n{proc.stdout}"
+
 
 
 def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None:

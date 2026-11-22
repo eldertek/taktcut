@@ -740,8 +740,13 @@ body {
   touch-action: none;
 }
 
-#timeline-canvas.is-scrubbing {
+#timeline-canvas.is-scrubbing,
+#timeline-canvas.is-trimming {
   cursor: ew-resize !important;
+}
+
+#timeline-canvas.is-blade-mode {
+  cursor: cell;
 }
 
 .tc-group {
@@ -1007,6 +1012,105 @@ input[type="file"]::file-selector-button:hover {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+
+.timeline-pane-header {
+  gap: 8px 12px;
+}
+
+.timeline-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.timeline-toolbar {
+  gap: 6px;
+}
+
+.tl-tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.tl-tool-btn,
+.tl-action-btn,
+.tl-snap-btn,
+.tl-history-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  border: 1px solid var(--border-inner);
+  white-space: nowrap;
+}
+
+.tl-tool-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #ffd8a8;
+}
+
+#btn-tool-blade.is-active {
+  background: var(--status-fail-soft);
+  border-color: var(--status-fail);
+  color: #ffb3af;
+}
+
+.tl-snap-btn.is-active {
+  background: rgba(57, 197, 207, 0.16);
+  border-color: #39c5cf;
+  color: #8de8ef;
+}
+
+.tl-tool-btn:disabled,
+.tl-action-btn:disabled,
+.tl-snap-btn:disabled,
+.tl-history-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  border-color: var(--border-inner);
+  color: var(--text-dim);
+}
+
+.tl-icon {
+  flex-shrink: 0;
+}
+
+.kbd-chip {
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+}
+
+.tl-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nle-tag.is-blade {
+  border-color: var(--status-fail);
+  background: var(--status-fail-soft);
+  color: #ffb3af;
+}
+
+.nle-tag.is-snap {
+  border-color: #39c5cf;
+  background: rgba(57, 197, 207, 0.16);
+  color: #8de8ef;
 }
 
 .inline-label {
@@ -1335,6 +1439,13 @@ input[type="range"] {
   }
   .scrub-slider {
     flex: 1 1 160px;
+    min-height: 44px;
+  }
+  .tl-zoom-group {
+    flex: 1 1 180px;
+  }
+  .tl-zoom-group input[type="range"] {
+    flex: 1 1 80px;
     min-height: 44px;
   }
   .page-tab,

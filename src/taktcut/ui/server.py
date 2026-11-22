@@ -87,6 +87,7 @@ STATIC_ROUTE_MAP: dict[str, tuple[str, str]] = {
     "/i18n.js": ("i18n.js", "application/javascript; charset=utf-8"),
     "/canvas.js": ("canvas.js", "application/javascript; charset=utf-8"),
     "/color_wheels.js": ("color_wheels.js", "application/javascript; charset=utf-8"),
+    "/timeline_ops.js": ("timeline_ops.js", "application/javascript; charset=utf-8"),
     "/demo_adapter.js": ("demo_adapter.js", "application/javascript; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
 }
