@@ -97,7 +97,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.3"
+    assert health["version"] == "0.1.4"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -735,9 +735,14 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "clip-transition-badge",
         "clip-transition-audio",
         "btn-clip-transition-preview",
+        "subtitles-workbench-pane",
+        "subtitle-raw-input",
+        "subtitle-cue-list",
+        "subtitle-filtergraph-output",
+        "render-use-studio-subtitles",
     ):
         assert elem_id in html_text
-    assert "v0.1.3" in html_text
+    assert "v0.1.4" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -1277,6 +1282,99 @@ def test_ui_titles_endpoints_and_render_integration(ui_server: tuple[str, Path])
     vf = plan_data["plan"]["video_filter"] or ""
     assert "drawbox=" in vf
     assert "drawtext=" in vf
+
+
+def test_ui_subtitles_endpoints_and_render_integration(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    s_status, _, s_raw = _http_call(f"{base_url}/api/subtitles/styles")
+    assert s_status == 200
+    styles_data = json.loads(s_raw.decode("utf-8"))
+    assert [s["id"] for s in styles_data["styles"]] == [
+        "clean_white",
+        "yellow_broadcast",
+        "boxed_social",
+    ]
+
+    p_status, _, p_raw = _http_call(
+        f"{base_url}/api/subtitles/parse",
+        method="POST",
+        payload={
+            "format": "auto",
+            "content": (
+                "1\n"
+                "00:00:00,500 --> 00:00:02,500\n"
+                "<script>alert(1)</script><b>First</b> cue\n\n"
+                "2\n"
+                "00:00:03,000 --> 00:00:05,000\n"
+                "Second cue\n"
+            ),
+        },
+    )
+    assert p_status == 200
+    parsed = json.loads(p_raw.decode("utf-8"))
+    assert parsed["format"] == "srt"
+    assert parsed["cue_count"] == 2
+    assert parsed["cues"][0]["text"] == "First cue"
+
+    bad_parse, _, _ = _http_call(
+        f"{base_url}/api/subtitles/parse",
+        method="POST",
+        payload={"format": "srt", "content": "invalid srt"},
+    )
+    assert bad_parse == 400
+
+    e_status, _, e_raw = _http_call(
+        f"{base_url}/api/subtitles/export",
+        method="POST",
+        payload={"format": "vtt", "cues": parsed["cues"], "out_path": "captions/master.vtt"},
+    )
+    assert e_status == 200
+    exported = json.loads(e_raw.decode("utf-8"))
+    assert exported["format"] == "vtt"
+    assert exported["saved_path"] == "captions/master.vtt"
+    assert exported["content"].startswith("WEBVTT\n\n")
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/subtitles/compile",
+        method="POST",
+        payload={
+            "subtitle_track": {
+                "cues": parsed["cues"],
+                "style": "boxed_social",
+                "font_size": 38,
+                "enabled": True,
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["is_active"] is True
+    assert "drawtext=" in compiled["filtergraph"]
+    assert "boxcolor=0x141416@0.86" in compiled["filtergraph"]
+
+    r_status, _, r_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": "inputs/in.mp4",
+            "output_path": "renders/out_sub.mp4",
+            "profile": "web_h264",
+            "prefer_hw": False,
+            "execute": False,
+            "subtitle_track": {
+                "cues": parsed["cues"],
+                "style": "yellow_broadcast",
+                "font_size": 34,
+                "enabled": True,
+            },
+        },
+    )
+    assert r_status == 200
+    plan_data = json.loads(r_raw.decode("utf-8"))
+    vf = plan_data["plan"]["video_filter"] or ""
+    assert "drawtext=" in vf
+    assert "fontcolor=0xffe047" in vf
 
 
 def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None:

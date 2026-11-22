@@ -583,6 +583,119 @@ export function drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState,
   return true;
 }
 
+function sanitizeCanvasCaptionText(raw) {
+  let cur = String(raw || "").replace(/\r\n|\r/g, "\n").replace(/\t/g, " ");
+  for (let i = 0; i < 6; i += 1) {
+    const nxt = cur.replace(/<[^>]{0,256}>/g, "");
+    if (nxt === cur) break;
+    cur = nxt;
+  }
+  return cur
+    .replace(/[<>]/g, "")
+    .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, " ")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+export function findActiveSubtitleCue(subtitleState, tSec) {
+  if (!subtitleState || subtitleState.enabled === false) return null;
+  const cues = Array.isArray(subtitleState.cues) ? subtitleState.cues : [];
+  let matched = null;
+  for (const cue of cues) {
+    if (!cue) continue;
+    const startS = Number(cue.start_s);
+    const endS = Number(cue.end_s);
+    if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) continue;
+    if (tSec >= startS && tSec <= endS) {
+      matched = cue;
+    }
+  }
+  return matched;
+}
+
+export function drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitleState, tSec) {
+  const cue = findActiveSubtitleCue(subtitleState, tSec);
+  if (!cue) return null;
+
+  const lines = sanitizeCanvasCaptionText(cue.text).slice(0, 3);
+  if (lines.length === 0) return null;
+
+  const styleId = subtitleState.style || "clean_white";
+  const refFontSize = Math.max(
+    14,
+    Math.min(72, Number.isFinite(Number(subtitleState.font_size)) ? Number(subtitleState.font_size) : 34)
+  );
+  const px = Math.max(10, Math.round(frameH * (refFontSize / 1080)));
+  const marginBottomPct = Math.max(
+    0.02,
+    Math.min(0.45, Number.isFinite(Number(subtitleState.margin_bottom_pct)) ? Number(subtitleState.margin_bottom_pct) : 0.08)
+  );
+  const lineH = Math.round(px * 1.38);
+  const maxTextW = Math.max(60, frameW * 0.86);
+  const weight = styleId === "clean_white" ? "600" : "700";
+
+  ctx.save();
+  ctx.font = `${weight} ${px}px system-ui, -apple-system, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  const fittedLines = lines.map((line) => fitCanvasText(ctx, line, maxTextW));
+  const cx = fx + frameW * 0.5;
+  const bottomY = fy + frameH * (1.0 - marginBottomPct);
+
+  for (let i = 0; i < fittedLines.length; i += 1) {
+    const lineText = fittedLines[i];
+    const distFromBottom = fittedLines.length - 1 - i;
+    const lineY = bottomY - distFromBottom * lineH - lineH * 0.45;
+    const measuredW = Math.min(maxTextW, ctx.measureText(lineText).width);
+
+    if (styleId === "boxed_social") {
+      const padX = Math.max(8, Math.round(px * 0.48));
+      const padY = Math.max(4, Math.round(px * 0.22));
+      const boxW = measuredW + padX * 2;
+      const boxH = px + padY * 2;
+      ctx.fillStyle = "rgba(20, 20, 22, 0.86)";
+      ctx.fillRect(cx - boxW / 2, lineY - boxH / 2, boxW, boxH);
+      ctx.fillStyle = "#ffffff";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+      ctx.shadowBlur = 2;
+      ctx.shadowOffsetX = 1;
+      ctx.shadowOffsetY = 1;
+      ctx.fillText(lineText, cx, lineY);
+    } else if (styleId === "yellow_broadcast") {
+      const padX = Math.max(6, Math.round(px * 0.34));
+      const padY = Math.max(3, Math.round(px * 0.16));
+      const boxW = measuredW + padX * 2;
+      const boxH = px + padY * 2;
+      ctx.fillStyle = "rgba(12, 12, 14, 0.55)";
+      ctx.fillRect(cx - boxW / 2, lineY - boxH / 2, boxW, boxH);
+      ctx.lineWidth = Math.max(2, Math.round(px * 0.14));
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+      ctx.strokeText(lineText, cx, lineY);
+      ctx.fillStyle = "#ffe047";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.88)";
+      ctx.shadowBlur = 2;
+      ctx.shadowOffsetX = 1;
+      ctx.shadowOffsetY = 1;
+      ctx.fillText(lineText, cx, lineY);
+    } else {
+      ctx.lineWidth = Math.max(2, Math.round(px * 0.14));
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.82)";
+      ctx.strokeText(lineText, cx, lineY);
+      ctx.fillStyle = "#ffffff";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.88)";
+      ctx.shadowBlur = 2;
+      ctx.shadowOffsetX = 1;
+      ctx.shadowOffsetY = 1;
+      ctx.fillText(lineText, cx, lineY);
+    }
+  }
+
+  ctx.restore();
+  return cue;
+}
+
 export function drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState) {
   const guides = framingState && framingState.guides ? framingState.guides : null;
   if (!guides || !guides.enabled) return;
@@ -736,7 +849,8 @@ export function drawProgramMonitorCanvas(
   cdl,
   fxState = null,
   titleState = null,
-  framingState = null
+  framingState = null,
+  subtitleState = null
 ) {
   const { ctx, width, height } = setupCanvas(canvas, 244);
   ctx.fillStyle = "#141416";
@@ -1156,6 +1270,10 @@ export function drawProgramMonitorCanvas(
   // Composite Title & Lower-Third overlay over graded/FX video
   const titleOnAir = drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState, tSec);
 
+  // Composite Active Subtitle / Caption Cue over video
+  const activeSubCue = drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitleState, tSec);
+
+  let leftPillY = fy + 16;
   if (titleState && titleState.showBadge) {
     const label = titleState.enabled === false
       ? "TITLE: BYPASSED"
@@ -1165,9 +1283,28 @@ export function drawProgramMonitorCanvas(
     ctx.font = "700 10px ui-monospace, monospace";
     const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
     ctx.fillStyle = titleOnAir ? "rgba(63, 185, 80, 0.90)" : "rgba(20, 20, 22, 0.84)";
-    ctx.fillRect(fx + 8, fy + 16, tw, 17);
+    ctx.fillRect(fx + 8, leftPillY, tw, 17);
     ctx.fillStyle = titleOnAir ? "#111114" : "#a4a4ae";
-    ctx.fillText(label, fx + 14, fy + 28);
+    ctx.fillText(label, fx + 14, leftPillY + 12);
+    leftPillY += 20;
+  }
+
+  if (subtitleState && subtitleState.showBadge) {
+    const cuesLen = Array.isArray(subtitleState.cues) ? subtitleState.cues.length : 0;
+    const subLabel = subtitleState.enabled === false
+      ? "SUB: BYPASSED"
+      : activeSubCue
+        ? `SUB: CUE #${activeSubCue.index || 1}`
+        : cuesLen > 0
+          ? `SUB: STANDBY (${cuesLen})`
+          : "SUB: EMPTY";
+    ctx.font = "700 10px ui-monospace, monospace";
+    const tw = Math.min(frameW - 20, ctx.measureText(subLabel).width + 12);
+    ctx.fillStyle = activeSubCue ? "rgba(104, 156, 255, 0.92)" : "rgba(20, 20, 22, 0.84)";
+    ctx.fillRect(fx + 8, leftPillY, tw, 17);
+    ctx.fillStyle = activeSubCue ? "#111114" : "#a4a4ae";
+    ctx.fillText(subLabel, fx + 14, leftPillY + 12);
+    leftPillY += 20;
   }
 
   if (activeTrans) {
@@ -1175,11 +1312,10 @@ export function drawProgramMonitorCanvas(
     const label = `TRANS: ${getTransitionPresetName(activeTrans.transition.preset).toUpperCase()} ${pct}% (${activeTrans.transition.duration_s.toFixed(2)}s)`;
     ctx.font = "700 10px ui-monospace, monospace";
     const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
-    const pillY = titleState && titleState.showBadge ? fy + 36 : fy + 16;
     ctx.fillStyle = "rgba(230, 132, 66, 0.94)";
-    ctx.fillRect(fx + 8, pillY, tw, 17);
+    ctx.fillRect(fx + 8, leftPillY, tw, 17);
     ctx.fillStyle = "#111114";
-    ctx.fillText(label, fx + 14, pillY + 12);
+    ctx.fillText(label, fx + 14, leftPillY + 12);
   }
 
   // FX telemetry pill inside Program Monitor corner

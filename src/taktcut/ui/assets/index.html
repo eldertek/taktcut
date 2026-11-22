@@ -676,6 +676,88 @@
           </section>
         </div>
 
+        <!-- CAPTIONS & SUBTITLES TRACK (.SRT / .VTT) -->
+        <section id="subtitles-workbench-pane" class="nle-pane">
+          <div class="pane-header">
+            <h2 data-i18n="subtitles.panel.title">Captions &amp; Subtitles Track (.srt / .vtt)</h2>
+            <div class="viewer-controls">
+              <span id="subtitle-onair-badge" class="nle-tag is-blue mono">STANDBY</span>
+              <span id="subtitle-cue-count-badge" class="nle-tag mono">3 CUES</span>
+              <button type="button" id="btn-subtitle-toggle" class="btn btn-mini is-active" aria-pressed="true" data-i18n="subtitles.btn.enabled">Enabled</button>
+            </div>
+          </div>
+          <div class="pane-body">
+            <div class="nle-subtitles-grid">
+              <!-- LEFT: CAPTION STYLE + SRT/VTT IMPORT/EXPORT -->
+              <div class="subtitle-left-col">
+                <div class="pane-subheader">
+                  <span data-i18n="subtitles.styles.title">Burn-In Caption Style</span>
+                </div>
+                <div id="subtitle-style-grid" class="subtitle-style-grid" role="group" aria-label="Caption burn-in styles">
+                  <button type="button" class="btn subtitle-style-btn is-active" data-subtitle-style="clean_white" aria-pressed="true">
+                    <span class="fx-preset-name" data-i18n="subtitles.style.cleanWhite">Clean White</span>
+                    <span class="fx-preset-meta mono">#ffffff | edge outline</span>
+                  </button>
+                  <button type="button" class="btn subtitle-style-btn" data-subtitle-style="yellow_broadcast" aria-pressed="false">
+                    <span class="fx-preset-name" data-i18n="subtitles.style.yellowBroadcast">Yellow Broadcast</span>
+                    <span class="fx-preset-meta mono">#ffe047 | broadcast plate</span>
+                  </button>
+                  <button type="button" class="btn subtitle-style-btn" data-subtitle-style="boxed_social" aria-pressed="false">
+                    <span class="fx-preset-name" data-i18n="subtitles.style.boxedSocial">Boxed Social</span>
+                    <span class="fx-preset-meta mono">#ffffff | dark social pill</span>
+                  </button>
+                </div>
+
+                <div class="title-param-grid mono">
+                  <div class="title-param-row">
+                    <label for="subtitle-font-size-range" data-i18n="subtitles.label.fontSize">Caption Size (px)</label>
+                    <input type="range" id="subtitle-font-size-range" min="14" max="72" step="1" value="34">
+                    <input type="number" id="subtitle-font-size-num" class="input-num" min="14" max="72" step="1" value="34" aria-label="Caption font size">
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="subtitle-import-header">
+                    <label for="subtitle-raw-input" data-i18n="subtitles.label.rawInput">Paste .srt or .vtt Captions</label>
+                    <label for="subtitle-file-input" class="btn btn-mini file-btn" data-i18n="subtitles.btn.importFile">Import File</label>
+                    <input type="file" id="subtitle-file-input" class="is-hidden" accept=".srt,.vtt">
+                  </div>
+                  <textarea id="subtitle-raw-input" class="input-control mono subtitle-textarea" rows="5" spellcheck="false" placeholder="1&#10;00:00:00,500 --> 00:00:03,000&#10;Welcome to taktcut Studio."></textarea>
+                </div>
+
+                <div class="btn-row">
+                  <button type="button" id="btn-subtitle-parse" class="btn btn-primary" data-i18n="subtitles.btn.parse">Parse SRT / VTT</button>
+                  <button type="button" id="btn-subtitle-sample" class="btn btn-secondary" data-i18n="subtitles.btn.loadSample">Load Sample SRT</button>
+                  <button type="button" id="btn-subtitle-export-srt" class="btn btn-secondary" data-i18n="subtitles.btn.exportSrt">Export .srt</button>
+                  <button type="button" id="btn-subtitle-export-vtt" class="btn btn-secondary" data-i18n="subtitles.btn.exportVtt">Export .vtt</button>
+                  <button type="button" id="btn-subtitle-clear" class="btn btn-secondary" data-i18n="subtitles.btn.clear">Clear</button>
+                </div>
+              </div>
+
+              <!-- RIGHT: CUE TRACK EDITOR + FFMPEG SUBTITLE COMPILER -->
+              <div class="subtitle-right-col">
+                <div class="pane-subheader">
+                  <span data-i18n="subtitles.cues.title">Cue Track Editor</span>
+                  <div class="btn-row">
+                    <button type="button" id="btn-subtitle-add-cue" class="btn btn-mini" data-i18n="subtitles.btn.addCue">+ Add Cue @ Playhead</button>
+                    <button type="button" id="btn-subtitle-send-render" class="btn btn-mini" data-i18n="subtitles.btn.deliver">Use in Deliver</button>
+                  </div>
+                </div>
+                <div id="subtitle-cue-list" class="subtitle-cue-list" role="list" aria-label="Subtitle cues"></div>
+                <div class="pane-subheader">
+                  <span data-i18n="subtitles.compiler.title">Safe FFmpeg Subtitles drawtext Filtergraph</span>
+                  <div class="btn-row">
+                    <span id="subtitle-compile-badge" class="nle-tag is-active mono">ACTIVE</span>
+                    <button type="button" id="btn-subtitle-compile" class="btn btn-mini" data-i18n="subtitles.btn.compile">Compile</button>
+                    <button type="button" id="btn-subtitle-copy-fg" class="btn btn-mini" data-i18n="subtitles.btn.copyFg">Copy</button>
+                  </div>
+                </div>
+                <pre id="subtitle-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- BOTTOM DOCK: SAFE FFMPEG DRAWTEXT + DRAWBOX COMPILER -->
         <section class="nle-pane">
           <div class="pane-header">
@@ -1014,6 +1096,10 @@
                   <span data-i18n="render.check.studioTitle">Burn in active Title / Lower-Third overlay (drawbox + drawtext)</span>
                 </label>
                 <label class="check-label">
+                  <input type="checkbox" id="render-use-studio-subtitles">
+                  <span data-i18n="render.check.studioSubtitles">Burn in active Captions / SRT track (drawtext)</span>
+                </label>
+                <label class="check-label">
                   <input type="checkbox" id="render-use-clip-audio" checked>
                   <span data-i18n="render.check.clipAudio">Apply selected clip audio gain, fades &amp; track mute/solo</span>
                 </label>
@@ -1183,7 +1269,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | M: Marker | Ctrl+Z/Y: Undo/Redo</span>
       </span>
-      <span id="version-badge">v0.1.3</span>
+      <span id="version-badge">v0.1.4</span>
     </footer>
   </div>
 

@@ -75,6 +75,23 @@ from taktcut.render import (
     list_aspect_presets,
     probe_hardware_capabilities,
 )
+from taktcut.subtitles import (
+    CAPTION_FONT_SIZE_MAX,
+    CAPTION_FONT_SIZE_MIN,
+    CAPTION_MARGIN_BOTTOM_MAX,
+    CAPTION_MARGIN_BOTTOM_MIN,
+    CAPTION_MAX_CUES,
+    CAPTION_MAX_TEXT_LEN,
+    CAPTION_STYLE_IDS,
+    CAPTION_TIME_MAX_S,
+    SubtitleTrackParams,
+    compile_subtitles,
+    export_srt,
+    export_vtt,
+    list_caption_styles,
+    parse_srt,
+    parse_vtt,
+)
 from taktcut.titles import (
     TITLE_FONT_SIZE_MAX,
     TITLE_FONT_SIZE_MIN,
@@ -103,6 +120,7 @@ from taktcut.ui.security import (
     LUT_SUFFIXES,
     MEDIA_SUFFIXES,
     OTIO_EXPORT_SUFFIXES,
+    SUBTITLE_SUFFIXES,
     TIMELINE_SUFFIXES,
     PathConfinementError,
     confine_workspace_path,
@@ -424,6 +442,28 @@ def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayPa
     return TitleOverlayParams.model_validate(merged)
 
 
+def _build_subtitle_track_from_payload(payload: dict[str, Any]) -> SubtitleTrackParams:
+    raw_sub = payload.get("subtitle_track")
+    if raw_sub is not None and not isinstance(raw_sub, dict):
+        raise ValueError("'subtitle_track' must be a JSON object")
+    source: dict[str, Any] = raw_sub if isinstance(raw_sub, dict) else payload
+    raw_cues = source.get("cues", [])
+    if not isinstance(raw_cues, list):
+        raise ValueError("'cues' must be a list")
+    enabled_raw = source.get("enabled", True)
+    if not isinstance(enabled_raw, bool):
+        raise ValueError("enabled must be a boolean")
+    return SubtitleTrackParams.model_validate(
+        {
+            "cues": raw_cues,
+            "style": source.get("style", "clean_white"),
+            "font_size": source.get("font_size", 34),
+            "margin_bottom_pct": source.get("margin_bottom_pct", 0.08),
+            "enabled": enabled_raw,
+        }
+    )
+
+
 def _build_transition_params_from_payload(payload: dict[str, Any]) -> TransitionParams:
     raw_trans = payload.get("transition")
     if raw_trans is not None and not isinstance(raw_trans, dict):
@@ -713,6 +753,26 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                         "end_s": {"min": 0.0, "max": TITLE_TIME_MAX_S},
                         "font_size": {"min": TITLE_FONT_SIZE_MIN, "max": TITLE_FONT_SIZE_MAX},
                         "box_opacity": {"min": 0.0, "max": 1.0},
+                    },
+                },
+            )
+            return
+
+        if route == "/api/subtitles/styles":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "styles": [s.model_dump(mode="json") for s in list_caption_styles()],
+                    "style_ids": list(CAPTION_STYLE_IDS),
+                    "bounds": {
+                        "max_cues": CAPTION_MAX_CUES,
+                        "max_text_len": CAPTION_MAX_TEXT_LEN,
+                        "font_size": {"min": CAPTION_FONT_SIZE_MIN, "max": CAPTION_FONT_SIZE_MAX},
+                        "margin_bottom_pct": {
+                            "min": CAPTION_MARGIN_BOTTOM_MIN,
+                            "max": CAPTION_MARGIN_BOTTOM_MAX,
+                        },
+                        "time_max_s": CAPTION_TIME_MAX_S,
                     },
                 },
             )
@@ -1092,6 +1152,15 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     {"title_overlay": raw_title_overlay}
                 )
 
+            subtitle_track_obj: SubtitleTrackParams | None = None
+            raw_subtitle_track = payload.get("subtitle_track")
+            if raw_subtitle_track is not None:
+                if not isinstance(raw_subtitle_track, dict):
+                    raise ValueError("'subtitle_track' must be a JSON object")
+                subtitle_track_obj = _build_subtitle_track_from_payload(
+                    {"subtitle_track": raw_subtitle_track}
+                )
+
             plan = build_render_plan(
                 input_path=in_file,
                 output_path=out_file,
@@ -1101,6 +1170,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 color_grade=color_grade_obj,
                 fx_filtergraph=fx_filtergraph,
                 title_overlay=title_overlay_obj,
+                subtitle_track=subtitle_track_obj,
                 audio_params=audio_params,
                 retime_params=retime_params,
                 framing=framing_params,
@@ -1126,6 +1196,93 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
             compiled_title = compile_title_overlay(title_params, pix_fmt=pix_fmt)
             self._send_json(HTTPStatus.OK, compiled_title.model_dump(mode="json"))
+            return
+
+        if route == "/api/subtitles/parse":
+            raw_fmt = str(payload.get("format", "auto")).strip().lower()
+            if raw_fmt not in {"auto", "srt", "vtt"}:
+                raise ValueError("format must be 'auto', 'srt', or 'vtt'")
+            raw_content = payload.get("content")
+            if isinstance(raw_content, str):
+                text_content = raw_content
+            else:
+                raw_path = payload.get("path")
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    raise ValueError("Provide 'content' string or workspace 'path'")
+                confined = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    raw_path,
+                    must_exist=True,
+                    allowed_suffixes=SUBTITLE_SUFFIXES,
+                )
+                text_content = confined.read_text(encoding="utf-8-sig")
+                if raw_fmt == "auto":
+                    raw_fmt = confined.suffix.lower().lstrip(".")
+
+            detected_fmt = raw_fmt
+            if detected_fmt == "auto":
+                first_line = text_content.lstrip("\ufeff").lstrip().splitlines()[0:1]
+                head = first_line[0].strip() if first_line else ""
+                detected_fmt = (
+                    "vtt"
+                    if head == "WEBVTT" or head.startswith(("WEBVTT ", "WEBVTT\t"))
+                    else "srt"
+                )
+
+            cues = parse_vtt(text_content) if detected_fmt == "vtt" else parse_srt(text_content)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "format": detected_fmt,
+                    "cue_count": len(cues),
+                    "cues": [c.model_dump(mode="json") for c in cues],
+                },
+            )
+            return
+
+        if route == "/api/subtitles/export":
+            raw_fmt = str(payload.get("format", "srt")).strip().lower()
+            if raw_fmt not in {"srt", "vtt"}:
+                raise ValueError("format must be 'srt' or 'vtt'")
+            raw_cues = payload.get("cues", [])
+            if not isinstance(raw_cues, list):
+                raise ValueError("'cues' must be a list")
+            exported = export_vtt(raw_cues) if raw_fmt == "vtt" else export_srt(raw_cues)
+            filename = sanitize_download_filename(
+                str(payload.get("filename") or "captions"),
+                "captions",
+                f".{raw_fmt}",
+            )
+            sub_saved_rel: str | None = None
+            raw_out = payload.get("out_path")
+            if raw_out is not None and str(raw_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_out),
+                    must_exist=False,
+                    allowed_suffixes=SUBTITLE_SUFFIXES,
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(exported, encoding="utf-8")
+                sub_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "format": raw_fmt,
+                    "filename": filename,
+                    "content": exported,
+                    "cue_count": len(raw_cues),
+                    "saved_path": sub_saved_rel,
+                },
+            )
+            return
+
+        if route == "/api/subtitles/compile":
+            sub_params = _build_subtitle_track_from_payload(payload)
+            raw_pix_fmt = payload.get("pix_fmt")
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            compiled_subs = compile_subtitles(sub_params, pix_fmt=pix_fmt)
+            self._send_json(HTTPStatus.OK, compiled_subs.model_dump(mode="json"))
             return
 
         if route == "/api/audio/compile":
@@ -1351,6 +1508,11 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 title_overlay_remote = _build_title_overlay_from_payload(
                     {"title_overlay": payload["title_overlay"]}
                 )
+            subtitle_track_remote: SubtitleTrackParams | None = None
+            if isinstance(payload.get("subtitle_track"), dict):
+                subtitle_track_remote = _build_subtitle_track_from_payload(
+                    {"subtitle_track": payload["subtitle_track"]}
+                )
 
             job_req = RemoteRenderJobRequest(
                 input_filename=in_file.name,
@@ -1365,6 +1527,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 color_grade=color_grade_remote,
                 lut_cube_text=lut_cube_text,
                 title_overlay=title_overlay_remote,
+                subtitle_track=subtitle_track_remote,
                 audio_params=audio_params,
                 retime_params=retime_params,
                 framing=framing_params,

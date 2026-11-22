@@ -24,6 +24,7 @@ from taktcut.models import (
     RenderProfile,
     RenderResult,
 )
+from taktcut.subtitles import SubtitleTrackParams, compile_subtitles_filter
 from taktcut.titles import TitleOverlayParams, compile_title_filter
 
 AUDIO_GAIN_DB_MIN: float = -24.0
@@ -547,6 +548,7 @@ def build_render_plan(
     color_grade: ColorGradeParams | None = None,
     fx_filtergraph: str | None = None,
     title_overlay: TitleOverlayParams | None = None,
+    subtitle_track: SubtitleTrackParams | None = None,
     audio_params: ClipAudioParams | None = None,
     retime_params: ClipRetimeParams | None = None,
     framing: FramingParams | None = None,
@@ -596,6 +598,10 @@ def build_render_plan(
         title_fg = compile_title_filter(title_overlay, pix_fmt=pix_fmt)
         if title_fg:
             vf_parts.append(title_fg)
+    if subtitle_track is not None and subtitle_track.is_active():
+        sub_fg = compile_subtitles_filter(subtitle_track, pix_fmt=pix_fmt)
+        if sub_fg:
+            vf_parts.append(sub_fg)
     video_filter = ",".join(vf_parts) if vf_parts else None
 
     resolved_clip_dur = clip_duration_s

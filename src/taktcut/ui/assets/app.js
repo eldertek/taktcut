@@ -6,6 +6,7 @@ import {
   drawLoudnessCanvas,
   drawProgramMonitorCanvas,
   drawTimelineCanvas,
+  findActiveSubtitleCue,
   framesToSmpte
 } from "./canvas.js";
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
@@ -254,6 +255,19 @@ const state = {
   titlePresetsCatalog: null,
   titleLastCompile: null,
   titleCompileTimer: null,
+  subtitleTrack: {
+    enabled: true,
+    style: "clean_white",
+    font_size: 34,
+    margin_bottom_pct: 0.08,
+    cues: [
+      { index: 1, start_s: 0.5, end_s: 2.8, text: "Clean-room OpenTimelineIO interchange" },
+      { index: 2, start_s: 3.2, end_s: 6.4, text: "Rec.709 color science and broadcast QA" },
+      { index: 3, start_s: 7.0, end_s: 10.5, text: "Deterministic FFmpeg NVENC delivery" }
+    ]
+  },
+  subtitleLastCompile: null,
+  subtitleCompileTimer: null,
   transitionPresetsCatalog: null,
   framing: {
     preset: "16:9",
@@ -347,8 +361,10 @@ function setLanguage(lang) {
   renderTimelineUI();
   renderFxStack();
   updateTitleTimingBadges();
+  updateSubtitleTimingBadges();
   if (state.fxLastCompile) renderFxCompileResult(state.fxLastCompile);
   if (state.titleLastCompile) renderTitleCompileResult(state.titleLastCompile);
+  if (state.subtitleLastCompile) renderSubtitleCompileResult(state.subtitleLastCompile);
   if (state.lastQaReport) renderQaReport(state.lastQaReport);
 }
 
@@ -428,6 +444,13 @@ function getEffectiveTitleState(showBadge = false) {
   };
 }
 
+function getEffectiveSubtitleState(showBadge = false) {
+  return {
+    ...state.subtitleTrack,
+    showBadge
+  };
+}
+
 function getEffectiveFramingState() {
   return {
     aspectPreset: state.framing.preset,
@@ -503,6 +526,7 @@ function updatePlayheadReadout() {
     titlesCounter.textContent = `${state.playheadFrame}f / ${state.timelineMaxFrame}f`;
   }
   updateTitleTimingBadges();
+  updateSubtitleTimingBadges();
 }
 
 function redrawActiveCanvases() {
@@ -514,7 +538,8 @@ function redrawActiveCanvases() {
       state.colorGrade,
       getEffectiveFxState(),
       getEffectiveTitleState(false),
-      getEffectiveFramingState()
+      getEffectiveFramingState(),
+      getEffectiveSubtitleState(false)
     );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
@@ -553,7 +578,8 @@ function redrawActiveCanvases() {
       state.colorGrade,
       getEffectiveFxState(),
       getEffectiveTitleState(false),
-      getEffectiveFramingState()
+      getEffectiveFramingState(),
+      getEffectiveSubtitleState(false)
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -564,7 +590,8 @@ function redrawActiveCanvases() {
       state.colorGrade,
       getEffectiveFxState(),
       getEffectiveTitleState(true),
-      getEffectiveFramingState()
+      getEffectiveFramingState(),
+      getEffectiveSubtitleState(true)
     );
   } else if (state.activeTab === "color") {
     drawColorPreviewCanvas(byId("color-preview-canvas"), state.colorGrade, state.wipeRatio);
@@ -2062,6 +2089,299 @@ async function compileTitleNow() {
   }
 }
 
+/* PAGE 3: CAPTIONS & SUBTITLES TRACK (.SRT / .VTT) */
+const SAMPLE_SRT_TEXT = [
+  "1",
+  "00:00:00,500 --> 00:00:02,800",
+  "Clean-room OpenTimelineIO interchange",
+  "",
+  "2",
+  "00:00:03,200 --> 00:00:06,400",
+  "Rec.709 color science and broadcast QA",
+  "",
+  "3",
+  "00:00:07,000 --> 00:00:10,500",
+  "Deterministic FFmpeg NVENC delivery",
+  ""
+].join("\n");
+
+function formatCueTimecode(seconds) {
+  const totalMs = Math.max(0, Math.round(Number(seconds || 0) * 1000));
+  const hh = Math.floor(totalMs / 3600000);
+  const mm = Math.floor((totalMs % 3600000) / 60000);
+  const ss = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+}
+
+function formatCuesAsSrtLocal(cues) {
+  return cues
+    .map((c, idx) => `${idx + 1}\n${formatCueTimecode(c.start_s)} --> ${formatCueTimecode(c.end_s)}\n${c.text}`)
+    .join("\n\n");
+}
+
+function updateSubtitleStyleButtons() {
+  for (const btn of document.querySelectorAll("[data-subtitle-style]")) {
+    const sid = btn.getAttribute("data-subtitle-style");
+    const isMatch = sid === state.subtitleTrack.style;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function updateSubtitleTimingBadges() {
+  const sub = state.subtitleTrack;
+  const fps = getTimelineFps();
+  const tSec = state.playheadFrame / fps;
+  const activeCue = findActiveSubtitleCue(sub, tSec);
+
+  const onAirBadge = byId("subtitle-onair-badge");
+  if (onAirBadge) {
+    if (!sub.enabled) {
+      onAirBadge.textContent = "BYPASSED";
+      onAirBadge.className = "nle-tag mono";
+    } else if (sub.cues.length === 0) {
+      onAirBadge.textContent = "EMPTY";
+      onAirBadge.className = "nle-tag is-warn mono";
+    } else if (activeCue) {
+      onAirBadge.textContent = `ON AIR #${activeCue.index}`;
+      onAirBadge.className = "nle-tag is-pass mono";
+    } else {
+      onAirBadge.textContent = "STANDBY";
+      onAirBadge.className = "nle-tag is-blue mono";
+    }
+  }
+
+  const countBadge = byId("subtitle-cue-count-badge");
+  if (countBadge) {
+    countBadge.textContent = `${sub.cues.length} CUES`;
+  }
+
+  const toggleBtn = byId("btn-subtitle-toggle");
+  if (toggleBtn) {
+    toggleBtn.textContent = sub.enabled ? t("subtitles.btn.enabled") : t("subtitles.btn.bypassed");
+    toggleBtn.setAttribute("aria-pressed", sub.enabled ? "true" : "false");
+    toggleBtn.classList.toggle("is-active", sub.enabled);
+  }
+
+  const list = byId("subtitle-cue-list");
+  if (list) {
+    for (const row of list.querySelectorAll(".subtitle-cue-row")) {
+      const idx = Number.parseInt(row.getAttribute("data-cue-idx") || "-1", 10);
+      const cue = sub.cues[idx];
+      const isActive = Boolean(activeCue && cue && activeCue.index === cue.index);
+      row.classList.toggle("is-active-cue", isActive);
+    }
+  }
+}
+
+function renderSubtitleCueList() {
+  const list = byId("subtitle-cue-list");
+  if (!list) return;
+  const cues = state.subtitleTrack.cues;
+  if (!cues || cues.length === 0) {
+    list.replaceChildren(dom("div", "subtitle-cue-empty", t("subtitles.cues.empty")));
+    updateSubtitleTimingBadges();
+    return;
+  }
+
+  const fps = getTimelineFps();
+  const rows = cues.map((cue, idx) => {
+    cue.index = idx + 1;
+    const row = dom("div", "subtitle-cue-row");
+    row.setAttribute("role", "listitem");
+    row.setAttribute("data-cue-idx", String(idx));
+
+    const head = dom("div", "subtitle-cue-head");
+    const jumpBtn = dom(
+      "button",
+      "btn btn-mini mono",
+      `#${cue.index} @ ${formatCueTimecode(cue.start_s)}`
+    );
+    jumpBtn.type = "button";
+    jumpBtn.addEventListener("click", () => {
+      stopPlayback();
+      const targetFrame = Math.max(0, Math.round(cue.start_s * fps));
+      setPlayhead(targetFrame);
+    });
+
+    const timesWrap = dom("div", "subtitle-cue-times mono");
+    const startInput = dom("input", "input-num subtitle-time-num");
+    startInput.type = "number";
+    startInput.step = "0.1";
+    startInput.min = "0";
+    startInput.max = "86400";
+    startInput.value = String(cue.start_s);
+    startInput.setAttribute("aria-label", `Cue ${cue.index} start seconds`);
+    startInput.addEventListener("input", () => {
+      const val = Number.parseFloat(startInput.value);
+      if (Number.isFinite(val) && val >= 0 && val < cue.end_s) {
+        cue.start_s = Number(val.toFixed(3));
+        jumpBtn.textContent = `#${cue.index} @ ${formatCueTimecode(cue.start_s)}`;
+        updateSubtitleTimingBadges();
+        redrawActiveCanvases();
+        scheduleSubtitleCompile();
+      }
+    });
+    startInput.addEventListener("blur", () => {
+      const raw = Number.parseFloat(startInput.value);
+      if (!Number.isFinite(raw) || raw < 0 || raw >= cue.end_s) {
+        startInput.value = String(cue.start_s);
+      }
+    });
+
+    const arrowSpan = dom("span", "nle-tag mono", "->");
+    const endInput = dom("input", "input-num subtitle-time-num");
+    endInput.type = "number";
+    endInput.step = "0.1";
+    endInput.min = "0.1";
+    endInput.max = "86400";
+    endInput.value = String(cue.end_s);
+    endInput.setAttribute("aria-label", `Cue ${cue.index} end seconds`);
+    endInput.addEventListener("input", () => {
+      const val = Number.parseFloat(endInput.value);
+      if (Number.isFinite(val) && val > cue.start_s && val <= 86400) {
+        cue.end_s = Number(val.toFixed(3));
+        updateSubtitleTimingBadges();
+        redrawActiveCanvases();
+        scheduleSubtitleCompile();
+      }
+    });
+    endInput.addEventListener("blur", () => {
+      const raw = Number.parseFloat(endInput.value);
+      if (!Number.isFinite(raw) || raw <= cue.start_s || raw > 86400) {
+        endInput.value = String(cue.end_s);
+      }
+    });
+
+    const delBtn = dom("button", "btn btn-mini mono", "x");
+    delBtn.type = "button";
+    delBtn.setAttribute("aria-label", `Delete cue ${cue.index}`);
+    delBtn.addEventListener("click", () => {
+      state.subtitleTrack.cues.splice(idx, 1);
+      renderSubtitleCueList();
+      redrawActiveCanvases();
+      compileSubtitlesNow();
+    });
+
+    timesWrap.append(startInput, arrowSpan, endInput);
+    head.append(jumpBtn, timesWrap, delBtn);
+
+    const textInput = dom("input", "input-control subtitle-cue-text-input");
+    textInput.type = "text";
+    textInput.maxLength = 300;
+    textInput.value = cue.text;
+    textInput.setAttribute("aria-label", `Cue ${cue.index} caption text`);
+    textInput.addEventListener("input", () => {
+      cue.text = textInput.value;
+      updateSubtitleTimingBadges();
+      redrawActiveCanvases();
+      scheduleSubtitleCompile();
+    });
+
+    row.append(head, textInput);
+    return row;
+  });
+
+  list.replaceChildren(...rows);
+  updateSubtitleTimingBadges();
+}
+
+function renderSubtitleCompileResult(res) {
+  state.subtitleLastCompile = res;
+  const badge = byId("subtitle-compile-badge");
+  const out = byId("subtitle-filtergraph-output");
+  if (!badge || !out) return;
+
+  if (!res || !res.is_active || !res.filtergraph) {
+    badge.textContent = "INACTIVE";
+    badge.className = "nle-tag mono";
+    out.textContent = t("subtitles.compiler.empty");
+    return;
+  }
+  badge.textContent = `COMPILED (${res.cue_count})`;
+  badge.className = "nle-tag is-active mono";
+  out.textContent = res.filtergraph;
+}
+
+function scheduleSubtitleCompile() {
+  if (state.subtitleCompileTimer !== null) {
+    window.clearTimeout(state.subtitleCompileTimer);
+  }
+  state.subtitleCompileTimer = window.setTimeout(compileSubtitlesNow, 120);
+}
+
+async function compileSubtitlesNow() {
+  try {
+    const validCues = state.subtitleTrack.cues.filter(
+      (c) => String(c.text || "").trim().length > 0 && c.end_s > c.start_s
+    );
+    const payload = {
+      subtitle_track: {
+        ...state.subtitleTrack,
+        cues: validCues
+      }
+    };
+    const res = await api.compileSubtitles(payload);
+    renderSubtitleCompileResult(res);
+  } catch (err) {
+    const badge = byId("subtitle-compile-badge");
+    const out = byId("subtitle-filtergraph-output");
+    if (badge) {
+      badge.textContent = "ERROR";
+      badge.className = "nle-tag is-fail mono";
+    }
+    if (out) out.textContent = `# ${err.message}`;
+  }
+}
+
+async function parseSubtitleRawInput(rawContent, format = "auto") {
+  try {
+    const res = await api.parseSubtitles({ content: rawContent, format });
+    state.subtitleTrack.cues = Array.isArray(res.cues) ? res.cues : [];
+    renderSubtitleCueList();
+    redrawActiveCanvases();
+    await compileSubtitlesNow();
+    showBanner(`Parsed ${res.cue_count} caption cues (${String(res.format || "srt").toUpperCase()}).`, "success");
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+async function exportSubtitlesAndDownload(format) {
+  try {
+    const validCues = state.subtitleTrack.cues.filter(
+      (c) => String(c.text || "").trim().length > 0 && c.end_s > c.start_s
+    );
+    const res = await api.exportSubtitles({
+      cues: validCues,
+      format,
+      filename: `captions.${format}`
+    });
+    const rawEl = byId("subtitle-raw-input");
+    if (rawEl) rawEl.value = res.content || "";
+    const mime = format === "vtt" ? "text/vtt;charset=utf-8" : "text/plain;charset=utf-8";
+    triggerBlobDownload(new Blob([res.content || ""], { type: mime }), res.filename || `captions.${format}`);
+    showBanner(`Exported ${res.cue_count} cues as .${format}.`, "success");
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+function syncSubtitleControlsFromState() {
+  const sub = state.subtitleTrack;
+  const fsRange = byId("subtitle-font-size-range");
+  const fsNum = byId("subtitle-font-size-num");
+  const rawEl = byId("subtitle-raw-input");
+  if (fsRange) fsRange.value = String(sub.font_size);
+  if (fsNum) fsNum.value = String(sub.font_size);
+  if (rawEl && !rawEl.value.trim() && sub.cues.length > 0) {
+    rawEl.value = formatCuesAsSrtLocal(sub.cues);
+  }
+  updateSubtitleStyleButtons();
+  renderSubtitleCueList();
+}
+
 /* PAGE 4: COLOR WHEELS, LUMETRI TONE, SCOPES, FFMPEG & .CUBE */
 const COLOR_WHEEL_BINDINGS = [
   { group: "lift", idx: 0, range: "lift-r-range", num: "lift-r-num", min: -1, max: 1, decimals: 2 },
@@ -2480,6 +2800,8 @@ async function buildOrExecuteRender(execute) {
     const useStudioFx = useStudioFxEl ? useStudioFxEl.checked : false;
     const useStudioTitleEl = byId("render-use-studio-title");
     const useStudioTitle = useStudioTitleEl ? useStudioTitleEl.checked : false;
+    const useStudioSubsEl = byId("render-use-studio-subtitles");
+    const useStudioSubs = useStudioSubsEl ? useStudioSubsEl.checked : false;
     const preferHw = byId("render-prefer-hw").checked;
 
     const fxPayload =
@@ -2491,6 +2813,13 @@ async function buildOrExecuteRender(execute) {
       state.titleOverlay.enabled &&
       (state.titleOverlay.title.trim() || state.titleOverlay.subtitle.trim())
         ? state.titleOverlay
+        : null;
+    const activeValidCues = state.subtitleTrack.cues.filter(
+      (c) => String(c.text || "").trim().length > 0 && c.end_s > c.start_s
+    );
+    const subtitlePayload =
+      useStudioSubs && state.subtitleTrack.enabled && activeValidCues.length > 0
+        ? { ...state.subtitleTrack, cues: activeValidCues }
         : null;
 
     const useClipAudioEl = byId("render-use-clip-audio");
@@ -2527,6 +2856,7 @@ async function buildOrExecuteRender(execute) {
         color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
         fx_stack: fxPayload,
         title_overlay: titlePayload,
+        subtitle_track: subtitlePayload,
         audio_params: audioParamsPayload,
         retime_params: retimeParamsPayload,
         framing: framingPayload,
@@ -2572,6 +2902,7 @@ async function buildOrExecuteRender(execute) {
       color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
       fx_stack: fxPayload,
       title_overlay: titlePayload,
+      subtitle_track: subtitlePayload,
       audio_params: audioParamsPayload,
       retime_params: retimeParamsPayload,
       framing: framingPayload,
@@ -5011,6 +5342,108 @@ function wireEvents() {
     showBanner("Active Title / Lower-Third overlay linked to Deliver page.", "success");
   });
 
+  // Captions & Subtitles Track events
+  for (const btn of document.querySelectorAll("[data-subtitle-style]")) {
+    btn.addEventListener("click", () => {
+      const sid = btn.getAttribute("data-subtitle-style");
+      if (!sid) return;
+      state.subtitleTrack.style = sid;
+      updateSubtitleStyleButtons();
+      redrawActiveCanvases();
+      compileSubtitlesNow();
+    });
+  }
+  byId("btn-subtitle-toggle").addEventListener("click", () => {
+    state.subtitleTrack.enabled = !state.subtitleTrack.enabled;
+    updateSubtitleTimingBadges();
+    redrawActiveCanvases();
+    compileSubtitlesNow();
+  });
+  byId("subtitle-font-size-range").addEventListener("input", () => {
+    const val = Number.parseInt(byId("subtitle-font-size-range").value, 10);
+    state.subtitleTrack.font_size = val;
+    byId("subtitle-font-size-num").value = String(val);
+    redrawActiveCanvases();
+    scheduleSubtitleCompile();
+  });
+  byId("subtitle-font-size-num").addEventListener("input", () => {
+    const val = Number.parseInt(byId("subtitle-font-size-num").value, 10);
+    if (Number.isFinite(val) && val >= 14 && val <= 72) {
+      state.subtitleTrack.font_size = val;
+      byId("subtitle-font-size-range").value = String(val);
+      redrawActiveCanvases();
+      scheduleSubtitleCompile();
+    }
+  });
+  byId("subtitle-font-size-num").addEventListener("blur", () => {
+    const raw = Number.parseInt(byId("subtitle-font-size-num").value, 10);
+    if (!Number.isFinite(raw) || raw < 14 || raw > 72) {
+      byId("subtitle-font-size-num").value = String(state.subtitleTrack.font_size);
+    }
+  });
+  byId("btn-subtitle-parse").addEventListener("click", () => {
+    const raw = byId("subtitle-raw-input").value;
+    parseSubtitleRawInput(raw, "auto");
+  });
+  byId("subtitle-file-input").addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      byId("subtitle-raw-input").value = text;
+      const fmt = file.name.toLowerCase().endsWith(".vtt") ? "vtt" : "srt";
+      await parseSubtitleRawInput(text, fmt);
+    } catch (err) {
+      showBanner(err.message, "error");
+    } finally {
+      ev.target.value = "";
+    }
+  });
+  byId("btn-subtitle-sample").addEventListener("click", () => {
+    byId("subtitle-raw-input").value = SAMPLE_SRT_TEXT;
+    parseSubtitleRawInput(SAMPLE_SRT_TEXT, "srt");
+  });
+  byId("btn-subtitle-export-srt").addEventListener("click", () => exportSubtitlesAndDownload("srt"));
+  byId("btn-subtitle-export-vtt").addEventListener("click", () => exportSubtitlesAndDownload("vtt"));
+  byId("btn-subtitle-clear").addEventListener("click", () => {
+    state.subtitleTrack.cues = [];
+    byId("subtitle-raw-input").value = "";
+    renderSubtitleCueList();
+    redrawActiveCanvases();
+    compileSubtitlesNow();
+  });
+  byId("btn-subtitle-add-cue").addEventListener("click", () => {
+    const tSec = Number((state.playheadFrame / getTimelineFps()).toFixed(2));
+    const endSec = Number((tSec + 2.5).toFixed(2));
+    state.subtitleTrack.cues.push({
+      index: state.subtitleTrack.cues.length + 1,
+      start_s: tSec,
+      end_s: endSec,
+      text: "New caption line"
+    });
+    state.subtitleTrack.enabled = true;
+    renderSubtitleCueList();
+    redrawActiveCanvases();
+    compileSubtitlesNow();
+  });
+  byId("btn-subtitle-compile").addEventListener("click", compileSubtitlesNow);
+  byId("btn-subtitle-copy-fg").addEventListener("click", async () => {
+    const fg = state.subtitleLastCompile ? state.subtitleLastCompile.filtergraph : "";
+    if (!fg) return;
+    try {
+      await navigator.clipboard.writeText(fg);
+      showBanner("Copied Subtitles FFmpeg filtergraph to clipboard.", "success");
+    } catch {
+      showBanner("Clipboard unavailable; copy directly from filtergraph box.", "error");
+    }
+  });
+  byId("btn-subtitle-send-render").addEventListener("click", () => {
+    const chk = byId("render-use-studio-subtitles");
+    if (chk) chk.checked = true;
+    switchTab("render");
+    showBanner("Active Captions / SRT track linked to Deliver page.", "success");
+  });
+
   // Color page events
   wireColorInputs();
   byId("btn-color-copy-fg").addEventListener("click", async () => {
@@ -5260,6 +5693,8 @@ async function bootstrap() {
   compileColorNow();
   syncTitleInputsFromState();
   compileTitleNow();
+  syncSubtitleControlsFromState();
+  compileSubtitlesNow();
   renderFxStack();
   renderFxCompileResult(null);
 

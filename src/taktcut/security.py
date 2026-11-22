@@ -25,6 +25,7 @@ TIMELINE_SUFFIXES: frozenset[str] = frozenset(
 OTIO_EXPORT_SUFFIXES: frozenset[str] = frozenset({".otio", ".otioz"})
 LUT_SUFFIXES: frozenset[str] = frozenset({".cube"})
 CDL_SUFFIXES: frozenset[str] = frozenset({".cdl", ".cc", ".ccc", ".xml"})
+SUBTITLE_SUFFIXES: frozenset[str] = frozenset({".srt", ".vtt"})
 MEDIA_SUFFIXES: frozenset[str] = frozenset(
     {".mp4", ".mov", ".m4v", ".mkv", ".mxf", ".webm", ".wav", ".aac", ".mp3"}
 )
@@ -133,6 +134,7 @@ def scan_workspace_files(
     timelines: list[str] = []
     luts: list[str] = []
     cdls: list[str] = []
+    subtitles: list[str] = []
     media: list[str] = []
     total_found = 0
 
@@ -163,6 +165,8 @@ def scan_workspace_files(
                 luts.append(rel_posix)
             elif ext in CDL_SUFFIXES and ext != ".xml":
                 cdls.append(rel_posix)
+            elif ext in SUBTITLE_SUFFIXES:
+                subtitles.append(rel_posix)
             elif ext in MEDIA_SUFFIXES:
                 media.append(rel_posix)
             else:
@@ -174,6 +178,7 @@ def scan_workspace_files(
                     "timelines": timelines,
                     "luts": luts,
                     "cdls": cdls,
+                    "subtitles": subtitles,
                     "media": media,
                 }
 
@@ -181,5 +186,6 @@ def scan_workspace_files(
         "timelines": timelines,
         "luts": luts,
         "cdls": cdls,
+        "subtitles": subtitles,
         "media": media,
     }

@@ -55,6 +55,7 @@ from taktcut.security import (
     resolve_workspace_root,
     sanitize_download_filename,
 )
+from taktcut.subtitles import SubtitleTrackParams
 from taktcut.titles import TitleOverlayParams
 
 MAX_REMOTE_JOB_BYTES: int = 64 * 1024 * 1024
@@ -223,6 +224,7 @@ class RemoteRenderJobRequest(BaseModel):
     color_grade: ColorGradeParams | None = None
     lut_cube_text: str | None = None
     title_overlay: TitleOverlayParams | None = None
+    subtitle_track: SubtitleTrackParams | None = None
     audio_params: ClipAudioParams | None = None
     retime_params: ClipRetimeParams | None = None
     framing: FramingParams | None = None
@@ -497,6 +499,7 @@ class RemoteRenderState:
             color_grade=req.color_grade if lut_file is None else None,
             fx_filtergraph=fx_filtergraph,
             title_overlay=req.title_overlay,
+            subtitle_track=req.subtitle_track,
             audio_params=req.audio_params,
             retime_params=req.retime_params,
             framing=req.framing,

@@ -347,6 +347,195 @@ function compileTitleClient(payload, opts = {}) {
   };
 }
 
+const CAPTION_STYLE_SPECS = [
+  {
+    id: "clean_white",
+    name: "Clean White",
+    description: "Crisp white captions with black edge outline and drop shadow.",
+    font_color: "#ffffff",
+    box_color: "#000000",
+    box_opacity: 0.0,
+    border_w: 2,
+    default_font_size: 34,
+    bold: false
+  },
+  {
+    id: "yellow_broadcast",
+    name: "Yellow Broadcast",
+    description: "Traditional broadcast yellow captions with subtle dark plate and shadow.",
+    font_color: "#ffe047",
+    box_color: "#0c0c0e",
+    box_opacity: 0.55,
+    border_w: 2,
+    default_font_size: 34,
+    bold: true
+  },
+  {
+    id: "boxed_social",
+    name: "Boxed Social",
+    description: "High-contrast bold white captions on a solid dark social pill box.",
+    font_color: "#ffffff",
+    box_color: "#141416",
+    box_opacity: 0.86,
+    border_w: 0,
+    default_font_size: 38,
+    bold: true
+  }
+];
+
+function sanitizeCaptionTextClient(raw) {
+  let cur = String(raw || "").replace(/\r\n|\r/g, "\n").replace(/\t/g, " ");
+  for (let i = 0; i < 8; i += 1) {
+    const nxt = cur
+      .replace(/<\s*(script|style)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
+      .replace(/<[^>]{0,512}>/g, "");
+    if (nxt === cur) break;
+    cur = nxt;
+  }
+  cur = cur.replace(/[<>]/g, "").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, " ");
+  return cur
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseSrtTsClient(raw) {
+  const m = /^(\d{2,3}):([0-5]\d):([0-5]\d),(\d{3})$/.exec(String(raw || "").trim());
+  if (!m) throw new Error(`Invalid SRT timestamp: ${raw}`);
+  return Number((Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000).toFixed(3));
+}
+
+function parseVttTsClient(raw) {
+  const m = /^(?:(\d{2,3}):)?([0-5]\d):([0-5]\d)\.(\d{3})$/.exec(String(raw || "").trim());
+  if (!m) throw new Error(`Invalid VTT timestamp: ${raw}`);
+  const hh = m[1] !== undefined ? Number(m[1]) : 0;
+  return Number((hh * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000).toFixed(3));
+}
+
+function formatTsClient(seconds, sep) {
+  const totalMs = Math.max(0, Math.round(Number(seconds) * 1000));
+  const hh = Math.floor(totalMs / 3600000);
+  const mm = Math.floor((totalMs % 3600000) / 60000);
+  const ss = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}${sep}${String(ms).padStart(3, "0")}`;
+}
+
+function parseSrtClient(raw) {
+  const cleaned = String(raw || "").replace(/^\ufeff/, "").replace(/\r\n|\r/g, "\n").trim();
+  if (!cleaned) throw new Error("SRT input is empty");
+  const blocks = cleaned.split(/\n[ \t]*\n+/);
+  const cues = [];
+  for (let i = 0; i < blocks.length; i += 1) {
+    const lines = blocks[i].split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+    if (lines.length < 3 || !/^\d+$/.test(lines[0].trim())) {
+      throw new Error(`Invalid SRT cue block #${i + 1}`);
+    }
+    const parts = lines[1].split("-->");
+    if (parts.length !== 2) throw new Error(`Invalid SRT timing line in block #${i + 1}`);
+    const start_s = parseSrtTsClient(parts[0]);
+    const end_s = parseSrtTsClient(parts[1]);
+    if (end_s <= start_s) throw new Error(`Cue #${i + 1} end must exceed start`);
+    const text = sanitizeCaptionTextClient(lines.slice(2).join("\n"));
+    if (!text) throw new Error(`Cue #${i + 1} text is empty after sanitization`);
+    cues.push({ index: cues.length + 1, start_s, end_s, text });
+  }
+  return cues;
+}
+
+function parseVttClient(raw) {
+  const cleaned = String(raw || "").replace(/^\ufeff/, "").replace(/\r\n|\r/g, "\n").trim();
+  if (!cleaned) throw new Error("WebVTT input is empty");
+  const blocks = cleaned.split(/\n[ \t]*\n+/);
+  const head = (blocks[0].split("\n")[0] || "").trim();
+  if (head !== "WEBVTT" && !head.startsWith("WEBVTT ") && !head.startsWith("WEBVTT\t")) {
+    throw new Error("Invalid WebVTT header: must start with WEBVTT");
+  }
+  const cues = [];
+  for (let i = 1; i < blocks.length; i += 1) {
+    const lines = blocks[i].split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+    if (lines.length === 0) continue;
+    const h = lines[0].trim();
+    if (h === "NOTE" || h.startsWith("NOTE ") || h.startsWith("STYLE") || h.startsWith("REGION")) continue;
+    const tIdx = lines[0].includes("-->") ? 0 : lines[1] && lines[1].includes("-->") ? 1 : -1;
+    if (tIdx < 0) throw new Error(`WebVTT cue #${i} missing timing line`);
+    const parts = lines[tIdx].split("-->");
+    if (parts.length !== 2) throw new Error(`Invalid WebVTT timing in cue #${i}`);
+    const start_s = parseVttTsClient(parts[0]);
+    const end_s = parseVttTsClient((parts[1].trim().split(/\s+/)[0]) || "");
+    if (end_s <= start_s) throw new Error(`Cue #${i} end must exceed start`);
+    const text = sanitizeCaptionTextClient(lines.slice(tIdx + 1).join("\n"));
+    if (!text) throw new Error(`Cue #${i} text is empty after sanitization`);
+    cues.push({ index: cues.length + 1, start_s, end_s, text });
+  }
+  return cues;
+}
+
+function compileSubtitlesClient(payload, opts = {}) {
+  const src = payload && payload.subtitle_track ? payload.subtitle_track : payload || {};
+  const enabled = src.enabled !== false;
+  const styleId = ["clean_white", "yellow_broadcast", "boxed_social"].includes(src.style) ? src.style : "clean_white";
+  const spec = CAPTION_STYLE_SPECS.find((s) => s.id === styleId) || CAPTION_STYLE_SPECS[0];
+  const fontSize = Math.min(72, Math.max(14, Math.round(Number(src.font_size ?? 34))));
+  const marginBottomPct = Math.min(0.45, Math.max(0.02, Number(src.margin_bottom_pct ?? 0.08)));
+  const cues = Array.isArray(src.cues) ? src.cues : [];
+
+  if (!enabled || cues.length === 0) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      is_active: false,
+      cue_count: cues.length,
+      style: styleId,
+      escaped_cues: []
+    };
+  }
+
+  const fontColor = `0x${spec.font_color.slice(1)}`;
+  const boxColor = `0x${spec.box_color.slice(1)}`;
+  const fsExpr = `max(14,round(h*${(fontSize / 1080).toFixed(5)}))`;
+  const lineStepRatio = (fontSize * 1.38) / 1080;
+  const bottomYRatio = 1 - marginBottomPct;
+  const styleOpts = [`fontcolor=${fontColor}`];
+  if (spec.border_w > 0) styleOpts.push(`borderw=${spec.border_w}:bordercolor=0x000000@0.80`);
+  if (spec.box_opacity > 0) {
+    const bw = spec.id === "boxed_social" ? 12 : 8;
+    styleOpts.push(`box=1:boxcolor=${boxColor}@${spec.box_opacity.toFixed(2)}:boxborderw=${bw}`);
+  }
+  styleOpts.push("shadowcolor=0x000000@0.85:shadowx=1:shadowy=1");
+  const styleStr = styleOpts.join(":");
+
+  const segs = [];
+  const escapedCues = [];
+  for (const cue of cues) {
+    const clean = sanitizeCaptionTextClient(cue.text || "");
+    if (!clean) continue;
+    const lines = clean.split("\n").filter(Boolean);
+    const startS = Math.max(0, Number(cue.start_s ?? 0));
+    const endS = Math.max(startS + 0.1, Number(cue.end_s ?? startS + 2));
+    const en = `enable='between(t,${startS.toFixed(3)},${endS.toFixed(3)})'`;
+    escapedCues.push(escapeDrawtextClient(lines.join(" ")));
+    for (let idx = 0; idx < lines.length; idx += 1) {
+      const escLine = escapeDrawtextClient(lines[idx]);
+      const yRatio = Math.max(0.05, bottomYRatio - (lines.length - 1 - idx) * lineStepRatio);
+      segs.push(
+        `drawtext=expansion=none:text='${escLine}':x=(w-tw)/2:y=round(h*${yRatio.toFixed(4)}-th):fontsize='${fsExpr}':${styleStr}:${en}`
+      );
+    }
+  }
+  if (opts.pix_fmt && segs.length > 0) segs.push(`format=${opts.pix_fmt}`);
+  const fg = segs.join(",");
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: fg ? ["-vf", fg] : [],
+    is_active: segs.length > 0,
+    cue_count: cues.length,
+    style: styleId,
+    escaped_cues: escapedCues
+  };
+}
+
 export function createApiClient() {
   const cfg = typeof window !== "undefined" && window.__TAKTCUT_CONFIG__ ? window.__TAKTCUT_CONFIG__ : {};
   const apiBase = typeof cfg.apiBase === "string" ? cfg.apiBase.replace(/\/+$/, "") : "";
@@ -396,7 +585,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.3",
+      version: "0.1.4",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -637,6 +826,12 @@ export function createApiClient() {
             vfParts.push(compiledTitle.filtergraph);
           }
         }
+        if (body.subtitle_track) {
+          const compiledSubs = compileSubtitlesClient(body.subtitle_track, { pix_fmt: pixFmt });
+          if (compiledSubs.is_active && compiledSubs.filtergraph) {
+            vfParts.push(compiledSubs.filtergraph);
+          }
+        }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
         if (body.audio_params) {
           const compiledAudio = compileAudioFilterClient(
@@ -738,8 +933,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.3",
-          latest_version: "0.1.3",
+          current_version: "0.1.4",
+          latest_version: "0.1.4",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -814,6 +1009,44 @@ export function createApiClient() {
         return compileTitleClient(payload, payload);
       }
       return requestJson("/api/titles/compile", { method: "POST", body: payload });
+    },
+    async getSubtitleStyles() {
+      if (resolvedMode === "static-demo") {
+        return {
+          styles: CAPTION_STYLE_SPECS,
+          style_ids: CAPTION_STYLE_SPECS.map((s) => s.id),
+          bounds: { max_cues: 500, max_text_len: 300, font_size: { min: 14, max: 72, default: 34 } }
+        };
+      }
+      return requestJson("/api/subtitles/styles");
+    },
+    async parseSubtitles(payload) {
+      if (resolvedMode === "static-demo") {
+        const content = String(payload.content || "");
+        const fmt = payload.format === "vtt" || (!payload.format || payload.format === "auto") && content.trimStart().startsWith("WEBVTT")
+          ? "vtt"
+          : "srt";
+        const cues = fmt === "vtt" ? parseVttClient(content) : parseSrtClient(content);
+        return { format: fmt, cue_count: cues.length, cues };
+      }
+      return requestJson("/api/subtitles/parse", { method: "POST", body: payload });
+    },
+    async exportSubtitles(payload) {
+      if (resolvedMode === "static-demo") {
+        const fmt = payload.format === "vtt" ? "vtt" : "srt";
+        const cues = Array.isArray(payload.cues) ? payload.cues : [];
+        const sep = fmt === "vtt" ? "." : ",";
+        const blocks = cues.map((c, idx) => `${idx + 1}\n${formatTsClient(c.start_s, sep)} --> ${formatTsClient(c.end_s, sep)}\n${sanitizeCaptionTextClient(c.text)}`);
+        const content = fmt === "vtt" ? `WEBVTT\n\n${blocks.join("\n\n")}\n` : (blocks.length ? `${blocks.join("\n\n")}\n` : "");
+        return { format: fmt, filename: `captions.${fmt}`, content, cue_count: cues.length, saved_path: null };
+      }
+      return requestJson("/api/subtitles/export", { method: "POST", body: payload });
+    },
+    async compileSubtitles(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileSubtitlesClient(payload, payload);
+      }
+      return requestJson("/api/subtitles/compile", { method: "POST", body: payload });
     },
     async getTransitionPresets() {
       if (resolvedMode === "static-demo") {
