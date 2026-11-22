@@ -880,12 +880,19 @@
 
           <section class="nle-pane">
             <div class="pane-header">
-              <h2 data-i18n="color.scopes.title">Live Scopes (Waveform / RGB Curve &amp; Vectorscope)</h2>
-              <span class="nle-tag mono">Rec.709</span>
+              <h2 data-i18n="color.scopes.title">Live Broadcast Scopes</h2>
+              <div class="viewer-controls">
+                <div class="scope-switch" role="group" aria-label="Broadcast video scope mode">
+                  <button type="button" id="btn-scope-parade" class="scope-btn is-active" data-scope-mode="parade" aria-pressed="true" data-i18n="color.scopes.parade">RGB Parade</button>
+                  <button type="button" id="btn-scope-waveform" class="scope-btn" data-scope-mode="waveform" aria-pressed="false" data-i18n="color.scopes.waveform">Luma Waveform</button>
+                  <button type="button" id="btn-scope-vectorscope" class="scope-btn" data-scope-mode="vectorscope" aria-pressed="false" data-i18n="color.scopes.vectorscope">Vectorscope</button>
+                </div>
+                <span class="nle-tag mono">Rec.709</span>
+              </div>
             </div>
             <div class="pane-body">
               <div class="viewer-well">
-                <canvas id="color-scope-canvas" class="studio-canvas" aria-label="Live RGB waveform and vectorscope"></canvas>
+                <canvas id="color-scope-canvas" class="studio-canvas" aria-label="Live broadcast video scope"></canvas>
               </div>
             </div>
           </section>
@@ -1344,7 +1351,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | M: Marker | Ctrl+Z/Y: Undo/Redo</span>
       </span>
-      <span id="version-badge">v0.1.4</span>
+      <span id="version-badge">v0.1.5</span>
     </footer>
   </div>
 

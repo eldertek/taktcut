@@ -670,7 +670,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.4",
+      version: "0.1.5",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -1024,8 +1024,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.4",
-          latest_version: "0.1.4",
+          current_version: "0.1.5",
+          latest_version: "0.1.5",
           update_available: false,
           can_apply_ota: false,
           error: null

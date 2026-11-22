@@ -2418,6 +2418,62 @@ const REFERENCE_SWATCHES = [
   { label: "Crimson", rgb: [0.72, 0.18, 0.22] }
 ];
 
+function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
+  const barW = width / SMPTE_BARS.length;
+  const row1H = Math.round((88 / 224) * height);
+  SMPTE_BARS.forEach((col, i) => {
+    const [r, g, b] = graded ? applyGradeOrCdlRgb(col[0], col[1], col[2], cdl) : col;
+    ctx.fillStyle = toCssRgb(r, g, b);
+    ctx.fillRect(i * barW, 0, Math.ceil(barW), row1H);
+  });
+
+  const row2Y = row1H;
+  const row2H = Math.round((66 / 224) * height);
+  const swW = width / REFERENCE_SWATCHES.length;
+  REFERENCE_SWATCHES.forEach((sw, i) => {
+    const [r, g, b] = graded ? applyGradeOrCdlRgb(sw.rgb[0], sw.rgb[1], sw.rgb[2], cdl) : sw.rgb;
+    ctx.fillStyle = toCssRgb(r, g, b);
+    ctx.fillRect(i * swW, row2Y, Math.ceil(swW), row2H);
+    if (showLabels) {
+      ctx.fillStyle = "rgba(17, 17, 20, 0.78)";
+      ctx.fillRect(i * swW + 3, row2Y + row2H - 18, Math.max(8, swW - 6), 15);
+      ctx.fillStyle = "#d8d8de";
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillText(sw.label, i * swW + 6, row2Y + row2H - 7);
+    }
+  });
+
+  const row3Y = row1H + row2H;
+  const row3H = Math.round((38 / 224) * height);
+  const steps = 32;
+  const stepW = width / steps;
+  for (let i = 0; i < steps; i++) {
+    const v = i / (steps - 1);
+    const [r, g, b] = graded ? applyGradeOrCdlRgb(v, v, v, cdl) : [v, v, v];
+    ctx.fillStyle = toCssRgb(r, g, b);
+    ctx.fillRect(i * stepW, row3Y, Math.ceil(stepW), row3H);
+  }
+
+  const row4Y = row3Y + row3H;
+  const row4H = height - row4Y;
+  const hueCols = Math.max(48, Math.floor(width / 4));
+  const hStepW = width / hueCols;
+  for (let i = 0; i < hueCols; i++) {
+    const h = (i / hueCols) * 6;
+    const x = 1 - Math.abs((h % 2) - 1);
+    let rgb = [0.85, 0.2, 0.2];
+    if (h < 1) rgb = [0.85, 0.2 + 0.65 * x, 0.2];
+    else if (h < 2) rgb = [0.2 + 0.65 * x, 0.85, 0.2];
+    else if (h < 3) rgb = [0.2, 0.85, 0.2 + 0.65 * x];
+    else if (h < 4) rgb = [0.2, 0.2 + 0.65 * x, 0.85];
+    else if (h < 5) rgb = [0.2 + 0.65 * x, 0.2, 0.85];
+    else rgb = [0.85, 0.2, 0.2 + 0.65 * x];
+    const [r, g, b] = graded ? applyGradeOrCdlRgb(rgb[0], rgb[1], rgb[2], cdl) : rgb;
+    ctx.fillStyle = toCssRgb(r, g, b);
+    ctx.fillRect(i * hStepW, row4Y, Math.ceil(hStepW), row4H);
+  }
+}
+
 export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
   const { ctx, width, height } = setupCanvas(canvas, 224);
   const wipeX = Math.round(width * clamp01(wipeRatio));
@@ -2428,64 +2484,28 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
     ctx.beginPath();
     ctx.rect(xStart, 0, xEnd - xStart, height);
     ctx.clip();
-
-    const barW = width / SMPTE_BARS.length;
-    const row1H = 88;
-    SMPTE_BARS.forEach((col, i) => {
-      const [r, g, b] = graded ? applyGradeOrCdlRgb(col[0], col[1], col[2], cdl) : col;
-      ctx.fillStyle = toCssRgb(r, g, b);
-      ctx.fillRect(i * barW, 0, Math.ceil(barW), row1H);
-    });
-
-    const row2Y = row1H;
-    const row2H = 66;
-    const swW = width / REFERENCE_SWATCHES.length;
-    REFERENCE_SWATCHES.forEach((sw, i) => {
-      const [r, g, b] = graded ? applyGradeOrCdlRgb(sw.rgb[0], sw.rgb[1], sw.rgb[2], cdl) : sw.rgb;
-      ctx.fillStyle = toCssRgb(r, g, b);
-      ctx.fillRect(i * swW, row2Y, Math.ceil(swW), row2H);
-      ctx.fillStyle = "rgba(17, 17, 20, 0.78)";
-      ctx.fillRect(i * swW + 3, row2Y + row2H - 18, Math.max(8, swW - 6), 15);
-      ctx.fillStyle = "#d8d8de";
-      ctx.font = "10px ui-monospace, monospace";
-      ctx.fillText(sw.label, i * swW + 6, row2Y + row2H - 7);
-    });
-
-    const row3Y = row1H + row2H;
-    const row3H = 38;
-    const steps = 32;
-    const stepW = width / steps;
-    for (let i = 0; i < steps; i++) {
-      const v = i / (steps - 1);
-      const [r, g, b] = graded ? applyGradeOrCdlRgb(v, v, v, cdl) : [v, v, v];
-      ctx.fillStyle = toCssRgb(r, g, b);
-      ctx.fillRect(i * stepW, row3Y, Math.ceil(stepW), row3H);
-    }
-
-    const row4Y = row3Y + row3H;
-    const row4H = height - row4Y;
-    const hueCols = Math.max(48, Math.floor(width / 4));
-    const hStepW = width / hueCols;
-    for (let i = 0; i < hueCols; i++) {
-      const h = (i / hueCols) * 6;
-      const x = 1 - Math.abs((h % 2) - 1);
-      let rgb = [0.85, 0.2, 0.2];
-      if (h < 1) rgb = [0.85, 0.2 + 0.65 * x, 0.2];
-      else if (h < 2) rgb = [0.2 + 0.65 * x, 0.85, 0.2];
-      else if (h < 3) rgb = [0.2, 0.85, 0.2 + 0.65 * x];
-      else if (h < 4) rgb = [0.2, 0.2 + 0.65 * x, 0.85];
-      else if (h < 5) rgb = [0.2 + 0.65 * x, 0.2, 0.85];
-      else rgb = [0.85, 0.2, 0.2 + 0.65 * x];
-      const [r, g, b] = graded ? applyGradeOrCdlRgb(rgb[0], rgb[1], rgb[2], cdl) : rgb;
-      ctx.fillStyle = toCssRgb(r, g, b);
-      ctx.fillRect(i * hStepW, row4Y, Math.ceil(hStepW), row4H);
-    }
-
+    renderColorPreviewScene(ctx, width, height, cdl, graded, true);
     ctx.restore();
   };
 
   drawHalf(0, wipeX, false);
   drawHalf(wipeX, width, true);
+
+  // Maintain a clean full-frame graded buffer of #color-preview-canvas for real ImageData scopes
+  const scopeW = Math.max(260, Math.min(400, width));
+  const scopeH = height;
+  if (!canvas._gradedScopeCanvas) {
+    canvas._gradedScopeCanvas = document.createElement("canvas");
+  }
+  const gradedBuf = canvas._gradedScopeCanvas;
+  if (gradedBuf.width !== scopeW || gradedBuf.height !== scopeH) {
+    gradedBuf.width = scopeW;
+    gradedBuf.height = scopeH;
+  }
+  const gradedCtx = gradedBuf.getContext("2d", { willReadFrequently: true });
+  if (gradedCtx) {
+    renderColorPreviewScene(gradedCtx, scopeW, scopeH, cdl, true, false);
+  }
 
   ctx.strokeStyle = "#e07b39";
   ctx.lineWidth = 1.5;
@@ -2506,77 +2526,247 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
   ctx.fillText("COLOR GRADE", width - 90, 20);
 }
 
-export function drawColorScopeCanvas(canvas, cdl) {
-  const { ctx, width, height } = setupCanvas(canvas, 224);
-  ctx.fillStyle = "#141416";
-  ctx.fillRect(0, 0, width, height);
+let _scopeTraceCanvas = null;
+let _fallbackPreviewCanvas = null;
 
-  const split = width >= 380;
-  const curveBoxW = split ? Math.floor(width * 0.5) : width;
-  const pad = 16;
-  const plotW = curveBoxW - pad * 2;
-  const plotH = height - pad * 2;
-
-  ctx.strokeStyle = "#27272d";
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const gx = pad + (plotW * i) / 4;
-    const gy = pad + (plotH * i) / 4;
-    ctx.beginPath();
-    ctx.moveTo(gx, pad);
-    ctx.lineTo(gx, pad + plotH);
-    ctx.moveTo(pad, gy);
-    ctx.lineTo(pad + plotW, gy);
-    ctx.stroke();
+function getScopeTraceSurface(w, h) {
+  if (!_scopeTraceCanvas) {
+    _scopeTraceCanvas = document.createElement("canvas");
   }
+  if (_scopeTraceCanvas.width !== w || _scopeTraceCanvas.height !== h) {
+    _scopeTraceCanvas.width = w;
+    _scopeTraceCanvas.height = h;
+  }
+  const traceCtx = _scopeTraceCanvas.getContext("2d");
+  const imgData = traceCtx.createImageData(w, h);
+  return { traceCanvas: _scopeTraceCanvas, traceCtx, imgData };
+}
 
-  ctx.save();
-  ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = "#484852";
-  ctx.beginPath();
-  ctx.moveTo(pad, pad + plotH);
-  ctx.lineTo(pad + plotW, pad);
-  ctx.stroke();
-  ctx.restore();
+function getGradedPreviewImageData(previewCanvas, cdl) {
+  const buf = previewCanvas && previewCanvas._gradedScopeCanvas ? previewCanvas._gradedScopeCanvas : null;
+  if (buf && buf.width > 0 && buf.height > 0) {
+    const bCtx = buf.getContext("2d", { willReadFrequently: true });
+    if (bCtx) return bCtx.getImageData(0, 0, buf.width, buf.height);
+  }
+  if (previewCanvas && previewCanvas.width > 0 && previewCanvas.height > 0) {
+    const pCtx = previewCanvas.getContext("2d", { willReadFrequently: true });
+    if (pCtx) return pCtx.getImageData(0, 0, previewCanvas.width, previewCanvas.height);
+  }
+  if (!_fallbackPreviewCanvas) {
+    _fallbackPreviewCanvas = document.createElement("canvas");
+  }
+  const fbW = 320;
+  const fbH = 224;
+  if (_fallbackPreviewCanvas.width !== fbW || _fallbackPreviewCanvas.height !== fbH) {
+    _fallbackPreviewCanvas.width = fbW;
+    _fallbackPreviewCanvas.height = fbH;
+  }
+  const fbCtx = _fallbackPreviewCanvas.getContext("2d", { willReadFrequently: true });
+  renderColorPreviewScene(fbCtx, fbW, fbH, cdl, true, false);
+  return fbCtx.getImageData(0, 0, fbW, fbH);
+}
 
-  const channels = [
-    { idx: 0, color: "#e5534b" },
-    { idx: 1, color: "#3fb950" },
-    { idx: 2, color: "#528bff" }
+function drawIreGraticule(ctx, padL, padT, plotW, plotH, highlightLevels) {
+  const ireLevels = [100, 75, 50, 25, 0];
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "right";
+  for (const ire of ireLevels) {
+    const y = Math.round(padT + (1 - ire / 100) * plotH) + 0.5;
+    const isMajor = highlightLevels.includes(ire);
+    ctx.strokeStyle = isMajor ? "#383844" : "#24242b";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + plotW, y);
+    ctx.stroke();
+
+    ctx.fillStyle = isMajor ? "#9a9aa6" : "#6b6b76";
+    ctx.fillText(String(ire), padL - 5, y);
+  }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function drawRgbParadeScope(ctx, width, height, srcImageData) {
+  const padL = 30;
+  const padR = 10;
+  const padT = 22;
+  const padB = 14;
+  const plotW = Math.max(96, width - padL - padR);
+  const plotH = Math.max(60, height - padT - padB);
+  const gap = 6;
+  const chW = Math.max(26, Math.floor((plotW - gap * 2) / 3));
+  const totalTraceW = chW * 3 + gap * 2;
+
+  const chMeta = [
+    { label: "R", x0: padL, offset: 0, base: [229, 83, 75], peak: [255, 196, 190] },
+    { label: "G", x0: padL + chW + gap, offset: chW + gap, base: [63, 198, 92], peak: [188, 255, 202] },
+    { label: "B", x0: padL + (chW + gap) * 2, offset: (chW + gap) * 2, base: [82, 145, 255], peak: [194, 222, 255] }
   ];
-  const samples = 48;
-  for (const ch of channels) {
-    ctx.strokeStyle = ch.color;
-    ctx.lineWidth = 1.75;
-    ctx.beginPath();
-    for (let i = 0; i <= samples; i++) {
-      const xNorm = i / samples;
-      const outRgb = applyGradeOrCdlRgb(xNorm, xNorm, xNorm, cdl);
-      const px = pad + xNorm * plotW;
-      const py = pad + (1 - outRgb[ch.idx]) * plotH;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.stroke();
+
+  drawIreGraticule(ctx, padL, padT, totalTraceW, plotH, [100, 50, 0]);
+
+  ctx.strokeStyle = "#2b2b33";
+  ctx.lineWidth = 1;
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  for (const ch of chMeta) {
+    ctx.strokeRect(ch.x0 + 0.5, padT + 0.5, chW - 1, plotH - 1);
+    ctx.fillStyle = `rgb(${ch.base[0]}, ${ch.base[1]}, ${ch.base[2]})`;
+    ctx.fillText(ch.label, ch.x0 + chW / 2, padT - 6);
   }
+  ctx.textAlign = "left";
+
+  const srcW = srcImageData.width;
+  const srcH = srcImageData.height;
+  const data = srcImageData.data;
+  const cellCount = chW * plotH;
+  const densR = new Uint32Array(cellCount);
+  const densG = new Uint32Array(cellCount);
+  const densB = new Uint32Array(cellCount);
+  const maxRow = plotH - 1;
+
+  for (let sy = 0; sy < srcH; sy++) {
+    const rowBase = sy * srcW * 4;
+    for (let sx = 0; sx < srcW; sx++) {
+      const col = Math.min(chW - 1, Math.floor((sx * chW) / srcW));
+      const p = rowBase + sx * 4;
+      const rRow = Math.max(0, Math.min(maxRow, Math.round((1 - data[p] / 255) * maxRow)));
+      const gRow = Math.max(0, Math.min(maxRow, Math.round((1 - data[p + 1] / 255) * maxRow)));
+      const bRow = Math.max(0, Math.min(maxRow, Math.round((1 - data[p + 2] / 255) * maxRow)));
+      densR[rRow * chW + col] += 1;
+      densG[gRow * chW + col] += 1;
+      densB[bRow * chW + col] += 1;
+    }
+  }
+
+  const { traceCanvas, traceCtx, imgData } = getScopeTraceSurface(totalTraceW, plotH);
+  const out = imgData.data;
+  const normPeak = Math.max(6, (srcW * srcH) / (chW * 9));
+  const densities = [densR, densG, densB];
+
+  for (let c = 0; c < 3; c++) {
+    const dens = densities[c];
+    const meta = chMeta[c];
+    for (let y = 0; y < plotH; y++) {
+      const dRow = y * chW;
+      const outRow = y * totalTraceW;
+      for (let x = 0; x < chW; x++) {
+        const count = dens[dRow + x];
+        if (count === 0) continue;
+        const t = Math.min(1, Math.sqrt(count / normPeak));
+        const hot = Math.max(0, (t - 0.55) / 0.45);
+        const oi = (outRow + meta.offset + x) * 4;
+        out[oi] = Math.round(meta.base[0] + (meta.peak[0] - meta.base[0]) * hot);
+        out[oi + 1] = Math.round(meta.base[1] + (meta.peak[1] - meta.base[1]) * hot);
+        out[oi + 2] = Math.round(meta.base[2] + (meta.peak[2] - meta.base[2]) * hot);
+        out[oi + 3] = Math.round(78 + t * 177);
+      }
+    }
+  }
+
+  traceCtx.putImageData(imgData, 0, 0);
+  ctx.drawImage(traceCanvas, padL, padT, totalTraceW, plotH);
 
   ctx.fillStyle = "#8e8e98";
-  ctx.font = "10px ui-monospace, monospace";
-  ctx.fillText("WAVEFORM / RGB CURVE", pad + 4, pad + 11);
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.fillText("RGB PARADE", padL, 12);
+}
 
-  if (!split) return;
+function drawLumaWaveformScope(ctx, width, height, srcImageData) {
+  const padL = 30;
+  const padR = 10;
+  const padT = 22;
+  const padB = 14;
+  const plotW = Math.max(96, width - padL - padR);
+  const plotH = Math.max(60, height - padT - padB);
 
-  const cx = curveBoxW + Math.floor((width - curveBoxW) / 2);
-  const cy = Math.floor(height / 2);
-  const radius = Math.min((width - curveBoxW) / 2 - 16, height / 2 - 18);
+  drawIreGraticule(ctx, padL, padT, plotW, plotH, [100, 50, 0]);
 
-  ctx.strokeStyle = "#27272d";
+  ctx.strokeStyle = "#24242b";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
+  for (const frac of [0.25, 0.5, 0.75]) {
+    const gx = Math.round(padL + frac * plotW) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+  }
+
+  const srcW = srcImageData.width;
+  const srcH = srcImageData.height;
+  const data = srcImageData.data;
+  const densY = new Uint32Array(plotW * plotH);
+  const maxRow = plotH - 1;
+
+  for (let sy = 0; sy < srcH; sy++) {
+    const rowBase = sy * srcW * 4;
+    for (let sx = 0; sx < srcW; sx++) {
+      const col = Math.min(plotW - 1, Math.floor((sx * plotW) / srcW));
+      const p = rowBase + sx * 4;
+      const yVal = (0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2]) / 255;
+      const row = Math.max(0, Math.min(maxRow, Math.round((1 - yVal) * maxRow)));
+      densY[row * plotW + col] += 1;
+    }
+  }
+
+  const { traceCanvas, traceCtx, imgData } = getScopeTraceSurface(plotW, plotH);
+  const out = imgData.data;
+  const normPeak = Math.max(5, (srcW * srcH) / (plotW * 7));
+
+  for (let i = 0; i < densY.length; i++) {
+    const count = densY[i];
+    if (count === 0) continue;
+    const t = Math.min(1, Math.sqrt(count / normPeak));
+    const hot = Math.max(0, (t - 0.5) / 0.5);
+    const oi = i * 4;
+    out[oi] = Math.round(118 + (242 - 118) * hot);
+    out[oi + 1] = Math.round(224 + (255 - 224) * hot);
+    out[oi + 2] = Math.round(166 + (246 - 166) * hot);
+    out[oi + 3] = Math.round(80 + t * 175);
+  }
+
+  traceCtx.putImageData(imgData, 0, 0);
+  ctx.drawImage(traceCanvas, padL, padT, plotW, plotH);
+
+  ctx.fillStyle = "#8e8e98";
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.fillText("LUMA WAVEFORM (REC.709 Y)", padL, 12);
+}
+
+function rgbToRec709CbCrVec(r, g, b) {
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const cb = (b - y) / 1.8556;
+  const cr = (r - y) / 1.5748;
+  return [cb * 2.0, -cr * 2.0];
+}
+
+function drawVectorscope(ctx, width, height, srcImageData) {
+  const cx = Math.floor(width / 2);
+  const cy = Math.floor(height / 2) + 5;
+  const radius = Math.max(48, Math.floor(Math.min(width - 40, height - 34) / 2));
+  const vecScale = 0.88;
+
+  // Outer 100% circle, 75% dashed ring, 50% ring, crosshair axes
+  ctx.strokeStyle = "#32323c";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
+
+  ctx.save();
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "#282830";
   ctx.beginPath();
-  ctx.arc(cx, cy, radius * 0.5, 0, Math.PI * 2);
+  ctx.arc(cx, cy, radius * 0.75 * vecScale, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.strokeStyle = "#24242b";
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.5 * vecScale, 0, Math.PI * 2);
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(cx - radius, cy);
@@ -2585,51 +2775,123 @@ export function drawColorScopeCanvas(canvas, cdl) {
   ctx.lineTo(cx, cy + radius);
   ctx.stroke();
 
-  const vectors = [
-    { rgb: [0.75, 0.0, 0.0], col: "#e5534b" },
-    { rgb: [0.75, 0.75, 0.0], col: "#d29922" },
-    { rgb: [0.0, 0.75, 0.0], col: "#3fb950" },
-    { rgb: [0.0, 0.75, 0.75], col: "#39c5cf" },
-    { rgb: [0.0, 0.0, 0.75], col: "#528bff" },
-    { rgb: [0.75, 0.0, 0.75], col: "#c678dd" }
-  ];
+  // Skin-tone I-line (~123 deg in Cb/Cr plane -> -123 deg in canvas Y-down space)
+  const skinAngle = (-123 * Math.PI) / 180;
+  const skinEndX = cx + Math.cos(skinAngle) * radius;
+  const skinEndY = cy + Math.sin(skinAngle) * radius;
+  ctx.strokeStyle = "rgba(230, 132, 66, 0.75)";
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(skinEndX, skinEndY);
+  ctx.stroke();
 
-  const rgbToVec = (r, g, b) => {
-    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    const pb = (b - y) / 1.8556;
-    const pr = (r - y) / 1.5748;
-    return [pb * 2.0, -pr * 2.0];
-  };
+  ctx.fillStyle = "#e68442";
+  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.fillText("I", skinEndX - 9, skinEndY + 9);
 
-  for (const v of vectors) {
-    const [ox, oy] = rgbToVec(v.rgb[0], v.rgb[1], v.rgb[2]);
-    const graded = applyGradeOrCdlRgb(v.rgb[0], v.rgb[1], v.rgb[2], cdl);
-    const [gx, gy] = rgbToVec(graded[0], graded[1], graded[2]);
+  // Real pixel Cb/Cr distribution cloud from graded ImageData
+  const boxSize = radius * 2 + 2;
+  const boxX = cx - radius - 1;
+  const boxY = cy - radius - 1;
+  const cells = boxSize * boxSize;
+  const dens = new Uint32Array(cells);
+  const sumR = new Float32Array(cells);
+  const sumG = new Float32Array(cells);
+  const sumB = new Float32Array(cells);
 
-    const px0 = cx + ox * radius;
-    const py0 = cy + oy * radius;
-    const px1 = cx + gx * radius;
-    const py1 = cy + gy * radius;
+  const srcW = srcImageData.width;
+  const srcH = srcImageData.height;
+  const data = srcImageData.data;
+  const totalPixels = srcW * srcH;
 
-    ctx.strokeStyle = "#484852";
-    ctx.strokeRect(px0 - 3.5, py0 - 3.5, 7, 7);
-
-    ctx.strokeStyle = v.col;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(px0, py0);
-    ctx.lineTo(px1, py1);
-    ctx.stroke();
-
-    ctx.fillStyle = v.col;
-    ctx.beginPath();
-    ctx.arc(px1, py1, 3.5, 0, Math.PI * 2);
-    ctx.fill();
+  for (let i = 0; i < totalPixels; i++) {
+    const p = i * 4;
+    const r = data[p] / 255;
+    const g = data[p + 1] / 255;
+    const b = data[p + 2] / 255;
+    const [vx, vy] = rgbToRec709CbCrVec(r, g, b);
+    const px = Math.round(radius + 1 + vx * vecScale * radius);
+    const py = Math.round(radius + 1 + vy * vecScale * radius);
+    if (px < 0 || px >= boxSize || py < 0 || py >= boxSize) continue;
+    const idx = py * boxSize + px;
+    dens[idx] += 1;
+    sumR[idx] += r;
+    sumG[idx] += g;
+    sumB[idx] += b;
   }
 
+  const { traceCanvas, traceCtx, imgData } = getScopeTraceSurface(boxSize, boxSize);
+  const out = imgData.data;
+  const normPeak = Math.max(8, totalPixels * 0.004);
+
+  for (let i = 0; i < cells; i++) {
+    const count = dens[i];
+    if (count === 0) continue;
+    const t = Math.min(1, Math.sqrt(count / normPeak));
+    const avgR = sumR[i] / count;
+    const avgG = sumG[i] / count;
+    const avgB = sumB[i] / count;
+    const oi = i * 4;
+    out[oi] = Math.min(255, Math.round((0.25 + 0.75 * avgR) * 255));
+    out[oi + 1] = Math.min(255, Math.round((0.25 + 0.75 * avgG) * 255));
+    out[oi + 2] = Math.min(255, Math.round((0.25 + 0.75 * avgB) * 255));
+    out[oi + 3] = Math.round(92 + t * 163);
+  }
+
+  traceCtx.putImageData(imgData, 0, 0);
+  ctx.drawImage(traceCanvas, boxX, boxY, boxSize, boxSize);
+
+  // 75% SMPTE broadcast target boxes (R, Yl, G, Cy, B, Mg)
+  const targets = [
+    { label: "R", rgb: [0.75, 0.0, 0.0], col: "#e5534b" },
+    { label: "Yl", rgb: [0.75, 0.75, 0.0], col: "#d29922" },
+    { label: "G", rgb: [0.0, 0.75, 0.0], col: "#3fb950" },
+    { label: "Cy", rgb: [0.0, 0.75, 0.75], col: "#39c5cf" },
+    { label: "B", rgb: [0.0, 0.0, 0.75], col: "#528bff" },
+    { label: "Mg", rgb: [0.75, 0.0, 0.75], col: "#c678dd" }
+  ];
+
+  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const tgt of targets) {
+    const [vx, vy] = rgbToRec709CbCrVec(tgt.rgb[0], tgt.rgb[1], tgt.rgb[2]);
+    const tx = cx + vx * vecScale * radius;
+    const ty = cy + vy * vecScale * radius;
+    ctx.strokeStyle = tgt.col;
+    ctx.lineWidth = 1.25;
+    ctx.strokeRect(tx - 4.5, ty - 4.5, 9, 9);
+
+    const len = Math.hypot(vx, vy) || 1;
+    const lx = tx + (vx / len) * 13;
+    const ly = ty + (vy / len) * 13;
+    ctx.fillStyle = tgt.col;
+    ctx.fillText(tgt.label, lx, ly);
+  }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+
   ctx.fillStyle = "#8e8e98";
-  ctx.font = "10px ui-monospace, monospace";
-  ctx.fillText("VECTORSCOPE", curveBoxW + 10, 18);
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.fillText("VECTORSCOPE (Cb / Cr)", 12, 14);
+}
+
+export function drawColorScopeCanvas(canvas, cdl, scopeMode = "parade", previewCanvas = null) {
+  const { ctx, width, height } = setupCanvas(canvas, 224);
+  ctx.fillStyle = "#141416";
+  ctx.fillRect(0, 0, width, height);
+
+  const srcImageData = getGradedPreviewImageData(previewCanvas, cdl);
+  const mode = scopeMode === "waveform" || scopeMode === "vectorscope" ? scopeMode : "parade";
+
+  if (mode === "waveform") {
+    drawLumaWaveformScope(ctx, width, height, srcImageData);
+  } else if (mode === "vectorscope") {
+    drawVectorscope(ctx, width, height, srcImageData);
+  } else {
+    drawRgbParadeScope(ctx, width, height, srcImageData);
+  }
 }
 
 export function drawLoudnessCanvas(canvas, loudness) {

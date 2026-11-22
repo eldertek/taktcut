@@ -235,6 +235,7 @@ const state = {
   playbackAccumFrames: 0,
   colorGrade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
   colorActivePresetId: "rec709_clean",
+  colorScopeMode: "parade",
   colorPresetsCatalog: null,
   colorLastCompile: null,
   colorCompileTimer: null,
@@ -612,8 +613,14 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(true)
     );
   } else if (state.activeTab === "color") {
-    drawColorPreviewCanvas(byId("color-preview-canvas"), state.colorGrade, state.wipeRatio);
-    drawColorScopeCanvas(byId("color-scope-canvas"), state.colorGrade);
+    const previewCanvas = byId("color-preview-canvas");
+    drawColorPreviewCanvas(previewCanvas, state.colorGrade, state.wipeRatio);
+    drawColorScopeCanvas(
+      byId("color-scope-canvas"),
+      state.colorGrade,
+      state.colorScopeMode,
+      previewCanvas
+    );
     drawColorWheel(byId("wheel-lift"), "lift", state.colorGrade.lift);
     drawColorWheel(byId("wheel-gamma"), "gamma", state.colorGrade.gamma);
     drawColorWheel(byId("wheel-gain"), "gain", state.colorGrade.gain);
@@ -2743,6 +2750,20 @@ function wireColorInputs() {
     btn.addEventListener("click", () => {
       const pid = btn.getAttribute("data-grade-preset");
       if (pid) applyColorPresetUI(pid);
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-scope-mode]")) {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-scope-mode");
+      if (mode !== "parade" && mode !== "waveform" && mode !== "vectorscope") return;
+      state.colorScopeMode = mode;
+      for (const other of document.querySelectorAll("[data-scope-mode]")) {
+        const active = other.getAttribute("data-scope-mode") === mode;
+        other.classList.toggle("is-active", active);
+        other.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+      redrawActiveCanvases();
     });
   }
 

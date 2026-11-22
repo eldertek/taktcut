@@ -97,7 +97,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.4"
+    assert health["version"] == "0.1.5"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -740,9 +740,12 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "subtitle-cue-list",
         "subtitle-filtergraph-output",
         "render-use-studio-subtitles",
+        "btn-scope-parade",
+        "btn-scope-waveform",
+        "btn-scope-vectorscope",
     ):
         assert elem_id in html_text
-    assert "v0.1.4" in html_text
+    assert "v0.1.5" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -763,6 +766,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Magnétisme"' in i18n_text
     assert '"Audio du Plan & Mixeur Pistes"' in i18n_text
     assert '"Fondu Entrée (s)"' in i18n_text
+    assert '"Parade RVB"' in i18n_text
+    assert '"Oscilloscope Y"' in i18n_text
+    assert '"Vecteurscope"' in i18n_text
     assert '"Fondu Sortie (s)"' in i18n_text
     assert '"Fondu Enchaîné (fade)"' in i18n_text
     assert '"Volet Gauche (wipeleft)"' in i18n_text
