@@ -6,9 +6,11 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from dataclasses import dataclass, field
@@ -49,8 +51,20 @@ from taktcut.ui.security import (
     scan_workspace_files,
     validate_loopback_host,
 )
+from taktcut.updater import apply_ota_update, check_for_update, launch_windows_swap_script
 
-ASSETS_DIR: Path = Path(__file__).resolve().parent / "assets"
+
+def resolve_assets_dir() -> Path:
+    """Resolve UI static assets directory in source, wheel, or PyInstaller _MEIPASS."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if isinstance(meipass, str) and meipass:
+        bundled = Path(meipass) / "taktcut" / "ui" / "assets"
+        if bundled.is_dir():
+            return bundled
+    return Path(__file__).resolve().parent / "assets"
+
+
+ASSETS_DIR: Path = resolve_assets_dir()
 MAX_REQUEST_BYTES: int = 32 * 1024 * 1024
 
 STATIC_ROUTE_MAP: dict[str, tuple[str, str]] = {
@@ -247,7 +261,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
         if route in STATIC_ROUTE_MAP:
             filename, content_type = STATIC_ROUTE_MAP[route]
-            asset_path = (ASSETS_DIR / filename).resolve()
+            assets_root = resolve_assets_dir().resolve()
+            asset_path = (assets_root / filename).resolve()
+            try:
+                asset_path.relative_to(assets_root)
+            except ValueError:
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "Invalid asset path"})
+                return
             if not asset_path.is_file():
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Asset missing: {filename}"})
                 return
@@ -257,6 +277,11 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 asset_path.read_bytes(),
                 cache_control="no-cache",
             )
+            return
+
+        if route == "/api/update/check":
+            info = check_for_update(__version__)
+            self._send_json(HTTPStatus.OK, info.to_dict())
             return
 
         if route == "/api/health":
@@ -638,6 +663,32 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "bytes_written": generated.stat().st_size,
                 },
             )
+            return
+
+        if route == "/api/update/apply":
+            update_result = apply_ota_update(__version__, defer_restart=True)
+            if not update_result.applied and update_result.error not in {
+                None,
+                "not_frozen",
+                "up_to_date",
+            }:
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, update_result.to_dict())
+                return
+            self._send_json(HTTPStatus.OK, update_result.to_dict())
+            if update_result.applied and update_result.restarting:
+                srv = self.server
+                helper_script = update_result.helper_script
+
+                def _perform_restart() -> None:
+                    if sys.platform.startswith("win") and helper_script:
+                        launch_windows_swap_script(Path(helper_script))
+                        srv.shutdown()
+                        os._exit(0)
+                    else:
+                        srv.shutdown()
+                        os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+
+                threading.Timer(0.25, _perform_restart).start()
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown API route: {route}"})

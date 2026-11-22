@@ -74,7 +74,8 @@ const state = {
   lastBakedCubePath: "",
   lastRenderCommand: "",
   lastRenderOutputPath: "",
-  lastQaReport: null
+  lastQaReport: null,
+  updateInfo: null
 };
 
 function byId(id) {
@@ -151,8 +152,54 @@ function setLanguage(lang) {
     if (key) node.textContent = t(key);
   }
   updateTransportStatusUI();
+  renderUpdateButton();
   renderTimelineUI();
   if (state.lastQaReport) renderQaReport(state.lastQaReport);
+}
+
+function renderUpdateButton() {
+  const btn = byId("update-banner-btn");
+  if (!btn) return;
+  const info = state.updateInfo;
+  if (!info || !info.update_available || !info.latest_version) {
+    btn.classList.add("is-hidden");
+    btn.textContent = "";
+    return;
+  }
+  btn.textContent = t("update.available").replace("{version}", info.latest_version);
+  btn.title = info.release_url || `v${info.latest_version}`;
+  btn.classList.remove("is-hidden");
+}
+
+async function checkForStudioUpdate() {
+  try {
+    const info = await api.checkForUpdate();
+    state.updateInfo = info;
+    renderUpdateButton();
+  } catch {
+    // Fail-safe offline: keep update button hidden
+  }
+}
+
+async function applyStudioUpdate() {
+  const btn = byId("update-banner-btn");
+  if (!btn || !state.updateInfo || !state.updateInfo.update_available) return;
+  btn.disabled = true;
+  btn.textContent = t("update.applying");
+  try {
+    const res = await api.applyUpdate();
+    if (res.applied) {
+      const ver = res.target_version || state.updateInfo.latest_version;
+      showBanner(t("update.restarting").replace("{version}", ver), "success");
+      return;
+    }
+    showBanner(res.message || "Update unavailable in current runtime.", "info");
+  } catch (err) {
+    showBanner(err.message, "error");
+  } finally {
+    btn.disabled = false;
+    renderUpdateButton();
+  }
 }
 
 function switchTab(tabName) {
@@ -1152,6 +1199,8 @@ function bindTimelineCanvasScrub(canvas) {
 
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
+  const updateBtn = byId("update-banner-btn");
+  if (updateBtn) updateBtn.addEventListener("click", applyStudioUpdate);
   byId("lang-en").addEventListener("click", () => setLanguage("en"));
   byId("lang-fr").addEventListener("click", () => setLanguage("fr"));
 
@@ -1394,7 +1443,8 @@ async function bootstrap() {
 
   await Promise.allSettled([
     refreshWorkspaceFiles(),
-    loadSampleTimeline("clean")
+    loadSampleTimeline("clean"),
+    checkForStudioUpdate()
   ]);
 }
 

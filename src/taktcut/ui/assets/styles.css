@@ -162,6 +162,30 @@ body {
   color: #111114;
 }
 
+.btn-update {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 2px;
+  border: 1px solid var(--accent-amber);
+  background: var(--accent-amber-soft);
+  color: #f4a46b;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-update:hover:not(:disabled) {
+  background: var(--accent-amber);
+  color: #111114;
+}
+
+.btn-update:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 /* TAGS & STATUS */
 .nle-tag {
   display: inline-flex;

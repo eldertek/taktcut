@@ -557,6 +557,29 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/qa/verify", { method: "POST", body });
+    },
+    async checkForUpdate() {
+      if (resolvedMode === "static-demo") {
+        return {
+          current_version: "0.1.0",
+          latest_version: "0.1.0",
+          update_available: false,
+          can_apply_ota: false,
+          error: null
+        };
+      }
+      return requestJson("/api/update/check");
+    },
+    async applyUpdate() {
+      if (resolvedMode === "static-demo") {
+        return {
+          applied: false,
+          restarting: false,
+          message: "OTA updates are available in desktop binary builds.",
+          error: "static_demo"
+        };
+      }
+      return requestJson("/api/update/apply", { method: "POST", body: {} });
     }
   };
 }

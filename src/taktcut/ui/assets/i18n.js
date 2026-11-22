@@ -94,7 +94,10 @@ export const TRANSLATIONS = {
     "qa.failures.title": "Detected Gate Failures",
     "qa.probe.title": "Container & Stream Probe",
     "qa.loudness.title": "EBU R128 Loudness & True Peak",
-    "qa.frames.title": "Frame Signalstats (Start / Mid / End)"
+    "qa.frames.title": "Frame Signalstats (Start / Mid / End)",
+    "update.available": "Update v{version}",
+    "update.applying": "Updating...",
+    "update.restarting": "Update v{version} installed. Restarting studio..."
   },
   fr: {
     "topbar.workspace": "WS",
@@ -191,6 +194,9 @@ export const TRANSLATIONS = {
     "qa.failures.title": "Anomalies Détectées",
     "qa.probe.title": "Audit Conteneur & Flux",
     "qa.loudness.title": "Sonie EBU R128 & True Peak",
-    "qa.frames.title": "Statistiques Images (Début / Milieu / Fin)"
+    "qa.frames.title": "Statistiques Images (Début / Milieu / Fin)",
+    "update.available": "Mise à jour v{version}",
+    "update.applying": "Mise à jour...",
+    "update.restarting": "Mise à jour v{version} installée. Redémarrage..."
   }
 };

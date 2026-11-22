@@ -9,6 +9,7 @@ from taktcut.ui.server import (
     build_ui_arg_parser,
     create_ui_server,
     main,
+    resolve_assets_dir,
     serve_ui,
 )
 
@@ -23,6 +24,7 @@ __all__ = [
     "create_ui_server",
     "find_desktop_browser_binary",
     "main",
+    "resolve_assets_dir",
     "serve_ui",
     "validate_loopback_host",
 ]
