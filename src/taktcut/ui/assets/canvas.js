@@ -1,3 +1,137 @@
+export function evaluateEasing(tNorm, easing = "linear") {
+  const u = clamp01(Number.isFinite(tNorm) ? tNorm : 0);
+  if (easing === "ease_in") return u * u;
+  if (easing === "ease_out") {
+    const inv = 1 - u;
+    return 1 - inv * inv;
+  }
+  if (easing === "ease_in_out") return u * u * (3 - 2 * u);
+  return u;
+}
+
+export function evaluateKeyframes(keyframes, timeSec) {
+  if (!Array.isArray(keyframes) || keyframes.length === 0) return 1.0;
+  const ordered = [...keyframes].sort((a, b) => Number(a.time_s) - Number(b.time_s));
+  const t = Math.max(0, Number.isFinite(timeSec) ? timeSec : 0);
+  if (t <= Number(ordered[0].time_s)) return Number(ordered[0].value);
+  const last = ordered[ordered.length - 1];
+  if (t >= Number(last.time_s)) return Number(last.value);
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const k0 = ordered[i];
+    const k1 = ordered[i + 1];
+    const t0 = Number(k0.time_s);
+    const t1 = Number(k1.time_s);
+    if (t <= t1) {
+      const dt = t1 - t0;
+      if (dt <= 1e-6) return Number(k1.value);
+      const u = (t - t0) / dt;
+      const w = evaluateEasing(u, k0.easing || "linear");
+      return Number(k0.value) + (Number(k1.value) - Number(k0.value)) * w;
+    }
+  }
+  return Number(last.value);
+}
+
+export function evaluateNodeIntensity(node, timeSec) {
+  if (!node || node.enabled === false) return 0.0;
+  if (!Array.isArray(node.keyframes) || node.keyframes.length === 0) return 1.0;
+  return Math.max(0, Math.min(2, evaluateKeyframes(node.keyframes, timeSec)));
+}
+
+export function drawKeyframeCurveCanvas(canvas, keyframes, durationSec, currentTimeSec) {
+  if (!canvas) return;
+  const { ctx, width, height } = setupCanvas(canvas, 74);
+  const dur = Math.max(0.5, Number.isFinite(durationSec) ? durationSec : 10);
+  const kfs = Array.isArray(keyframes)
+    ? [...keyframes].sort((a, b) => Number(a.time_s) - Number(b.time_s))
+    : [];
+  const maxVal = Math.max(1.0, ...kfs.map((k) => Number(k.value) || 0));
+  const padL = 26;
+  const padR = 10;
+  const padT = 10;
+  const padB = 14;
+  const plotW = Math.max(40, width - padL - padR);
+  const plotH = Math.max(20, height - padT - padB);
+
+  const timeToX = (t) => padL + (clamp01(t / dur)) * plotW;
+  const valToY = (v) => padT + (1 - clamp01(v / maxVal)) * plotH;
+
+  ctx.fillStyle = "#141416";
+  ctx.fillRect(0, 0, width, height);
+
+  // Subtle horizontal grid lines (0%, 50%, 100%)
+  ctx.strokeStyle = "#26262c";
+  ctx.lineWidth = 1;
+  for (const frac of [0, 0.5, 1]) {
+    const gy = padT + (1 - frac) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "#8e8e98";
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.fillText(maxVal > 1 ? `${Math.round(maxVal * 100)}%` : "100%", 2, padT + 4);
+  ctx.fillText("0%", 6, padT + plotH + 3);
+
+  // Sampled interpolation curve
+  const samples = 64;
+  ctx.beginPath();
+  for (let i = 0; i <= samples; i++) {
+    const t = (dur * i) / samples;
+    const v = kfs.length > 0 ? evaluateKeyframes(kfs, t) : 1.0;
+    const px = timeToX(t);
+    const py = valToY(v);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.strokeStyle = kfs.length > 0 ? "#e68442" : "#528bff";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Fill area under curve
+  ctx.lineTo(padL + plotW, padT + plotH);
+  ctx.lineTo(padL, padT + plotH);
+  ctx.closePath();
+  ctx.fillStyle = kfs.length > 0 ? "rgba(230, 132, 66, 0.14)" : "rgba(82, 139, 255, 0.1)";
+  ctx.fill();
+
+  // Keyframe diamonds
+  for (const kf of kfs) {
+    const kx = timeToX(Number(kf.time_s));
+    const ky = valToY(Number(kf.value));
+    ctx.fillStyle = "#ffd8a8";
+    ctx.strokeStyle = "#e68442";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(kx, ky - 4.5);
+    ctx.lineTo(kx + 4.5, ky);
+    ctx.lineTo(kx, ky + 4.5);
+    ctx.lineTo(kx - 4.5, ky);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Current playhead needle & evaluated readout
+  const curT = Math.max(0, Math.min(dur, Number.isFinite(currentTimeSec) ? currentTimeSec : 0));
+  const curV = kfs.length > 0 ? evaluateKeyframes(kfs, curT) : 1.0;
+  const nx = timeToX(curT);
+  ctx.strokeStyle = "#689cff";
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(nx, padT - 4);
+  ctx.lineTo(nx, padT + plotH + 2);
+  ctx.stroke();
+
+  ctx.fillStyle = "#d8d8de";
+  ctx.font = "600 9px ui-monospace, monospace";
+  const tag = `t=${curT.toFixed(2)}s | ${(curV * 100).toFixed(0)}%`;
+  const tw = ctx.measureText(tag).width;
+  ctx.fillText(tag, Math.max(padL, padL + plotW - tw - 2), padT + 2);
+}
+
 function clamp01(val) {
   return val < 0 ? 0 : val > 1 ? 1 : val;
 }
@@ -221,17 +355,19 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxStat
   let motionBlurAmt = 0;
   for (const node of activeFx) {
     const p = node.params || {};
+    const kfMul = evaluateNodeIntensity(node, tSec);
+    if (kfMul <= 0.0001) continue;
     if (node.effect === "shake") {
-      const amp = Number(p.amplitude ?? 14) * (frameW / 640);
+      const amp = Number(p.amplitude ?? 14) * kfMul * (frameW / 640);
       const freq = Number(p.frequency ?? 6);
       const seed = Number(p.seed ?? 42);
       const p1 = ((seed % 360) * Math.PI) / 180 + 0.65;
       const p2 = (((seed * 7 + 53) % 360) * Math.PI) / 180 + 1.15;
       shiftX += amp * Math.sin(tSec * freq * Math.PI * 2 + p1);
       shiftY += amp * Math.cos(tSec * freq * 1.37 * Math.PI * 2 + p2);
-      motionBlurAmt = Math.max(motionBlurAmt, Number(p.motion_blur ?? 0));
+      motionBlurAmt = Math.max(motionBlurAmt, Number(p.motion_blur ?? 0) * Math.min(1, kfMul));
     } else if (node.effect === "film_damage") {
-      const mix = Number(p.mix ?? 0.75);
+      const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
       const weave = Number(p.gate_weave ?? 0.25) * mix;
       shiftX += weave * 4.5 * Math.sin(tSec * 7.1 + 0.4);
       shiftY += weave * 4.5 * Math.cos(tSec * 5.3 + 0.9);
@@ -257,8 +393,9 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxStat
     // Apply Chroma Aberration RGB channel split directly on frame buffer
     const chromaNode = activeFx.find((n) => n.effect === "chroma_aberration");
     if (chromaNode) {
+      const chromaMul = evaluateNodeIntensity(chromaNode, tSec);
       const p = chromaNode.params || {};
-      const spread = Number(p.spread ?? 8);
+      const spread = Number(p.spread ?? 8) * chromaMul;
       const angleRad = (Number(p.angle ?? 15) * Math.PI) / 180;
       const dx = Math.round(Math.cos(angleRad) * spread * (bw / 640));
       const dy = Math.round(Math.sin(angleRad) * spread * (bw / 640));
@@ -304,8 +441,10 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxStat
   // Apply optical/lighting FX passes over the 16:9 frame
   for (const node of activeFx) {
     const p = node.params || {};
+    const kfMul = evaluateNodeIntensity(node, tSec);
+    if (kfMul <= 0.0001) continue;
     if (node.effect === "glow") {
-      const brightness = Number(p.brightness ?? 0.85);
+      const brightness = Number(p.brightness ?? 0.85) * kfMul;
       const widthPx = Number(p.width ?? 18);
       const threshold = Number(p.threshold ?? 0.45);
       const [tr, tg, tb] = hexToRgbTuple(p.tint || "#ffd8a8");
@@ -335,7 +474,7 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxStat
     } else if (node.effect === "lens_flare") {
       const cx = fx + Number(p.center_x ?? 0.72) * frameW;
       const cy = fy + Number(p.center_y ?? 0.28) * frameH;
-      const brightness = Number(p.brightness ?? 0.95);
+      const brightness = Number(p.brightness ?? 0.95) * kfMul;
       const scale = Number(p.scale ?? 1.0);
       const [tr, tg, tb] = hexToRgbTuple(p.tint || "#7cc4ff");
       const alpha = clamp01(brightness * 0.75);
@@ -379,7 +518,7 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxStat
 
       ctx.restore();
     } else if (node.effect === "flicker") {
-      const amp = Number(p.amplitude ?? 0.18);
+      const amp = Number(p.amplitude ?? 0.18) * kfMul;
       const freq = Number(p.frequency ?? 8);
       const rand = Number(p.randomness ?? 0.35);
       const delta =
@@ -397,7 +536,7 @@ export function drawProgramMonitorCanvas(canvas, doc, playheadFrame, cdl, fxStat
         ctx.restore();
       }
     } else if (node.effect === "film_damage") {
-      const mix = Number(p.mix ?? 0.75);
+      const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
       if (mix > 0.01) {
         const grain = Number(p.grain ?? 28) * mix;
         const scratches = Number(p.scratches ?? 0.45) * mix;

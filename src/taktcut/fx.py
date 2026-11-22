@@ -7,7 +7,7 @@ import re
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 FxType = Literal[
     "glow",
@@ -26,6 +26,17 @@ FX_TYPES: tuple[FxType, ...] = (
     "film_damage",
     "chroma_aberration",
 )
+
+EasingType = Literal["linear", "ease_in", "ease_out", "ease_in_out"]
+
+EASING_TYPES: tuple[EasingType, ...] = (
+    "linear",
+    "ease_in",
+    "ease_out",
+    "ease_in_out",
+)
+
+MAX_KEYFRAMES_PER_NODE: int = 64
 
 ALLOWED_PIX_FMTS: frozenset[str] = frozenset({"yuv420p", "yuv422p10le", "rgb24", "yuv444p"})
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -309,12 +320,28 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
 }
 
 
+class Keyframe(BaseModel):
+    """Temporal keyframe controlling an FX node's intensity multiplier over time."""
+
+    time_s: float = Field(ge=0.0, le=86400.0)
+    value: float = Field(ge=0.0, le=2.0)
+    easing: EasingType = "linear"
+
+    @field_validator("time_s", "value")
+    @classmethod
+    def _validate_finite(cls, val: float) -> float:
+        if not math.isfinite(val):
+            raise ValueError(f"Keyframe numeric field must be finite, got {val!r}")
+        return float(val)
+
+
 class FxNode(BaseModel):
     """A single effect instance in the Premiere/AE-style Effect Controls stack."""
 
     effect: FxType
     enabled: bool = True
     params: dict[str, float | int | str] = Field(default_factory=dict)
+    keyframes: list[Keyframe] = Field(default_factory=list)
 
 
 class FxPreset(BaseModel):
@@ -333,6 +360,7 @@ class FxCompileResult(BaseModel):
     filtergraph: str
     ffmpeg_vf_args: list[str]
     active_effects: list[FxType]
+    keyframed_effects: list[FxType] = Field(default_factory=list)
     bypassed_count: int
     normalized_nodes: list[FxNode]
     estimated_render_seconds: float
@@ -543,8 +571,144 @@ def _canonicalize_param_keys(effect: FxType, raw_params: dict[str, Any]) -> dict
     return mapped
 
 
+def _normalize_keyframes(raw_kfs: Sequence[Keyframe]) -> list[Keyframe]:
+    if len(raw_kfs) > MAX_KEYFRAMES_PER_NODE:
+        raise ValueError(
+            f"Too many keyframes ({len(raw_kfs)}); maximum allowed is {MAX_KEYFRAMES_PER_NODE}"
+        )
+    normalized: list[Keyframe] = []
+    for kf in raw_kfs:
+        t_val = round(_clamp_num(float(kf.time_s), 0.0, 86400.0), 4)
+        v_val = round(_clamp_num(float(kf.value), 0.0, 2.0), 4)
+        normalized.append(Keyframe(time_s=t_val, value=v_val, easing=kf.easing))
+    normalized.sort(key=lambda item: item.time_s)
+    return normalized
+
+
+def evaluate_easing(t_norm: float, easing: EasingType = "linear") -> float:
+    """Evaluate a normalized [0, 1] interpolation factor for the requested curve."""
+    if not math.isfinite(t_norm):
+        raise ValueError(f"Interpolation factor must be finite, got {t_norm!r}")
+    u = _clamp_num(float(t_norm), 0.0, 1.0)
+    if easing == "linear":
+        return u
+    if easing == "ease_in":
+        return u * u
+    if easing == "ease_out":
+        inv = 1.0 - u
+        return 1.0 - inv * inv
+    if easing == "ease_in_out":
+        return u * u * (3.0 - 2.0 * u)
+    raise ValueError(f"Unsupported easing curve: {easing!r}")
+
+
+def evaluate_keyframes(
+    keyframes: Sequence[Keyframe | dict[str, Any]],
+    time_s: float,
+) -> float:
+    """Deterministically evaluate keyframed intensity multiplier at time_s (seconds)."""
+    if not math.isfinite(time_s):
+        raise ValueError(f"time_s must be finite, got {time_s!r}")
+    if not keyframes:
+        return 1.0
+
+    parsed = [
+        kf if isinstance(kf, Keyframe) else Keyframe.model_validate(kf)
+        for kf in keyframes
+    ]
+    ordered = sorted(parsed, key=lambda item: item.time_s)
+    t_clamped = max(0.0, float(time_s))
+
+    if t_clamped <= ordered[0].time_s:
+        return float(ordered[0].value)
+    if t_clamped >= ordered[-1].time_s:
+        return float(ordered[-1].value)
+
+    for idx in range(len(ordered) - 1):
+        k0 = ordered[idx]
+        k1 = ordered[idx + 1]
+        if t_clamped <= k1.time_s:
+            dt = k1.time_s - k0.time_s
+            if dt <= 1e-9:
+                return float(k1.value)
+            u = (t_clamped - k0.time_s) / dt
+            w = evaluate_easing(u, k0.easing)
+            return round(k0.value + (k1.value - k0.value) * w, 6)
+
+    return float(ordered[-1].value)
+
+
+def evaluate_node_intensity(node: FxNode | dict[str, Any], time_s: float) -> float:
+    """Evaluate a node's effective intensity multiplier (0 if bypassed, 1 if unkeyframed)."""
+    parsed = node if isinstance(node, FxNode) else FxNode.model_validate(node)
+    if not parsed.enabled:
+        return 0.0
+    if not parsed.keyframes:
+        return 1.0
+    return evaluate_keyframes(parsed.keyframes, time_s)
+
+
+def build_fade_keyframes(
+    duration_seconds: float,
+    *,
+    mode: Literal["in", "out", "in_out"] = "in_out",
+    fade_in_s: float = 1.0,
+    fade_out_s: float = 1.0,
+    easing: EasingType = "ease_in_out",
+    peak: float = 1.0,
+) -> list[Keyframe]:
+    """Generate a 1-click 2-point fade-in, fade-out, or symmetric fade-in/out envelope."""
+    dur = _clamp_num(float(duration_seconds), 0.1, 86400.0)
+    peak_val = round(_clamp_num(float(peak), 0.0, 2.0), 4)
+    in_s = _clamp_num(float(fade_in_s), 0.05, dur)
+    out_s = _clamp_num(float(fade_out_s), 0.05, dur)
+
+    if mode == "in":
+        return [
+            Keyframe(time_s=0.0, value=0.0, easing=easing),
+            Keyframe(time_s=round(in_s, 4), value=peak_val, easing=easing),
+        ]
+    if mode == "out":
+        start_out = round(max(0.0, dur - out_s), 4)
+        return [
+            Keyframe(time_s=start_out, value=peak_val, easing=easing),
+            Keyframe(time_s=round(dur, 4), value=0.0, easing=easing),
+        ]
+    if in_s + out_s >= dur - 1e-4:
+        mid = round(dur * 0.5, 4)
+        return [
+            Keyframe(time_s=0.0, value=0.0, easing=easing),
+            Keyframe(time_s=mid, value=peak_val, easing=easing),
+            Keyframe(time_s=round(dur, 4), value=0.0, easing=easing),
+        ]
+    return [
+        Keyframe(time_s=0.0, value=0.0, easing=easing),
+        Keyframe(time_s=round(in_s, 4), value=peak_val, easing="linear"),
+        Keyframe(time_s=round(dur - out_s, 4), value=peak_val, easing=easing),
+        Keyframe(time_s=round(dur, 4), value=0.0, easing=easing),
+    ]
+
+
+def sample_keyframe_curve(
+    keyframes: Sequence[Keyframe | dict[str, Any]],
+    duration_seconds: float,
+    *,
+    samples: int = 41,
+) -> list[dict[str, float]]:
+    """Sample deterministic (time_s, value) curve points for UI preview and inspection."""
+    dur = _clamp_num(float(duration_seconds), 0.1, 86400.0)
+    count = max(2, min(512, int(samples)))
+    return [
+        {
+            "time_s": round(dur * idx / (count - 1), 4),
+            "value": round(evaluate_keyframes(keyframes, dur * idx / (count - 1)), 6),
+        }
+        for idx in range(count)
+    ]
+
+
 def normalize_fx_node(raw_node: FxNode | dict[str, Any]) -> FxNode:
-    """Validate and clamp an FX node's parameters strictly within safe bounds."""
+    """Validate and clamp an FX node's parameters and keyframes strictly within safe bounds."""
     node = raw_node if isinstance(raw_node, FxNode) else FxNode.model_validate(raw_node)
     specs = FX_PARAM_SPECS[node.effect]
     canonical_raw = _canonicalize_param_keys(node.effect, node.params)
@@ -569,7 +733,13 @@ def normalize_fx_node(raw_node: FxNode | dict[str, Any]) -> FxNode:
             max_v = spec.max_val if spec.max_val is not None else 1.0
             normalized_params[spec.name] = round(_clamp_num(num, min_v, max_v), 4)
 
-    return FxNode(effect=node.effect, enabled=node.enabled, params=normalized_params)
+    normalized_kfs = _normalize_keyframes(node.keyframes)
+    return FxNode(
+        effect=node.effect,
+        enabled=node.enabled,
+        params=normalized_params,
+        keyframes=normalized_kfs,
+    )
 
 
 def default_fx_node(effect: FxType) -> FxNode:
@@ -619,7 +789,70 @@ def _compile_glow(idx: int, params: dict[str, float | int | str]) -> str:
     )
 
 
-def _compile_shake(params: dict[str, float | int | str]) -> str:
+def _build_keyframe_expr(
+    keyframes: Sequence[Keyframe],
+    *,
+    time_var: str = "T",
+    clamp_unit: bool = True,
+) -> str:
+    """Compile sorted keyframes into a deterministic piecewise FFmpeg expression."""
+    ordered = sorted(keyframes, key=lambda item: item.time_s)
+    if not ordered:
+        return "1.0000"
+    if len(ordered) == 1:
+        val = _clamp_num(ordered[0].value, 0.0, 1.0) if clamp_unit else ordered[0].value
+        return f"{val:.4f}"
+
+    def _fmt_val(raw: float) -> float:
+        return _clamp_num(raw, 0.0, 1.0) if clamp_unit else raw
+
+    expr = f"{_fmt_val(ordered[-1].value):.4f}"
+    for idx in range(len(ordered) - 2, -1, -1):
+        k0 = ordered[idx]
+        k1 = ordered[idx + 1]
+        v0 = _fmt_val(k0.value)
+        v1 = _fmt_val(k1.value)
+        dt = k1.time_s - k0.time_s
+        if dt <= 1e-6:
+            seg_expr = f"{v1:.4f}"
+        else:
+            u = f"clip(({time_var}-{k0.time_s:.4f})/{dt:.4f},0,1)"
+            if k0.easing == "linear":
+                curve = u
+            elif k0.easing == "ease_in":
+                curve = f"pow({u},2)"
+            elif k0.easing == "ease_out":
+                curve = f"(1-pow(1-{u},2))"
+            else:
+                curve = f"(3*pow({u},2)-2*pow({u},3))"
+            dv = v1 - v0
+            seg_expr = f"{v0:.4f}" if abs(dv) <= 1e-6 else f"({v0:.4f}+({dv:.4f})*{curve})"
+        expr = f"if(lt({time_var},{k1.time_s:.4f}),{seg_expr},{expr})"
+
+    first_v = _fmt_val(ordered[0].value)
+    full_expr = f"if(lte({time_var},{ordered[0].time_s:.4f}),{first_v:.4f},{expr})"
+    return f"clip({full_expr},0,1)" if clamp_unit else full_expr
+
+
+def _wrap_keyframed_segment(idx: int, segment: str, keyframes: Sequence[Keyframe]) -> str:
+    """Wrap an FX segment in a dry/wet blend controlled by its keyframe intensity curve."""
+    if segment == "null":
+        return "null"
+    expr = _build_keyframe_expr(keyframes, time_var="T", clamp_unit=True)
+    dry_pad = f"kfd{idx}"
+    wet_pad = f"kfw{idx}"
+    out_pad = f"kfo{idx}"
+    return (
+        f"split[{dry_pad}][{wet_pad}];"
+        f"[{wet_pad}]{segment}[{out_pad}];"
+        f"[{dry_pad}][{out_pad}]blend=all_expr='A*(1-({expr}))+B*({expr})'"
+    )
+
+
+def _compile_shake(
+    params: dict[str, float | int | str],
+    keyframes: Sequence[Keyframe] = (),
+) -> str:
     amplitude = float(params["amplitude"])
     frequency = float(params["frequency"])
     motion_blur = float(params["motion_blur"])
@@ -629,33 +862,55 @@ def _compile_shake(params: dict[str, float | int | str]) -> str:
     if amp <= 0:
         return "null"
 
+    if keyframes:
+        max_k = max(k.value for k in keyframes)
+        if max_k <= 0.0001:
+            return "null"
+        pad_amp = max(1, round(amp * max_k))
+        kf_expr = _build_keyframe_expr(keyframes, time_var="t", clamp_unit=False)
+        amp_expr = f"({amp}*({kf_expr}))"
+    else:
+        pad_amp = amp
+        amp_expr = str(amp)
+
     omega = round(2.0 * math.pi * frequency, 4)
     omega2 = round(omega * 1.37, 4)
     phase1 = round((seed % 360) * math.pi / 180.0, 4)
     phase2 = round(((seed * 7 + 53) % 360) * math.pi / 180.0, 4)
     segment = (
-        f"pad=iw+{2 * amp}:ih+{2 * amp}:{amp}:{amp}:color=black,"
-        f"crop=iw-{2 * amp}:ih-{2 * amp}:"
-        f"x='{amp}+{amp}*sin(t*{omega:.4f}+{phase1:.4f})':"
-        f"y='{amp}+{amp}*cos(t*{omega2:.4f}+{phase2:.4f})'"
+        f"pad=iw+{2 * pad_amp}:ih+{2 * pad_amp}:{pad_amp}:{pad_amp}:color=black,"
+        f"crop=iw-{2 * pad_amp}:ih-{2 * pad_amp}:"
+        f"x='{pad_amp}+{amp_expr}*sin(t*{omega:.4f}+{phase1:.4f})':"
+        f"y='{pad_amp}+{amp_expr}*cos(t*{omega2:.4f}+{phase2:.4f})'"
     )
     if motion_blur >= 0.05:
         segment += f",tblend=all_mode=average:all_opacity={motion_blur:.3f}"
     return segment
 
 
-def _compile_flicker(params: dict[str, float | int | str]) -> str:
+def _compile_flicker(
+    params: dict[str, float | int | str],
+    keyframes: Sequence[Keyframe] = (),
+) -> str:
     amplitude = float(params["amplitude"])
     frequency = float(params["frequency"])
     randomness = float(params["randomness"])
     if amplitude <= 0.0001:
         return "null"
 
+    if keyframes:
+        if max(k.value for k in keyframes) <= 0.0001:
+            return "null"
+        kf_expr = _build_keyframe_expr(keyframes, time_var="t", clamp_unit=False)
+        amp_expr = f"({amplitude:.4f}*({kf_expr}))"
+    else:
+        amp_expr = f"{amplitude:.4f}"
+
     omega = round(2.0 * math.pi * frequency, 4)
     omega2 = round(omega * 1.73, 4)
     norm = round(1.0 + randomness, 4)
     return (
-        f"eq=brightness='{amplitude:.4f}*(sin(t*{omega:.4f})+"
+        f"eq=brightness='{amp_expr}*(sin(t*{omega:.4f})+"
         f"{randomness:.4f}*sin(t*{omega2:.4f}+1.7))/{norm:.4f}':eval=frame"
     )
 
@@ -796,22 +1051,31 @@ def compile_fx_filtergraph(
 
     total_weight = 0.0
     active_effects: list[FxType] = []
+    keyframed_effects: list[FxType] = []
 
     for idx, node in enumerate(active_nodes):
         active_effects.append(node.effect)
         total_weight += _FX_COMPLEXITY_WEIGHTS[node.effect]
+        has_kf = len(node.keyframes) > 0
+        if has_kf:
+            keyframed_effects.append(node.effect)
+
         if node.effect == "glow":
-            segments.append(_compile_glow(idx, node.params))
+            seg = _compile_glow(idx, node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "shake":
-            segments.append(_compile_shake(node.params))
+            segments.append(_compile_shake(node.params, node.keyframes))
         elif node.effect == "flicker":
-            segments.append(_compile_flicker(node.params))
+            segments.append(_compile_flicker(node.params, node.keyframes))
         elif node.effect == "lens_flare":
-            segments.append(_compile_lens_flare(idx, node.params))
+            seg = _compile_lens_flare(idx, node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "film_damage":
-            segments.append(_compile_film_damage(node.params))
+            seg = _compile_film_damage(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "chroma_aberration":
-            segments.append(_compile_chroma_aberration(node.params))
+            seg = _compile_chroma_aberration(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb:
         segments.append(f"format={pix_fmt}")
@@ -838,6 +1102,7 @@ def compile_fx_filtergraph(
         filtergraph=filtergraph,
         ffmpeg_vf_args=["-vf", filtergraph],
         active_effects=active_effects,
+        keyframed_effects=keyframed_effects,
         bypassed_count=bypassed_count,
         normalized_nodes=normalized_nodes,
         estimated_render_seconds=est_seconds,

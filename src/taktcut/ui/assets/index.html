@@ -496,6 +496,30 @@
               <button type="button" id="btn-generate-sample-clip" class="btn btn-secondary" data-i18n="render.btn.genSample">Generate Test Clip</button>
             </div>
             <div class="pane-body">
+              <div class="render-engine-bar">
+                <span class="pill-label" data-i18n="render.engine.label">Render Engine</span>
+                <div class="engine-switch" role="group" aria-label="Render Engine">
+                  <button type="button" id="btn-engine-local" class="engine-btn is-active" data-render-engine="local" aria-pressed="true" data-i18n="render.engine.local">Local</button>
+                  <button type="button" id="btn-engine-remote" class="engine-btn" data-render-engine="remote" aria-pressed="false" data-i18n="render.engine.remote">Remote Server</button>
+                </div>
+                <span id="remote-node-status-pill" class="nle-tag mono is-hidden">OFFLINE</span>
+              </div>
+              <div id="remote-render-panel" class="remote-panel is-hidden">
+                <div class="form-row-two">
+                  <div class="form-row">
+                    <label for="remote-node-url" data-i18n="render.remote.url">Remote Node URL (HTTPS / LAN)</label>
+                    <input type="url" id="remote-node-url" class="input-control mono" placeholder="http://192.168.1.50:8742">
+                  </div>
+                  <div class="form-row">
+                    <label for="remote-bearer-token" data-i18n="render.remote.token">Bearer Token</label>
+                    <input type="password" id="remote-bearer-token" class="input-control mono" placeholder="taktcut-node-token" autocomplete="off">
+                  </div>
+                </div>
+                <div class="btn-row">
+                  <button type="button" id="btn-remote-probe" class="btn btn-secondary" data-i18n="render.remote.probe">Probe Remote Node</button>
+                  <span id="remote-node-caps-note" class="telemetry-note mono" data-i18n="render.remote.hint">SSRF guard active: HTTPS or private LAN/loopback HTTP only.</span>
+                </div>
+              </div>
               <div class="form-row">
                 <label for="render-input-select" data-i18n="render.label.pickMedia">Workspace Media Shortcut</label>
                 <select id="render-input-select" class="input-control mono"></select>
@@ -701,7 +725,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | Left/Right: +/-1f</span>
       </span>
-      <span id="version-badge">v0.1.0</span>
+      <span id="version-badge">v0.1.1</span>
     </footer>
   </div>
 

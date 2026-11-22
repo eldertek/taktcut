@@ -2,6 +2,7 @@ import {
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
   drawFramesCanvas,
+  drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
   drawProgramMonitorCanvas,
   drawTimelineCanvas,
@@ -82,7 +83,9 @@ const state = {
   fxBypassAll: false,
   fxActivePresetId: "",
   fxLastCompile: null,
-  fxCompileTimer: null
+  fxCompileTimer: null,
+  renderEngine: "local",
+  remotePollTimer: null
 };
 
 function byId(id) {
@@ -282,6 +285,7 @@ function redrawActiveCanvases() {
       state.cdl,
       getEffectiveFxState()
     );
+    redrawFxKeyframeCanvases();
   } else if (state.activeTab === "color") {
     drawColorPreviewCanvas(byId("color-preview-canvas"), state.cdl, state.wipeRatio);
     drawColorScopeCanvas(byId("color-scope-canvas"), state.cdl);
@@ -572,7 +576,41 @@ function createDefaultFxNode(effect) {
   for (const sp of getFxSpecs(effect)) {
     params[sp.name] = sp.default;
   }
-  return { effect, enabled: true, params };
+  return { effect, enabled: true, params, keyframes: [], kfOpen: false };
+}
+
+function getFxDurationSeconds() {
+  const el = byId("fx-duration-input");
+  const raw = el ? Number.parseFloat(el.value) : 10;
+  return Number.isFinite(raw) && raw > 0.1 ? raw : 10;
+}
+
+function serializeFxStackForApi(forceDisabled = false) {
+  return state.fxStack.map((n) => ({
+    effect: n.effect,
+    enabled: forceDisabled ? false : n.enabled !== false,
+    params: { ...n.params },
+    keyframes: Array.isArray(n.keyframes)
+      ? n.keyframes.map((k) => ({
+          time_s: Number(k.time_s),
+          value: Number(k.value),
+          easing: k.easing || "linear"
+        }))
+      : []
+  }));
+}
+
+function redrawFxKeyframeCanvases() {
+  const dur = getFxDurationSeconds();
+  const fps = getTimelineFps();
+  const curT = state.playheadFrame / fps;
+  for (const canvas of document.querySelectorAll(".fx-kf-canvas")) {
+    const idx = Number.parseInt(canvas.getAttribute("data-node-idx") || "-1", 10);
+    const node = state.fxStack[idx];
+    if (node) {
+      drawKeyframeCurveCanvas(canvas, node.keyframes || [], dur, curT);
+    }
+  }
 }
 
 function updateFxBadges() {
@@ -626,8 +664,11 @@ function renderFxCompileResult(res) {
   badge.className = `nle-tag mono ${
     res.complexity_tier === "heavy" ? "is-warn" : "is-pass"
   }`;
+  const kfList = Array.isArray(res.keyframed_effects) && res.keyframed_effects.length > 0
+    ? ` | KF: ${res.keyframed_effects.join(", ")}`
+    : "";
   renderKv(kv, [
-    ["Active FX", res.active_effects.join(", ") || t("common.none")],
+    ["Active FX", (res.active_effects.join(", ") || t("common.none")) + kfList],
     ["Est. Render", `${res.estimated_render_seconds.toFixed(2)}s`],
     ["Realtime", `${res.realtime_factor.toFixed(2)}x`],
     ["Complexity", `${res.complexity_tier.toUpperCase()} (${res.bypassed_count} bypassed)`]
@@ -637,8 +678,7 @@ function renderFxCompileResult(res) {
 
 async function compileFxNow() {
   try {
-    const durRaw = Number.parseFloat(byId("fx-duration-input").value);
-    const duration_seconds = Number.isFinite(durRaw) && durRaw > 0 ? durRaw : 10;
+    const duration_seconds = getFxDurationSeconds();
     const resStr = byId("fx-resolution-select").value || "1920x1080";
     const [wStr, hStr] = resStr.split("x");
     const width = Number.parseInt(wStr, 10) || 1920;
@@ -646,9 +686,7 @@ async function compileFxNow() {
     const use_gpu = byId("fx-use-gpu").checked;
     const fps = getTimelineFps();
 
-    const nodesPayload = state.fxBypassAll
-      ? state.fxStack.map((n) => ({ ...n, enabled: false }))
-      : state.fxStack;
+    const nodesPayload = serializeFxStackForApi(state.fxBypassAll);
 
     const compiled = await api.compileFx({
       nodes: nodesPayload,
@@ -674,6 +712,37 @@ function scheduleFxCompile() {
   }, 80);
 }
 
+function applyFadeToNode(node, mode) {
+  const dur = getFxDurationSeconds();
+  const fadeSpan = Math.min(1.0, Math.max(0.25, dur * 0.25));
+  if (mode === "in") {
+    node.keyframes = [
+      { time_s: 0.0, value: 0.0, easing: "ease_in_out" },
+      { time_s: Number(fadeSpan.toFixed(2)), value: 1.0, easing: "ease_in_out" }
+    ];
+  } else if (mode === "out") {
+    const startOut = Math.max(0, Number((dur - fadeSpan).toFixed(2)));
+    node.keyframes = [
+      { time_s: startOut, value: 1.0, easing: "ease_in_out" },
+      { time_s: Number(dur.toFixed(2)), value: 0.0, easing: "ease_in_out" }
+    ];
+  } else if (fadeSpan * 2 >= dur - 0.05) {
+    node.keyframes = [
+      { time_s: 0.0, value: 0.0, easing: "ease_in_out" },
+      { time_s: Number((dur * 0.5).toFixed(2)), value: 1.0, easing: "ease_in_out" },
+      { time_s: Number(dur.toFixed(2)), value: 0.0, easing: "ease_in_out" }
+    ];
+  } else {
+    node.keyframes = [
+      { time_s: 0.0, value: 0.0, easing: "ease_in_out" },
+      { time_s: Number(fadeSpan.toFixed(2)), value: 1.0, easing: "linear" },
+      { time_s: Number((dur - fadeSpan).toFixed(2)), value: 1.0, easing: "ease_in_out" },
+      { time_s: Number(dur.toFixed(2)), value: 0.0, easing: "ease_in_out" }
+    ];
+  }
+  node.kfOpen = true;
+}
+
 function renderFxStack() {
   const container = byId("fx-controls-stack");
   if (!container) return;
@@ -685,6 +754,7 @@ function renderFxStack() {
   }
 
   const cards = state.fxStack.map((node, nodeIdx) => {
+    if (!Array.isArray(node.keyframes)) node.keyframes = [];
     const card = dom("article", `fx-node-card${node.enabled ? "" : " is-bypassed"}`);
 
     // Header
@@ -712,11 +782,30 @@ function renderFxStack() {
     titleGroup.replaceChildren(bypassBtn, titleSpan, idxTag);
 
     const actions = dom("div", "btn-row");
+    const kfActive = Boolean(node.kfOpen || node.keyframes.length > 0);
+    const kfLabel = node.keyframes.length > 0
+      ? `${t("fx.kf.toggle")} (${node.keyframes.length})`
+      : t("fx.kf.toggle");
+    const kfBtn = dom(
+      "button",
+      `btn btn-mini fx-kf-toggle-btn${kfActive ? " is-active" : ""}`,
+      kfLabel
+    );
+    kfBtn.type = "button";
+    kfBtn.setAttribute("aria-pressed", kfActive ? "true" : "false");
+    kfBtn.addEventListener("click", () => {
+      node.kfOpen = !kfActive;
+      renderFxStack();
+      redrawFxKeyframeCanvases();
+    });
+
     const rstBtn = dom("button", "btn btn-mini", t("fx.controls.reset"));
     rstBtn.type = "button";
     rstBtn.addEventListener("click", () => {
       const def = createDefaultFxNode(node.effect);
       node.params = { ...def.params };
+      node.keyframes = [];
+      node.kfOpen = false;
       node.enabled = true;
       state.fxActivePresetId = "";
       renderFxStack();
@@ -734,7 +823,7 @@ function renderFxStack() {
       scheduleFxCompile();
     });
 
-    actions.replaceChildren(rstBtn, rmBtn);
+    actions.replaceChildren(kfBtn, rstBtn, rmBtn);
     head.replaceChildren(titleGroup, actions);
 
     // Parameters
@@ -814,11 +903,172 @@ function renderFxStack() {
       paramGrid.appendChild(row);
     }
 
-    card.replaceChildren(head, paramGrid);
+    const cardChildren = [head, paramGrid];
+
+    if (kfActive) {
+      const kfPanel = dom("div", "fx-kf-panel");
+      const kfToolbar = dom("div", "fx-kf-toolbar");
+
+      const fadeInBtn = dom("button", "btn btn-chip mono", t("fx.kf.fadeIn"));
+      fadeInBtn.type = "button";
+      fadeInBtn.addEventListener("click", () => {
+        applyFadeToNode(node, "in");
+        renderFxStack();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      });
+
+      const fadeOutBtn = dom("button", "btn btn-chip mono", t("fx.kf.fadeOut"));
+      fadeOutBtn.type = "button";
+      fadeOutBtn.addEventListener("click", () => {
+        applyFadeToNode(node, "out");
+        renderFxStack();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      });
+
+      const fadeBothBtn = dom("button", "btn btn-chip mono", t("fx.kf.fadeInOut"));
+      fadeBothBtn.type = "button";
+      fadeBothBtn.addEventListener("click", () => {
+        applyFadeToNode(node, "in_out");
+        renderFxStack();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      });
+
+      const addKfBtn = dom("button", "btn btn-mini mono", t("fx.kf.addAtPlayhead"));
+      addKfBtn.type = "button";
+      addKfBtn.addEventListener("click", () => {
+        const curT = Number((state.playheadFrame / getTimelineFps()).toFixed(2));
+        const existing = node.keyframes.find((k) => Math.abs(Number(k.time_s) - curT) < 0.02);
+        if (existing) {
+          existing.value = existing.value > 0 ? 0.0 : 1.0;
+        } else {
+          node.keyframes.push({ time_s: curT, value: 1.0, easing: "ease_in_out" });
+        }
+        node.keyframes.sort((a, b) => Number(a.time_s) - Number(b.time_s));
+        node.kfOpen = true;
+        renderFxStack();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      });
+
+      const clearKfBtn = dom("button", "btn btn-mini mono", t("fx.kf.clear"));
+      clearKfBtn.type = "button";
+      clearKfBtn.addEventListener("click", () => {
+        node.keyframes = [];
+        renderFxStack();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      });
+
+      kfToolbar.replaceChildren(fadeInBtn, fadeOutBtn, fadeBothBtn, addKfBtn, clearKfBtn);
+
+      const curveWell = dom("div", "fx-kf-canvas-well");
+      const curveCanvas = dom("canvas", "fx-kf-canvas");
+      curveCanvas.setAttribute("data-node-idx", String(nodeIdx));
+      curveCanvas.setAttribute("aria-label", `${FX_DISPLAY_TITLES[node.effect] || node.effect} keyframe curve`);
+      curveWell.appendChild(curveCanvas);
+
+      const kfList = dom("div", "fx-kf-list");
+      if (node.keyframes.length === 0) {
+        kfList.appendChild(dom("div", "fx-kf-empty", t("fx.kf.empty")));
+      } else {
+        node.keyframes.forEach((kf, kfIdx) => {
+          const kfRow = dom("div", "fx-kf-row");
+
+          const tWrap = dom("label", "fx-kf-field");
+          tWrap.appendChild(dom("span", "fx-kf-field-label", t("fx.kf.time")));
+          const tInput = dom("input", "input-num mono");
+          tInput.type = "number";
+          tInput.min = "0";
+          tInput.max = "86400";
+          tInput.step = "0.1";
+          tInput.value = String(kf.time_s);
+          tInput.addEventListener("input", () => {
+            const parsed = Number.parseFloat(tInput.value);
+            if (Number.isFinite(parsed) && parsed >= 0) {
+              kf.time_s = parsed;
+              redrawActiveCanvases();
+              scheduleFxCompile();
+            }
+          });
+          tInput.addEventListener("change", () => {
+            const parsed = Number.parseFloat(tInput.value);
+            kf.time_s = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+            node.keyframes.sort((a, b) => Number(a.time_s) - Number(b.time_s));
+            renderFxStack();
+            redrawActiveCanvases();
+            scheduleFxCompile();
+          });
+          tWrap.appendChild(tInput);
+
+          const vWrap = dom("label", "fx-kf-field");
+          vWrap.appendChild(dom("span", "fx-kf-field-label", t("fx.kf.value")));
+          const vInput = dom("input", "input-num mono");
+          vInput.type = "number";
+          vInput.min = "0";
+          vInput.max = "2";
+          vInput.step = "0.05";
+          vInput.value = String(kf.value);
+          vInput.addEventListener("input", () => {
+            const parsed = Number.parseFloat(vInput.value);
+            if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 2) {
+              kf.value = parsed;
+              redrawActiveCanvases();
+              scheduleFxCompile();
+            }
+          });
+          vInput.addEventListener("change", () => {
+            const parsed = Number.parseFloat(vInput.value);
+            kf.value = Number.isFinite(parsed) ? Math.min(2, Math.max(0, parsed)) : 1;
+            vInput.value = String(kf.value);
+            redrawActiveCanvases();
+            scheduleFxCompile();
+          });
+          vWrap.appendChild(vInput);
+
+          const eWrap = dom("label", "fx-kf-field");
+          eWrap.appendChild(dom("span", "fx-kf-field-label", t("fx.kf.easing")));
+          const eSelect = dom("select", "input-control mono");
+          for (const optVal of ["linear", "ease_in", "ease_out", "ease_in_out"]) {
+            const opt = dom("option", "", optVal);
+            opt.value = optVal;
+            if ((kf.easing || "linear") === optVal) opt.selected = true;
+            eSelect.appendChild(opt);
+          }
+          eSelect.addEventListener("change", () => {
+            kf.easing = eSelect.value;
+            redrawActiveCanvases();
+            scheduleFxCompile();
+          });
+          eWrap.appendChild(eSelect);
+
+          const delKfBtn = dom("button", "btn btn-mini mono", "x");
+          delKfBtn.type = "button";
+          delKfBtn.setAttribute("aria-label", `Delete keyframe ${kfIdx + 1}`);
+          delKfBtn.addEventListener("click", () => {
+            node.keyframes.splice(kfIdx, 1);
+            renderFxStack();
+            redrawActiveCanvases();
+            scheduleFxCompile();
+          });
+
+          kfRow.replaceChildren(tWrap, vWrap, eWrap, delKfBtn);
+          kfList.appendChild(kfRow);
+        });
+      }
+
+      kfPanel.replaceChildren(kfToolbar, curveWell, kfList);
+      cardChildren.push(kfPanel);
+    }
+
+    card.replaceChildren(...cardChildren);
     return card;
   });
 
   container.replaceChildren(...cards);
+  window.requestAnimationFrame(redrawFxKeyframeCanvases);
 }
 
 function applyFxPreset(presetId) {
@@ -835,7 +1085,9 @@ function applyFxPreset(presetId) {
   state.fxStack = presetNodes.map((n) => ({
     effect: n.effect,
     enabled: n.enabled !== false,
-    params: { ...n.params }
+    params: { ...n.params },
+    keyframes: Array.isArray(n.keyframes) ? n.keyframes.map((k) => ({ ...k })) : [],
+    kfOpen: false
   }));
   state.fxBypassAll = false;
   state.fxActivePresetId = presetId;
@@ -1059,8 +1311,102 @@ function renderCapabilitiesStrip(caps, ffmpegError, isDemo) {
   strip.replaceChildren(...badges);
 }
 
+function setRenderEngine(engine) {
+  state.renderEngine = engine === "remote" ? "remote" : "local";
+  const isRemote = state.renderEngine === "remote";
+  const localBtn = byId("btn-engine-local");
+  const remoteBtn = byId("btn-engine-remote");
+  const panel = byId("remote-render-panel");
+  const pill = byId("remote-node-status-pill");
+  if (localBtn) {
+    localBtn.classList.toggle("is-active", !isRemote);
+    localBtn.setAttribute("aria-pressed", isRemote ? "false" : "true");
+  }
+  if (remoteBtn) {
+    remoteBtn.classList.toggle("is-active", isRemote);
+    remoteBtn.setAttribute("aria-pressed", isRemote ? "true" : "false");
+  }
+  if (panel) panel.classList.toggle("is-hidden", !isRemote);
+  if (pill) pill.classList.toggle("is-hidden", !isRemote);
+}
+
+async function probeRemoteRenderNode() {
+  const pill = byId("remote-node-status-pill");
+  const note = byId("remote-node-caps-note");
+  try {
+    const remote_url = byId("remote-node-url").value.trim();
+    const bearer_token = byId("remote-bearer-token").value.trim();
+    const data = await api.probeRemoteNode({ remote_url, bearer_token });
+    const h = data.health || {};
+    const caps = h.capabilities || {};
+    const hasNvenc = Boolean(caps.h264_nvenc || caps.hevc_nvenc);
+    if (pill) {
+      pill.textContent = h.ffmpeg_available ? (hasNvenc ? "ONLINE (NVENC)" : "ONLINE (CPU)") : "NO FFMPEG";
+      pill.className = `nle-tag mono ${h.ffmpeg_available ? "is-pass" : "is-warn"}`;
+    }
+    if (note) {
+      note.textContent = `Connected to ${data.remote_url} (v${h.version || "?"} | active jobs: ${h.active_jobs ?? 0})`;
+    }
+    showBanner(`Remote render node ready: ${data.remote_url}`, "success");
+  } catch (err) {
+    if (pill) {
+      pill.textContent = "ERROR";
+      pill.className = "nle-tag mono is-fail";
+    }
+    if (note) note.textContent = err.message;
+    showBanner(err.message, "error");
+  }
+}
+
+function stopRemotePoll() {
+  if (state.remotePollTimer !== null) {
+    window.clearTimeout(state.remotePollTimer);
+    state.remotePollTimer = null;
+  }
+}
+
+function renderRemoteJobTelemetry(data) {
+  const job = data.job;
+  const plan = job.plan;
+  const badge = byId("render-encoder-badge");
+  if (badge) {
+    badge.textContent = `REMOTE | ${job.status.toUpperCase()} (${job.encoder || "..."})`;
+    badge.className = `nle-tag mono ${
+      job.status === "completed" ? "is-pass" : job.status === "failed" ? "is-fail" : "is-active"
+    }`;
+  }
+  if (plan) {
+    const fpsLabel = plan.fps.den === 1 ? String(plan.fps.num) : `${plan.fps.num}/${plan.fps.den}`;
+    state.lastRenderCommand = plan.argv.join(" ");
+    renderKv(byId("render-plan-kv"), [
+      ["Engine", `REMOTE (${data.remote_url || "node"})`],
+      ["Job ID", job.job_id],
+      ["Status", job.status.toUpperCase()],
+      ["Encoder", `${plan.encoder} (${plan.pix_fmt})`],
+      ["Rational FPS", fpsLabel],
+      ["Video Filter", plan.video_filter || t("common.none")],
+      ["Audio Filter", plan.audio_filter || t("common.none")],
+      ["Local Output", data.local_output_path || "--"]
+    ]);
+    byId("render-argv-output").textContent = state.lastRenderCommand;
+  }
+  const execBox = byId("render-exec-result");
+  execBox.classList.remove("is-hidden");
+  byId("render-exec-output").textContent = [
+    `job_id: ${job.job_id}`,
+    `status: ${job.status}`,
+    `encoder: ${job.encoder}`,
+    `bytes_written: ${job.bytes_written}`,
+    `downloaded_local: ${Boolean(data.downloaded)}`,
+    job.error ? `error: ${job.error}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 async function buildOrExecuteRender(execute) {
   try {
+    stopRemotePoll();
     const inputPath = byId("render-input-path").value.trim();
     const outputPath = byId("render-output-path").value.trim();
     const profile = byId("render-profile").value;
@@ -1073,6 +1419,56 @@ async function buildOrExecuteRender(execute) {
     const useStudioFx = useStudioFxEl ? useStudioFxEl.checked : false;
     const preferHw = byId("render-prefer-hw").checked;
 
+    const fxPayload =
+      useStudioFx && !state.fxBypassAll && state.fxStack.length > 0
+        ? serializeFxStackForApi(false)
+        : null;
+
+    if (execute && state.renderEngine === "remote") {
+      const remote_url = byId("remote-node-url").value.trim();
+      const bearer_token = byId("remote-bearer-token").value.trim();
+      const submitData = await api.submitRemoteJob({
+        remote_url,
+        bearer_token,
+        input_path: inputPath,
+        output_path: outputPath,
+        profile,
+        fps,
+        lut_path: lutPath,
+        cdl: !lutPath && useStudioCdl ? state.cdl : null,
+        fx_stack: fxPayload,
+        target_lufs: targetLufs,
+        prefer_hw: preferHw
+      });
+      renderRemoteJobTelemetry(submitData);
+      showBanner(`Submitted remote render job ${submitData.job.job_id}`, "info");
+
+      const pollOnce = async () => {
+        try {
+          const polled = await api.getRemoteJob(submitData.job.job_id);
+          renderRemoteJobTelemetry(polled);
+          if (polled.job.status === "completed") {
+            state.lastRenderOutputPath = polled.local_output_path || outputPath;
+            showBanner(
+              `Remote render completed & saved to ${state.lastRenderOutputPath} (${polled.job.bytes_written} bytes)`,
+              "success"
+            );
+            await refreshWorkspaceFiles();
+            return;
+          }
+          if (polled.job.status === "failed") {
+            showBanner(`Remote render failed: ${polled.job.error || "unknown error"}`, "error");
+            return;
+          }
+          state.remotePollTimer = window.setTimeout(pollOnce, 500);
+        } catch (pollErr) {
+          showBanner(`Remote poll error: ${pollErr.message}`, "error");
+        }
+      };
+      state.remotePollTimer = window.setTimeout(pollOnce, 350);
+      return;
+    }
+
     const body = {
       input_path: inputPath,
       output_path: outputPath,
@@ -1080,7 +1476,7 @@ async function buildOrExecuteRender(execute) {
       fps,
       lut_path: lutPath,
       cdl: !lutPath && useStudioCdl ? state.cdl : null,
-      fx_stack: useStudioFx && !state.fxBypassAll && state.fxStack.length > 0 ? state.fxStack : null,
+      fx_stack: fxPayload,
       target_lufs: targetLufs,
       prefer_hw: preferHw,
       execute
@@ -1775,7 +2171,10 @@ function wireEvents() {
     stopPlayback();
     setPlayhead(Number.parseInt(byId("fx-playhead-slider").value, 10));
   });
-  byId("fx-duration-input").addEventListener("change", compileFxNow);
+  byId("fx-duration-input").addEventListener("change", () => {
+    redrawFxKeyframeCanvases();
+    compileFxNow();
+  });
   byId("fx-resolution-select").addEventListener("change", compileFxNow);
   byId("fx-use-gpu").addEventListener("change", compileFxNow);
   byId("btn-fx-compile").addEventListener("click", compileFxNow);
@@ -1833,6 +2232,13 @@ function wireEvents() {
   });
 
   // Deliver page events
+  const engLocalBtn = byId("btn-engine-local");
+  const engRemoteBtn = byId("btn-engine-remote");
+  const remoteProbeBtn = byId("btn-remote-probe");
+  if (engLocalBtn) engLocalBtn.addEventListener("click", () => setRenderEngine("local"));
+  if (engRemoteBtn) engRemoteBtn.addEventListener("click", () => setRenderEngine("remote"));
+  if (remoteProbeBtn) remoteProbeBtn.addEventListener("click", probeRemoteRenderNode);
+
   byId("render-input-select").addEventListener("change", () => {
     const val = byId("render-input-select").value;
     if (val) byId("render-input-path").value = val;

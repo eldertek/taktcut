@@ -15,14 +15,22 @@ from typing import Any
 import pytest
 
 from taktcut.fx import (
+    EASING_TYPES,
     FX_PRESETS,
     FX_TYPES,
+    MAX_KEYFRAMES_PER_NODE,
     FxNode,
+    Keyframe,
+    build_fade_keyframes,
     compile_fx_filtergraph,
     compile_preset_filtergraph,
     default_fx_node,
+    evaluate_easing,
+    evaluate_keyframes,
+    evaluate_node_intensity,
     get_fx_preset,
     normalize_fx_node,
+    sample_keyframe_curve,
 )
 from taktcut.ui.server import create_ui_server
 
@@ -259,3 +267,135 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
         payload={"nodes": [{"effect": "glow", "params": {"tint": "bad;injection"}}]},
     )
     assert bad_status == 400
+
+    kf_status, kf_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={
+            "nodes": [
+                {
+                    "effect": "glow",
+                    "enabled": True,
+                    "params": {"brightness": 1.1},
+                    "keyframes": [
+                        {"time_s": 0.0, "value": 0.0, "easing": "ease_in_out"},
+                        {"time_s": 2.0, "value": 1.0, "easing": "ease_in_out"},
+                    ],
+                }
+            ],
+            "duration_seconds": 4.0,
+        },
+    )
+    assert kf_status == 200
+    kf_data = json.loads(kf_raw.decode("utf-8"))
+    assert kf_data["keyframed_effects"] == ["glow"]
+    assert "blend=all_expr=" in kf_data["filtergraph"]
+
+
+def test_keyframe_easing_and_deterministic_evaluation() -> None:
+    for curve in EASING_TYPES:
+        assert evaluate_easing(0.0, curve) == pytest.approx(0.0)
+        assert evaluate_easing(1.0, curve) == pytest.approx(1.0)
+        assert evaluate_easing(0.5, curve) == pytest.approx(
+            {"linear": 0.5, "ease_in": 0.25, "ease_out": 0.75, "ease_in_out": 0.5}[curve]
+        )
+
+    assert evaluate_easing(0.25, "ease_in") < evaluate_easing(0.25, "linear")
+    assert evaluate_easing(0.25, "ease_out") > evaluate_easing(0.25, "linear")
+    assert evaluate_easing(0.25, "ease_in_out") < evaluate_easing(0.25, "linear")
+    assert evaluate_easing(0.75, "ease_in_out") > evaluate_easing(0.75, "linear")
+
+    # Unkeyframed defaults to 1.0; bypassed returns 0.0
+    assert evaluate_keyframes([], 3.5) == 1.0
+    assert evaluate_node_intensity(FxNode(effect="glow", enabled=False), 1.0) == 0.0
+    assert evaluate_node_intensity(FxNode(effect="glow", enabled=True), 1.0) == 1.0
+
+    # Unsorted input is sorted deterministically and clamped outside endpoints
+    kfs = [
+        Keyframe(time_s=4.0, value=0.0, easing="linear"),
+        Keyframe(time_s=0.0, value=0.0, easing="ease_in"),
+        Keyframe(time_s=2.0, value=1.0, easing="ease_out"),
+    ]
+    assert evaluate_keyframes(kfs, -1.0) == pytest.approx(0.0)
+    assert evaluate_keyframes(kfs, 1.0) == pytest.approx(0.25)  # ease_in at u=0.5 -> 0.25
+    assert evaluate_keyframes(kfs, 3.0) == pytest.approx(0.25)  # 1.0 + (-1.0)*0.75 = 0.25
+    assert evaluate_keyframes(kfs, 10.0) == pytest.approx(0.0)
+
+    # Identical timestamps resolve deterministically without zero division
+    step_kfs = [
+        Keyframe(time_s=1.0, value=0.0, easing="linear"),
+        Keyframe(time_s=1.0, value=1.0, easing="linear"),
+    ]
+    assert evaluate_keyframes(step_kfs, 1.0) == pytest.approx(0.0)
+    assert evaluate_keyframes(step_kfs, 1.5) == pytest.approx(1.0)
+
+
+def test_fade_presets_curve_sampling_and_normalization_guards() -> None:
+    fade_in = build_fade_keyframes(10.0, mode="in", fade_in_s=1.5, easing="ease_out")
+    assert len(fade_in) == 2
+    assert fade_in[0].time_s == 0.0 and fade_in[0].value == 0.0
+    assert fade_in[1].time_s == 1.5 and fade_in[1].value == 1.0
+
+    fade_out = build_fade_keyframes(10.0, mode="out", fade_out_s=2.0, easing="ease_in")
+    assert len(fade_out) == 2
+    assert fade_out[0].time_s == 8.0 and fade_out[0].value == 1.0
+    assert fade_out[1].time_s == 10.0 and fade_out[1].value == 0.0
+
+    both = build_fade_keyframes(10.0, mode="in_out", fade_in_s=1.0, fade_out_s=1.0)
+    assert len(both) == 4
+    curve = sample_keyframe_curve(both, 10.0, samples=11)
+    assert len(curve) == 11
+    assert curve[0]["value"] == 0.0
+    assert curve[5]["value"] == 1.0
+    assert curve[-1]["value"] == 0.0
+
+    # Normalization sorts keyframes cleanly and enforces max count
+    norm = normalize_fx_node(
+        {
+            "effect": "shake",
+            "keyframes": [
+                {"time_s": 2.0, "value": 1.0, "easing": "ease_out"},
+                {"time_s": 0.0, "value": 0.0, "easing": "ease_in"},
+            ],
+        }
+    )
+    assert [k.time_s for k in norm.keyframes] == [0.0, 2.0]
+
+    with pytest.raises(ValueError, match="Too many keyframes"):
+        normalize_fx_node(
+            FxNode(
+                effect="glow",
+                keyframes=[
+                    Keyframe(time_s=float(i), value=1.0) for i in range(MAX_KEYFRAMES_PER_NODE + 1)
+                ],
+            )
+        )
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_keyframed_filtergraphs_execute_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    kfs = build_fade_keyframes(0.3, mode="in_out", fade_in_s=0.1, fade_out_s=0.1)
+    nodes = [FxNode(effect=fx_type, enabled=True, keyframes=kfs) for fx_type in FX_TYPES]
+    res = compile_fx_filtergraph(nodes, duration_seconds=0.3, width=320, height=180, fps=25.0)
+    assert set(res.keyframed_effects) == set(FX_TYPES)
+
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=0.3:size=320x180:rate=25",
+        "-vf",
+        res.filtergraph,
+        "-frames:v",
+        "4",
+        "-f",
+        "null",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+    assert proc.returncode == 0, f"FFmpeg rejected keyframed stack: {proc.stderr}"

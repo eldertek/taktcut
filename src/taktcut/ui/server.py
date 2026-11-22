@@ -28,6 +28,7 @@ from taktcut.color import bake_cdl_to_cube, parse_cdl_xml, parse_cube_lut
 from taktcut.drp import export_otio, load_timeline, validate_timeline
 from taktcut.fx import (
     FX_PARAM_SPECS,
+    FxNode,
     compile_fx_filtergraph,
     get_fx_preset,
     list_fx_presets,
@@ -40,6 +41,11 @@ from taktcut.models import (
     TimelineDocument,
 )
 from taktcut.qa import run_qa_gate
+from taktcut.remote_render import (
+    MAX_REMOTE_JOB_BYTES,
+    RemoteRenderClient,
+    RemoteRenderJobRequest,
+)
 from taktcut.render import build_render_plan, execute_render_plan, probe_hardware_capabilities
 from taktcut.ui.desktop import has_pywebview, open_studio_window, run_with_pywebview
 from taktcut.ui.samples import build_sample_timeline, generate_synthetic_sample_clip
@@ -98,6 +104,18 @@ class UiServerConfig:
 
 
 @dataclass
+class _TrackedRemoteJob:
+    """Client-side proxy tracking record for a remote render job."""
+
+    job_id: str
+    remote_url: str
+    bearer_token: str
+    local_output_path: Path
+    local_output_rel: str
+    downloaded: bool = False
+
+
+@dataclass
 class UiAppState:
     """Thread-safe shared state for the UI HTTP server."""
 
@@ -105,6 +123,36 @@ class UiAppState:
     _caps_lock: threading.Lock = field(default_factory=threading.Lock)
     _cached_caps: HardwareCapabilities | None = None
     _cached_caps_verified: bool = False
+    _remote_jobs_lock: threading.Lock = field(default_factory=threading.Lock)
+    _remote_jobs: dict[str, _TrackedRemoteJob] = field(default_factory=dict)
+
+    def track_remote_job(
+        self,
+        *,
+        job_id: str,
+        remote_url: str,
+        bearer_token: str,
+        local_output_path: Path,
+        local_output_rel: str,
+    ) -> None:
+        with self._remote_jobs_lock:
+            self._remote_jobs[job_id] = _TrackedRemoteJob(
+                job_id=job_id,
+                remote_url=remote_url,
+                bearer_token=bearer_token,
+                local_output_path=local_output_path,
+                local_output_rel=local_output_rel,
+            )
+
+    def get_tracked_remote_job(self, job_id: str) -> _TrackedRemoteJob | None:
+        with self._remote_jobs_lock:
+            return self._remote_jobs.get(job_id)
+
+    def mark_remote_job_downloaded(self, job_id: str) -> None:
+        with self._remote_jobs_lock:
+            rec = self._remote_jobs.get(job_id)
+            if rec is not None:
+                rec.downloaded = True
 
     def get_capabilities(
         self,
@@ -363,6 +411,37 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     },
                 },
             )
+            return
+
+        if route.startswith("/api/remote/jobs/"):
+            job_id = route[len("/api/remote/jobs/") :].strip()
+            if not job_id or "/" in job_id:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid remote job id"})
+                return
+            tracked = self.app_state.get_tracked_remote_job(job_id)
+            if tracked is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown remote job: {job_id}"})
+                return
+            try:
+                client = RemoteRenderClient(tracked.remote_url, tracked.bearer_token)
+                job = client.get_job(job_id)
+                if job.status == "completed" and not tracked.downloaded:
+                    client.download_job_output(job_id, tracked.local_output_path)
+                    self.app_state.mark_remote_job_downloaded(job_id)
+                    tracked = self.app_state.get_tracked_remote_job(job_id)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "job": job.model_dump(mode="json"),
+                        "remote_url": tracked.remote_url if tracked else "",
+                        "local_output_path": tracked.local_output_rel if tracked else "",
+                        "downloaded": bool(tracked and tracked.downloaded),
+                    },
+                )
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            except (RuntimeError, OSError) as exc:
+                self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {route}"})
@@ -729,6 +808,110 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "path": rel_target,
                     "absolute_path": str(generated),
                     "bytes_written": generated.stat().st_size,
+                },
+            )
+            return
+
+        if route == "/api/remote/probe":
+            remote_url = payload.get("remote_url")
+            bearer_token = payload.get("bearer_token")
+            if not isinstance(remote_url, str) or not isinstance(bearer_token, str):
+                raise ValueError("remote_url and bearer_token strings are required")
+            client = RemoteRenderClient(remote_url, bearer_token, timeout=10.0)
+            probe_info = client.health()
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "remote_url": client.base_url,
+                    "health": probe_info,
+                },
+            )
+            return
+
+        if route == "/api/remote/jobs":
+            remote_url = payload.get("remote_url")
+            bearer_token = payload.get("bearer_token")
+            raw_in = payload.get("input_path")
+            raw_out = payload.get("output_path")
+            if not isinstance(remote_url, str) or not isinstance(bearer_token, str):
+                raise ValueError("remote_url and bearer_token strings are required")
+            if not isinstance(raw_in, str) or not isinstance(raw_out, str):
+                raise ValueError("input_path and output_path strings are required")
+
+            in_file = confine_workspace_path(
+                self.app_state.workspace_root,
+                raw_in,
+                must_exist=True,
+                allowed_suffixes=MEDIA_SUFFIXES,
+            )
+            out_file = confine_workspace_path(
+                self.app_state.workspace_root,
+                raw_out,
+                must_exist=False,
+                allowed_suffixes=MEDIA_SUFFIXES,
+            )
+            raw_media = in_file.read_bytes()
+            if len(raw_media) == 0 or len(raw_media) > MAX_REMOTE_JOB_BYTES:
+                raise ValueError(
+                    f"Input media exceeds remote transfer limit ({MAX_REMOTE_JOB_BYTES} bytes)"
+                )
+
+            profile = RenderProfile(str(payload.get("profile", RenderProfile.WEB_H264.value)))
+            raw_fps = payload.get("fps")
+            fps_str = RationalFrameRate.from_str(str(raw_fps)).ffmpeg_rate if raw_fps else None
+            raw_lufs = payload.get("target_lufs")
+            target_lufs = float(raw_lufs) if raw_lufs not in (None, "") else None
+            prefer_hw = bool(payload.get("prefer_hw", True))
+
+            lut_cube_text: str | None = None
+            raw_lut = payload.get("lut_path")
+            if isinstance(raw_lut, str) and raw_lut.strip():
+                lut_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    raw_lut,
+                    must_exist=True,
+                    allowed_suffixes=LUT_SUFFIXES,
+                )
+                lut_cube_text = lut_file.read_text(encoding="utf-8")
+
+            cdl_params: AscCdlParams | None = None
+            if lut_cube_text is None and isinstance(payload.get("cdl"), dict):
+                cdl_params = _build_cdl_from_payload(payload["cdl"])
+
+            fx_nodes: list[FxNode] = []
+            raw_fx = payload.get("fx_stack")
+            if isinstance(raw_fx, list) and len(raw_fx) > 0:
+                fx_nodes = [FxNode.model_validate(item) for item in raw_fx]
+
+            job_req = RemoteRenderJobRequest(
+                input_filename=in_file.name,
+                input_base64=base64.b64encode(raw_media).decode("ascii"),
+                output_filename=out_file.name,
+                profile=profile,
+                fps=fps_str,
+                target_lufs=target_lufs,
+                prefer_hw=prefer_hw,
+                fx_stack=fx_nodes,
+                cdl=cdl_params,
+                lut_cube_text=lut_cube_text,
+            )
+            client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
+            job = client.submit_job(job_req)
+            rel_out = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self.app_state.track_remote_job(
+                job_id=job.job_id,
+                remote_url=client.base_url,
+                bearer_token=bearer_token.strip(),
+                local_output_path=out_file,
+                local_output_rel=rel_out,
+            )
+            self._send_json(
+                HTTPStatus.ACCEPTED,
+                {
+                    "job": job.model_dump(mode="json"),
+                    "remote_url": client.base_url,
+                    "local_output_path": rel_out,
+                    "downloaded": False,
                 },
             )
             return

@@ -12,6 +12,7 @@ from taktcut.drp import export_otio, load_timeline, validate_timeline
 from taktcut.mcp_server import serve_stdio
 from taktcut.models import AscCdlParams, RationalFrameRate, RenderProfile
 from taktcut.qa import run_qa_gate
+from taktcut.remote_render import serve_remote_render
 from taktcut.render import build_render_plan, execute_render_plan
 from taktcut.ui.server import serve_ui
 
@@ -95,6 +96,20 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Confined workspace directory for media, timelines, and LUTs (default: cwd)",
     )
+
+    p_rnode = sub.add_parser(
+        "render-node",
+        help="Start a taktcut Remote Render Node HTTP server with Bearer authentication",
+    )
+    p_rnode.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    p_rnode.add_argument("--port", type=int, default=8742, help="Bind port (default: 8742)")
+    p_rnode.add_argument(
+        "--workspace-dir",
+        type=Path,
+        default=None,
+        help="Confined render workspace",
+    )
+    p_rnode.add_argument("--token", default=None, help="Bearer token (auto-generated if omitted)")
     return parser
 
 
@@ -171,6 +186,18 @@ def main(argv: list[str] | None = None) -> int:
                 workspace_dir=args.workspace_dir,
                 open_browser=not args.no_open,
                 desktop=args.desktop,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+            return 2
+
+    if args.command == "render-node":
+        try:
+            return serve_remote_render(
+                host=args.host,
+                port=args.port,
+                workspace_dir=args.workspace_dir,
+                auth_token=args.token,
             )
         except ValueError as exc:
             parser.error(str(exc))

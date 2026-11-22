@@ -230,6 +230,7 @@ function compileFxClient(nodes, opts = {}) {
       filtergraph: "",
       ffmpeg_vf_args: [],
       active_effects: [],
+      keyframed_effects: [],
       bypassed_count: (nodes || []).length,
       normalized_nodes: nodes || [],
       estimated_render_seconds: 0,
@@ -245,8 +246,11 @@ function compileFxClient(nodes, opts = {}) {
   if (needsRgb) segs.push("format=rgb24");
   const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65 };
   let totalWeight = 0;
+  const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
+    const hasKf = Array.isArray(n.keyframes) && n.keyframes.length > 0;
+    if (hasKf) keyframedEffects.push(n.effect);
     totalWeight += weights[n.effect] || 0.8;
     if (n.effect === "glow") {
       const thr = Math.round(Number(p.threshold ?? 0.45) * 255);
@@ -277,6 +281,7 @@ function compileFxClient(nodes, opts = {}) {
     filtergraph: fg,
     ffmpeg_vf_args: ["-vf", fg],
     active_effects: active.map((n) => n.effect),
+    keyframed_effects: keyframedEffects,
     bypassed_count: (nodes || []).length - active.length,
     normalized_nodes: nodes || [],
     estimated_render_seconds: est,
@@ -335,7 +340,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.0",
+      version: "0.1.1",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -632,8 +637,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.0",
-          latest_version: "0.1.0",
+          current_version: "0.1.1",
+          latest_version: "0.1.1",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -652,6 +657,24 @@ export function createApiClient() {
         return compileFxClient(payload.nodes || [], payload);
       }
       return requestJson("/api/fx/compile", { method: "POST", body: payload });
+    },
+    async probeRemoteNode(payload) {
+      if (resolvedMode === "static-demo") {
+        throw new Error("Remote Render Node requires the local studio server.");
+      }
+      return requestJson("/api/remote/probe", { method: "POST", body: payload });
+    },
+    async submitRemoteJob(payload) {
+      if (resolvedMode === "static-demo") {
+        throw new Error("Remote Render Node requires the local studio server.");
+      }
+      return requestJson("/api/remote/jobs", { method: "POST", body: payload });
+    },
+    async getRemoteJob(jobId) {
+      if (resolvedMode === "static-demo") {
+        throw new Error("Remote Render Node requires the local studio server.");
+      }
+      return requestJson(`/api/remote/jobs/${encodeURIComponent(jobId)}`);
     },
     async applyUpdate() {
       if (resolvedMode === "static-demo") {
