@@ -8,6 +8,7 @@ from pathlib import Path
 
 from taktcut.color import REC709_FFMPEG_FLAGS
 from taktcut.models import (
+    ClipTransition,
     RationalFrameRate,
     TimelineClip,
     TimelineDocument,
@@ -145,6 +146,7 @@ def build_sample_timeline(preset: str = "clean") -> TimelineDocument:
                         source_path="media/A001_Opening_Wide.mov",
                         media_ref="m-01",
                         source_fps=fps_25,
+                        transition_out=ClipTransition(preset="fade", duration_s=0.5),
                     ),
                     TimelineClip(
                         name="A002_Studio_Detail",
@@ -168,6 +170,7 @@ def build_sample_timeline(preset: str = "clean") -> TimelineDocument:
                         source_path="media/A003_Talent_Close.mov",
                         media_ref="m-03",
                         source_fps=fps_25,
+                        transition_out=ClipTransition(preset="wipeleft", duration_s=0.8),
                     ),
                     TimelineClip(
                         name="A004_End_Packshot",

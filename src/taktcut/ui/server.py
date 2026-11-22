@@ -83,6 +83,15 @@ from taktcut.titles import (
     compile_title_overlay,
     list_title_presets,
 )
+from taktcut.transitions import (
+    TRANSITION_DURATION_DEFAULT_S,
+    TRANSITION_DURATION_MAX_S,
+    TRANSITION_DURATION_MIN_S,
+    TRANSITION_OFFSET_MAX_S,
+    TransitionParams,
+    compile_transition_filter_result,
+    list_transition_presets,
+)
 from taktcut.ui.desktop import has_pywebview, open_studio_window, run_with_pywebview
 from taktcut.ui.samples import build_sample_timeline, generate_synthetic_sample_clip
 from taktcut.ui.security import (
@@ -370,6 +379,28 @@ def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayPa
     return TitleOverlayParams.model_validate(merged)
 
 
+def _build_transition_params_from_payload(payload: dict[str, Any]) -> TransitionParams:
+    raw_trans = payload.get("transition")
+    if raw_trans is not None and not isinstance(raw_trans, dict):
+        raise ValueError("'transition' must be a JSON object")
+    source: dict[str, Any] = raw_trans if isinstance(raw_trans, dict) else payload
+    include_audio_raw = source.get("include_audio", True)
+    if not isinstance(include_audio_raw, bool):
+        raise ValueError("include_audio must be a boolean")
+    curve = source.get("audio_curve")
+    c1 = source.get("audio_curve1", curve if curve is not None else "tri")
+    c2 = source.get("audio_curve2", curve if curve is not None else "tri")
+    return TransitionParams.model_validate(
+        {
+            "preset": source.get("preset", "fade"),
+            "duration_s": source.get("duration_s", TRANSITION_DURATION_DEFAULT_S),
+            "include_audio": include_audio_raw,
+            "audio_curve1": c1,
+            "audio_curve2": c2,
+        }
+    )
+
+
 def _resolve_timeline_from_payload(
     state: UiAppState,
     payload: dict[str, Any],
@@ -637,6 +668,23 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                         "end_s": {"min": 0.0, "max": TITLE_TIME_MAX_S},
                         "font_size": {"min": TITLE_FONT_SIZE_MIN, "max": TITLE_FONT_SIZE_MAX},
                         "box_opacity": {"min": 0.0, "max": 1.0},
+                    },
+                },
+            )
+            return
+
+        if route == "/api/transitions/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_transition_presets()],
+                    "bounds": {
+                        "duration_s": {
+                            "min": TRANSITION_DURATION_MIN_S,
+                            "max": TRANSITION_DURATION_MAX_S,
+                            "default": TRANSITION_DURATION_DEFAULT_S,
+                        },
+                        "offset_s": {"min": 0.0, "max": TRANSITION_OFFSET_MAX_S},
                     },
                 },
             )
@@ -1039,6 +1087,37 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             assert retime_params is not None
             compiled_retime = compile_retime_filter_result(retime_params)
             self._send_json(HTTPStatus.OK, compiled_retime.model_dump(mode="json"))
+            return
+
+        if route == "/api/transitions/compile":
+            trans_params = _build_transition_params_from_payload(payload)
+            raw_dur_a = payload.get("clip_a_duration_s")
+            raw_dur_b = payload.get("clip_b_duration_s")
+            raw_offset = payload.get("offset_s")
+            raw_pix_fmt = payload.get("pix_fmt")
+            for name, raw_val in (
+                ("clip_a_duration_s", raw_dur_a),
+                ("clip_b_duration_s", raw_dur_b),
+                ("offset_s", raw_offset),
+            ):
+                if raw_val not in (None, "") and (
+                    isinstance(raw_val, bool) or not isinstance(raw_val, int | float)
+                ):
+                    raise ValueError(f"{name} must be a finite number")
+            dur_a = float(raw_dur_a) if raw_dur_a not in (None, "") else None
+            dur_b = float(raw_dur_b) if raw_dur_b not in (None, "") else None
+            offset_val = float(raw_offset) if raw_offset not in (None, "") else None
+            if dur_a is None and offset_val is None:
+                dur_a = 5.0
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            compiled_trans = compile_transition_filter_result(
+                trans_params,
+                clip_a_duration_s=dur_a,
+                clip_b_duration_s=dur_b,
+                offset_s=offset_val,
+                pix_fmt=pix_fmt,
+            )
+            self._send_json(HTTPStatus.OK, compiled_trans.model_dump(mode="json"))
             return
 
         if route == "/api/fx/compile":

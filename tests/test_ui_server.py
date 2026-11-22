@@ -97,7 +97,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.2"
+    assert health["version"] == "0.1.3"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -651,9 +651,15 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "clip-audio-af-preview",
         "track-mixer-strip",
         "render-use-clip-audio",
+        "clip-transition-preset",
+        "clip-transition-dur-range",
+        "clip-transition-dur-num",
+        "clip-transition-badge",
+        "clip-transition-audio",
+        "btn-clip-transition-preview",
     ):
         assert elem_id in html_text
-    assert "v0.1.2" in html_text
+    assert "v0.1.3" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -675,6 +681,8 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Audio du Plan & Mixeur Pistes"' in i18n_text
     assert '"Fondu Entrée (s)"' in i18n_text
     assert '"Fondu Sortie (s)"' in i18n_text
+    assert '"Fondu Enchaîné (fade)"' in i18n_text
+    assert '"Volet Gauche (wipeleft)"' in i18n_text
     assert '"statusbar.shortcuts"' in i18n_text
     assert "innerHTML" not in i18n_text
     for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
@@ -706,11 +714,16 @@ import {{
   collectSnapTargets,
   compileAudioFilterClient,
   compileRetimeFilterClient,
+  compileTransitionFilterClient,
+  findActiveTransitionAtFrame,
+  findAdjacentCutForClip,
+  findAllCutJunctions,
   findMagneticSnap,
   formatRetimeBadgeText,
   isTrackAudiblyMuted,
   normalizeClipAudio,
   normalizeClipRetime,
+  normalizeClipTransition,
   splitClipInDocument,
   splitClipsAtPlayhead,
   toggleTrackMuteInDocument,
@@ -718,6 +731,7 @@ import {{
   trimClipInDocument,
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
+  updateClipTransitionInDocument,
   validateTimelineClient
 }} from {json.dumps(ops_path)};
 
@@ -853,6 +867,41 @@ const compiledRt = compileRetimeFilterClient({{ speed_rate: 4.0, reverse: true }
 assert.equal(compiledRt.is_identity, false);
 assert.equal(compiledRt.video_filtergraph, "setpts=0.250000*PTS,reverse");
 assert.equal(compiledRt.audio_filtergraph, "atempo=2.0000,atempo=2.0000,areverse");
+
+assert.equal(normalizeClipTransition(doc.tracks[0].clips[0]), null);
+const transDoc = updateClipTransitionInDocument(doc, "video", 1, 0, {{
+  preset: "wipeleft",
+  duration_s: 0.8,
+  include_audio: true
+}});
+assert.equal(transDoc.changed, true);
+assert.equal(transDoc.clip.transition_out.preset, "wipeleft");
+assert.equal(transDoc.clip.transition_out.duration_s, 0.8);
+
+const junctions = findAllCutJunctions(transDoc.doc);
+assert.equal(junctions.length, 1);
+assert.equal(junctions[0].cutFrame, 100);
+assert.ok(findAdjacentCutForClip(transDoc.doc, "video", 1, 0));
+assert.ok(findAdjacentCutForClip(transDoc.doc, "video", 1, 1));
+
+const activeMid = findActiveTransitionAtFrame(transDoc.doc, 100);
+assert.ok(activeMid);
+assert.equal(activeMid.transition.preset, "wipeleft");
+assert.ok(activeMid.progress > 0.4 && activeMid.progress < 0.6);
+
+const compiledTr = compileTransitionFilterClient(
+  {{ preset: "fadeblack", duration_s: 0.5, include_audio: true }},
+  4.0,
+  3.0
+);
+assert.equal(
+  compiledTr.video_filtergraph,
+  "[0:v][1:v]xfade=transition=fadeblack:duration=0.500:offset=3.500[vout]"
+);
+assert.equal(
+  compiledTr.audio_filtergraph,
+  "[0:a][1:a]acrossfade=d=0.500:c1=tri:c2=tri[aout]"
+);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -862,6 +911,58 @@ assert.equal(compiledRt.audio_filtergraph, "atempo=2.0000,atempo=2.0000,areverse
         check=False,
     )
     assert proc.returncode == 0, f"Node timeline_ops tests failed:\n{proc.stderr}\n{proc.stdout}"
+
+
+def test_ui_transitions_endpoints(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    p_status, _, p_raw = _http_call(f"{base_url}/api/transitions/presets")
+    assert p_status == 200
+    presets_data = json.loads(p_raw.decode("utf-8"))
+    assert [p["id"] for p in presets_data["presets"]] == [
+        "fade",
+        "fadeblack",
+        "wipeleft",
+        "slideright",
+        "zoomin",
+    ]
+    assert presets_data["bounds"]["duration_s"] == {"min": 0.1, "max": 2.0, "default": 0.5}
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/transitions/compile",
+        method="POST",
+        payload={
+            "transition": {
+                "preset": "slideright",
+                "duration_s": 0.75,
+                "include_audio": True,
+            },
+            "clip_a_duration_s": 5.0,
+            "clip_b_duration_s": 4.0,
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["offset_s"] == 4.25
+    assert (
+        "xfade=transition=slideright:duration=0.750:offset=4.250"
+        in compiled["video_filtergraph"]
+    )
+    assert "acrossfade=d=0.750:c1=tri:c2=tri" in compiled["audio_filtergraph"]
+
+    bad_preset_status, _, _ = _http_call(
+        f"{base_url}/api/transitions/compile",
+        method="POST",
+        payload={"preset": "fade;evil", "duration_s": 0.5, "clip_a_duration_s": 3.0},
+    )
+    assert bad_preset_status == 400
+
+    bad_dur_status, _, _ = _http_call(
+        f"{base_url}/api/transitions/compile",
+        method="POST",
+        payload={"preset": "fade", "duration_s": 2.5, "clip_a_duration_s": 5.0},
+    )
+    assert bad_dur_status == 400
 
 
 def test_ui_titles_endpoints_and_render_integration(ui_server: tuple[str, Path]) -> None:
@@ -1045,6 +1146,18 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert "areverse" in rt_badge_rev
                     page.locator("#btn-clip-retime-reset").click()
                     assert page.locator("#clip-retime-badge").text_content() == "1.0x NORMAL"
+
+                    # Verify Cut Transition Selector & Preview Cut scrub
+                    page.locator("#clip-transition-preset").select_option("fadeblack")
+                    page.locator("#clip-transition-dur-num").fill("0.90")
+                    page.locator("#clip-transition-dur-num").press("Enter")
+                    tr_badge = page.locator("#clip-transition-badge").text_content() or ""
+                    assert "Dip to Black 0.90s" in tr_badge
+                    tr_fg = page.locator("#clip-transition-fg-preview").text_content() or ""
+                    assert "xfade=transition=fadeblack:duration=0.900" in tr_fg
+                    assert "acrossfade=d=0.900" in tr_fg
+                    page.locator("#btn-clip-transition-preview").click()
+                    assert page.locator("#program-frame-counter").text_content() == "125f / 500f"
 
                 # Verify Color Grading Panel responsiveness and 4 presets at all viewports
                 page.locator("#tab-color").click()

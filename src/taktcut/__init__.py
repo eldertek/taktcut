@@ -2,6 +2,7 @@
 
 from taktcut.models import (
     AscCdlParams,
+    ClipTransition,
     CubeLutInfo,
     GapIssue,
     HardwareCapabilities,
@@ -26,20 +27,40 @@ from taktcut.render import (
     compile_retime_filter,
     compile_retime_filter_result,
 )
+from taktcut.transitions import (
+    CutJunction,
+    TransitionCompileResult,
+    TransitionParams,
+    TransitionPreset,
+    apply_transition_preset,
+    compile_transition_filter,
+    compile_transition_filter_result,
+    find_adjacent_cut_junctions,
+    get_transition_preset,
+    list_transition_presets,
+)
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "__version__",
+    "apply_transition_preset",
     "AscCdlParams",
     "ClipAudioParams",
     "ClipRetimeParams",
+    "ClipTransition",
     "compile_audio_filter",
     "compile_retime_filter",
     "compile_retime_filter_result",
+    "compile_transition_filter",
+    "compile_transition_filter_result",
     "CubeLutInfo",
+    "CutJunction",
+    "find_adjacent_cut_junctions",
     "GapIssue",
+    "get_transition_preset",
     "HardwareCapabilities",
+    "list_transition_presets",
     "LoudnessReport",
     "QaReport",
     "RationalFrameRate",
@@ -53,4 +74,7 @@ __all__ = [
     "TimelineMarker",
     "TimelineTrack",
     "TimelineValidationResult",
+    "TransitionCompileResult",
+    "TransitionParams",
+    "TransitionPreset",
 ]

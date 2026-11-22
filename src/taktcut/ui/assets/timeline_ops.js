@@ -5,6 +5,19 @@ export const AUDIO_FADE_S_MIN = 0;
 export const AUDIO_FADE_S_MAX = 5;
 export const RETIME_SPEED_MIN = 0.25;
 export const RETIME_SPEED_MAX = 4.0;
+export const TRANSITION_DURATION_MIN_S = 0.1;
+export const TRANSITION_DURATION_MAX_S = 2.0;
+export const TRANSITION_DURATION_DEFAULT_S = 0.5;
+
+export const TRANSITION_PRESETS = [
+  { id: "fade", name: "Cross Dissolve", shortTag: "FADE" },
+  { id: "fadeblack", name: "Dip to Black", shortTag: "DIP BLK" },
+  { id: "wipeleft", name: "Wipe Left", shortTag: "WIPE L" },
+  { id: "slideright", name: "Slide Right", shortTag: "SLIDE R" },
+  { id: "zoomin", name: "Smooth Zoom", shortTag: "ZOOM" }
+];
+
+const ALLOWED_TRANSITION_IDS = new Set(TRANSITION_PRESETS.map((p) => p.id));
 
 function clampNum(val, minVal, maxVal) {
   return Math.min(maxVal, Math.max(minVal, val));
@@ -467,7 +480,8 @@ function _buildSplitClipPair(clip, cut, fps, fpsRate) {
     fade_in_s: Number(Math.min(audioNorm.fadeInS, leftDur / fpsRate).toFixed(2)),
     fade_out_s: 0,
     speed_rate: retimeNorm.speedRate,
-    reverse: retimeNorm.reverse
+    reverse: retimeNorm.reverse,
+    transition_out: null
   };
   const rightClip = {
     ...clip,
@@ -478,7 +492,8 @@ function _buildSplitClipPair(clip, cut, fps, fpsRate) {
     fade_in_s: 0,
     fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2)),
     speed_rate: retimeNorm.speedRate,
-    reverse: retimeNorm.reverse
+    reverse: retimeNorm.reverse,
+    transition_out: clip.transition_out ? { ...clip.transition_out } : null
   };
   return { leftClip, rightClip };
 }
@@ -667,4 +682,202 @@ export function hasSplittableClipAtFrame(doc, frame, selectedClip = null) {
     }
   }
   return false;
+}
+
+export function normalizeClipTransition(clip) {
+  if (!clip || !clip.transition_out || typeof clip.transition_out !== "object") return null;
+  const rawPreset = String(clip.transition_out.preset || "").trim().toLowerCase();
+  if (!rawPreset || rawPreset === "none" || !ALLOWED_TRANSITION_IDS.has(rawPreset)) return null;
+  const rawDur = Number(clip.transition_out.duration_s);
+  const durationS = Number.isFinite(rawDur)
+    ? Number(clampNum(rawDur, TRANSITION_DURATION_MIN_S, TRANSITION_DURATION_MAX_S).toFixed(2))
+    : TRANSITION_DURATION_DEFAULT_S;
+  return {
+    preset: rawPreset,
+    duration_s: durationS,
+    include_audio: clip.transition_out.include_audio !== false,
+    audio_curve: String(clip.transition_out.audio_curve || "tri").trim().toLowerCase() || "tri"
+  };
+}
+
+export function getTransitionShortTag(preset) {
+  const found = TRANSITION_PRESETS.find((p) => p.id === preset);
+  return found ? found.shortTag : "TRANS";
+}
+
+export function getTransitionPresetName(preset) {
+  const found = TRANSITION_PRESETS.find((p) => p.id === preset);
+  return found ? found.name : "Cut";
+}
+
+export function compileTransitionFilterClient(params, clipADurationS = 5.0, clipBDurationS = null) {
+  const p = params || {};
+  const rawPreset = String(p.preset || "fade").trim().toLowerCase();
+  const preset = ALLOWED_TRANSITION_IDS.has(rawPreset) ? rawPreset : "fade";
+  const rawDur = Number(p.duration_s);
+  const dur = Number.isFinite(rawDur)
+    ? Number(clampNum(rawDur, TRANSITION_DURATION_MIN_S, TRANSITION_DURATION_MAX_S).toFixed(3))
+    : TRANSITION_DURATION_DEFAULT_S;
+  const durA = Number.isFinite(Number(clipADurationS)) && Number(clipADurationS) > 0
+    ? Number(clipADurationS)
+    : 5.0;
+  const effectiveDur = Math.min(dur, durA, clipBDurationS && clipBDurationS > 0 ? clipBDurationS : dur);
+  const offset = Math.max(0, Number((durA - effectiveDur).toFixed(6)));
+  const includeAudio = p.include_audio !== false;
+  const c1 = String(p.audio_curve1 || p.audio_curve || "tri").trim().toLowerCase() || "tri";
+  const c2 = String(p.audio_curve2 || p.audio_curve || "tri").trim().toLowerCase() || "tri";
+
+  const vf = `[0:v][1:v]xfade=transition=${preset}:duration=${effectiveDur.toFixed(3)}:offset=${offset.toFixed(3)}[vout]`;
+  const af = includeAudio
+    ? `[0:a][1:a]acrossfade=d=${effectiveDur.toFixed(3)}:c1=${c1}:c2=${c2}[aout]`
+    : "";
+  const filterComplex = af ? `${vf};${af}` : vf;
+  const args = ["-filter_complex", filterComplex, "-map", "[vout]"];
+  if (af) args.push("-map", "[aout]");
+
+  return {
+    preset,
+    preset_name: getTransitionPresetName(preset),
+    duration_s: Number(effectiveDur.toFixed(3)),
+    offset_s: offset,
+    include_audio: includeAudio,
+    audio_curve1: c1,
+    audio_curve2: c2,
+    video_filtergraph: vf,
+    audio_filtergraph: af,
+    filter_complex: filterComplex,
+    ffmpeg_args: args
+  };
+}
+
+export function findAllCutJunctions(doc) {
+  if (!doc || !Array.isArray(doc.tracks)) return [];
+  const fps = doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+  const junctions = [];
+  for (const trk of doc.tracks) {
+    const ordered = (trk.clips || [])
+      .map((clip, idx) => ({ clip, idx }))
+      .sort((a, b) => a.clip.start_frame - b.clip.start_frame || a.clip.duration_frames - b.clip.duration_frames);
+    for (let i = 0; i < ordered.length - 1; i++) {
+      const a = ordered[i];
+      const b = ordered[i + 1];
+      if (a.clip.duration_frames <= 0 || b.clip.duration_frames <= 0) continue;
+      const cutFrame = a.clip.start_frame + a.clip.duration_frames;
+      if (cutFrame !== b.clip.start_frame) continue;
+      const durAS = a.clip.duration_frames / fps;
+      const durBS = b.clip.duration_frames / fps;
+      junctions.push({
+        trackKind: trk.kind,
+        trackIndex: trk.index,
+        track: trk,
+        cutFrame,
+        clipAIndex: a.idx,
+        clipBIndex: b.idx,
+        clipA: a.clip,
+        clipB: b.clip,
+        clipADurationS: durAS,
+        clipBDurationS: durBS,
+        maxDurationS: Number(Math.min(TRANSITION_DURATION_MAX_S, durAS, durBS).toFixed(2)),
+        transition: normalizeClipTransition(a.clip)
+      });
+    }
+  }
+  return junctions;
+}
+
+export function findAdjacentCutForClip(doc, trackKind, trackIndex, clipIndex) {
+  const junctions = findAllCutJunctions(doc);
+  const outgoing = junctions.find(
+    (j) => j.trackKind === trackKind && j.trackIndex === trackIndex && j.clipAIndex === clipIndex
+  );
+  if (outgoing) return outgoing;
+  const incoming = junctions.find(
+    (j) => j.trackKind === trackKind && j.trackIndex === trackIndex && j.clipBIndex === clipIndex
+  );
+  return incoming || null;
+}
+
+export function findActiveTransitionAtFrame(doc, frame) {
+  if (!doc || !Array.isArray(doc.tracks)) return null;
+  const fps = doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+  const junctions = findAllCutJunctions(doc).filter(
+    (j) => j.trackKind === "video" && j.transition !== null
+  );
+  let best = null;
+  for (const j of junctions) {
+    const trans = j.transition;
+    const rawFrames = Math.round(trans.duration_s * fps);
+    const maxAvail = Math.max(2, Math.min(j.clipA.duration_frames, j.clipB.duration_frames));
+    const transFrames = Math.max(2, Math.min(maxAvail, rawFrames));
+    const halfPre = Math.floor(transFrames / 2);
+    const transStart = j.cutFrame - halfPre;
+    const transEnd = transStart + transFrames;
+    if (frame >= transStart && frame <= transEnd) {
+      const progress = clampNum((frame - transStart) / Math.max(1, transEnd - transStart), 0, 1);
+      best = {
+        ...j,
+        transFrames,
+        transStart,
+        transEnd,
+        progress
+      };
+    }
+  }
+  return best;
+}
+
+export function updateClipTransitionInDocument(doc, trackKind, trackIndex, clipIndex, patch) {
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origTrans = normalizeClipTransition(foundOrig.clip);
+
+  let nextTrans = null;
+  if (patch !== null && patch !== undefined) {
+    const rawPreset = patch.preset !== undefined
+      ? String(patch.preset).trim().toLowerCase()
+      : origTrans
+        ? origTrans.preset
+        : "fade";
+    if (rawPreset && rawPreset !== "none" && ALLOWED_TRANSITION_IDS.has(rawPreset)) {
+      const rawDur = patch.duration_s !== undefined
+        ? Number(patch.duration_s)
+        : origTrans
+          ? origTrans.duration_s
+          : TRANSITION_DURATION_DEFAULT_S;
+      if (!Number.isFinite(rawDur)) {
+        return { doc, clip: null, changed: false };
+      }
+      const nextDur = Number(
+        clampNum(rawDur, TRANSITION_DURATION_MIN_S, TRANSITION_DURATION_MAX_S).toFixed(2)
+      );
+      const nextAudio = patch.include_audio !== undefined
+        ? Boolean(patch.include_audio)
+        : origTrans
+          ? origTrans.include_audio
+          : true;
+      nextTrans = {
+        preset: rawPreset,
+        duration_s: nextDur,
+        include_audio: nextAudio,
+        audio_curve: origTrans ? origTrans.audio_curve : "tri"
+      };
+    }
+  }
+
+  const unchanged =
+    (!origTrans && !nextTrans) ||
+    (origTrans &&
+      nextTrans &&
+      origTrans.preset === nextTrans.preset &&
+      Math.abs(origTrans.duration_s - nextTrans.duration_s) < 1e-6 &&
+      origTrans.include_audio === nextTrans.include_audio);
+  if (unchanged) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) return { doc, clip: null, changed: false };
+  found.clip.transition_out = nextTrans;
+  return { doc: nextDoc, clip: found.clip, changed: true };
 }

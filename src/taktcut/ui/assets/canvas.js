@@ -1,4 +1,11 @@
-import { formatRetimeBadgeText, normalizeClipRetime } from "./timeline_ops.js";
+import {
+  findActiveTransitionAtFrame,
+  formatRetimeBadgeText,
+  getTransitionPresetName,
+  getTransitionShortTag,
+  normalizeClipRetime,
+  normalizeClipTransition
+} from "./timeline_ops.js";
 
 export function evaluateEasing(tNorm, easing = "linear") {
   const u = clamp01(Number.isFinite(tNorm) ? tNorm : 0);
@@ -280,25 +287,79 @@ function hexToRgbTuple(hex) {
 }
 
 let _fxScratchCanvas = null;
-function getFxScratchCanvas(w, h) {
-  if (!_fxScratchCanvas && typeof document !== "undefined") {
-    _fxScratchCanvas = document.createElement("canvas");
+let _transScratchA = null;
+let _transScratchB = null;
+function ensureScratchCanvas(existing, w, h) {
+  let canvas = existing;
+  if (!canvas && typeof document !== "undefined") {
+    canvas = document.createElement("canvas");
   }
-  if (!_fxScratchCanvas) return null;
+  if (!canvas) return null;
   const cw = Math.max(1, Math.round(w));
   const ch = Math.max(1, Math.round(h));
-  if (_fxScratchCanvas.width !== cw || _fxScratchCanvas.height !== ch) {
-    _fxScratchCanvas.width = cw;
-    _fxScratchCanvas.height = ch;
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw;
+    canvas.height = ch;
   }
+  return canvas;
+}
+
+function getFxScratchCanvas(w, h) {
+  _fxScratchCanvas = ensureScratchCanvas(_fxScratchCanvas, w, h);
   return _fxScratchCanvas;
 }
 
+const CLIP_SCENE_PALETTES = [
+  {
+    bg0: [0.14, 0.18, 0.26],
+    bg1: [0.22, 0.27, 0.34],
+    bg2: [0.09, 0.11, 0.16],
+    key: [0.95, 0.88, 0.78],
+    keyX: 0.72,
+    keyY: 0.32
+  },
+  {
+    bg0: [0.24, 0.16, 0.14],
+    bg1: [0.33, 0.24, 0.20],
+    bg2: [0.13, 0.09, 0.09],
+    key: [0.98, 0.78, 0.56],
+    keyX: 0.30,
+    keyY: 0.36
+  },
+  {
+    bg0: [0.12, 0.22, 0.20],
+    bg1: [0.18, 0.31, 0.28],
+    bg2: [0.08, 0.13, 0.12],
+    key: [0.76, 0.96, 0.90],
+    keyX: 0.64,
+    keyY: 0.28
+  },
+  {
+    bg0: [0.20, 0.16, 0.26],
+    bg1: [0.29, 0.24, 0.36],
+    bg2: [0.11, 0.09, 0.15],
+    key: [0.84, 0.86, 1.0],
+    keyX: 0.38,
+    keyY: 0.30
+  }
+];
+
+function getClipScenePalette(clipName) {
+  const str = String(clipName || "");
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return CLIP_SCENE_PALETTES[hash % CLIP_SCENE_PALETTES.length];
+}
+
 function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
+  const topClip = activeClips.length > 0 ? activeClips[activeClips.length - 1] : null;
+  const pal = topClip ? getClipScenePalette(topClip.clip.name) : CLIP_SCENE_PALETTES[0];
   const grad = ctx.createLinearGradient(0, 0, w, h);
-  const c0 = applyGradeOrCdlRgb(0.14, 0.18, 0.24, cdl);
-  const c1 = applyGradeOrCdlRgb(0.24, 0.26, 0.30, cdl);
-  const c2 = applyGradeOrCdlRgb(0.10, 0.11, 0.14, cdl);
+  const c0 = applyGradeOrCdlRgb(pal.bg0[0], pal.bg0[1], pal.bg0[2], cdl);
+  const c1 = applyGradeOrCdlRgb(pal.bg1[0], pal.bg1[1], pal.bg1[2], cdl);
+  const c2 = applyGradeOrCdlRgb(pal.bg2[0], pal.bg2[1], pal.bg2[2], cdl);
   grad.addColorStop(0, toCssRgb(c0[0], c0[1], c0[2]));
   grad.addColorStop(0.55, toCssRgb(c1[0], c1[1], c1[2]));
   grad.addColorStop(1, toCssRgb(c2[0], c2[1], c2[2]));
@@ -306,14 +367,14 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   ctx.fillRect(0, 0, w, h);
 
   // Subtle editorial specular keylight disc for glow/flare/chroma response
-  const keyX = w * 0.72;
-  const keyY = h * 0.32;
-  const keyR = Math.max(18, Math.min(w, h) * 0.2);
-  const keyRgb = applyGradeOrCdlRgb(0.95, 0.90, 0.82, cdl);
+  const keyX = w * pal.keyX;
+  const keyY = h * pal.keyY;
+  const keyR = Math.max(18, Math.min(w, h) * 0.22);
+  const keyRgb = applyGradeOrCdlRgb(pal.key[0], pal.key[1], pal.key[2], cdl);
   const keyGrad = ctx.createRadialGradient(keyX, keyY, 2, keyX, keyY, keyR);
   keyGrad.addColorStop(
     0,
-    `rgba(${Math.round(keyRgb[0] * 255)}, ${Math.round(keyRgb[1] * 255)}, ${Math.round(keyRgb[2] * 255)}, 0.52)`
+    `rgba(${Math.round(keyRgb[0] * 255)}, ${Math.round(keyRgb[1] * 255)}, ${Math.round(keyRgb[2] * 255)}, 0.54)`
   );
   keyGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
   ctx.fillStyle = keyGrad;
@@ -588,6 +649,7 @@ export function drawProgramMonitorCanvas(
   const bw = Math.max(1, Math.round(frameW));
   const bh = Math.max(1, Math.round(frameH));
   const buf = getFxScratchCanvas(bw, bh);
+  const activeTrans = findActiveTransitionAtFrame(doc, playheadFrame);
 
   ctx.save();
   ctx.beginPath();
@@ -598,7 +660,96 @@ export function drawProgramMonitorCanvas(
     const bctx = buf.getContext("2d");
     bctx.setTransform(1, 0, 0, 1, 0, 0);
     bctx.clearRect(0, 0, bw, bh);
-    drawBaseProgramScene(bctx, bw, bh, doc, playheadFrame, cdl, activeClips);
+
+    _transScratchA = activeTrans ? ensureScratchCanvas(_transScratchA, bw, bh) : _transScratchA;
+    _transScratchB = activeTrans ? ensureScratchCanvas(_transScratchB, bw, bh) : _transScratchB;
+
+    if (activeTrans && _transScratchA && _transScratchB) {
+      const ctxA = _transScratchA.getContext("2d");
+      const ctxB = _transScratchB.getContext("2d");
+      ctxA.setTransform(1, 0, 0, 1, 0, 0);
+      ctxB.setTransform(1, 0, 0, 1, 0, 0);
+      ctxA.clearRect(0, 0, bw, bh);
+      ctxB.clearRect(0, 0, bw, bh);
+
+      const trkTag = `V${activeTrans.trackIndex}`;
+      drawBaseProgramScene(ctxA, bw, bh, doc, playheadFrame, cdl, [
+        { track: trkTag, clip: activeTrans.clipA }
+      ]);
+      drawBaseProgramScene(ctxB, bw, bh, doc, playheadFrame, cdl, [
+        { track: trkTag, clip: activeTrans.clipB }
+      ]);
+
+      const u = clamp01(activeTrans.progress);
+      const preset = activeTrans.transition.preset;
+      bctx.fillStyle = "#000000";
+      bctx.fillRect(0, 0, bw, bh);
+
+      if (preset === "fadeblack") {
+        if (u < 0.5) {
+          bctx.save();
+          bctx.globalAlpha = clamp01(1 - u * 2);
+          bctx.drawImage(_transScratchA, 0, 0, bw, bh);
+          bctx.restore();
+        } else {
+          bctx.save();
+          bctx.globalAlpha = clamp01((u - 0.5) * 2);
+          bctx.drawImage(_transScratchB, 0, 0, bw, bh);
+          bctx.restore();
+        }
+      } else if (preset === "wipeleft") {
+        const seamX = bw * (1 - u);
+        bctx.drawImage(_transScratchA, 0, 0, bw, bh);
+        bctx.save();
+        bctx.beginPath();
+        bctx.rect(seamX, 0, bw - seamX, bh);
+        bctx.clip();
+        bctx.drawImage(_transScratchB, 0, 0, bw, bh);
+        bctx.restore();
+        bctx.strokeStyle = "#e68442";
+        bctx.lineWidth = 2;
+        bctx.beginPath();
+        bctx.moveTo(seamX, 0);
+        bctx.lineTo(seamX, bh);
+        bctx.stroke();
+      } else if (preset === "slideright") {
+        const slideX = bw * u;
+        bctx.drawImage(_transScratchA, slideX, 0, bw, bh);
+        bctx.drawImage(_transScratchB, slideX - bw, 0, bw, bh);
+        bctx.strokeStyle = "#e68442";
+        bctx.lineWidth = 2;
+        bctx.beginPath();
+        bctx.moveTo(slideX, 0);
+        bctx.lineTo(slideX, bh);
+        bctx.stroke();
+      } else if (preset === "zoomin") {
+        const eased = u * u * (3 - 2 * u);
+        const scaleA = 1 + eased * 0.34;
+        const wA = bw * scaleA;
+        const hA = bh * scaleA;
+        bctx.save();
+        bctx.globalAlpha = clamp01(1 - eased);
+        bctx.drawImage(_transScratchA, (bw - wA) / 2, (bh - hA) / 2, wA, hA);
+        bctx.restore();
+
+        const scaleB = 0.84 + eased * 0.16;
+        const wB = bw * scaleB;
+        const hB = bh * scaleB;
+        bctx.save();
+        bctx.globalAlpha = clamp01(eased);
+        bctx.drawImage(_transScratchB, (bw - wB) / 2, (bh - hB) / 2, wB, hB);
+        bctx.restore();
+      } else {
+        // Cross Dissolve (fade)
+        bctx.drawImage(_transScratchA, 0, 0, bw, bh);
+        bctx.save();
+        bctx.globalAlpha = u;
+        bctx.drawImage(_transScratchB, 0, 0, bw, bh);
+        bctx.restore();
+      }
+    } else {
+      drawBaseProgramScene(bctx, bw, bh, doc, playheadFrame, cdl, activeClips);
+    }
 
     // Apply Chroma Aberration RGB channel split directly on frame buffer
     const chromaNode = activeFx.find((n) => n.effect === "chroma_aberration");
@@ -821,6 +972,18 @@ export function drawProgramMonitorCanvas(
     ctx.fillRect(fx + 8, fy + 16, tw, 17);
     ctx.fillStyle = titleOnAir ? "#111114" : "#a4a4ae";
     ctx.fillText(label, fx + 14, fy + 28);
+  }
+
+  if (activeTrans) {
+    const pct = Math.round(clamp01(activeTrans.progress) * 100);
+    const label = `TRANS: ${getTransitionPresetName(activeTrans.transition.preset).toUpperCase()} ${pct}% (${activeTrans.transition.duration_s.toFixed(2)}s)`;
+    ctx.font = "700 10px ui-monospace, monospace";
+    const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
+    const pillY = titleState && titleState.showBadge ? fy + 36 : fy + 16;
+    ctx.fillStyle = "rgba(230, 132, 66, 0.94)";
+    ctx.fillRect(fx + 8, pillY, tw, 17);
+    ctx.fillStyle = "#111114";
+    ctx.fillText(label, fx + 14, pillY + 12);
   }
 
   // FX telemetry pill inside Program Monitor corner
@@ -1304,6 +1467,121 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         fadeOutHandleX,
         fadeHandleY,
         data: clip
+      });
+    }
+
+    // Visual Bowtie Transition Badges at adjacent clip cut junctions
+    const orderedClips = clipList
+      .map((clip, idx) => ({ clip, idx }))
+      .sort((a, b) => a.clip.start_frame - b.clip.start_frame || a.clip.duration_frames - b.clip.duration_frames);
+    for (let pos = 0; pos < orderedClips.length - 1; pos++) {
+      const pairA = orderedClips[pos];
+      const pairB = orderedClips[pos + 1];
+      if (pairA.clip.duration_frames <= 0 || pairB.clip.duration_frames <= 0) continue;
+      const cutFrame = pairA.clip.start_frame + pairA.clip.duration_frames;
+      if (cutFrame !== pairB.clip.start_frame) continue;
+
+      const trans = normalizeClipTransition(pairA.clip);
+      if (!trans) continue;
+
+      const cutX = frameToX(cutFrame);
+      if (cutX < timelineX - 24 || cutX > timelineX + timelineW + 24) continue;
+
+      const clipY = rowY + 4;
+      const clipH = trackHeight - 8;
+      const maxPairPx = Math.max(
+        18,
+        Math.min(
+          pairA.clip.duration_frames * pxPerFrame * 0.9,
+          pairB.clip.duration_frames * pxPerFrame * 0.9
+        ) * 2
+      );
+      const transPx = Math.max(18, Math.min(maxPairPx, trans.duration_s * fpsFloat * pxPerFrame));
+      const halfSpan = transPx / 2;
+      const badgeX = Math.max(timelineX, cutX - halfSpan);
+      const badgeRight = Math.min(timelineX + timelineW, cutX + halfSpan);
+      const badgeW = badgeRight - badgeX;
+      if (badgeW <= 4) continue;
+
+      const isTransSelected =
+        selected &&
+        selected.kind === "transition" &&
+        selected.data &&
+        selected.data.name === pairA.clip.name &&
+        selected.data.start_frame === pairA.clip.start_frame &&
+        selected.data.track_index === pairA.clip.track_index &&
+        selected.data.media_type === pairA.clip.media_type;
+
+      const hoverTrans = opts && opts.hoverTransition ? opts.hoverTransition : null;
+      const isTransHovered =
+        hoverTrans &&
+        hoverTrans.trackKind === trk.kind &&
+        hoverTrans.trackIndex === trk.index &&
+        hoverTrans.clipIndex === pairA.idx;
+
+      // Translucent transition span plate across the cut seam
+      ctx.save();
+      ctx.fillStyle = "rgba(17, 17, 20, 0.72)";
+      roundRectPath(ctx, badgeX, clipY + 1, badgeW, clipH - 2, 2);
+      ctx.fill();
+      ctx.fillStyle = isTransSelected || isTransHovered
+        ? "rgba(255, 209, 102, 0.30)"
+        : "rgba(230, 132, 66, 0.24)";
+      roundRectPath(ctx, badgeX, clipY + 1, badgeW, clipH - 2, 2);
+      ctx.fill();
+      ctx.strokeStyle = isTransSelected || isTransHovered ? "#ffd166" : "#e68442";
+      ctx.lineWidth = isTransSelected ? 1.75 : 1.25;
+      ctx.stroke();
+
+      // Classic NLE Bowtie glyph centered on cutX
+      const showBadgeText = badgeW >= 58;
+      const midY = showBadgeText ? clipY + 12 : clipY + clipH / 2;
+      const bowHalfW = Math.min(8, Math.max(5, badgeW * 0.24));
+      const bowHalfH = showBadgeText ? 5.5 : 6.5;
+      ctx.fillStyle = isTransSelected || isTransHovered ? "#ffd166" : "#e68442";
+      ctx.strokeStyle = "#111114";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cutX - bowHalfW, midY - bowHalfH);
+      ctx.lineTo(cutX, midY);
+      ctx.lineTo(cutX - bowHalfW, midY + bowHalfH);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(cutX + bowHalfW, midY - bowHalfH);
+      ctx.lineTo(cutX, midY);
+      ctx.lineTo(cutX + bowHalfW, midY + bowHalfH);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Compact transition label when wide enough
+      if (showBadgeText) {
+        const tag = getTransitionShortTag(trans.preset);
+        const label = badgeW >= 78 ? `${tag} ${trans.duration_s.toFixed(1)}s` : tag;
+        ctx.font = "700 8.5px ui-monospace, monospace";
+        const tw = ctx.measureText(label).width;
+        if (tw + 4 <= badgeW) {
+          ctx.fillStyle = isTransSelected || isTransHovered ? "#ffd166" : "#ffd8a8";
+          ctx.fillText(label, cutX - tw / 2, clipY + clipH - 6);
+        }
+      }
+      ctx.restore();
+
+      hitboxes.push({
+        kind: "transition",
+        x: Math.min(badgeX, cutX - 10),
+        y: clipY,
+        w: Math.max(badgeW, 20),
+        h: clipH,
+        trackKind: trk.kind,
+        trackIndex: trk.index,
+        clipIndex: pairA.idx,
+        nextClipIndex: pairB.idx,
+        cutFrame,
+        data: pairA.clip
       });
     }
 

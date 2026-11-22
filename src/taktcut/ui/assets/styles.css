@@ -1551,6 +1551,66 @@ input[type="range"] {
   font-weight: 700;
 }
 
+/* CUT TRANSITION INSPECTOR */
+.transition-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.transition-inspector-dock .pane-subheader {
+  flex-wrap: wrap;
+}
+
+#clip-transition-badge,
+#clip-transition-fg-preview {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
+.transition-ctrl-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.transition-ctrl-box.is-disabled {
+  opacity: 0.55;
+}
+
+.transition-select-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transition-select-row label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.transition-meta-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
 .issue-list {
   display: flex;
   flex-direction: column;
@@ -1842,6 +1902,10 @@ input[type="range"] {
   }
   .retime-preset-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .transition-select-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
   .title-param-row {
     grid-template-columns: minmax(0, 1fr) 64px;

@@ -19,20 +19,27 @@ import {
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
+  TRANSITION_DURATION_DEFAULT_S,
+  TRANSITION_DURATION_MAX_S,
+  TRANSITION_DURATION_MIN_S,
   cloneTimelineDoc,
   collectSnapTargets,
   compileAudioFilterClient,
   compileRetimeFilterClient,
+  compileTransitionFilterClient,
   computeTimelineMaxFrame,
+  findAdjacentCutForClip,
   findClipIndex,
   findMagneticSnap,
   findTrackAndClip,
   formatRetimeBadgeText,
   getClipTrimBounds,
+  getTransitionPresetName,
   hasSplittableClipAtFrame,
   isTrackAudiblyMuted,
   normalizeClipAudio,
   normalizeClipRetime,
+  normalizeClipTransition,
   splitClipInDocument,
   splitClipsAtPlayhead,
   toggleTrackMuteInDocument,
@@ -40,6 +47,7 @@ import {
   trimClipInDocument,
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
+  updateClipTransitionInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -196,6 +204,7 @@ const state = {
   timelineActiveTrim: null,
   timelineHoverFade: null,
   timelineActiveFade: null,
+  timelineHoverTransition: null,
   timelineDragFixedMaxFrame: null,
   timelineUndoStack: [],
   timelineRedoStack: [],
@@ -227,6 +236,7 @@ const state = {
   titlePresetsCatalog: null,
   titleLastCompile: null,
   titleCompileTimer: null,
+  transitionPresetsCatalog: null,
   renderEngine: "local",
   remotePollTimer: null
 };
@@ -447,6 +457,7 @@ function redrawActiveCanvases() {
         activeTrim: state.timelineActiveTrim,
         hoverFade: state.timelineHoverFade,
         activeFade: state.timelineActiveFade,
+        hoverTransition: state.timelineHoverTransition,
         fixedMaxFrame: state.timelineDragFixedMaxFrame
       }
     );
@@ -503,6 +514,7 @@ function setTimelineData(payload) {
   state.timelineActiveTrim = null;
   state.timelineHoverFade = null;
   state.timelineActiveFade = null;
+  state.timelineHoverTransition = null;
   state.timelineDragFixedMaxFrame = null;
 
   const doc = state.timelineDoc;
@@ -516,6 +528,7 @@ function setTimelineData(payload) {
       for (const c of trk.clips || []) {
         if (!firstClip) firstClip = c;
         if (
+          !activeAtPlayhead &&
           trk.kind === "video" &&
           state.playheadFrame >= c.start_frame &&
           state.playheadFrame < c.start_frame + c.duration_frames
@@ -603,12 +616,19 @@ function renderTimelineUI() {
 function getSelectedClipTrack() {
   const doc = state.timelineDoc;
   const sel = state.timelineSelected;
-  if (!doc || !sel || sel.kind !== "clip") return null;
+  if (!doc || !sel || (sel.kind !== "clip" && sel.kind !== "transition")) return null;
   const ref = findClipIndex(doc, sel.data);
   if (!ref) return null;
   const found = findTrackAndClip(doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
   if (!found) return null;
   return { ref, trk: found.trk, clip: found.clip };
+}
+
+function getSelectedTransitionTarget() {
+  const doc = state.timelineDoc;
+  const info = getSelectedClipTrack();
+  if (!doc || !info) return null;
+  return findAdjacentCutForClip(doc, info.ref.trackKind, info.ref.trackIndex, info.ref.clipIndex);
 }
 
 function getSelectedClipAudioPayload() {
@@ -868,6 +888,98 @@ function renderTimelineRetimeInspector() {
   }
 }
 
+function renderTimelineTransitionInspector() {
+  const ctrlBox = byId("clip-transition-controls");
+  const badge = byId("clip-transition-badge");
+  const junctionNote = byId("clip-transition-junction-note");
+  const presetSel = byId("clip-transition-preset");
+  const durRange = byId("clip-transition-dur-range");
+  const durNum = byId("clip-transition-dur-num");
+  const rstBtn = byId("btn-clip-transition-reset");
+  const audioChk = byId("clip-transition-audio");
+  const previewBtn = byId("btn-clip-transition-preview");
+  const fgPreview = byId("clip-transition-fg-preview");
+
+  if (!ctrlBox) return;
+
+  const junction = getSelectedTransitionTarget();
+  const hasCut = Boolean(junction);
+  ctrlBox.classList.toggle("is-disabled", !hasCut);
+  if (presetSel) presetSel.disabled = !hasCut;
+  if (previewBtn) previewBtn.disabled = !hasCut;
+
+  if (!junction) {
+    if (presetSel) presetSel.value = "none";
+    if (durRange) {
+      durRange.value = String(TRANSITION_DURATION_DEFAULT_S);
+      durRange.disabled = true;
+    }
+    if (durNum) {
+      if (document.activeElement !== durNum) durNum.value = TRANSITION_DURATION_DEFAULT_S.toFixed(2);
+      durNum.disabled = true;
+    }
+    if (audioChk) {
+      audioChk.checked = true;
+      audioChk.disabled = true;
+    }
+    if (rstBtn) rstBtn.disabled = true;
+    if (badge) {
+      badge.textContent = "NO ADJACENT CUT";
+      badge.className = "nle-tag mono";
+    }
+    if (junctionNote) {
+      junctionNote.textContent = "Select an adjacent clip pair to apply a cut transition.";
+    }
+    if (fgPreview) fgPreview.textContent = "--";
+    return;
+  }
+
+  const trans = junction.transition;
+  const trackTag = `${junction.trackKind === "audio" ? "A" : "V"}${junction.trackIndex}`;
+  if (junctionNote) {
+    junctionNote.textContent = `${trackTag} CUT @ ${junction.cutFrame}f: ${junction.clipA.name} -> ${junction.clipB.name}`;
+  }
+
+  const isActive = Boolean(trans);
+  if (presetSel) presetSel.value = isActive ? trans.preset : "none";
+  const durVal = isActive ? trans.duration_s : TRANSITION_DURATION_DEFAULT_S;
+  if (durRange) {
+    durRange.value = String(durVal);
+    durRange.disabled = !isActive;
+  }
+  if (durNum) {
+    if (document.activeElement !== durNum) durNum.value = durVal.toFixed(2);
+    durNum.disabled = !isActive;
+  }
+  if (audioChk) {
+    audioChk.checked = isActive ? trans.include_audio : true;
+    audioChk.disabled = !isActive;
+  }
+  if (rstBtn) rstBtn.disabled = !isActive;
+
+  if (!isActive) {
+    if (badge) {
+      badge.textContent = "NONE (CUT)";
+      badge.className = "nle-tag mono";
+    }
+    if (fgPreview) fgPreview.textContent = "Hard cut (no xfade / acrossfade)";
+    return;
+  }
+
+  const compiled = compileTransitionFilterClient(
+    trans,
+    junction.clipADurationS,
+    junction.clipBDurationS
+  );
+  if (badge) {
+    badge.textContent = `${getTransitionPresetName(trans.preset)} ${trans.duration_s.toFixed(2)}s`;
+    badge.className = "nle-tag mono is-active";
+  }
+  if (fgPreview) {
+    fgPreview.textContent = compiled.filter_complex;
+  }
+}
+
 function renderTimelineSelection() {
   const box = byId("timeline-selection-detail");
   const sel = state.timelineSelected;
@@ -875,12 +987,14 @@ function renderTimelineSelection() {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
+    renderTimelineTransitionInspector();
     return;
   }
-  if (sel.kind === "clip") {
+  if (sel.kind === "clip" || sel.kind === "transition") {
     const c = sel.data;
     const norm = normalizeClipAudio(c);
     const retimeNorm = normalizeClipRetime(c);
+    const transNorm = normalizeClipTransition(c);
     const srcFps = c.source_fps
       ? c.source_fps.den === 1
         ? String(c.source_fps.num)
@@ -889,18 +1003,23 @@ function renderTimelineSelection() {
     const gainLabel = `${norm.gainDb >= 0 ? "+" : ""}${norm.gainDb.toFixed(1)} dB`;
     const fadeLabel = `In ${norm.fadeInS.toFixed(2)}s / Out ${norm.fadeOutS.toFixed(2)}s`;
     const retimeLabel = formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse);
+    const transLabel = transNorm
+      ? `${getTransitionPresetName(transNorm.preset)} (${transNorm.duration_s.toFixed(2)}s)`
+      : t("common.none");
     renderKv(box, [
-      ["Type", `Clip (${c.media_type.toUpperCase()})`],
+      ["Type", sel.kind === "transition" ? `Transition (${c.media_type.toUpperCase()})` : `Clip (${c.media_type.toUpperCase()})`],
       ["Name", c.name],
       ["Track", `${c.media_type === "audio" ? "A" : "V"}${c.track_index}`],
       ["Range", `${c.start_frame}f .. ${c.start_frame + c.duration_frames}f (${c.duration_frames}f)`],
       ["Retime", retimeLabel],
+      ["Transition", transLabel],
       ["Audio", `${gainLabel} | ${fadeLabel}`],
       ["Source In", `${c.source_in_frame}f (${srcFps})`],
       ["Source Path", c.source_path || t("common.none")]
     ]);
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
+    renderTimelineTransitionInspector();
     return;
   }
   const mk = sel.data;
@@ -913,6 +1032,7 @@ function renderTimelineSelection() {
   ]);
   renderTimelineAudioInspector();
   renderTimelineRetimeInspector();
+  renderTimelineTransitionInspector();
 }
 
 function renderTimelineIssues() {
@@ -2824,6 +2944,9 @@ function hitTestTimeline(x, y, opts = {}) {
   for (let i = boxes.length - 1; i >= 0; i--) {
     const b = boxes[i];
     if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      if (b.kind === "transition") {
+        return { kind: "transition", box: b, data: b.data };
+      }
       if (includeFade && b.kind === "clip" && b.fadeHandlesEnabled) {
         if (Math.abs(y - b.fadeHandleY) <= 10) {
           if (Math.abs(x - b.fadeInHandleX) <= 8) {
@@ -3112,7 +3235,26 @@ function bindTimelineCanvasScrub(canvas) {
           }
         } else if (state.timelineTool === "select" && inTrackArea) {
           const hit = hitTestTimeline(x, y, { includeTrim: true, includeFade: true });
-          if (hit && hit.kind === "fade" && hit.box) {
+          if (hit && hit.kind === "transition" && hit.box) {
+            const nextTransHover = {
+              trackKind: hit.box.trackKind,
+              trackIndex: hit.box.trackIndex,
+              clipIndex: hit.box.clipIndex
+            };
+            canvas.style.cursor = "pointer";
+            const prevTrans = state.timelineHoverTransition;
+            const sameTrans =
+              prevTrans &&
+              prevTrans.trackKind === nextTransHover.trackKind &&
+              prevTrans.trackIndex === nextTransHover.trackIndex &&
+              prevTrans.clipIndex === nextTransHover.clipIndex;
+            if (!sameTrans || state.timelineHoverTrim || state.timelineHoverFade) {
+              state.timelineHoverTransition = nextTransHover;
+              state.timelineHoverTrim = null;
+              state.timelineHoverFade = null;
+              needRedraw = true;
+            }
+          } else if (hit && hit.kind === "fade" && hit.box) {
             const nextFadeHover = {
               trackKind: hit.box.trackKind,
               trackIndex: hit.box.trackIndex,
@@ -3120,9 +3262,10 @@ function bindTimelineCanvasScrub(canvas) {
               edge: hit.edge
             };
             canvas.style.cursor = "ew-resize";
-            if (!sameTrimRef(state.timelineHoverFade, nextFadeHover) || state.timelineHoverTrim) {
+            if (!sameTrimRef(state.timelineHoverFade, nextFadeHover) || state.timelineHoverTrim || state.timelineHoverTransition) {
               state.timelineHoverFade = nextFadeHover;
               state.timelineHoverTrim = null;
+              state.timelineHoverTransition = null;
               needRedraw = true;
             }
           } else if (hit && hit.kind === "trim" && hit.box) {
@@ -3133,16 +3276,18 @@ function bindTimelineCanvasScrub(canvas) {
               edge: hit.edge
             };
             canvas.style.cursor = "ew-resize";
-            if (!sameTrimRef(state.timelineHoverTrim, nextHover) || state.timelineHoverFade) {
+            if (!sameTrimRef(state.timelineHoverTrim, nextHover) || state.timelineHoverFade || state.timelineHoverTransition) {
               state.timelineHoverTrim = nextHover;
               state.timelineHoverFade = null;
+              state.timelineHoverTransition = null;
               needRedraw = true;
             }
           } else {
             canvas.style.cursor = nearPh ? "ew-resize" : "crosshair";
-            if (state.timelineHoverTrim || state.timelineHoverFade) {
+            if (state.timelineHoverTrim || state.timelineHoverFade || state.timelineHoverTransition) {
               state.timelineHoverTrim = null;
               state.timelineHoverFade = null;
+              state.timelineHoverTransition = null;
               needRedraw = true;
             }
           }
@@ -3150,9 +3295,10 @@ function bindTimelineCanvasScrub(canvas) {
           const railHover = hitTestTimeline(x, y, { includeTrim: false, includeFade: false });
           const isMsBtn = railHover && (railHover.kind === "track_mute" || railHover.kind === "track_solo");
           canvas.style.cursor = isMsBtn ? "pointer" : nearPh ? "ew-resize" : "crosshair";
-          if (state.timelineHoverTrim || state.timelineHoverFade) {
+          if (state.timelineHoverTrim || state.timelineHoverFade || state.timelineHoverTransition) {
             state.timelineHoverTrim = null;
             state.timelineHoverFade = null;
+            state.timelineHoverTransition = null;
             needRedraw = true;
           }
         }
@@ -3445,7 +3591,10 @@ function bindTimelineCanvasScrub(canvas) {
     if (!wasMoved) {
       const match = hitTestTimeline(x, y, { includeTrim: false });
       state.timelineSelected = match ? { kind: match.kind, data: match.data } : null;
-      if (match && match.kind === "clip") {
+      if (match && match.kind === "transition" && match.box) {
+        state.playheadFrame = match.box.cutFrame;
+        updatePlayheadReadout();
+      } else if (match && match.kind === "clip") {
         state.playheadFrame = match.data.start_frame;
         updatePlayheadReadout();
       } else if (match && match.kind === "marker") {
@@ -3471,11 +3620,13 @@ function bindTimelineCanvasScrub(canvas) {
         state.timelineBladePreview ||
         state.timelineHoverTrim ||
         state.timelineHoverFade ||
+        state.timelineHoverTransition ||
         state.timelineActiveSnapFrame !== null
       ) {
         state.timelineBladePreview = null;
         state.timelineHoverTrim = null;
         state.timelineHoverFade = null;
+        state.timelineHoverTransition = null;
         state.timelineActiveSnapFrame = null;
         redrawActiveCanvases();
       }
@@ -3790,6 +3941,186 @@ function wireClipRetimeInspector() {
   }
 }
 
+function wireClipTransitionInspector() {
+  const presetSel = byId("clip-transition-preset");
+  const durRange = byId("clip-transition-dur-range");
+  const durNum = byId("clip-transition-dur-num");
+  const audioChk = byId("clip-transition-audio");
+  const rstBtn = byId("btn-clip-transition-reset");
+  const previewBtn = byId("btn-clip-transition-preview");
+  let dragSnap = null;
+
+  const liveUpdateTransition = (patch) => {
+    const junction = getSelectedTransitionTarget();
+    if (!junction) return;
+    const res = updateClipTransitionInDocument(
+      state.timelineDoc,
+      junction.trackKind,
+      junction.trackIndex,
+      junction.clipAIndex,
+      patch
+    );
+    if (!res.changed) return;
+    state.timelineDoc = res.doc;
+    const selKind =
+      state.timelineSelected && state.timelineSelected.kind === "transition"
+        ? "transition"
+        : "clip";
+    state.timelineSelected = { kind: selKind, data: res.clip };
+    renderTimelineSelection();
+    if (state.activeTab === "timeline") redrawActiveCanvases();
+  };
+
+  if (presetSel) {
+    presetSel.addEventListener("change", () => {
+      const junction = getSelectedTransitionTarget();
+      if (!junction) return;
+      const val = presetSel.value;
+      const patch =
+        val === "none"
+          ? null
+          : {
+              preset: val,
+              duration_s: junction.transition
+                ? junction.transition.duration_s
+                : TRANSITION_DURATION_DEFAULT_S,
+              include_audio: junction.transition ? junction.transition.include_audio : true
+            };
+      const res = updateClipTransitionInDocument(
+        state.timelineDoc,
+        junction.trackKind,
+        junction.trackIndex,
+        junction.clipAIndex,
+        patch
+      );
+      if (res.changed) {
+        const selKind =
+          state.timelineSelected && state.timelineSelected.kind === "transition"
+            ? "transition"
+            : "clip";
+        commitTimelineMutation(res.doc, { kind: selKind, data: res.clip });
+      }
+    });
+  }
+
+  if (durRange) {
+    durRange.addEventListener("pointerdown", () => {
+      dragSnap = captureTimelineSnapshot();
+    });
+    durRange.addEventListener("input", () => {
+      const val = Number.parseFloat(durRange.value);
+      if (!Number.isFinite(val)) return;
+      if (!dragSnap) dragSnap = captureTimelineSnapshot();
+      liveUpdateTransition({ duration_s: val });
+    });
+    durRange.addEventListener("change", () => {
+      const val = Number.parseFloat(durRange.value);
+      if (Number.isFinite(val) && dragSnap) {
+        const junction = getSelectedTransitionTarget();
+        if (junction) {
+          pushUndoSnapshot(dragSnap);
+          updateTimelineToolbarUI();
+        }
+      }
+      dragSnap = null;
+    });
+  }
+
+  if (durNum) {
+    durNum.addEventListener("focus", () => {
+      dragSnap = captureTimelineSnapshot();
+    });
+    durNum.addEventListener("input", () => {
+      const val = Number.parseFloat(durNum.value);
+      if (
+        Number.isFinite(val) &&
+        val >= TRANSITION_DURATION_MIN_S &&
+        val <= TRANSITION_DURATION_MAX_S
+      ) {
+        if (!dragSnap) dragSnap = captureTimelineSnapshot();
+        liveUpdateTransition({ duration_s: val });
+      }
+    });
+    durNum.addEventListener("change", () => {
+      const raw = Number.parseFloat(durNum.value);
+      const junction = getSelectedTransitionTarget();
+      if (!junction) return;
+      if (!Number.isFinite(raw)) {
+        renderTimelineTransitionInspector();
+        dragSnap = null;
+        return;
+      }
+      const clamped = Math.min(TRANSITION_DURATION_MAX_S, Math.max(TRANSITION_DURATION_MIN_S, raw));
+      const baseDoc = dragSnap && dragSnap.doc ? dragSnap.doc : state.timelineDoc;
+      const res = updateClipTransitionInDocument(
+        baseDoc,
+        junction.trackKind,
+        junction.trackIndex,
+        junction.clipAIndex,
+        { duration_s: clamped }
+      );
+      if (res.changed) {
+        const selKind =
+          state.timelineSelected && state.timelineSelected.kind === "transition"
+            ? "transition"
+            : "clip";
+        commitTimelineMutation(res.doc, { kind: selKind, data: res.clip }, dragSnap);
+      } else {
+        renderTimelineSelection();
+      }
+      durNum.value = clamped.toFixed(2);
+      dragSnap = null;
+    });
+  }
+
+  if (audioChk) {
+    audioChk.addEventListener("change", () => {
+      const junction = getSelectedTransitionTarget();
+      if (!junction || !junction.transition) return;
+      const res = updateClipTransitionInDocument(
+        state.timelineDoc,
+        junction.trackKind,
+        junction.trackIndex,
+        junction.clipAIndex,
+        { include_audio: audioChk.checked }
+      );
+      if (res.changed) {
+        const selKind =
+          state.timelineSelected && state.timelineSelected.kind === "transition"
+            ? "transition"
+            : "clip";
+        commitTimelineMutation(res.doc, { kind: selKind, data: res.clip });
+      }
+    });
+  }
+
+  if (rstBtn) {
+    rstBtn.addEventListener("click", () => {
+      const junction = getSelectedTransitionTarget();
+      if (!junction) return;
+      const res = updateClipTransitionInDocument(
+        state.timelineDoc,
+        junction.trackKind,
+        junction.trackIndex,
+        junction.clipAIndex,
+        null
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (previewBtn) {
+    previewBtn.addEventListener("click", () => {
+      const junction = getSelectedTransitionTarget();
+      if (!junction) return;
+      stopPlayback();
+      setPlayhead(junction.cutFrame);
+    });
+  }
+}
+
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   const updateBtn = byId("update-banner-btn");
@@ -3931,6 +4262,7 @@ function wireEvents() {
   bindTimelineCanvasScrub(byId("timeline-canvas"));
   wireClipAudioInspector();
   wireClipRetimeInspector();
+  wireClipTransitionInspector();
 
   // FX page events
   for (const btn of document.querySelectorAll("[data-fx-preset]")) {
@@ -4300,6 +4632,17 @@ async function loadTitlesCatalog() {
   }
 }
 
+async function loadTransitionsCatalog() {
+  try {
+    const data = await api.getTransitionPresets();
+    if (data && Array.isArray(data.presets) && data.presets.length > 0) {
+      state.transitionPresetsCatalog = data.presets;
+    }
+  } catch {
+    // Fallback to built-in TRANSITION_PRESETS constants
+  }
+}
+
 async function bootstrap() {
   wireEvents();
   syncColorInputsFromState();
@@ -4339,7 +4682,8 @@ async function bootstrap() {
     checkForStudioUpdate(),
     loadFxCatalog(),
     loadColorCatalog(),
-    loadTitlesCatalog()
+    loadTitlesCatalog(),
+    loadTransitionsCatalog()
   ]);
 }
 

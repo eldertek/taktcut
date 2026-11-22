@@ -99,6 +99,75 @@ class TimelineMarker(BaseModel):
     note: str = ""
 
 
+TransitionPresetId = Literal["fade", "fadeblack", "wipeleft", "slideright", "zoomin"]
+
+ALLOWED_TRANSITION_PRESETS: frozenset[str] = frozenset(
+    {"fade", "fadeblack", "wipeleft", "slideright", "zoomin"}
+)
+ALLOWED_ACROSSFADE_CURVES: frozenset[str] = frozenset(
+    {
+        "tri",
+        "qsin",
+        "esin",
+        "hsin",
+        "log",
+        "ipar",
+        "qua",
+        "cub",
+        "squ",
+        "cbr",
+        "par",
+        "exp",
+        "iqsin",
+        "ihsin",
+        "dese",
+        "desi",
+        "losi",
+        "sinc",
+        "isinc",
+        "nofade",
+    }
+)
+
+
+class ClipTransition(BaseModel):
+    """Editorial video & audio transition attached to an outgoing clip cut junction."""
+
+    preset: TransitionPresetId = "fade"
+    duration_s: float = Field(default=0.5, ge=0.1, le=2.0)
+    include_audio: bool = True
+    audio_curve: str = "tri"
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_TRANSITION_PRESETS:
+            allowed = ", ".join(sorted(ALLOWED_TRANSITION_PRESETS))
+            raise ValueError(f"Unsupported transition preset {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("duration_s", mode="before")
+    @classmethod
+    def _validate_duration_s(cls, raw: Any) -> float:
+        val = _check_finite_number(raw, "duration_s")
+        if val < 0.1 or val > 2.0:
+            raise ValueError(f"duration_s must be within [0.1, 2.0], got {val}")
+        return val
+
+    @field_validator("audio_curve", mode="before")
+    @classmethod
+    def _validate_audio_curve(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"audio_curve must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_ACROSSFADE_CURVES:
+            raise ValueError(f"Unsupported acrossfade curve {raw!r}")
+        return cleaned
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -117,6 +186,7 @@ class TimelineClip(BaseModel):
     fade_out_s: float = Field(default=0.0, ge=0.0, le=5.0)
     speed_rate: float = Field(default=1.0, ge=0.25, le=4.0)
     reverse: bool = False
+    transition_out: ClipTransition | None = None
 
     @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", "speed_rate", mode="before")
     @classmethod

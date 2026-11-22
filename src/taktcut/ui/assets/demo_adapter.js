@@ -1,7 +1,9 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
+  TRANSITION_PRESETS,
   compileAudioFilterClient,
   compileRetimeFilterClient,
+  compileTransitionFilterClient,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -60,9 +62,9 @@ function buildDemoTimeline(preset) {
         kind: "video",
         name: "V1 Main Picture",
         clips: [
-          { name: "A001_Opening_Wide", track_index: 1, media_type: "video", start_frame: 0, duration_frames: 125, source_in_frame: 24, source_path: "media/A001_Opening_Wide.mov", source_fps: fps25, enabled: true },
+          { name: "A001_Opening_Wide", track_index: 1, media_type: "video", start_frame: 0, duration_frames: 125, source_in_frame: 24, source_path: "media/A001_Opening_Wide.mov", source_fps: fps25, enabled: true, transition_out: { preset: "fade", duration_s: 0.5, include_audio: true, audio_curve: "tri" } },
           { name: "A002_Studio_Detail", track_index: 1, media_type: "video", start_frame: 125, duration_frames: 100, source_in_frame: 10, source_path: "media/A002_Studio_Detail.mov", source_fps: fps25, enabled: true, speed_rate: 0.5 },
-          { name: "A003_Talent_Close", track_index: 1, media_type: "video", start_frame: 225, duration_frames: 150, source_in_frame: 48, source_path: "media/A003_Talent_Close.mov", source_fps: fps25, enabled: true },
+          { name: "A003_Talent_Close", track_index: 1, media_type: "video", start_frame: 225, duration_frames: 150, source_in_frame: 48, source_path: "media/A003_Talent_Close.mov", source_fps: fps25, enabled: true, transition_out: { preset: "wipeleft", duration_s: 0.8, include_audio: true, audio_curve: "tri" } },
           { name: "A004_End_Packshot", track_index: 1, media_type: "video", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "media/A004_End_Packshot.mov", source_fps: fps25, enabled: true, speed_rate: 2.0, reverse: true }
         ]
       },
@@ -392,7 +394,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.2",
+      version: "0.1.3",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -719,8 +721,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.2",
-          latest_version: "0.1.2",
+          current_version: "0.1.3",
+          latest_version: "0.1.3",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -779,6 +781,30 @@ export function createApiClient() {
         return compileTitleClient(payload, payload);
       }
       return requestJson("/api/titles/compile", { method: "POST", body: payload });
+    },
+    async getTransitionPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: TRANSITION_PRESETS.map((p) => ({
+            id: p.id,
+            name: p.name,
+            ffmpeg_xfade: p.id,
+            default_duration_s: 0.5
+          })),
+          bounds: { duration_s: { min: 0.1, max: 2.0, default: 0.5 } }
+        };
+      }
+      return requestJson("/api/transitions/presets");
+    },
+    async compileTransitionFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileTransitionFilterClient(
+          payload.transition || payload,
+          payload.clip_a_duration_s ?? 5.0,
+          payload.clip_b_duration_s ?? null
+        );
+      }
+      return requestJson("/api/transitions/compile", { method: "POST", body: payload });
     },
     async probeRemoteNode(payload) {
       if (resolvedMode === "static-demo") {
