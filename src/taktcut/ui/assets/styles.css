@@ -1000,6 +1000,12 @@ input[type="file"]::file-selector-button:hover {
   color: var(--text-primary);
 }
 
+.color-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #ffd8a8;
+}
+
 .preset-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1211,6 +1217,41 @@ input[type="range"] {
   border: 1px solid var(--border-inner);
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.grade-tone-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.grade-tone-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 64px auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.grade-tone-row label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.temp-slider {
+  accent-color: #f4a46b;
+}
+
+.code-box-compact {
+  max-height: 92px;
 }
 
 /* KV, ISSUES, CODE BOX */
@@ -1493,6 +1534,16 @@ input[type="range"] {
   }
   .sat-strip {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .grade-tone-row {
+    grid-template-columns: minmax(0, 1fr) 64px auto;
+    gap: 5px;
+  }
+  .grade-tone-row label {
+    grid-column: 1 / -1;
+  }
+  .grade-tone-row input[type="range"] {
+    min-height: 44px;
   }
   .kv-grid {
     grid-template-columns: minmax(0, 1fr);

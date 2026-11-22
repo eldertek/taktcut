@@ -353,7 +353,7 @@
         </div>
       </section>
 
-      <!-- PAGE 3: COLOR (DAVINCI COLOR WHEELS + SCOPES + .CUBE) -->
+      <!-- PAGE 3: COLOR (DAVINCI COLOR WHEELS + LUMETRI TONE + SCOPES + FFMPEG + .CUBE) -->
       <section id="panel-color" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-color">
         <div class="nle-color-top">
           <section class="nle-pane">
@@ -368,15 +368,14 @@
             </div>
             <div class="pane-body">
               <div class="viewer-well">
-                <canvas id="color-preview-canvas" class="studio-canvas"></canvas>
+                <canvas id="color-preview-canvas" class="studio-canvas" aria-label="Color grading before and after preview"></canvas>
               </div>
-              <div class="preset-bar">
+              <div class="preset-bar" role="group" aria-label="Cinematic color grade presets">
                 <span class="pill-label" data-i18n="color.presets.label">PRESETS</span>
-                <button type="button" class="btn btn-chip" data-cdl-preset="neutral" data-i18n="color.preset.neutral">Neutral</button>
-                <button type="button" class="btn btn-chip" data-cdl-preset="warm" data-i18n="color.preset.warm">Warm Editorial</button>
-                <button type="button" class="btn btn-chip" data-cdl-preset="teal" data-i18n="color.preset.teal">Teal &amp; Amber</button>
-                <button type="button" class="btn btn-chip" data-cdl-preset="bleach" data-i18n="color.preset.bleach">Crisp Contrast</button>
-                <button type="button" class="btn btn-chip" data-cdl-preset="cool" data-i18n="color.preset.cool">Cool Broadcast</button>
+                <button type="button" class="btn btn-chip color-preset-btn is-active" data-grade-preset="rec709_clean" aria-pressed="true" data-i18n="color.preset.rec709">Rec.709 Clean</button>
+                <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="teal_orange" aria-pressed="false" data-i18n="color.preset.tealOrange">Teal &amp; Orange</button>
+                <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="film_warm" aria-pressed="false" data-i18n="color.preset.filmWarm">Film Warm</button>
+                <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="noir_bw" aria-pressed="false" data-i18n="color.preset.noirBw">Noir B&amp;W</button>
               </div>
             </div>
           </section>
@@ -388,118 +387,147 @@
             </div>
             <div class="pane-body">
               <div class="viewer-well">
-                <canvas id="color-scope-canvas" class="studio-canvas"></canvas>
+                <canvas id="color-scope-canvas" class="studio-canvas" aria-label="Live RGB waveform and vectorscope"></canvas>
               </div>
             </div>
           </section>
         </div>
 
         <div class="nle-color-bottom">
-          <!-- DAVINCI COLOR WHEELS + PRIMARY BARS -->
+          <!-- DAVINCI COLOR WHEELS + LUMETRI TONE CONTROLS -->
           <section class="nle-pane">
             <div class="pane-header">
-              <h2 data-i18n="color.controls.title">Primary Color Wheels (ASC CDL v1.2)</h2>
+              <h2 data-i18n="color.controls.title">Color Grading Panel (Lift / Gamma / Gain &amp; Tone)</h2>
               <div class="viewer-controls">
+                <span id="color-preset-badge" class="nle-tag is-active mono">Rec.709 Clean</span>
                 <label class="inline-label" for="cdl-file-input" data-i18n="color.label.importCdl">Import .cdl</label>
                 <input type="file" id="cdl-file-input" class="input-control file-input-compact" accept=".cdl,.cc,.ccc,.xml">
               </div>
             </div>
             <div class="pane-body">
               <div class="wheels-grid">
-                <!-- LIFT / OFFSET WHEEL -->
+                <!-- LIFT (SHADOWS) WHEEL -->
                 <div class="wheel-dock">
                   <div class="wheel-head">
-                    <span class="wheel-title mono" data-i18n="color.group.offset">LIFT (OFFSET)</span>
-                    <button type="button" id="btn-reset-offset" class="btn btn-mini">Rst</button>
+                    <span class="wheel-title mono" data-i18n="color.group.lift">LIFT (SHADOWS)</span>
+                    <button type="button" id="btn-reset-lift" class="btn btn-mini" aria-label="Reset Lift">Rst</button>
                   </div>
-                  <canvas id="wheel-offset" class="wheel-canvas" aria-label="Lift Offset Color Wheel"></canvas>
+                  <canvas id="wheel-lift" class="wheel-canvas" aria-label="Lift Shadows Color Wheel"></canvas>
                   <div class="wheel-bars mono">
                     <div class="cdl-slider-row">
-                      <label class="ch-r" for="offset-r-range">R</label>
-                      <input type="range" id="offset-r-range" min="-0.3" max="0.3" step="0.005" value="0.010">
-                      <input type="number" id="offset-r-num" class="input-num" min="-1" max="1" step="0.005" value="0.010">
+                      <label class="ch-r" for="lift-r-range">R</label>
+                      <input type="range" id="lift-r-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="lift-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Red">
                     </div>
                     <div class="cdl-slider-row">
-                      <label class="ch-g" for="offset-g-range">G</label>
-                      <input type="range" id="offset-g-range" min="-0.3" max="0.3" step="0.005" value="0.000">
-                      <input type="number" id="offset-g-num" class="input-num" min="-1" max="1" step="0.005" value="0.000">
+                      <label class="ch-g" for="lift-g-range">G</label>
+                      <input type="range" id="lift-g-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="lift-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Green">
                     </div>
                     <div class="cdl-slider-row">
-                      <label class="ch-b" for="offset-b-range">B</label>
-                      <input type="range" id="offset-b-range" min="-0.3" max="0.3" step="0.005" value="-0.010">
-                      <input type="number" id="offset-b-num" class="input-num" min="-1" max="1" step="0.005" value="-0.010">
+                      <label class="ch-b" for="lift-b-range">B</label>
+                      <input type="range" id="lift-b-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="lift-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Blue">
                     </div>
                   </div>
                 </div>
 
-                <!-- GAMMA / POWER WHEEL -->
+                <!-- GAMMA (MIDTONES) WHEEL -->
                 <div class="wheel-dock">
                   <div class="wheel-head">
-                    <span class="wheel-title mono" data-i18n="color.group.power">GAMMA (POWER)</span>
-                    <button type="button" id="btn-reset-power" class="btn btn-mini">Rst</button>
+                    <span class="wheel-title mono" data-i18n="color.group.gamma">GAMMA (MIDTONES)</span>
+                    <button type="button" id="btn-reset-gamma" class="btn btn-mini" aria-label="Reset Gamma">Rst</button>
                   </div>
-                  <canvas id="wheel-power" class="wheel-canvas" aria-label="Gamma Power Color Wheel"></canvas>
+                  <canvas id="wheel-gamma" class="wheel-canvas" aria-label="Gamma Midtones Color Wheel"></canvas>
                   <div class="wheel-bars mono">
                     <div class="cdl-slider-row">
-                      <label class="ch-r" for="power-r-range">R</label>
-                      <input type="range" id="power-r-range" min="0.2" max="2.5" step="0.01" value="0.96">
-                      <input type="number" id="power-r-num" class="input-num" min="0.05" max="4" step="0.01" value="0.96">
+                      <label class="ch-r" for="gamma-r-range">R</label>
+                      <input type="range" id="gamma-r-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gamma-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Red">
                     </div>
                     <div class="cdl-slider-row">
-                      <label class="ch-g" for="power-g-range">G</label>
-                      <input type="range" id="power-g-range" min="0.2" max="2.5" step="0.01" value="0.98">
-                      <input type="number" id="power-g-num" class="input-num" min="0.05" max="4" step="0.01" value="0.98">
+                      <label class="ch-g" for="gamma-g-range">G</label>
+                      <input type="range" id="gamma-g-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gamma-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Green">
                     </div>
                     <div class="cdl-slider-row">
-                      <label class="ch-b" for="power-b-range">B</label>
-                      <input type="range" id="power-b-range" min="0.2" max="2.5" step="0.01" value="1.03">
-                      <input type="number" id="power-b-num" class="input-num" min="0.05" max="4" step="0.01" value="1.03">
+                      <label class="ch-b" for="gamma-b-range">B</label>
+                      <input type="range" id="gamma-b-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gamma-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Blue">
                     </div>
                   </div>
                 </div>
 
-                <!-- GAIN / SLOPE WHEEL -->
+                <!-- GAIN (HIGHLIGHTS) WHEEL -->
                 <div class="wheel-dock">
                   <div class="wheel-head">
-                    <span class="wheel-title mono" data-i18n="color.group.slope">GAIN (SLOPE)</span>
-                    <button type="button" id="btn-reset-slope" class="btn btn-mini">Rst</button>
+                    <span class="wheel-title mono" data-i18n="color.group.gain">GAIN (HIGHLIGHTS)</span>
+                    <button type="button" id="btn-reset-gain" class="btn btn-mini" aria-label="Reset Gain">Rst</button>
                   </div>
-                  <canvas id="wheel-slope" class="wheel-canvas" aria-label="Gain Slope Color Wheel"></canvas>
+                  <canvas id="wheel-gain" class="wheel-canvas" aria-label="Gain Highlights Color Wheel"></canvas>
                   <div class="wheel-bars mono">
                     <div class="cdl-slider-row">
-                      <label class="ch-r" for="slope-r-range">R</label>
-                      <input type="range" id="slope-r-range" min="0.2" max="2.5" step="0.01" value="1.06">
-                      <input type="number" id="slope-r-num" class="input-num" min="0.1" max="4" step="0.01" value="1.06">
+                      <label class="ch-r" for="gain-r-range">R</label>
+                      <input type="range" id="gain-r-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gain-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Red">
                     </div>
                     <div class="cdl-slider-row">
-                      <label class="ch-g" for="slope-g-range">G</label>
-                      <input type="range" id="slope-g-range" min="0.2" max="2.5" step="0.01" value="1.00">
-                      <input type="number" id="slope-g-num" class="input-num" min="0.1" max="4" step="0.01" value="1.00">
+                      <label class="ch-g" for="gain-g-range">G</label>
+                      <input type="range" id="gain-g-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gain-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Green">
                     </div>
                     <div class="cdl-slider-row">
-                      <label class="ch-b" for="slope-b-range">B</label>
-                      <input type="range" id="slope-b-range" min="0.2" max="2.5" step="0.01" value="0.94">
-                      <input type="number" id="slope-b-num" class="input-num" min="0.1" max="4" step="0.01" value="0.94">
+                      <label class="ch-b" for="gain-b-range">B</label>
+                      <input type="range" id="gain-b-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gain-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Blue">
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div class="sat-strip mono">
-                <label for="sat-range" data-i18n="color.group.sat">SATURATION (REC.709)</label>
-                <input type="range" id="sat-range" min="0" max="2.2" step="0.01" value="1.12">
-                <input type="number" id="sat-num" class="input-num" min="0" max="4" step="0.01" value="1.12">
+              <!-- LUMETRI TONE CONTROLS: CONTRAST / SATURATION / TEMPERATURE -->
+              <div class="grade-tone-grid mono">
+                <div class="grade-tone-row">
+                  <label for="grade-contrast-range" data-i18n="color.group.contrast">CONTRAST</label>
+                  <input type="range" id="grade-contrast-range" min="0" max="2" step="0.01" value="1.00">
+                  <input type="number" id="grade-contrast-num" class="input-num" min="0" max="2" step="0.01" value="1.00" aria-label="Contrast value">
+                  <button type="button" id="btn-reset-contrast" class="btn btn-mini" aria-label="Reset Contrast">Rst</button>
+                </div>
+                <div class="grade-tone-row">
+                  <label for="grade-saturation-range" data-i18n="color.group.sat">SATURATION</label>
+                  <input type="range" id="grade-saturation-range" min="0" max="3" step="0.01" value="1.00">
+                  <input type="number" id="grade-saturation-num" class="input-num" min="0" max="3" step="0.01" value="1.00" aria-label="Saturation value">
+                  <button type="button" id="btn-reset-saturation" class="btn btn-mini" aria-label="Reset Saturation">Rst</button>
+                </div>
+                <div class="grade-tone-row">
+                  <label for="grade-temperature-range" data-i18n="color.group.temperature">TEMPERATURE</label>
+                  <input type="range" id="grade-temperature-range" class="temp-slider" min="-1" max="1" step="0.01" value="0.00">
+                  <input type="number" id="grade-temperature-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Temperature value">
+                  <button type="button" id="btn-reset-temperature" class="btn btn-mini" aria-label="Reset Temperature">Rst</button>
+                </div>
               </div>
             </div>
           </section>
 
-          <!-- 3D .CUBE LUT BAKER DOCK -->
+          <!-- FFMPEG COLOR FILTERGRAPH & 3D .CUBE LUT BAKER DOCK -->
           <aside class="nle-pane">
             <div class="pane-header">
-              <h2 data-i18n="color.bake.title">3D .cube LUT Baker</h2>
+              <h2 data-i18n="color.bake.title">FFmpeg Color Filter &amp; 3D .cube Baker</h2>
               <span id="cube-info-badge" class="nle-tag mono">33x33x33</span>
             </div>
             <div class="pane-body">
+              <div class="pane-subheader">
+                <span data-i18n="color.compiler.title">FFmpeg Pipeline (colorbalance + eq)</span>
+                <span id="color-compile-badge" class="nle-tag mono">UNITY</span>
+              </div>
+              <pre id="color-filtergraph-output" class="code-box code-box-compact mono" aria-live="polite"></pre>
+              <div class="btn-row">
+                <button type="button" id="btn-color-copy-fg" class="btn btn-secondary" data-i18n="color.compiler.btnCopy">Copy Color Filter</button>
+                <button type="button" id="btn-send-lut-render" class="btn btn-secondary" data-i18n="color.btn.sendRender">Use in Deliver</button>
+              </div>
+
+              <div class="pane-divider"></div>
+
               <div class="form-row-two">
                 <div class="form-row">
                   <label for="cube-title-input" data-i18n="color.label.lutTitle">LUT Title</label>
@@ -521,7 +549,6 @@
               <div class="btn-row">
                 <button type="button" id="btn-bake-cube" class="btn btn-primary" data-i18n="color.btn.bake">Bake .cube</button>
                 <button type="button" id="btn-download-cube" class="btn btn-secondary" data-i18n="color.btn.download">Download .cube</button>
-                <button type="button" id="btn-send-lut-render" class="btn btn-secondary" data-i18n="color.btn.sendRender">Use in Deliver</button>
               </div>
               <pre id="cube-preview-output" class="code-box mono" aria-live="polite"></pre>
             </div>

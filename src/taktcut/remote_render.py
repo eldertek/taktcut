@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from taktcut import __version__
-from taktcut.color import bake_cdl_to_cube, parse_cube_lut
+from taktcut.color import ColorGradeParams, bake_cdl_to_cube, parse_cube_lut
 from taktcut.fx import FxNode, compile_fx_filtergraph
 from taktcut.models import (
     AscCdlParams,
@@ -212,6 +212,7 @@ class RemoteRenderJobRequest(BaseModel):
     prefer_hw: bool = True
     fx_stack: list[FxNode] = Field(default_factory=list)
     cdl: AscCdlParams | None = None
+    color_grade: ColorGradeParams | None = None
     lut_cube_text: str | None = None
 
     @field_validator("input_filename", "output_filename")
@@ -480,6 +481,7 @@ class RemoteRenderState:
             profile=req.profile,
             fps=fps,
             lut_path=lut_file,
+            color_grade=req.color_grade if lut_file is None else None,
             fx_filtergraph=fx_filtergraph,
             target_lufs=req.target_lufs,
             prefer_hw=req.prefer_hw,

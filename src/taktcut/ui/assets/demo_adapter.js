@@ -1,4 +1,4 @@
-import { applyAscCdlRgb } from "./canvas.js";
+import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import { validateTimelineClient } from "./timeline_ops.js";
 
 function buildDemoTimeline(preset) {
@@ -129,10 +129,48 @@ function buildOtioJsonString(doc) {
   return JSON.stringify(otio, null, 2);
 }
 
-function bakeCubeTextClient(cdl, size, title) {
+function compileColorClient(payload, opts = {}) {
+  const g = payload && payload.grade ? payload.grade : payload || {};
+  const lift = Array.isArray(g.lift) && g.lift.length === 3 ? g.lift.map(Number) : [0, 0, 0];
+  const gamma = Array.isArray(g.gamma) && g.gamma.length === 3 ? g.gamma.map(Number) : [0, 0, 0];
+  const gain = Array.isArray(g.gain) && g.gain.length === 3 ? g.gain.map(Number) : [0, 0, 0];
+  const contrast = Number.isFinite(Number(g.contrast)) ? Number(g.contrast) : 1.0;
+  const saturation = Number.isFinite(Number(g.saturation)) ? Number(g.saturation) : 1.0;
+  const temperature = Number.isFinite(Number(g.temperature)) ? Number(g.temperature) : 0.0;
+
+  const clampB = (v) => Math.max(-1, Math.min(1, v));
+  const tempR = temperature * 0.25;
+  const tempG = temperature * 0.03;
+  const tempB = -temperature * 0.28;
+  const s = [clampB(lift[0]), clampB(lift[1]), clampB(lift[2])];
+  const m = [clampB(gamma[0] + tempR), clampB(gamma[1] + tempG), clampB(gamma[2] + tempB)];
+  const h = [clampB(gain[0] + tempR * 0.8), clampB(gain[1] + tempG * 0.8), clampB(gain[2] + tempB * 0.8)];
+  const cb = `colorbalance=rs=${s[0].toFixed(4)}:gs=${s[1].toFixed(4)}:bs=${s[2].toFixed(4)}:rm=${m[0].toFixed(4)}:gm=${m[1].toFixed(4)}:bm=${m[2].toFixed(4)}:rh=${h[0].toFixed(4)}:gh=${h[1].toFixed(4)}:bh=${h[2].toFixed(4)}:pl=0`;
+  const eq = `eq=contrast=${contrast.toFixed(4)}:saturation=${saturation.toFixed(4)}`;
+  const fg = opts.pix_fmt ? `${cb},${eq},format=${opts.pix_fmt}` : `${cb},${eq}`;
+  const isIdentity =
+    lift.every((v) => v === 0) &&
+    gamma.every((v) => v === 0) &&
+    gain.every((v) => v === 0) &&
+    Math.abs(contrast - 1) < 1e-6 &&
+    Math.abs(saturation - 1) < 1e-6 &&
+    Math.abs(temperature) < 1e-6;
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: ["-vf", fg],
+    is_identity: isIdentity,
+    params: { lift, gamma, gain, contrast, saturation, temperature, preserve_lightness: false }
+  };
+}
+
+function bakeCubeTextClient(payload, size, title) {
   if (size < 2 || size > 65) throw new Error("3D LUT size must be between 2 and 65");
-  for (const ch of cdl.power) {
-    if (ch <= 0) throw new Error("ASC CDL power channels must be strictly positive");
+  const isGrade = Boolean(payload.grade || Array.isArray(payload.lift) || Array.isArray(payload.gamma) || Array.isArray(payload.gain));
+  const grade = payload.grade || payload;
+  if (!isGrade) {
+    for (const ch of payload.power || [1, 1, 1]) {
+      if (ch <= 0) throw new Error("ASC CDL power channels must be strictly positive");
+    }
   }
   const lines = [
     `TITLE "${title}"`,
@@ -148,7 +186,9 @@ function bakeCubeTextClient(cdl, size, title) {
       const gIn = g / denom;
       for (let r = 0; r < size; r++) {
         const rIn = r / denom;
-        const [ro, go, bo] = applyAscCdlRgb(rIn, gIn, bIn, cdl);
+        const [ro, go, bo] = isGrade
+          ? applyColorGradeRgb(rIn, gIn, bIn, grade)
+          : applyAscCdlRgb(rIn, gIn, bIn, payload);
         lines.push(`${ro.toFixed(6)} ${go.toFixed(6)} ${bo.toFixed(6)}`);
       }
     }
@@ -481,6 +521,10 @@ export function createApiClient() {
           const compiledFx = compileFxClient(body.fx_stack, { pix_fmt: pixFmt, use_gpu: Boolean(body.prefer_hw) });
           if (compiledFx.filtergraph) vfParts.push(compiledFx.filtergraph);
         }
+        if (body.color_grade) {
+          const compiledColor = compileColorClient(body.color_grade, { pix_fmt: pixFmt });
+          if (!compiledColor.is_identity) vfParts.push(compiledColor.filtergraph);
+        }
         if (body.lut_path || body.cdl) {
           vfParts.push(`lut3d=file='${body.lut_path || "studio_grade.cube"}':interp=tetrahedral,format=${pixFmt}`);
         }
@@ -578,6 +622,18 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/update/check");
+    },
+    async getColorPresets() {
+      if (resolvedMode === "static-demo") {
+        return { presets: [], bounds: {} };
+      }
+      return requestJson("/api/color/presets");
+    },
+    async compileColorGrade(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileColorClient(payload, payload);
+      }
+      return requestJson("/api/color/compile", { method: "POST", body: payload });
     },
     async getFxPresets() {
       if (resolvedMode === "static-demo") {

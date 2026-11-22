@@ -24,7 +24,24 @@ from defusedxml.common import DefusedXmlException
 from pydantic import ValidationError
 
 from taktcut import __version__
-from taktcut.color import bake_cdl_to_cube, parse_cdl_xml, parse_cube_lut
+from taktcut.color import (
+    COLOR_BALANCE_MAX,
+    COLOR_BALANCE_MIN,
+    CONTRAST_MAX,
+    CONTRAST_MIN,
+    SATURATION_MAX,
+    SATURATION_MIN,
+    TEMPERATURE_MAX,
+    TEMPERATURE_MIN,
+    ColorGradeParams,
+    apply_color_preset,
+    bake_cdl_to_cube,
+    bake_color_grade_to_cube,
+    compile_color_grade,
+    list_color_presets,
+    parse_cdl_xml,
+    parse_cube_lut,
+)
 from taktcut.drp import export_otio, load_timeline, validate_timeline
 from taktcut.fx import (
     FX_PARAM_SPECS,
@@ -193,6 +210,35 @@ def _build_cdl_from_payload(payload: dict[str, Any]) -> AscCdlParams:
         offset=_triplet(payload.get("offset"), (0.0, 0.0, 0.0)),
         power=_triplet(payload.get("power"), (1.0, 1.0, 1.0)),
         saturation=float(payload.get("saturation", 1.0)),
+    )
+
+
+def _has_color_grade_fields(payload: dict[str, Any]) -> bool:
+    return any(
+        key in payload for key in ("grade", "lift", "gamma", "gain", "contrast", "temperature")
+    )
+
+
+def _build_color_grade_from_payload(payload: dict[str, Any]) -> ColorGradeParams:
+    preset_id = payload.get("preset") or payload.get("preset_id")
+    if preset_id is not None:
+        if not isinstance(preset_id, str) or not preset_id.strip():
+            raise ValueError("preset must be a non-empty string")
+        return apply_color_preset(preset_id)
+    raw_grade = payload.get("grade")
+    source: dict[str, Any] = raw_grade if isinstance(raw_grade, dict) else payload
+    if raw_grade is not None and not isinstance(raw_grade, dict):
+        raise ValueError("'grade' must be a JSON object")
+    return ColorGradeParams.model_validate(
+        {
+            "lift": source.get("lift", (0.0, 0.0, 0.0)),
+            "gamma": source.get("gamma", (0.0, 0.0, 0.0)),
+            "gain": source.get("gain", (0.0, 0.0, 0.0)),
+            "contrast": source.get("contrast", 1.0),
+            "saturation": source.get("saturation", 1.0),
+            "temperature": source.get("temperature", 0.0),
+            "preserve_lightness": source.get("preserve_lightness", False),
+        }
     )
 
 
@@ -414,6 +460,43 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/color/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_color_presets()],
+                    "bounds": {
+                        "lift": {
+                            "min": COLOR_BALANCE_MIN,
+                            "max": COLOR_BALANCE_MAX,
+                            "default": 0.0,
+                        },
+                        "gamma": {
+                            "min": COLOR_BALANCE_MIN,
+                            "max": COLOR_BALANCE_MAX,
+                            "default": 0.0,
+                        },
+                        "gain": {
+                            "min": COLOR_BALANCE_MIN,
+                            "max": COLOR_BALANCE_MAX,
+                            "default": 0.0,
+                        },
+                        "contrast": {"min": CONTRAST_MIN, "max": CONTRAST_MAX, "default": 1.0},
+                        "saturation": {
+                            "min": SATURATION_MIN,
+                            "max": SATURATION_MAX,
+                            "default": 1.0,
+                        },
+                        "temperature": {
+                            "min": TEMPERATURE_MIN,
+                            "max": TEMPERATURE_MAX,
+                            "default": 0.0,
+                        },
+                    },
+                },
+            )
+            return
+
         if route.startswith("/api/remote/jobs/"):
             job_id = route[len("/api/remote/jobs/") :].strip()
             if not job_id or "/" in job_id:
@@ -590,8 +673,22 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"info": info.model_dump(mode="json")})
             return
 
+        if route == "/api/color/compile":
+            grade = _build_color_grade_from_payload(payload)
+            raw_pix_fmt = payload.get("pix_fmt")
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            compiled_color = compile_color_grade(grade, pix_fmt=pix_fmt)
+            self._send_json(HTTPStatus.OK, compiled_color.model_dump(mode="json"))
+            return
+
         if route == "/api/color/bake":
-            cdl = _build_cdl_from_payload(payload)
+            use_grade = _has_color_grade_fields(payload)
+            grade_obj: ColorGradeParams | None = None
+            cdl_obj: AscCdlParams | None = None
+            if use_grade:
+                grade_obj = _build_color_grade_from_payload(payload)
+            else:
+                cdl_obj = _build_cdl_from_payload(payload)
             size = int(payload.get("size", 33))
             title = str(payload.get("title", "taktcut_cdl")).strip() or "taktcut_cdl"
             raw_out = payload.get("out_path")
@@ -603,7 +700,11 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     must_exist=False,
                     allowed_suffixes=LUT_SUFFIXES,
                 )
-                info = bake_cdl_to_cube(cdl, out_file, size=size, title=title)
+                if grade_obj is not None:
+                    info = bake_color_grade_to_cube(grade_obj, out_file, size=size, title=title)
+                else:
+                    assert cdl_obj is not None
+                    info = bake_cdl_to_cube(cdl_obj, out_file, size=size, title=title)
                 cube_text = out_file.read_text(encoding="utf-8")
                 saved_rel: str | None = out_file.relative_to(
                     self.app_state.workspace_root
@@ -611,23 +712,30 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             else:
                 with tempfile.TemporaryDirectory(prefix="taktcut_ui_cube_") as tmp_dir:
                     tmp_cube = Path(tmp_dir) / "baked.cube"
-                    info = bake_cdl_to_cube(cdl, tmp_cube, size=size, title=title)
+                    if grade_obj is not None:
+                        info = bake_color_grade_to_cube(grade_obj, tmp_cube, size=size, title=title)
+                    else:
+                        assert cdl_obj is not None
+                        info = bake_cdl_to_cube(cdl_obj, tmp_cube, size=size, title=title)
                     cube_text = tmp_cube.read_text(encoding="utf-8")
                 saved_rel = None
 
-            self._send_json(
-                HTTPStatus.OK,
-                {
-                    "info": info.model_dump(mode="json"),
-                    "cdl": cdl.model_dump(mode="json"),
-                    "saved_path": saved_rel,
-                    "cube_text": cube_text,
-                },
-            )
+            bake_resp: dict[str, Any] = {
+                "info": info.model_dump(mode="json"),
+                "saved_path": saved_rel,
+                "cube_text": cube_text,
+            }
+            if grade_obj is not None:
+                bake_resp["grade"] = grade_obj.model_dump(mode="json")
+            if cdl_obj is not None:
+                bake_resp["cdl"] = cdl_obj.model_dump(mode="json")
+            self._send_json(HTTPStatus.OK, bake_resp)
             return
 
         if route == "/api/color/download-cube":
-            cdl = _build_cdl_from_payload(payload)
+            use_grade = _has_color_grade_fields(payload)
+            grade_dl = _build_color_grade_from_payload(payload) if use_grade else None
+            cdl_dl = None if use_grade else _build_cdl_from_payload(payload)
             size = int(payload.get("size", 33))
             title = str(payload.get("title", "taktcut_cdl")).strip() or "taktcut_cdl"
             filename = sanitize_download_filename(
@@ -637,7 +745,11 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             with tempfile.TemporaryDirectory(prefix="taktcut_ui_cubedl_") as tmp_dir:
                 tmp_cube = Path(tmp_dir) / filename
-                bake_cdl_to_cube(cdl, tmp_cube, size=size, title=title)
+                if grade_dl is not None:
+                    bake_color_grade_to_cube(grade_dl, tmp_cube, size=size, title=title)
+                else:
+                    assert cdl_dl is not None
+                    bake_cdl_to_cube(cdl_dl, tmp_cube, size=size, title=title)
                 cube_bytes = tmp_cube.read_bytes()
             self._send_bytes(
                 HTTPStatus.OK,
@@ -677,6 +789,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             prefer_hw = bool(payload.get("prefer_hw", True))
 
             lut_file: Path | None = None
+            color_grade_obj: ColorGradeParams | None = None
             raw_lut = payload.get("lut_path")
             if isinstance(raw_lut, str) and raw_lut.strip():
                 lut_file = confine_workspace_path(
@@ -685,6 +798,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     must_exist=True,
                     allowed_suffixes=LUT_SUFFIXES,
                 )
+            elif isinstance(payload.get("color_grade"), dict):
+                color_grade_obj = _build_color_grade_from_payload({"grade": payload["color_grade"]})
             elif isinstance(payload.get("cdl"), dict):
                 cdl = _build_cdl_from_payload(payload["cdl"])
                 lut_file = confine_workspace_path(
@@ -718,6 +833,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 profile=profile,
                 fps=fps,
                 lut_path=lut_file,
+                color_grade=color_grade_obj,
                 fx_filtergraph=fx_filtergraph,
                 target_lufs=target_lufs,
                 prefer_hw=prefer_hw,
@@ -876,7 +992,12 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 lut_cube_text = lut_file.read_text(encoding="utf-8")
 
             cdl_params: AscCdlParams | None = None
-            if lut_cube_text is None and isinstance(payload.get("cdl"), dict):
+            color_grade_remote: ColorGradeParams | None = None
+            if lut_cube_text is None and isinstance(payload.get("color_grade"), dict):
+                color_grade_remote = _build_color_grade_from_payload(
+                    {"grade": payload["color_grade"]}
+                )
+            elif lut_cube_text is None and isinstance(payload.get("cdl"), dict):
                 cdl_params = _build_cdl_from_payload(payload["cdl"])
 
             fx_nodes: list[FxNode] = []
@@ -894,6 +1015,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 prefer_hw=prefer_hw,
                 fx_stack=fx_nodes,
                 cdl=cdl_params,
+                color_grade=color_grade_remote,
                 lut_cube_text=lut_cube_text,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)

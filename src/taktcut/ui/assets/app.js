@@ -28,38 +28,67 @@ import {
 
 const api = createApiClient();
 
-const CDL_PRESETS = {
-  neutral: {
-    slope: [1.0, 1.0, 1.0],
-    offset: [0.0, 0.0, 0.0],
-    power: [1.0, 1.0, 1.0],
-    saturation: 1.0
+const COLOR_GRADE_PRESETS = {
+  rec709_clean: {
+    id: "rec709_clean",
+    name: "Rec.709 Clean",
+    params: {
+      lift: [0.0, 0.0, 0.0],
+      gamma: [0.0, 0.0, 0.0],
+      gain: [0.0, 0.0, 0.0],
+      contrast: 1.0,
+      saturation: 1.0,
+      temperature: 0.0
+    }
   },
-  warm: {
-    slope: [1.06, 1.0, 0.94],
-    offset: [0.01, 0.0, -0.01],
-    power: [0.96, 0.98, 1.03],
-    saturation: 1.12
+  teal_orange: {
+    id: "teal_orange",
+    name: "Teal & Orange",
+    params: {
+      lift: [-0.14, 0.02, 0.16],
+      gamma: [0.04, 0.0, -0.04],
+      gain: [0.14, 0.04, -0.14],
+      contrast: 1.14,
+      saturation: 1.18,
+      temperature: 0.12
+    }
   },
-  teal: {
-    slope: [1.08, 1.01, 0.9],
-    offset: [-0.015, 0.005, 0.025],
-    power: [0.95, 1.0, 1.04],
-    saturation: 1.16
+  film_warm: {
+    id: "film_warm",
+    name: "Film Warm",
+    params: {
+      lift: [0.02, 0.01, -0.03],
+      gamma: [0.06, 0.02, -0.06],
+      gain: [0.10, 0.04, -0.10],
+      contrast: 1.08,
+      saturation: 1.10,
+      temperature: 0.28
+    }
   },
-  bleach: {
-    slope: [1.14, 1.14, 1.14],
-    offset: [-0.025, -0.025, -0.025],
-    power: [1.08, 1.08, 1.08],
-    saturation: 0.72
-  },
-  cool: {
-    slope: [0.94, 0.99, 1.07],
-    offset: [-0.005, 0.0, 0.012],
-    power: [1.02, 1.0, 0.95],
-    saturation: 1.04
+  noir_bw: {
+    id: "noir_bw",
+    name: "Noir B&W",
+    params: {
+      lift: [-0.04, -0.04, -0.02],
+      gamma: [-0.03, -0.03, -0.03],
+      gain: [0.06, 0.06, 0.08],
+      contrast: 1.32,
+      saturation: 0.0,
+      temperature: -0.10
+    }
   }
 };
+
+function cloneGradeParams(p) {
+  return {
+    lift: [...p.lift],
+    gamma: [...p.gamma],
+    gain: [...p.gain],
+    contrast: Number(p.contrast),
+    saturation: Number(p.saturation),
+    temperature: Number(p.temperature)
+  };
+}
 
 const state = {
   lang: "en",
@@ -91,12 +120,11 @@ const state = {
   playbackRafId: null,
   playbackLastTs: 0,
   playbackAccumFrames: 0,
-  cdl: {
-    slope: [1.06, 1.0, 0.94],
-    offset: [0.01, 0.0, -0.01],
-    power: [0.96, 0.98, 1.03],
-    saturation: 1.12
-  },
+  colorGrade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
+  colorActivePresetId: "rec709_clean",
+  colorPresetsCatalog: null,
+  colorLastCompile: null,
+  colorCompileTimer: null,
   wipeRatio: 0.5,
   lastBakedCubePath: "",
   lastRenderCommand: "",
@@ -289,7 +317,7 @@ function redrawActiveCanvases() {
       byId("timeline-program-canvas"),
       state.timelineDoc,
       state.playheadFrame,
-      state.cdl,
+      state.colorGrade,
       getEffectiveFxState()
     );
     const tlDraw = drawTimelineCanvas(
@@ -321,16 +349,16 @@ function redrawActiveCanvases() {
       byId("fx-program-canvas"),
       state.timelineDoc,
       state.playheadFrame,
-      state.cdl,
+      state.colorGrade,
       getEffectiveFxState()
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "color") {
-    drawColorPreviewCanvas(byId("color-preview-canvas"), state.cdl, state.wipeRatio);
-    drawColorScopeCanvas(byId("color-scope-canvas"), state.cdl);
-    drawColorWheel(byId("wheel-offset"), "offset", state.cdl.offset);
-    drawColorWheel(byId("wheel-power"), "power", state.cdl.power);
-    drawColorWheel(byId("wheel-slope"), "slope", state.cdl.slope);
+    drawColorPreviewCanvas(byId("color-preview-canvas"), state.colorGrade, state.wipeRatio);
+    drawColorScopeCanvas(byId("color-scope-canvas"), state.colorGrade);
+    drawColorWheel(byId("wheel-lift"), "lift", state.colorGrade.lift);
+    drawColorWheel(byId("wheel-gamma"), "gamma", state.colorGrade.gamma);
+    drawColorWheel(byId("wheel-gain"), "gain", state.colorGrade.gain);
   } else if (state.activeTab === "qa" && state.lastQaReport) {
     drawLoudnessCanvas(byId("qa-loudness-canvas"), state.lastQaReport.loudness);
     drawFramesCanvas(byId("qa-frames-canvas"), state.lastQaReport.frame_samples);
@@ -1150,89 +1178,203 @@ function addFxNode(effect) {
   compileFxNow();
 }
 
-/* PAGE 3: COLOR WHEELS, BARS, SCOPES & .CUBE */
-const CDL_BINDINGS = [
-  { group: "slope", idx: 0, range: "slope-r-range", num: "slope-r-num", decimals: 2 },
-  { group: "slope", idx: 1, range: "slope-g-range", num: "slope-g-num", decimals: 2 },
-  { group: "slope", idx: 2, range: "slope-b-range", num: "slope-b-num", decimals: 2 },
-  { group: "offset", idx: 0, range: "offset-r-range", num: "offset-r-num", decimals: 3 },
-  { group: "offset", idx: 1, range: "offset-g-range", num: "offset-g-num", decimals: 3 },
-  { group: "offset", idx: 2, range: "offset-b-range", num: "offset-b-num", decimals: 3 },
-  { group: "power", idx: 0, range: "power-r-range", num: "power-r-num", decimals: 2 },
-  { group: "power", idx: 1, range: "power-g-range", num: "power-g-num", decimals: 2 },
-  { group: "power", idx: 2, range: "power-b-range", num: "power-b-num", decimals: 2 }
+/* PAGE 3: COLOR WHEELS, LUMETRI TONE, SCOPES, FFMPEG & .CUBE */
+const COLOR_WHEEL_BINDINGS = [
+  { group: "lift", idx: 0, range: "lift-r-range", num: "lift-r-num", min: -1, max: 1, decimals: 2 },
+  { group: "lift", idx: 1, range: "lift-g-range", num: "lift-g-num", min: -1, max: 1, decimals: 2 },
+  { group: "lift", idx: 2, range: "lift-b-range", num: "lift-b-num", min: -1, max: 1, decimals: 2 },
+  { group: "gamma", idx: 0, range: "gamma-r-range", num: "gamma-r-num", min: -1, max: 1, decimals: 2 },
+  { group: "gamma", idx: 1, range: "gamma-g-range", num: "gamma-g-num", min: -1, max: 1, decimals: 2 },
+  { group: "gamma", idx: 2, range: "gamma-b-range", num: "gamma-b-num", min: -1, max: 1, decimals: 2 },
+  { group: "gain", idx: 0, range: "gain-r-range", num: "gain-r-num", min: -1, max: 1, decimals: 2 },
+  { group: "gain", idx: 1, range: "gain-g-range", num: "gain-g-num", min: -1, max: 1, decimals: 2 },
+  { group: "gain", idx: 2, range: "gain-b-range", num: "gain-b-num", min: -1, max: 1, decimals: 2 }
 ];
 
-function syncCdlInputsFromState() {
-  for (const b of CDL_BINDINGS) {
-    const val = state.cdl[b.group][b.idx];
-    byId(b.range).value = String(val);
-    byId(b.num).value = val.toFixed(b.decimals);
+const COLOR_TONE_BINDINGS = [
+  { key: "contrast", range: "grade-contrast-range", num: "grade-contrast-num", reset: "btn-reset-contrast", min: 0, max: 2, def: 1.0, decimals: 2 },
+  { key: "saturation", range: "grade-saturation-range", num: "grade-saturation-num", reset: "btn-reset-saturation", min: 0, max: 3, def: 1.0, decimals: 2 },
+  { key: "temperature", range: "grade-temperature-range", num: "grade-temperature-num", reset: "btn-reset-temperature", min: -1, max: 1, def: 0.0, decimals: 2 }
+];
+
+function clampColorNum(val, minVal, maxVal) {
+  return Math.min(maxVal, Math.max(minVal, val));
+}
+
+function updateColorPresetBadges() {
+  const activeId = state.colorActivePresetId;
+  for (const btn of document.querySelectorAll("[data-grade-preset]")) {
+    const pid = btn.getAttribute("data-grade-preset");
+    const isMatch = pid === activeId;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
   }
-  byId("sat-range").value = String(state.cdl.saturation);
-  byId("sat-num").value = state.cdl.saturation.toFixed(2);
-  if (state.activeTab === "color" || state.activeTab === "timeline") {
+  const badge = byId("color-preset-badge");
+  if (badge) {
+    const presetObj = COLOR_GRADE_PRESETS[activeId];
+    badge.textContent = presetObj ? presetObj.name : "Custom Grade";
+    badge.className = `nle-tag mono ${presetObj ? "is-active" : "is-blue"}`;
+  }
+}
+
+function renderColorCompileResult(res) {
+  state.colorLastCompile = res;
+  const badge = byId("color-compile-badge");
+  const out = byId("color-filtergraph-output");
+  if (!badge || !out) return;
+  if (!res || !res.filtergraph) {
+    badge.textContent = "UNITY";
+    badge.className = "nle-tag mono";
+    out.textContent = "";
+    return;
+  }
+  badge.textContent = res.is_identity ? "UNITY" : "GRADED";
+  badge.className = `nle-tag mono ${res.is_identity ? "" : "is-pass"}`;
+  out.textContent = res.filtergraph;
+}
+
+async function compileColorNow() {
+  try {
+    const compiled = await api.compileColorGrade({ grade: state.colorGrade });
+    renderColorCompileResult(compiled);
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+function scheduleColorCompile() {
+  if (state.colorCompileTimer !== null) {
+    window.clearTimeout(state.colorCompileTimer);
+  }
+  state.colorCompileTimer = window.setTimeout(() => {
+    state.colorCompileTimer = null;
+    compileColorNow();
+  }, 80);
+}
+
+function syncColorInputsFromState() {
+  for (const b of COLOR_WHEEL_BINDINGS) {
+    const val = state.colorGrade[b.group][b.idx];
+    const rEl = byId(b.range);
+    const nEl = byId(b.num);
+    if (rEl) rEl.value = String(val);
+    if (nEl) nEl.value = val.toFixed(b.decimals);
+  }
+  for (const tb of COLOR_TONE_BINDINGS) {
+    const val = state.colorGrade[tb.key];
+    const rEl = byId(tb.range);
+    const nEl = byId(tb.num);
+    if (rEl) rEl.value = String(val);
+    if (nEl) nEl.value = val.toFixed(tb.decimals);
+  }
+  updateColorPresetBadges();
+  if (state.activeTab === "color" || state.activeTab === "timeline" || state.activeTab === "fx") {
     redrawActiveCanvases();
   }
 }
 
-function wireCdlInputs() {
-  for (const b of CDL_BINDINGS) {
+function applyColorPresetUI(presetId) {
+  let presetParams = null;
+  if (Array.isArray(state.colorPresetsCatalog)) {
+    const found = state.colorPresetsCatalog.find((p) => p.id === presetId);
+    if (found && found.params) presetParams = found.params;
+  }
+  if (!presetParams && COLOR_GRADE_PRESETS[presetId]) {
+    presetParams = COLOR_GRADE_PRESETS[presetId].params;
+  }
+  if (!presetParams) return;
+  state.colorGrade = cloneGradeParams(presetParams);
+  state.colorActivePresetId = presetId;
+  syncColorInputsFromState();
+  compileColorNow();
+}
+
+function wireColorInputs() {
+  for (const b of COLOR_WHEEL_BINDINGS) {
     const rangeEl = byId(b.range);
     const numEl = byId(b.num);
     rangeEl.addEventListener("input", () => {
       const val = Number.parseFloat(rangeEl.value);
       if (Number.isFinite(val)) {
-        state.cdl[b.group][b.idx] = val;
-        numEl.value = val.toFixed(b.decimals);
+        state.colorGrade[b.group][b.idx] = clampColorNum(val, b.min, b.max);
+        numEl.value = state.colorGrade[b.group][b.idx].toFixed(b.decimals);
+        state.colorActivePresetId = "";
+        updateColorPresetBadges();
         redrawActiveCanvases();
+        scheduleColorCompile();
       }
     });
     numEl.addEventListener("change", () => {
       const val = Number.parseFloat(numEl.value);
       if (Number.isFinite(val)) {
-        state.cdl[b.group][b.idx] = val;
-        rangeEl.value = String(val);
+        const clamped = clampColorNum(val, b.min, b.max);
+        state.colorGrade[b.group][b.idx] = clamped;
+        rangeEl.value = String(clamped);
+        numEl.value = clamped.toFixed(b.decimals);
+        state.colorActivePresetId = "";
+        updateColorPresetBadges();
         redrawActiveCanvases();
+        scheduleColorCompile();
       }
     });
   }
 
-  for (const group of ["offset", "power", "slope"]) {
+  for (const group of ["lift", "gamma", "gain"]) {
     const wheelCanvas = byId(`wheel-${group}`);
     bindColorWheelEvents(
       wheelCanvas,
       group,
-      () => state.cdl[group],
+      () => state.colorGrade[group],
       (nextRgb) => {
-        state.cdl[group] = nextRgb;
-        syncCdlInputsFromState();
+        state.colorGrade[group] = nextRgb;
+        state.colorActivePresetId = "";
+        syncColorInputsFromState();
+        scheduleColorCompile();
       }
     );
     byId(`btn-reset-${group}`).addEventListener("click", () => {
-      state.cdl[group] = group === "offset" ? [0.0, 0.0, 0.0] : [1.0, 1.0, 1.0];
-      syncCdlInputsFromState();
+      state.colorGrade[group] = [0.0, 0.0, 0.0];
+      state.colorActivePresetId = "";
+      syncColorInputsFromState();
+      compileColorNow();
     });
   }
 
-  const satRange = byId("sat-range");
-  const satNum = byId("sat-num");
-  satRange.addEventListener("input", () => {
-    const val = Number.parseFloat(satRange.value);
-    if (Number.isFinite(val)) {
-      state.cdl.saturation = val;
-      satNum.value = val.toFixed(2);
-      redrawActiveCanvases();
-    }
-  });
-  satNum.addEventListener("change", () => {
-    const val = Number.parseFloat(satNum.value);
-    if (Number.isFinite(val)) {
-      state.cdl.saturation = val;
-      satRange.value = String(val);
-      redrawActiveCanvases();
-    }
-  });
+  for (const tb of COLOR_TONE_BINDINGS) {
+    const rangeEl = byId(tb.range);
+    const numEl = byId(tb.num);
+    rangeEl.addEventListener("input", () => {
+      const val = Number.parseFloat(rangeEl.value);
+      if (Number.isFinite(val)) {
+        const clamped = clampColorNum(val, tb.min, tb.max);
+        state.colorGrade[tb.key] = clamped;
+        numEl.value = clamped.toFixed(tb.decimals);
+        state.colorActivePresetId = "";
+        updateColorPresetBadges();
+        redrawActiveCanvases();
+        scheduleColorCompile();
+      }
+    });
+    numEl.addEventListener("change", () => {
+      const val = Number.parseFloat(numEl.value);
+      if (Number.isFinite(val)) {
+        const clamped = clampColorNum(val, tb.min, tb.max);
+        state.colorGrade[tb.key] = clamped;
+        rangeEl.value = String(clamped);
+        numEl.value = clamped.toFixed(tb.decimals);
+        state.colorActivePresetId = "";
+        updateColorPresetBadges();
+        redrawActiveCanvases();
+        scheduleColorCompile();
+      }
+    });
+    byId(tb.reset).addEventListener("click", () => {
+      state.colorGrade[tb.key] = tb.def;
+      state.colorActivePresetId = "";
+      syncColorInputsFromState();
+      compileColorNow();
+    });
+  }
 
   const wipeSlider = byId("cdl-wipe-slider");
   wipeSlider.addEventListener("input", () => {
@@ -1241,30 +1383,15 @@ function wireCdlInputs() {
     redrawActiveCanvases();
   });
 
-  for (const btn of document.querySelectorAll("[data-cdl-preset]")) {
+  for (const btn of document.querySelectorAll("[data-grade-preset]")) {
     btn.addEventListener("click", () => {
-      const key = btn.getAttribute("data-cdl-preset");
-      const preset = CDL_PRESETS[key];
-      if (!preset) return;
-      state.cdl = {
-        slope: [...preset.slope],
-        offset: [...preset.offset],
-        power: [...preset.power],
-        saturation: preset.saturation
-      };
-      syncCdlInputsFromState();
+      const pid = btn.getAttribute("data-grade-preset");
+      if (pid) applyColorPresetUI(pid);
     });
   }
 
   byId("btn-cdl-reset").addEventListener("click", () => {
-    const n = CDL_PRESETS.neutral;
-    state.cdl = {
-      slope: [...n.slope],
-      offset: [...n.offset],
-      power: [...n.power],
-      saturation: n.saturation
-    };
-    syncCdlInputsFromState();
+    applyColorPresetUI("rec709_clean");
   });
 
   byId("cube-size-select").addEventListener("change", () => {
@@ -1276,10 +1403,10 @@ function wireCdlInputs() {
 async function bakeCubeLut() {
   try {
     const size = Number.parseInt(byId("cube-size-select").value, 10);
-    const title = byId("cube-title-input").value.trim() || "taktcut_cdl";
+    const title = byId("cube-title-input").value.trim() || "taktcut_grade";
     const outPath = byId("cube-out-path").value.trim();
     const payload = {
-      ...state.cdl,
+      grade: state.colorGrade,
       size,
       title,
       out_path: outPath || null
@@ -1312,9 +1439,14 @@ async function bakeCubeLut() {
 async function downloadCubeLut() {
   try {
     const size = Number.parseInt(byId("cube-size-select").value, 10);
-    const title = byId("cube-title-input").value.trim() || "taktcut_cdl";
-    const blob = await api.downloadCubeBlob({ ...state.cdl, size, title, filename: `${title}.cube` });
-    const safeStem = title.replace(/[^A-Za-z0-9._-]/g, "_") || "taktcut_cdl";
+    const title = byId("cube-title-input").value.trim() || "taktcut_grade";
+    const blob = await api.downloadCubeBlob({
+      grade: state.colorGrade,
+      size,
+      title,
+      filename: `${title}.cube`
+    });
+    const safeStem = title.replace(/[^A-Za-z0-9._-]/g, "_") || "taktcut_grade";
     triggerBlobDownload(blob, `${safeStem}.cube`);
     showBanner(`Downloaded ${safeStem}.cube`, "success");
   } catch (err) {
@@ -1480,7 +1612,7 @@ async function buildOrExecuteRender(execute) {
         profile,
         fps,
         lut_path: lutPath,
-        cdl: !lutPath && useStudioCdl ? state.cdl : null,
+        color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
         fx_stack: fxPayload,
         target_lufs: targetLufs,
         prefer_hw: preferHw
@@ -1520,7 +1652,7 @@ async function buildOrExecuteRender(execute) {
       profile,
       fps,
       lut_path: lutPath,
-      cdl: !lutPath && useStudioCdl ? state.cdl : null,
+      color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
       fx_stack: fxPayload,
       target_lufs: targetLufs,
       prefer_hw: preferHw,
@@ -2768,7 +2900,17 @@ function wireEvents() {
   });
 
   // Color page events
-  wireCdlInputs();
+  wireColorInputs();
+  byId("btn-color-copy-fg").addEventListener("click", async () => {
+    const fg = state.colorLastCompile ? state.colorLastCompile.filtergraph : "";
+    if (!fg) return;
+    try {
+      await navigator.clipboard.writeText(fg);
+      showBanner("Copied Color FFmpeg filtergraph to clipboard.", "success");
+    } catch {
+      showBanner("Clipboard unavailable; copy directly from filtergraph box.", "error");
+    }
+  });
   byId("btn-bake-cube").addEventListener("click", bakeCubeLut);
   byId("btn-download-cube").addEventListener("click", downloadCubeLut);
 
@@ -2778,13 +2920,18 @@ function wireEvents() {
     try {
       const xmlContent = await file.text();
       const data = await api.parseCdlXml(xmlContent);
-      state.cdl = {
-        slope: [...data.cdl.slope],
-        offset: [...data.cdl.offset],
-        power: [...data.cdl.power],
-        saturation: data.cdl.saturation
+      const c = data.cdl;
+      state.colorGrade = {
+        lift: c.offset.map((v) => clampColorNum(v, -1, 1)),
+        gamma: c.power.map((v) => clampColorNum(1.0 - v, -1, 1)),
+        gain: c.slope.map((v) => clampColorNum(v - 1.0, -1, 1)),
+        contrast: 1.0,
+        saturation: clampColorNum(c.saturation, 0, 3),
+        temperature: 0.0
       };
-      syncCdlInputsFromState();
+      state.colorActivePresetId = "";
+      syncColorInputsFromState();
+      compileColorNow();
       showBanner(`Imported ASC CDL from ${file.name}`, "success");
     } catch (err) {
       showBanner(err.message, "error");
@@ -2800,7 +2947,7 @@ function wireEvents() {
       byId("render-use-studio-cdl").checked = true;
     }
     switchTab("render");
-    showBanner("Active Color Page CDL grade linked to Deliver page.", "success");
+    showBanner("Active Color Page grade linked to Deliver page.", "success");
   });
 
   // Deliver page events
@@ -2876,9 +3023,21 @@ async function loadFxCatalog() {
   }
 }
 
+async function loadColorCatalog() {
+  try {
+    const data = await api.getColorPresets();
+    if (data && Array.isArray(data.presets) && data.presets.length > 0) {
+      state.colorPresetsCatalog = data.presets;
+    }
+  } catch {
+    // Fallback to built-in COLOR_GRADE_PRESETS constants
+  }
+}
+
 async function bootstrap() {
   wireEvents();
-  syncCdlInputsFromState();
+  syncColorInputsFromState();
+  compileColorNow();
   renderFxStack();
   renderFxCompileResult(null);
 
@@ -2910,7 +3069,8 @@ async function bootstrap() {
     refreshWorkspaceFiles(),
     loadSampleTimeline("clean"),
     checkForStudioUpdate(),
-    loadFxCatalog()
+    loadFxCatalog(),
+    loadColorCatalog()
   ]);
 }
 

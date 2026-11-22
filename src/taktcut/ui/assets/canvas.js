@@ -136,6 +136,62 @@ function clamp01(val) {
   return val < 0 ? 0 : val > 1 ? 1 : val;
 }
 
+function clampBalance(val) {
+  return val < -1 ? -1 : val > 1 ? 1 : val;
+}
+
+export function applyColorGradeRgb(r, g, b, grade) {
+  if (!grade) return [clamp01(r), clamp01(g), clamp01(b)];
+  const lift = grade.lift || [0, 0, 0];
+  const gamma = grade.gamma || [0, 0, 0];
+  const gain = grade.gain || [0, 0, 0];
+  const contrast = Number.isFinite(Number(grade.contrast)) ? Number(grade.contrast) : 1.0;
+  const sat = Number.isFinite(Number(grade.saturation)) ? Number(grade.saturation) : 1.0;
+  const temp = Number.isFinite(Number(grade.temperature)) ? Number(grade.temperature) : 0.0;
+
+  const tempR = temp * 0.25;
+  const tempG = temp * 0.03;
+  const tempB = -temp * 0.28;
+
+  const shadows = [clampBalance(lift[0]), clampBalance(lift[1]), clampBalance(lift[2])];
+  const midtones = [
+    clampBalance(gamma[0] + tempR),
+    clampBalance(gamma[1] + tempG),
+    clampBalance(gamma[2] + tempB)
+  ];
+  const highlights = [
+    clampBalance(gain[0] + tempR * 0.8),
+    clampBalance(gain[1] + tempG * 0.8),
+    clampBalance(gain[2] + tempB * 0.8)
+  ];
+
+  const channels = [r, g, b];
+  const graded = [0, 0, 0];
+  for (let idx = 0; idx < 3; idx++) {
+    const v = clamp01(channels[idx]);
+    const wS = clamp01(1.0 - v / 0.55);
+    const wM = clamp01(1.0 - Math.abs(v - 0.5) / 0.5);
+    const wH = clamp01((v - 0.45) / 0.55);
+    const balanced =
+      v +
+      (shadows[idx] * wS * 0.45 +
+        midtones[idx] * wM * 0.40 +
+        highlights[idx] * wH * 0.45);
+    graded[idx] = clamp01((balanced - 0.5) * contrast + 0.5);
+  }
+
+  let sr = graded[0];
+  let sg = graded[1];
+  let sb = graded[2];
+  if (Math.abs(sat - 1.0) > 1e-6) {
+    const luma = 0.2126 * sr + 0.7152 * sg + 0.0722 * sb;
+    sr = luma + sat * (sr - luma);
+    sg = luma + sat * (sg - luma);
+    sb = luma + sat * (sb - luma);
+  }
+  return [clamp01(sr), clamp01(sg), clamp01(sb)];
+}
+
 export function applyAscCdlRgb(r, g, b, cdl) {
   const s = cdl.slope;
   const o = cdl.offset;
@@ -155,6 +211,17 @@ export function applyAscCdlRgb(r, g, b, cdl) {
     ];
   }
   return [clamp01(sr0), clamp01(sg0), clamp01(sb0)];
+}
+
+export function applyGradeOrCdlRgb(r, g, b, colorState) {
+  if (!colorState) return [clamp01(r), clamp01(g), clamp01(b)];
+  if (Array.isArray(colorState.lift) || Array.isArray(colorState.gamma) || Array.isArray(colorState.gain)) {
+    return applyColorGradeRgb(r, g, b, colorState);
+  }
+  if (Array.isArray(colorState.slope)) {
+    return applyAscCdlRgb(r, g, b, colorState);
+  }
+  return [clamp01(r), clamp01(g), clamp01(b)];
 }
 
 export function framesToSmpte(frame, fpsNum, fpsDen) {
@@ -227,9 +294,9 @@ function getFxScratchCanvas(w, h) {
 
 function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   const grad = ctx.createLinearGradient(0, 0, w, h);
-  const c0 = applyAscCdlRgb(0.14, 0.18, 0.24, cdl);
-  const c1 = applyAscCdlRgb(0.24, 0.26, 0.30, cdl);
-  const c2 = applyAscCdlRgb(0.10, 0.11, 0.14, cdl);
+  const c0 = applyGradeOrCdlRgb(0.14, 0.18, 0.24, cdl);
+  const c1 = applyGradeOrCdlRgb(0.24, 0.26, 0.30, cdl);
+  const c2 = applyGradeOrCdlRgb(0.10, 0.11, 0.14, cdl);
   grad.addColorStop(0, toCssRgb(c0[0], c0[1], c0[2]));
   grad.addColorStop(0.55, toCssRgb(c1[0], c1[1], c1[2]));
   grad.addColorStop(1, toCssRgb(c2[0], c2[1], c2[2]));
@@ -240,7 +307,7 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   const keyX = w * 0.72;
   const keyY = h * 0.32;
   const keyR = Math.max(18, Math.min(w, h) * 0.2);
-  const keyRgb = applyAscCdlRgb(0.95, 0.90, 0.82, cdl);
+  const keyRgb = applyGradeOrCdlRgb(0.95, 0.90, 0.82, cdl);
   const keyGrad = ctx.createRadialGradient(keyX, keyY, 2, keyX, keyY, keyR);
   keyGrad.addColorStop(
     0,
@@ -264,7 +331,7 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   ];
   const cw = w / chipCols.length;
   chipCols.forEach((col, i) => {
-    const [r, g, b] = applyAscCdlRgb(col[0], col[1], col[2], cdl);
+    const [r, g, b] = applyGradeOrCdlRgb(col[0], col[1], col[2], cdl);
     ctx.fillStyle = toCssRgb(r, g, b);
     ctx.fillRect(i * cw, 0, Math.ceil(cw), 12);
   });
@@ -1040,7 +1107,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
     const barW = width / SMPTE_BARS.length;
     const row1H = 88;
     SMPTE_BARS.forEach((col, i) => {
-      const [r, g, b] = graded ? applyAscCdlRgb(col[0], col[1], col[2], cdl) : col;
+      const [r, g, b] = graded ? applyGradeOrCdlRgb(col[0], col[1], col[2], cdl) : col;
       ctx.fillStyle = toCssRgb(r, g, b);
       ctx.fillRect(i * barW, 0, Math.ceil(barW), row1H);
     });
@@ -1049,7 +1116,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
     const row2H = 66;
     const swW = width / REFERENCE_SWATCHES.length;
     REFERENCE_SWATCHES.forEach((sw, i) => {
-      const [r, g, b] = graded ? applyAscCdlRgb(sw.rgb[0], sw.rgb[1], sw.rgb[2], cdl) : sw.rgb;
+      const [r, g, b] = graded ? applyGradeOrCdlRgb(sw.rgb[0], sw.rgb[1], sw.rgb[2], cdl) : sw.rgb;
       ctx.fillStyle = toCssRgb(r, g, b);
       ctx.fillRect(i * swW, row2Y, Math.ceil(swW), row2H);
       ctx.fillStyle = "rgba(17, 17, 20, 0.78)";
@@ -1065,7 +1132,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
     const stepW = width / steps;
     for (let i = 0; i < steps; i++) {
       const v = i / (steps - 1);
-      const [r, g, b] = graded ? applyAscCdlRgb(v, v, v, cdl) : [v, v, v];
+      const [r, g, b] = graded ? applyGradeOrCdlRgb(v, v, v, cdl) : [v, v, v];
       ctx.fillStyle = toCssRgb(r, g, b);
       ctx.fillRect(i * stepW, row3Y, Math.ceil(stepW), row3H);
     }
@@ -1084,7 +1151,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
       else if (h < 4) rgb = [0.2, 0.2 + 0.65 * x, 0.85];
       else if (h < 5) rgb = [0.2 + 0.65 * x, 0.2, 0.85];
       else rgb = [0.85, 0.2, 0.2 + 0.65 * x];
-      const [r, g, b] = graded ? applyAscCdlRgb(rgb[0], rgb[1], rgb[2], cdl) : rgb;
+      const [r, g, b] = graded ? applyGradeOrCdlRgb(rgb[0], rgb[1], rgb[2], cdl) : rgb;
       ctx.fillStyle = toCssRgb(r, g, b);
       ctx.fillRect(i * hStepW, row4Y, Math.ceil(hStepW), row4H);
     }
@@ -1109,9 +1176,9 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
   ctx.fillText("ORIGINAL", 14, 20);
 
   ctx.fillStyle = "#e07b39";
-  ctx.fillRect(width - 84, 8, 76, 18);
+  ctx.fillRect(width - 96, 8, 88, 18);
   ctx.fillStyle = "#111114";
-  ctx.fillText("CDL GRADE", width - 78, 20);
+  ctx.fillText("COLOR GRADE", width - 90, 20);
 }
 
 export function drawColorScopeCanvas(canvas, cdl) {
@@ -1159,7 +1226,7 @@ export function drawColorScopeCanvas(canvas, cdl) {
     ctx.beginPath();
     for (let i = 0; i <= samples; i++) {
       const xNorm = i / samples;
-      const outRgb = applyAscCdlRgb(xNorm, xNorm, xNorm, cdl);
+      const outRgb = applyGradeOrCdlRgb(xNorm, xNorm, xNorm, cdl);
       const px = pad + xNorm * plotW;
       const py = pad + (1 - outRgb[ch.idx]) * plotH;
       if (i === 0) ctx.moveTo(px, py);
@@ -1211,7 +1278,7 @@ export function drawColorScopeCanvas(canvas, cdl) {
 
   for (const v of vectors) {
     const [ox, oy] = rgbToVec(v.rgb[0], v.rgb[1], v.rgb[2]);
-    const graded = applyAscCdlRgb(v.rgb[0], v.rgb[1], v.rgb[2], cdl);
+    const graded = applyGradeOrCdlRgb(v.rgb[0], v.rgb[1], v.rgb[2], cdl);
     const [gx, gy] = rgbToVec(graded[0], graded[1], graded[2]);
 
     const px0 = cx + ox * radius;

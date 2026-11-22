@@ -3,6 +3,9 @@ const U_G = { x: -0.8660254, y: 0.5 };
 const U_B = { x: 0.8660254, y: 0.5 };
 
 const WHEEL_CONFIGS = {
+  lift: { scale: 0.45, invertPower: false, minVal: -1.0, maxVal: 1.0, masterMin: -1.0, masterMax: 1.0 },
+  gamma: { scale: 0.45, invertPower: false, minVal: -1.0, maxVal: 1.0, masterMin: -1.0, masterMax: 1.0 },
+  gain: { scale: 0.45, invertPower: false, minVal: -1.0, maxVal: 1.0, masterMin: -1.0, masterMax: 1.0 },
   offset: { scale: 0.18, invertPower: false, minVal: -0.4, maxVal: 0.4, masterMin: -0.25, masterMax: 0.25 },
   power: { scale: 0.45, invertPower: true, minVal: 0.2, maxVal: 2.5, masterMin: 0.4, masterMax: 1.8 },
   slope: { scale: 0.55, invertPower: false, minVal: 0.2, maxVal: 2.5, masterMin: 0.4, masterMax: 1.8 }
@@ -161,7 +164,9 @@ export function bindColorWheelEvents(canvas, group, getRgb, onChange) {
     }
   });
   canvas.addEventListener("dblclick", () => {
-    const def = group === "offset" ? [0, 0, 0] : [1, 1, 1];
+    const isZeroNeutral =
+      group === "offset" || group === "lift" || group === "gamma" || group === "gain";
+    const def = isZeroNeutral ? [0, 0, 0] : [1, 1, 1];
     onChange(def);
   });
 }

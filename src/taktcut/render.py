@@ -6,7 +6,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from taktcut.color import REC709_FFMPEG_FLAGS, build_rec709_lut_filter
+from taktcut.color import (
+    REC709_FFMPEG_FLAGS,
+    ColorGradeParams,
+    build_rec709_lut_filter,
+    compile_color_grade_filter,
+)
 from taktcut.models import (
     HardwareCapabilities,
     RationalFrameRate,
@@ -101,6 +106,7 @@ def build_render_plan(
     profile: RenderProfile = RenderProfile.WEB_H264,
     fps: RationalFrameRate | None = None,
     lut_path: Path | None = None,
+    color_grade: ColorGradeParams | None = None,
     fx_filtergraph: str | None = None,
     target_lufs: float | None = None,
     prefer_hw: bool = True,
@@ -120,6 +126,8 @@ def build_render_plan(
     vf_parts: list[str] = []
     if fx_filtergraph:
         vf_parts.append(fx_filtergraph)
+    if color_grade is not None and not color_grade.is_identity():
+        vf_parts.append(compile_color_grade_filter(color_grade, pix_fmt=pix_fmt))
     if lut_path is not None:
         vf_parts.append(build_rec709_lut_filter(lut_path, target_pix_fmt=pix_fmt))
     video_filter = ",".join(vf_parts) if vf_parts else None

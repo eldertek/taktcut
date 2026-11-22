@@ -247,6 +247,80 @@ def test_ui_color_bake_download_and_cdl_parse(ui_server: tuple[str, Path]) -> No
     assert xxe_status == 400
 
 
+def test_ui_color_presets_compile_and_render_plan(ui_server: tuple[str, Path]) -> None:
+    base_url, workspace = ui_server
+
+    p_status, _, p_raw = _http_call(f"{base_url}/api/color/presets")
+    assert p_status == 200
+    p_data = json.loads(p_raw.decode("utf-8"))
+    assert [p["name"] for p in p_data["presets"]] == [
+        "Rec.709 Clean",
+        "Teal & Orange",
+        "Film Warm",
+        "Noir B&W",
+    ]
+    assert p_data["bounds"]["contrast"]["max"] == 2.0
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"preset": "teal_orange"},
+    )
+    assert c_status == 200
+    c_data = json.loads(c_raw.decode("utf-8"))
+    assert "colorbalance=" in c_data["filtergraph"]
+    assert "eq=contrast=1.1400:saturation=1.1800" in c_data["filtergraph"]
+    assert c_data["is_identity"] is False
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={
+            "grade": {
+                "lift": [1.5, 0.0, 0.0],
+                "gamma": [0.0, 0.0, 0.0],
+                "gain": [0.0, 0.0, 0.0],
+                "contrast": 1.0,
+                "saturation": 1.0,
+                "temperature": 0.0,
+            }
+        },
+    )
+    assert bad_status == 400
+
+    bake_status, _, bake_raw = _http_call(
+        f"{base_url}/api/color/bake",
+        method="POST",
+        payload={
+            "grade": c_data["params"],
+            "size": 9,
+            "title": "teal_orange_lut",
+            "out_path": "luts/teal_orange_lut.cube",
+        },
+    )
+    assert bake_status == 200
+    bake_data = json.loads(bake_raw.decode("utf-8"))
+    assert bake_data["info"]["entry_count"] == 729
+    assert (workspace / "luts" / "teal_orange_lut.cube").is_file()
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/color_graded.mp4",
+            "profile": "web_h264",
+            "color_grade": c_data["params"],
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan_data = json.loads(plan_raw.decode("utf-8"))
+    assert "colorbalance=" in plan_data["plan"]["video_filter"]
+    assert "eq=contrast=1.1400:saturation=1.1800" in plan_data["plan"]["video_filter"]
+
+
 def test_ui_render_plan_execute_and_qa_gate_roundtrip(ui_server: tuple[str, Path]) -> None:
     base_url, workspace = ui_server
 
@@ -425,6 +499,13 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-timeline-undo",
         "btn-timeline-redo",
         "timeline-tool-badge",
+        "wheel-lift",
+        "wheel-gamma",
+        "wheel-gain",
+        "grade-contrast-range",
+        "grade-saturation-range",
+        "grade-temperature-range",
+        "color-filtergraph-output",
     ):
         assert elem_id in html_text
 
@@ -440,6 +521,7 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     i18n_text = i18n_raw.decode("utf-8")
     assert "\u2013" not in i18n_text and "\u2014" not in i18n_text
     assert '"Étalonnage"' in i18n_text
+    assert '"TEMPÉRATURE"' in i18n_text
     assert '"Télécharger OTIO"' in i18n_text
     assert '"Sélection"' in i18n_text
     assert '"Rasoir"' in i18n_text
@@ -624,6 +706,35 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.mouse.up()
                     assert frame_down != frame_mid
                     assert page.locator("#program-tc").text_content() != "00:00:00:00"
+
+                # Verify Color Grading Panel responsiveness and 4 presets at all viewports
+                page.locator("#tab-color").click()
+                page.wait_for_selector("#panel-color:not(.is-hidden)")
+                color_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert color_overflow <= 0, (
+                    f"Color page horizontal overflow at {width}x{height}: {color_overflow}px"
+                )
+                if width == 1440:
+                    for preset_id, preset_label, expected_sat in (
+                        ("teal_orange", "Teal & Orange", "1.18"),
+                        ("film_warm", "Film Warm", "1.10"),
+                        ("noir_bw", "Noir B&W", "0.00"),
+                        ("rec709_clean", "Rec.709 Clean", "1.00"),
+                    ):
+                        page.locator(f'[data-grade-preset="{preset_id}"]').click()
+                        assert page.locator("#color-preset-badge").text_content() == preset_label
+                        assert page.locator("#grade-saturation-num").input_value() == expected_sat
+                    page.locator('[data-grade-preset="teal_orange"]').click()
+                    page.wait_for_function(
+                        "() => document.getElementById('color-compile-badge').textContent"
+                        " === 'GRADED'"
+                    )
+                    fg_text = page.locator("#color-filtergraph-output").text_content() or ""
+                    assert "colorbalance=" in fg_text
+                    assert "eq=contrast=1.1400:saturation=1.1800" in fg_text
+
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"
                 ctx.close()
