@@ -21,13 +21,17 @@ from taktcut.qa import audit_loudness, check_mp4_faststart, probe_media, run_qa_
 from taktcut.render import (
     ClipAudioParams,
     ClipRetimeParams,
+    FramingParams,
     build_atempo_stages,
     build_render_plan,
     compile_audio_filter,
     compile_audio_filter_result,
+    compile_framing_filter,
+    compile_framing_filter_result,
     compile_retime_filter,
     compile_retime_filter_result,
     execute_render_plan,
+    list_aspect_presets,
 )
 
 
@@ -333,3 +337,110 @@ def test_real_render_with_clip_retime_and_reverse(tmp_path: Path) -> None:
 
     probe_quarter = probe_media(out_quarter)
     assert probe_quarter.video_duration_s >= 7.5
+
+
+def test_compile_framing_presets_and_validation() -> None:
+    presets = list_aspect_presets()
+    assert [(p.id, p.width, p.height) for p in presets] == [
+        ("16:9", 1920, 1080),
+        ("9:16", 1080, 1920),
+        ("1:1", 1080, 1080),
+        ("4:5", 1080, 1350),
+    ]
+
+    disabled = FramingParams(preset="9:16", mode="fill", enabled=False)
+    assert compile_framing_filter(disabled) is None
+    disabled_res = compile_framing_filter_result(disabled)
+    assert disabled_res.is_identity is True
+    assert disabled_res.filtergraph == ""
+
+    fill_916 = FramingParams(preset="9:16", mode="fill")
+    fill_res = compile_framing_filter_result(fill_916)
+    assert fill_res.is_identity is False
+    assert fill_res.target_width == 1080
+    assert fill_res.target_height == 1920
+    assert fill_res.filtergraph == (
+        "scale=w=1080:h=1920:force_original_aspect_ratio=increase:"
+        "force_divisible_by=2:flags=lanczos,"
+        "crop=w=1080:h=1920:x=(iw-1080)/2:y=(ih-1920)/2,setsar=1"
+    )
+    assert fill_res.ffmpeg_vf_args == ["-vf", fill_res.filtergraph]
+
+    panned = FramingParams(preset="4:5", mode="fill", pan_x=-0.5, pan_y=0.25)
+    pan_fg = compile_framing_filter(panned)
+    assert pan_fg is not None
+    assert "crop=w=1080:h=1350:x=(iw-1080)/2*(1+(-0.5000)):y=(ih-1350)/2*(1+(0.2500))" in pan_fg
+
+    fit_11 = FramingParams(preset="1:1", mode="fit")
+    fit_res = compile_framing_filter_result(fit_11)
+    assert fit_res.target_width == 1080
+    assert fit_res.target_height == 1080
+    assert fit_res.filtergraph == (
+        "scale=w=1080:h=1080:force_original_aspect_ratio=decrease:"
+        "force_divisible_by=2:flags=lanczos,"
+        "pad=w=1080:h=1080:x=(ow-iw)/2:y=(oh-ih)/2:color=black,setsar=1"
+    )
+
+    for bad_kwargs in (
+        {"preset": "21:9"},
+        {"preset": 169},
+        {"mode": "stretch"},
+        {"pan_x": 1.1},
+        {"pan_y": -1.1},
+        {"pan_x": math.nan},
+        {"pan_x": True},
+        {"enabled": "yes"},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            FramingParams(**bad_kwargs)  # type: ignore[arg-type]
+
+
+def test_real_render_9_16_crop_and_1_1_pad(tmp_path: Path) -> None:
+    src = tmp_path / "framing_source.mp4"
+    _generate_synthetic_clip(src)
+
+    out_916 = tmp_path / "reels_9_16.mp4"
+    plan_916 = build_render_plan(
+        input_path=src,
+        output_path=out_916,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        framing=FramingParams(preset="9:16", mode="fill"),
+        prefer_hw=False,
+    )
+    assert plan_916.target_width == 1080
+    assert plan_916.target_height == 1920
+    assert plan_916.framing_mode == "fill"
+    assert plan_916.video_filter is not None
+    assert "crop=w=1080:h=1920" in plan_916.video_filter
+
+    res_916 = execute_render_plan(plan_916)
+    assert res_916.success is True, res_916.stderr_tail
+    assert res_916.bytes_written > 0
+
+    probe_916 = probe_media(out_916)
+    assert probe_916.width == 1080
+    assert probe_916.height == 1920
+    assert probe_916.is_cfr is True
+
+    out_11 = tmp_path / "square_1_1_fit.mp4"
+    plan_11 = build_render_plan(
+        input_path=src,
+        output_path=out_11,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        framing=FramingParams(preset="1:1", mode="fit"),
+        prefer_hw=False,
+    )
+    assert plan_11.target_width == 1080
+    assert plan_11.target_height == 1080
+    assert plan_11.framing_mode == "fit"
+    assert plan_11.video_filter is not None
+    assert "pad=w=1080:h=1080" in plan_11.video_filter
+
+    res_11 = execute_render_plan(plan_11)
+    assert res_11.success is True, res_11.stderr_tail
+    probe_11 = probe_media(out_11)
+    assert probe_11.width == 1080
+    assert probe_11.height == 1080
+    assert probe_11.is_cfr is True

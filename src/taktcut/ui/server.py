@@ -66,10 +66,13 @@ from taktcut.remote_render import (
 from taktcut.render import (
     ClipAudioParams,
     ClipRetimeParams,
+    FramingParams,
     build_render_plan,
     compile_audio_filter_result,
+    compile_framing_filter_result,
     compile_retime_filter_result,
     execute_render_plan,
+    list_aspect_presets,
     probe_hardware_capabilities,
 )
 from taktcut.titles import (
@@ -344,6 +347,48 @@ def _build_retime_params_from_payload(
             {
                 "speed_rate": payload.get("speed_rate", 1.0),
                 "reverse": rev_raw,
+            }
+        )
+    return None
+
+
+def _build_framing_params_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> FramingParams | None:
+    raw_framing = payload.get("framing")
+    if raw_framing is not None:
+        if not isinstance(raw_framing, dict):
+            raise ValueError("'framing' must be a JSON object")
+        preset_val = raw_framing.get("preset", raw_framing.get("aspect_preset", "16:9"))
+        enabled_val = raw_framing.get("enabled", True)
+        return FramingParams.model_validate(
+            {
+                "preset": preset_val,
+                "mode": raw_framing.get("mode", "fill"),
+                "pan_x": raw_framing.get("pan_x", 0.0),
+                "pan_y": raw_framing.get("pan_y", 0.0),
+                "enabled": enabled_val,
+            }
+        )
+
+    has_top_level = any(
+        key in payload for key in ("aspect_preset", "framing_preset", "framing_mode")
+    )
+    if allow_top_level or has_top_level:
+        preset_val = payload.get(
+            "aspect_preset", payload.get("framing_preset", payload.get("preset", "16:9"))
+        )
+        mode_val = payload.get("framing_mode", payload.get("mode", "fill"))
+        enabled_val = payload.get("enabled", True)
+        return FramingParams.model_validate(
+            {
+                "preset": preset_val,
+                "mode": mode_val,
+                "pan_x": payload.get("pan_x", 0.0),
+                "pan_y": payload.get("pan_y", 0.0),
+                "enabled": enabled_val,
             }
         )
     return None
@@ -690,6 +735,20 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/framing/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_aspect_presets()],
+                    "modes": ["fill", "fit"],
+                    "bounds": {
+                        "pan_x": {"min": -1.0, "max": 1.0},
+                        "pan_y": {"min": -1.0, "max": 1.0},
+                    },
+                },
+            )
+            return
+
         if route.startswith("/api/remote/jobs/"):
             job_id = route[len("/api/remote/jobs/") :].strip()
             if not job_id or "/" in job_id:
@@ -1022,6 +1081,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
+            framing_params = _build_framing_params_from_payload(payload)
 
             title_overlay_obj: TitleOverlayParams | None = None
             raw_title_overlay = payload.get("title_overlay")
@@ -1043,6 +1103,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 title_overlay=title_overlay_obj,
                 audio_params=audio_params,
                 retime_params=retime_params,
+                framing=framing_params,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
                 prefer_hw=prefer_hw,
@@ -1087,6 +1148,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             assert retime_params is not None
             compiled_retime = compile_retime_filter_result(retime_params)
             self._send_json(HTTPStatus.OK, compiled_retime.model_dump(mode="json"))
+            return
+
+        if route == "/api/framing/compile":
+            framing_params = _build_framing_params_from_payload(payload, allow_top_level=True)
+            assert framing_params is not None
+            compiled_framing = compile_framing_filter_result(framing_params)
+            self._send_json(HTTPStatus.OK, compiled_framing.model_dump(mode="json"))
             return
 
         if route == "/api/transitions/compile":
@@ -1277,6 +1345,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
+            framing_params = _build_framing_params_from_payload(payload)
             title_overlay_remote: TitleOverlayParams | None = None
             if isinstance(payload.get("title_overlay"), dict):
                 title_overlay_remote = _build_title_overlay_from_payload(
@@ -1298,6 +1367,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 title_overlay=title_overlay_remote,
                 audio_params=audio_params,
                 retime_params=retime_params,
+                framing=framing_params,
                 clip_duration_s=clip_duration_s,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)

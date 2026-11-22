@@ -109,6 +109,28 @@
               </div>
             </div>
             <div class="pane-body">
+              <div class="program-framing-bar" role="toolbar" aria-label="Aspect Ratio and Broadcast Safe Guides">
+                <div class="framing-select-group">
+                  <label class="inline-label" for="program-aspect-select" data-i18n="timeline.framing.aspect">Aspect</label>
+                  <select id="program-aspect-select" class="input-control input-compact mono" aria-label="Program aspect ratio preset">
+                    <option value="16:9">16:9 1920x1080</option>
+                    <option value="9:16">9:16 1080x1920 Reels/Shorts</option>
+                    <option value="1:1">1:1 1080x1080 Square</option>
+                    <option value="4:5">4:5 1080x1350 Feed</option>
+                  </select>
+                  <select id="program-framing-mode" class="input-control input-compact mono" aria-label="Program reframe mode">
+                    <option value="fill" data-i18n="framing.mode.fill">Fill (Crop)</option>
+                    <option value="fit" data-i18n="framing.mode.fit">Fit (Pad)</option>
+                  </select>
+                  <span id="program-framing-badge" class="nle-tag mono">1920x1080</span>
+                </div>
+                <div class="safe-guides-group" role="group" aria-label="Broadcast and social safe guides">
+                  <button type="button" id="btn-safe-guides" class="btn btn-mini" aria-pressed="false" data-i18n="timeline.framing.safeGuides">Safe Guides</button>
+                  <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="actionSafe" aria-pressed="true" data-i18n="timeline.framing.actionSafe">Action 90%</button>
+                  <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="titleSafe" aria-pressed="true" data-i18n="timeline.framing.titleSafe">Title 80%</button>
+                  <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="socialHud" aria-pressed="true" data-i18n="timeline.framing.socialHud">Reels HUD</button>
+                </div>
+              </div>
               <div class="viewer-well">
                 <canvas id="timeline-program-canvas" class="studio-canvas"></canvas>
               </div>
@@ -956,7 +978,29 @@
                   <input type="number" id="render-lufs" class="input-control mono" step="0.5" value="-14.0" placeholder="-14.0">
                 </div>
               </div>
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>
+                  <select id="render-aspect-preset" class="input-control mono">
+                    <option value="16:9">16:9 1920x1080</option>
+                    <option value="9:16">9:16 1080x1920 Reels/Shorts</option>
+                    <option value="1:1">1:1 1080x1080 Square</option>
+                    <option value="4:5">4:5 1080x1350 Feed</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label for="render-framing-mode" data-i18n="render.label.framingMode">Reframe Mode</label>
+                  <select id="render-framing-mode" class="input-control mono">
+                    <option value="fill" data-i18n="framing.mode.fillFull">Fill (Scale + Center Crop)</option>
+                    <option value="fit" data-i18n="framing.mode.fitFull">Fit (Scale + Black Pad)</option>
+                  </select>
+                </div>
+              </div>
               <div class="checkbox-row">
+                <label class="check-label">
+                  <input type="checkbox" id="render-use-framing">
+                  <span data-i18n="render.check.framing">Conform output aspect ratio &amp; resolution (scale + crop/pad)</span>
+                </label>
                 <label class="check-label">
                   <input type="checkbox" id="render-use-studio-cdl">
                   <span data-i18n="render.check.studioCdl">Bake &amp; apply active Color Page CDL grade when LUT path is empty</span>

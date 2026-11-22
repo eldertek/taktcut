@@ -41,6 +41,7 @@ import {
   findMagneticSnap,
   findTrackAndClip,
   formatRetimeBadgeText,
+  getAspectRatioPreset,
   getClipTrimBounds,
   getTransitionPresetName,
   hasSplittableClipAtFrame,
@@ -254,6 +255,16 @@ const state = {
   titleLastCompile: null,
   titleCompileTimer: null,
   transitionPresetsCatalog: null,
+  framing: {
+    preset: "16:9",
+    mode: "fill",
+    safeGuides: false,
+    guides: {
+      actionSafe: true,
+      titleSafe: true,
+      socialHud: true
+    }
+  },
   renderEngine: "local",
   remotePollTimer: null
 };
@@ -417,6 +428,51 @@ function getEffectiveTitleState(showBadge = false) {
   };
 }
 
+function getEffectiveFramingState() {
+  return {
+    aspectPreset: state.framing.preset,
+    framingMode: state.framing.mode,
+    guides: {
+      enabled: state.framing.safeGuides,
+      actionSafe: state.framing.guides.actionSafe,
+      titleSafe: state.framing.guides.titleSafe,
+      socialHud: state.framing.guides.socialHud
+    }
+  };
+}
+
+function syncFramingControlsUI() {
+  const spec = getAspectRatioPreset(state.framing.preset);
+  const progAspect = byId("program-aspect-select");
+  const progMode = byId("program-framing-mode");
+  const renderAspect = byId("render-aspect-preset");
+  const renderMode = byId("render-framing-mode");
+  if (progAspect && progAspect.value !== spec.id) progAspect.value = spec.id;
+  if (progMode && progMode.value !== state.framing.mode) progMode.value = state.framing.mode;
+  if (renderAspect && renderAspect.value !== spec.id) renderAspect.value = spec.id;
+  if (renderMode && renderMode.value !== state.framing.mode) renderMode.value = state.framing.mode;
+
+  const badge = byId("program-framing-badge");
+  if (badge) {
+    const modeTag = state.framing.mode === "fit" ? "FIT" : "FILL";
+    badge.textContent = `${spec.width}x${spec.height} ${modeTag}`;
+    badge.className = `nle-tag mono${spec.id !== "16:9" || state.framing.mode !== "fill" ? " is-active" : ""}`;
+  }
+
+  const safeBtn = byId("btn-safe-guides");
+  if (safeBtn) {
+    safeBtn.classList.toggle("is-active", state.framing.safeGuides);
+    safeBtn.setAttribute("aria-pressed", state.framing.safeGuides ? "true" : "false");
+  }
+  for (const chip of document.querySelectorAll("[data-safe-guide]")) {
+    const key = chip.getAttribute("data-safe-guide");
+    const active = Boolean(key && state.framing.guides[key]);
+    chip.classList.toggle("is-active", active);
+    chip.classList.toggle("is-dimmed", !state.framing.safeGuides);
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
 function updatePlayheadReadout() {
   const doc = state.timelineDoc;
   const fpsNum = doc ? doc.fps.num : 25;
@@ -457,7 +513,8 @@ function redrawActiveCanvases() {
       state.playheadFrame,
       state.colorGrade,
       getEffectiveFxState(),
-      getEffectiveTitleState(false)
+      getEffectiveTitleState(false),
+      getEffectiveFramingState()
     );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
@@ -495,7 +552,8 @@ function redrawActiveCanvases() {
       state.playheadFrame,
       state.colorGrade,
       getEffectiveFxState(),
-      getEffectiveTitleState(false)
+      getEffectiveTitleState(false),
+      getEffectiveFramingState()
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -505,7 +563,8 @@ function redrawActiveCanvases() {
       state.playheadFrame,
       state.colorGrade,
       getEffectiveFxState(),
-      getEffectiveTitleState(true)
+      getEffectiveTitleState(true),
+      getEffectiveFramingState()
     );
   } else if (state.activeTab === "color") {
     drawColorPreviewCanvas(byId("color-preview-canvas"), state.colorGrade, state.wipeRatio);
@@ -2448,6 +2507,12 @@ async function buildOrExecuteRender(execute) {
     const retimeParamsPayload =
       clipRetimeInfo && !clipRetimeInfo.isIdentity ? clipRetimeInfo.retime_params : null;
 
+    const useFramingEl = byId("render-use-framing");
+    const framingPayload =
+      useFramingEl && useFramingEl.checked
+        ? { preset: state.framing.preset, mode: state.framing.mode, enabled: true }
+        : null;
+
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
       const bearer_token = byId("remote-bearer-token").value.trim();
@@ -2464,6 +2529,7 @@ async function buildOrExecuteRender(execute) {
         title_overlay: titlePayload,
         audio_params: audioParamsPayload,
         retime_params: retimeParamsPayload,
+        framing: framingPayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
         prefer_hw: preferHw
@@ -2508,6 +2574,7 @@ async function buildOrExecuteRender(execute) {
       title_overlay: titlePayload,
       audio_params: audioParamsPayload,
       retime_params: retimeParamsPayload,
+      framing: framingPayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
       prefer_hw: preferHw,
@@ -2521,9 +2588,14 @@ async function buildOrExecuteRender(execute) {
     byId("render-encoder-badge").className = "nle-tag is-active mono";
 
     const fpsLabel = plan.fps.den === 1 ? String(plan.fps.num) : `${plan.fps.num}/${plan.fps.den}`;
+    const rasterLabel =
+      plan.target_width && plan.target_height
+        ? `${plan.target_width}x${plan.target_height} (${plan.framing_mode || "fill"})`
+        : "Source (Native)";
     renderKv(byId("render-plan-kv"), [
       ["Profile", plan.profile],
       ["Encoder", plan.encoder],
+      ["Target Raster", rasterLabel],
       ["Rational FPS", fpsLabel],
       ["GOP Frames", String(plan.gop_frames)],
       ["Pixel Format", plan.pix_fmt],
@@ -4990,6 +5062,71 @@ function wireEvents() {
     showBanner("Active Color Page grade linked to Deliver page.", "success");
   });
 
+  // Timeline Program Monitor Aspect Ratio & Broadcast Safe Guides
+  const progAspect = byId("program-aspect-select");
+  if (progAspect) {
+    progAspect.addEventListener("change", () => {
+      state.framing.preset = progAspect.value;
+      const useFraming = byId("render-use-framing");
+      if (useFraming && (state.framing.preset !== "16:9" || state.framing.mode !== "fill")) {
+        useFraming.checked = true;
+      }
+      syncFramingControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const progMode = byId("program-framing-mode");
+  if (progMode) {
+    progMode.addEventListener("change", () => {
+      state.framing.mode = progMode.value === "fit" ? "fit" : "fill";
+      const useFraming = byId("render-use-framing");
+      if (useFraming && (state.framing.preset !== "16:9" || state.framing.mode !== "fill")) {
+        useFraming.checked = true;
+      }
+      syncFramingControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const safeBtn = byId("btn-safe-guides");
+  if (safeBtn) {
+    safeBtn.addEventListener("click", () => {
+      state.framing.safeGuides = !state.framing.safeGuides;
+      if (
+        state.framing.safeGuides &&
+        !state.framing.guides.actionSafe &&
+        !state.framing.guides.titleSafe &&
+        !state.framing.guides.socialHud
+      ) {
+        state.framing.guides.actionSafe = true;
+        state.framing.guides.titleSafe = true;
+        state.framing.guides.socialHud = true;
+      }
+      syncFramingControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  for (const chip of document.querySelectorAll("[data-safe-guide]")) {
+    chip.addEventListener("click", () => {
+      const key = chip.getAttribute("data-safe-guide");
+      if (!key) return;
+      if (!state.framing.safeGuides) {
+        state.framing.safeGuides = true;
+        state.framing.guides[key] = true;
+      } else {
+        state.framing.guides[key] = !state.framing.guides[key];
+        if (
+          !state.framing.guides.actionSafe &&
+          !state.framing.guides.titleSafe &&
+          !state.framing.guides.socialHud
+        ) {
+          state.framing.safeGuides = false;
+        }
+      }
+      syncFramingControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+
   // Deliver page events
   const engLocalBtn = byId("btn-engine-local");
   const engRemoteBtn = byId("btn-engine-remote");
@@ -5008,6 +5145,26 @@ function wireEvents() {
     const stem = cur.replace(/\.(mp4|mov)$/i, "");
     byId("render-output-path").value = prof === "prores_hq" ? `${stem}.mov` : `${stem}.mp4`;
   });
+  const renderAspect = byId("render-aspect-preset");
+  if (renderAspect) {
+    renderAspect.addEventListener("change", () => {
+      state.framing.preset = renderAspect.value;
+      const useFraming = byId("render-use-framing");
+      if (useFraming) useFraming.checked = true;
+      syncFramingControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const renderMode = byId("render-framing-mode");
+  if (renderMode) {
+    renderMode.addEventListener("change", () => {
+      state.framing.mode = renderMode.value === "fit" ? "fit" : "fill";
+      const useFraming = byId("render-use-framing");
+      if (useFraming) useFraming.checked = true;
+      syncFramingControlsUI();
+      redrawActiveCanvases();
+    });
+  }
   byId("btn-verify-nvenc").addEventListener("click", async () => {
     try {
       const data = await api.verifyRenderCapabilities();
@@ -5098,6 +5255,7 @@ async function loadTransitionsCatalog() {
 
 async function bootstrap() {
   wireEvents();
+  syncFramingControlsUI();
   syncColorInputsFromState();
   compileColorNow();
   syncTitleInputsFromState();

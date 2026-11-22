@@ -7,7 +7,7 @@ import math
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -264,6 +264,170 @@ def compile_retime_filter_result(params: ClipRetimeParams) -> RetimeCompileResul
     )
 
 
+AspectRatioPresetId = Literal["16:9", "9:16", "1:1", "4:5"]
+FramingMode = Literal["fill", "fit"]
+
+
+class AspectRatioPreset(BaseModel):
+    """Canonical target delivery aspect ratio preset with output dimensions."""
+
+    id: AspectRatioPresetId
+    label: str
+    width: int
+    height: int
+    description: str
+
+
+ASPECT_RATIO_PRESETS: tuple[AspectRatioPreset, ...] = (
+    AspectRatioPreset(
+        id="16:9",
+        label="16:9 1920x1080",
+        width=1920,
+        height=1080,
+        description="Standard broadcast and widescreen 16:9 HD delivery.",
+    ),
+    AspectRatioPreset(
+        id="9:16",
+        label="9:16 1080x1920 Reels/Shorts",
+        width=1080,
+        height=1920,
+        description="Vertical 9:16 social framing for Reels, Shorts, and TikTok.",
+    ),
+    AspectRatioPreset(
+        id="1:1",
+        label="1:1 1080x1080 Square",
+        width=1080,
+        height=1080,
+        description="Square 1:1 social feed delivery.",
+    ),
+    AspectRatioPreset(
+        id="4:5",
+        label="4:5 1080x1350 Feed",
+        width=1080,
+        height=1350,
+        description="Vertical 4:5 social feed delivery.",
+    ),
+)
+
+_ASPECT_PRESET_MAP: dict[str, AspectRatioPreset] = {p.id: p for p in ASPECT_RATIO_PRESETS}
+
+
+def list_aspect_presets() -> list[AspectRatioPreset]:
+    """Return all built-in aspect ratio presets in deterministic display order."""
+    return list(ASPECT_RATIO_PRESETS)
+
+
+def get_aspect_preset(preset_id: str) -> AspectRatioPreset:
+    """Lookup an aspect ratio preset by canonical id."""
+    if not isinstance(preset_id, str):
+        raise ValueError(f"preset must be a string, got {preset_id!r}")
+    cleaned = preset_id.strip()
+    preset = _ASPECT_PRESET_MAP.get(cleaned)
+    if preset is None:
+        allowed = ", ".join(_ASPECT_PRESET_MAP.keys())
+        raise ValueError(
+            f"Unsupported aspect ratio preset {preset_id!r}; expected one of: {allowed}"
+        )
+    return preset
+
+
+class FramingParams(BaseModel):
+    """Aspect ratio reframe parameters for safe FFmpeg scale+crop (Fill) or scale+pad (Fit)."""
+
+    preset: AspectRatioPresetId = "16:9"
+    mode: FramingMode = "fill"
+    pan_x: float = 0.0
+    pan_y: float = 0.0
+    enabled: bool = True
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> str:
+        return get_aspect_preset(raw).id
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _validate_mode(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"mode must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in {"fill", "fit"}:
+            raise ValueError(f"Unsupported framing mode {raw!r}; expected 'fill' or 'fit'")
+        return cleaned
+
+    @field_validator("pan_x", "pan_y", mode="before")
+    @classmethod
+    def _validate_pan(cls, raw: Any, info: Any) -> float:
+        return _validate_bounded_float(raw, str(info.field_name), -1.0, 1.0)
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"enabled must be a boolean, got {raw!r}")
+        return raw
+
+    def target_dimensions(self) -> tuple[int, int]:
+        spec = _ASPECT_PRESET_MAP[self.preset]
+        return (spec.width, spec.height)
+
+
+class FramingCompileResult(BaseModel):
+    """Compiled FFmpeg scale+crop/pad framing filtergraph and target raster."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    target_width: int
+    target_height: int
+    is_identity: bool
+    params: FramingParams
+
+
+def compile_framing_filter(params: FramingParams) -> str | None:
+    """Compile validated FramingParams into a safe FFmpeg scale+crop (fill) or scale+pad (fit)."""
+    if not params.enabled:
+        return None
+    w, h = params.target_dimensions()
+    if params.mode == "fill":
+        scale_part = (
+            f"scale=w={w}:h={h}:force_original_aspect_ratio=increase:"
+            "force_divisible_by=2:flags=lanczos"
+        )
+        x_expr = (
+            f"(iw-{w})/2"
+            if math.isclose(params.pan_x, 0.0, abs_tol=1e-6)
+            else f"(iw-{w})/2*(1+({params.pan_x:.4f}))"
+        )
+        y_expr = (
+            f"(ih-{h})/2"
+            if math.isclose(params.pan_y, 0.0, abs_tol=1e-6)
+            else f"(ih-{h})/2*(1+({params.pan_y:.4f}))"
+        )
+        crop_part = f"crop=w={w}:h={h}:x={x_expr}:y={y_expr}"
+        return f"{scale_part},{crop_part},setsar=1"
+
+    scale_part = (
+        f"scale=w={w}:h={h}:force_original_aspect_ratio=decrease:"
+        "force_divisible_by=2:flags=lanczos"
+    )
+    pad_part = f"pad=w={w}:h={h}:x=(ow-iw)/2:y=(oh-ih)/2:color=black"
+    return f"{scale_part},{pad_part},setsar=1"
+
+
+def compile_framing_filter_result(params: FramingParams) -> FramingCompileResult:
+    """Compile framing parameters into structured filtergraph, argv slice, and target raster."""
+    fg = compile_framing_filter(params) or ""
+    w, h = params.target_dimensions()
+    return FramingCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        target_width=w,
+        target_height=h,
+        is_identity=(fg == ""),
+        params=params,
+    )
+
+
 def _probe_media_duration_s(media_path: Path) -> float | None:
     """Best-effort ffprobe container duration lookup for real files."""
     ffprobe_bin = shutil.which("ffprobe")
@@ -385,6 +549,7 @@ def build_render_plan(
     title_overlay: TitleOverlayParams | None = None,
     audio_params: ClipAudioParams | None = None,
     retime_params: ClipRetimeParams | None = None,
+    framing: FramingParams | None = None,
     clip_duration_s: float | None = None,
     target_lufs: float | None = None,
     prefer_hw: bool = True,
@@ -406,9 +571,21 @@ def build_render_plan(
     if retime_params is not None and not retime_params.is_identity():
         retime_vf, retime_af = compile_retime_filter(retime_params)
 
+    framing_vf: str | None = None
+    target_width: int | None = None
+    target_height: int | None = None
+    framing_mode: str | None = None
+    if framing is not None and framing.enabled:
+        framing_vf = compile_framing_filter(framing)
+        if framing_vf is not None:
+            target_width, target_height = framing.target_dimensions()
+            framing_mode = framing.mode
+
     vf_parts: list[str] = []
     if retime_vf is not None:
         vf_parts.append(retime_vf)
+    if framing_vf is not None:
+        vf_parts.append(framing_vf)
     if fx_filtergraph:
         vf_parts.append(fx_filtergraph)
     if color_grade is not None and not color_grade.is_identity():
@@ -506,6 +683,9 @@ def build_render_plan(
         pix_fmt=pix_fmt,
         faststart=faststart,
         target_lufs=target_lufs,
+        target_width=target_width,
+        target_height=target_height,
+        framing_mode=framing_mode,
         lut_path=str(lut_path) if lut_path is not None else None,
         video_filter=video_filter,
         audio_filter=audio_filter,

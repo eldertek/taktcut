@@ -3,6 +3,7 @@ import {
   computeBpmBeatFrames,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
+  getAspectRatioPreset,
   getTransitionPresetName,
   getTransitionShortTag,
   normalizeClipRetime,
@@ -401,15 +402,9 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
     ctx.fillRect(i * cw, 0, Math.ceil(cw), 12);
   });
 
-  // Action/Title Safe Reticle
-  ctx.strokeStyle = "rgba(216, 216, 222, 0.24)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(w * 0.05, h * 0.05, w * 0.9, h * 0.9);
-  ctx.setLineDash([3, 3]);
-  ctx.strokeRect(w * 0.1, h * 0.1, w * 0.8, h * 0.8);
-  ctx.setLineDash([]);
-
   // Center crosshair
+  ctx.strokeStyle = "rgba(216, 216, 222, 0.22)";
+  ctx.lineWidth = 1;
   const cx = w / 2;
   const cy = h / 2;
   ctx.beginPath();
@@ -420,11 +415,16 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   ctx.stroke();
 
   // Active clip slate info
+  const slatePad = Math.min(14, Math.max(6, Math.floor(w * 0.05)));
+  const slateW = Math.max(40, w - slatePad * 2);
+  const slateX = slatePad;
+  const slateY = Math.max(16, h - 46);
   ctx.fillStyle = "rgba(20, 20, 22, 0.76)";
-  ctx.fillRect(14, h - 48, Math.max(120, w - 28), 34);
+  ctx.fillRect(slateX, slateY, slateW, 34);
   ctx.strokeStyle = "#34343a";
-  ctx.strokeRect(14, h - 48, Math.max(120, w - 28), 34);
+  ctx.strokeRect(slateX, slateY, slateW, 34);
 
+  const textMaxW = Math.max(24, slateW - 14);
   if (activeClips.length > 0) {
     const top = activeClips[activeClips.length - 1];
     const retimeNorm = normalizeClipRetime(top.clip);
@@ -439,18 +439,22 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
       : "";
     ctx.fillStyle = "#d8d8de";
     ctx.font = "600 11px ui-monospace, monospace";
-    ctx.fillText(`${top.track}: ${top.clip.name}`, 22, h - 31);
+    ctx.fillText(fitCanvasText(ctx, `${top.track}: ${top.clip.name}`, textMaxW), slateX + 7, slateY + 14);
     ctx.fillStyle = "#8e8e98";
     ctx.font = "10px ui-monospace, monospace";
     ctx.fillText(
-      `SRC+${relOffset}f${retimeSlateTag} | ${doc.width}x${doc.height} | ${activeClips.length} active layer(s)`,
-      22,
-      h - 18
+      fitCanvasText(
+        ctx,
+        `SRC+${relOffset}f${retimeSlateTag} | ${doc.width}x${doc.height} | ${activeClips.length} active layer(s)`,
+        textMaxW
+      ),
+      slateX + 7,
+      slateY + 27
     );
   } else {
     ctx.fillStyle = "#8e8e98";
     ctx.font = "11px ui-monospace, monospace";
-    ctx.fillText("BLACK / NO VIDEO AT PLAYHEAD", 22, h - 27);
+    ctx.fillText(fitCanvasText(ctx, "BLACK / NO VIDEO AT PLAYHEAD", textMaxW), slateX + 7, slateY + 21);
   }
 }
 
@@ -579,20 +583,170 @@ export function drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState,
   return true;
 }
 
+export function drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState) {
+  const guides = framingState && framingState.guides ? framingState.guides : null;
+  if (!guides || !guides.enabled) return;
+
+  ctx.save();
+  ctx.font = "700 8px ui-monospace, monospace";
+  ctx.textBaseline = "top";
+
+  if (guides.socialHud) {
+    // Top Reels/TikTok UI bar dead zone (top 14%)
+    const topH = frameH * 0.14;
+    ctx.fillStyle = "rgba(248, 113, 113, 0.16)";
+    ctx.fillRect(fx, fy, frameW, topH);
+    ctx.strokeStyle = "rgba(248, 113, 113, 0.72)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(fx, fy + topH);
+    ctx.lineTo(fx + frameW, fy + topH);
+    ctx.stroke();
+
+    // Bottom caption / audio / progress bar dead zone (bottom 22%)
+    const botH = frameH * 0.22;
+    const botY = fy + frameH - botH;
+    ctx.fillStyle = "rgba(248, 113, 113, 0.18)";
+    ctx.fillRect(fx, botY, frameW, botH);
+    ctx.beginPath();
+    ctx.moveTo(fx, botY);
+    ctx.lineTo(fx + frameW, botY);
+    ctx.stroke();
+
+    // Right-side social action rail (16% width x 38% height above bottom HUD)
+    const railW = frameW * 0.16;
+    const railH = frameH * 0.38;
+    const railX = fx + frameW - railW;
+    const railY = botY - railH;
+    ctx.fillStyle = "rgba(248, 113, 113, 0.15)";
+    ctx.fillRect(railX, railY, railW, railH);
+    ctx.strokeRect(railX, railY, railW, railH);
+    ctx.setLineDash([]);
+
+    // Subtle social icon pips inside action rail
+    const pipX = railX + railW * 0.5;
+    const pipR = Math.max(2, Math.min(4, railW * 0.2));
+    ctx.fillStyle = "rgba(255, 180, 176, 0.55)";
+    for (let i = 0; i < 4; i++) {
+      const pipY = railY + railH * (0.2 + i * 0.21);
+      ctx.beginPath();
+      ctx.arc(pipX, pipY, pipR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Dead zone labels
+    ctx.fillStyle = "#ff9b96";
+    ctx.textAlign = "right";
+    const topLbl = fitCanvasText(ctx, "HUD TOP", Math.max(24, frameW * 0.42));
+    if (topH >= 14) {
+      ctx.fillText(topLbl, fx + frameW - 5, fy + topH - 11);
+    }
+    ctx.textAlign = "center";
+    const botLbl = fitCanvasText(ctx, "REELS / TIKTOK HUD", Math.max(24, frameW - 8));
+    if (botH >= 16) {
+      ctx.fillText(botLbl, fx + frameW * 0.5, botY + Math.max(3, botH * 0.42));
+    }
+    ctx.textAlign = "left";
+  }
+
+  if (guides.actionSafe !== false) {
+    const ax = fx + frameW * 0.05;
+    const ay = fy + frameH * 0.05;
+    const aw = frameW * 0.9;
+    const ah = frameH * 0.9;
+    ctx.strokeStyle = "rgba(104, 156, 255, 0.78)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.strokeRect(ax, ay, aw, ah);
+
+    // Corner L-brackets
+    const brk = Math.max(4, Math.min(10, aw * 0.08, ah * 0.08));
+    ctx.strokeStyle = "#689cff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay + brk);
+    ctx.lineTo(ax, ay);
+    ctx.lineTo(ax + brk, ay);
+    ctx.moveTo(ax + aw - brk, ay);
+    ctx.lineTo(ax + aw, ay);
+    ctx.lineTo(ax + aw, ay + brk);
+    ctx.moveTo(ax, ay + ah - brk);
+    ctx.lineTo(ax, ay + ah);
+    ctx.lineTo(ax + brk, ay + ah);
+    ctx.moveTo(ax + aw - brk, ay + ah);
+    ctx.lineTo(ax + aw, ay + ah);
+    ctx.lineTo(ax + aw, ay + ah - brk);
+    ctx.stroke();
+
+    if (aw >= 82) {
+      ctx.fillStyle = "#8cb4ff";
+      ctx.fillText("ACTION 90%", ax + 4, ay + 3);
+    }
+  }
+
+  if (guides.titleSafe !== false) {
+    const tx = fx + frameW * 0.1;
+    const ty = fy + frameH * 0.1;
+    const tw = frameW * 0.8;
+    const th = frameH * 0.8;
+    ctx.strokeStyle = "rgba(230, 132, 66, 0.86)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(tx, ty, tw, th);
+    ctx.setLineDash([]);
+
+    if (tw >= 72) {
+      ctx.fillStyle = "#f4a46b";
+      ctx.fillText("TITLE 80%", tx + 4, ty + 3);
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips, framingMode, srcAspect, targetAspect) {
+  if (framingMode === "fit" && Math.abs(targetAspect - srcAspect) > 0.015) {
+    targetCtx.fillStyle = "#000000";
+    targetCtx.fillRect(0, 0, bufW, bufH);
+    let innerW = bufW;
+    let innerH = innerW / srcAspect;
+    if (innerH > bufH) {
+      innerH = bufH;
+      innerW = innerH * srcAspect;
+    }
+    const ix = Math.floor((bufW - innerW) / 2);
+    const iy = Math.floor((bufH - innerH) / 2);
+    targetCtx.save();
+    targetCtx.beginPath();
+    targetCtx.rect(ix, iy, innerW, innerH);
+    targetCtx.clip();
+    targetCtx.translate(ix, iy);
+    drawBaseProgramScene(targetCtx, innerW, innerH, doc, playheadFrame, cdl, clips);
+    targetCtx.restore();
+    return;
+  }
+  drawBaseProgramScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips);
+}
+
 export function drawProgramMonitorCanvas(
   canvas,
   doc,
   playheadFrame,
   cdl,
   fxState = null,
-  titleState = null
+  titleState = null,
+  framingState = null
 ) {
   const { ctx, width, height } = setupCanvas(canvas, 244);
   ctx.fillStyle = "#141416";
   ctx.fillRect(0, 0, width, height);
 
-  // 16:9 letterbox / pillarbox viewer frame
-  const targetAspect = 16 / 9;
+  // Target aspect ratio letterbox / pillarbox viewer frame
+  const aspectSpec = getAspectRatioPreset(framingState && framingState.aspectPreset ? framingState.aspectPreset : "16:9");
+  const framingMode = framingState && framingState.framingMode === "fit" ? "fit" : "fill";
+  const targetAspect = aspectSpec.width / aspectSpec.height;
+  const srcAspect = doc && doc.width > 0 && doc.height > 0 ? doc.width / doc.height : 16 / 9;
   let frameW = width - 16;
   let frameH = frameW / targetAspect;
   if (frameH > height - 16) {
@@ -675,12 +829,30 @@ export function drawProgramMonitorCanvas(
       ctxB.clearRect(0, 0, bw, bh);
 
       const trkTag = `V${activeTrans.trackIndex}`;
-      drawBaseProgramScene(ctxA, bw, bh, doc, playheadFrame, cdl, [
-        { track: trkTag, clip: activeTrans.clipA }
-      ]);
-      drawBaseProgramScene(ctxB, bw, bh, doc, playheadFrame, cdl, [
-        { track: trkTag, clip: activeTrans.clipB }
-      ]);
+      drawFramedBaseScene(
+        ctxA,
+        bw,
+        bh,
+        doc,
+        playheadFrame,
+        cdl,
+        [{ track: trkTag, clip: activeTrans.clipA }],
+        framingMode,
+        srcAspect,
+        targetAspect
+      );
+      drawFramedBaseScene(
+        ctxB,
+        bw,
+        bh,
+        doc,
+        playheadFrame,
+        cdl,
+        [{ track: trkTag, clip: activeTrans.clipB }],
+        framingMode,
+        srcAspect,
+        targetAspect
+      );
 
       const u = clamp01(activeTrans.progress);
       const preset = activeTrans.transition.preset;
@@ -750,7 +922,18 @@ export function drawProgramMonitorCanvas(
         bctx.restore();
       }
     } else {
-      drawBaseProgramScene(bctx, bw, bh, doc, playheadFrame, cdl, activeClips);
+      drawFramedBaseScene(
+        bctx,
+        bw,
+        bh,
+        doc,
+        playheadFrame,
+        cdl,
+        activeClips,
+        framingMode,
+        srcAspect,
+        targetAspect
+      );
     }
 
     // Apply Chroma Aberration RGB channel split directly on frame buffer
@@ -797,7 +980,18 @@ export function drawProgramMonitorCanvas(
   } else {
     ctx.save();
     ctx.translate(fx + shiftX, fy + shiftY);
-    drawBaseProgramScene(ctx, frameW, frameH, doc, playheadFrame, cdl, activeClips);
+    drawFramedBaseScene(
+      ctx,
+      frameW,
+      frameH,
+      doc,
+      playheadFrame,
+      cdl,
+      activeClips,
+      framingMode,
+      srcAspect,
+      targetAspect
+    );
     ctx.restore();
   }
 
@@ -1002,6 +1196,9 @@ export function drawProgramMonitorCanvas(
     ctx.fillStyle = bypassAll || activeFx.length === 0 ? "#a4a4ae" : "#111114";
     ctx.fillText(label, fx + frameW - tw - 2, fy + 28);
   }
+
+  // Broadcast & Social Safe-Area Guides (Action 90%, Title 80%, Reels/TikTok HUD)
+  drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState);
 
   ctx.restore();
 

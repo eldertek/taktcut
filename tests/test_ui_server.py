@@ -457,6 +457,84 @@ def test_ui_retime_compile_and_render_plan(ui_server: tuple[str, Path]) -> None:
     )
 
 
+def test_ui_framing_presets_compile_and_render_plan(ui_server: tuple[str, Path]) -> None:
+    base_url, workspace = ui_server
+    sample_clip = workspace / ".taktcut-samples" / "sample_rec709.mp4"
+    sample_clip.parent.mkdir(parents=True, exist_ok=True)
+    sample_clip.write_bytes(b"fake-mp4")
+
+    p_status, _, p_raw = _http_call(f"{base_url}/api/framing/presets")
+    assert p_status == 200
+    presets_data = json.loads(p_raw.decode("utf-8"))
+    assert [p["id"] for p in presets_data["presets"]] == ["16:9", "9:16", "1:1", "4:5"]
+    assert presets_data["modes"] == ["fill", "fit"]
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/framing/compile",
+        method="POST",
+        payload={"preset": "9:16", "mode": "fill"},
+    )
+    assert c_status == 200
+    c_data = json.loads(c_raw.decode("utf-8"))
+    assert c_data["target_width"] == 1080
+    assert c_data["target_height"] == 1920
+    assert "crop=w=1080:h=1920" in c_data["filtergraph"]
+
+    for bad_payload in (
+        {"preset": "21:9"},
+        {"preset": "9:16", "mode": "stretch"},
+        {"preset": "1:1", "pan_x": 1.5},
+        {"framing": "bad"},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/framing/compile",
+            method="POST",
+            payload=bad_payload,
+        )
+        assert bad_status == 400
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/reels_9_16.mp4",
+            "profile": "web_h264",
+            "framing": {"preset": "9:16", "mode": "fill", "enabled": True},
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan_data = json.loads(plan_raw.decode("utf-8"))
+    assert plan_data["plan"]["target_width"] == 1080
+    assert plan_data["plan"]["target_height"] == 1920
+    assert plan_data["plan"]["framing_mode"] == "fill"
+    assert "scale=w=1080:h=1920:force_original_aspect_ratio=increase" in (
+        plan_data["plan"]["video_filter"] or ""
+    )
+    assert "crop=w=1080:h=1920" in (plan_data["plan"]["video_filter"] or "")
+
+    fit_status, _, fit_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/feed_4_5.mp4",
+            "profile": "web_h264",
+            "framing": {"preset": "4:5", "mode": "fit", "enabled": True},
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert fit_status == 200
+    fit_data = json.loads(fit_raw.decode("utf-8"))
+    assert fit_data["plan"]["target_width"] == 1080
+    assert fit_data["plan"]["target_height"] == 1350
+    assert fit_data["plan"]["framing_mode"] == "fit"
+    assert "pad=w=1080:h=1350" in (fit_data["plan"]["video_filter"] or "")
+
+
 def test_ui_render_plan_execute_and_qa_gate_roundtrip(ui_server: tuple[str, Path]) -> None:
     base_url, workspace = ui_server
 

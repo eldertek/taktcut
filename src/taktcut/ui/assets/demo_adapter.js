@@ -1,7 +1,9 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
+  ASPECT_RATIO_PRESETS,
   TRANSITION_PRESETS,
   compileAudioFilterClient,
+  compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   validateTimelineClient
@@ -599,11 +601,23 @@ export function createApiClient() {
         const gop = Math.max(2, Math.round((2 * fpsNum) / fpsDen));
         const vfParts = [];
         const afParts = [];
+        let targetWidth = null;
+        let targetHeight = null;
+        let framingMode = null;
         if (body.retime_params) {
           const compiledRetime = compileRetimeFilterClient(body.retime_params);
           if (!compiledRetime.is_identity) {
             if (compiledRetime.video_filtergraph) vfParts.push(compiledRetime.video_filtergraph);
             if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
+          }
+        }
+        if (body.framing) {
+          const compiledFraming = compileFramingFilterClient(body.framing);
+          if (!compiledFraming.is_identity && compiledFraming.filtergraph) {
+            vfParts.push(compiledFraming.filtergraph);
+            targetWidth = compiledFraming.target_width;
+            targetHeight = compiledFraming.target_height;
+            framingMode = compiledFraming.params.mode;
           }
         }
         if (Array.isArray(body.fx_stack) && body.fx_stack.length > 0) {
@@ -653,6 +667,9 @@ export function createApiClient() {
             pix_fmt: pixFmt,
             faststart: !isProres,
             target_lufs: body.target_lufs,
+            target_width: targetWidth,
+            target_height: targetHeight,
+            framing_mode: framingMode,
             lut_path: body.lut_path || null,
             video_filter: vf,
             audio_filter: af,
@@ -745,6 +762,22 @@ export function createApiClient() {
         return compileRetimeFilterClient(payload.retime_params || payload);
       }
       return requestJson("/api/retime/compile", { method: "POST", body: payload });
+    },
+    async getFramingPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: ASPECT_RATIO_PRESETS,
+          modes: ["fill", "fit"],
+          bounds: { pan_x: { min: -1, max: 1 }, pan_y: { min: -1, max: 1 } }
+        };
+      }
+      return requestJson("/api/framing/presets");
+    },
+    async compileFramingFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileFramingFilterClient(payload.framing || payload);
+      }
+      return requestJson("/api/framing/compile", { method: "POST", body: payload });
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {

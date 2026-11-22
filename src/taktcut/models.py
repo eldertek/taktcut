@@ -407,6 +407,9 @@ class RenderPlan(BaseModel):
     pix_fmt: str
     faststart: bool
     target_lufs: float | None = None
+    target_width: int | None = None
+    target_height: int | None = None
+    framing_mode: str | None = None
     lut_path: str | None = None
     video_filter: str | None = None
     audio_filter: str | None = None

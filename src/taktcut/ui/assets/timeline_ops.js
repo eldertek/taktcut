@@ -34,6 +34,65 @@ export const TRANSITION_PRESETS = [
   { id: "zoomin", name: "Smooth Zoom", shortTag: "ZOOM" }
 ];
 
+export const ASPECT_RATIO_PRESETS = [
+  { id: "16:9", label: "16:9 1920x1080", width: 1920, height: 1080 },
+  { id: "9:16", label: "9:16 1080x1920 Reels/Shorts", width: 1080, height: 1920 },
+  { id: "1:1", label: "1:1 1080x1080 Square", width: 1080, height: 1080 },
+  { id: "4:5", label: "4:5 1080x1350 Feed", width: 1080, height: 1350 }
+];
+
+const ASPECT_PRESET_MAP = new Map(ASPECT_RATIO_PRESETS.map((p) => [p.id, p]));
+
+export function getAspectRatioPreset(presetId) {
+  const clean = typeof presetId === "string" ? presetId.trim() : "";
+  return ASPECT_PRESET_MAP.get(clean) || ASPECT_RATIO_PRESETS[0];
+}
+
+export function compileFramingFilterClient(params) {
+  const p = params || {};
+  const preset = getAspectRatioPreset(p.preset || p.aspect_preset || "16:9");
+  const mode = typeof p.mode === "string" && p.mode.trim().toLowerCase() === "fit" ? "fit" : "fill";
+  const enabled = p.enabled !== false;
+  const panX = clampNum(Number.isFinite(Number(p.pan_x)) ? Number(p.pan_x) : 0, -1, 1);
+  const panY = clampNum(Number.isFinite(Number(p.pan_y)) ? Number(p.pan_y) : 0, -1, 1);
+
+  if (!enabled) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      target_width: preset.width,
+      target_height: preset.height,
+      is_identity: true,
+      params: { preset: preset.id, mode, pan_x: panX, pan_y: panY, enabled: false }
+    };
+  }
+
+  const w = preset.width;
+  const h = preset.height;
+  let fg = "";
+  if (mode === "fill") {
+    const xExpr =
+      Math.abs(panX) <= 1e-6 ? `(iw-${w})/2` : `(iw-${w})/2*(1+(${panX.toFixed(4)}))`;
+    const yExpr =
+      Math.abs(panY) <= 1e-6 ? `(ih-${h})/2` : `(ih-${h})/2*(1+(${panY.toFixed(4)}))`;
+    fg =
+      `scale=w=${w}:h=${h}:force_original_aspect_ratio=increase:force_divisible_by=2:flags=lanczos,` +
+      `crop=w=${w}:h=${h}:x=${xExpr}:y=${yExpr},setsar=1`;
+  } else {
+    fg =
+      `scale=w=${w}:h=${h}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,` +
+      `pad=w=${w}:h=${h}:x=(ow-iw)/2:y=(oh-ih)/2:color=black,setsar=1`;
+  }
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: ["-vf", fg],
+    target_width: w,
+    target_height: h,
+    is_identity: false,
+    params: { preset: preset.id, mode, pan_x: panX, pan_y: panY, enabled: true }
+  };
+}
+
 const ALLOWED_TRANSITION_IDS = new Set(TRANSITION_PRESETS.map((p) => p.id));
 
 function clampNum(val, minVal, maxVal) {

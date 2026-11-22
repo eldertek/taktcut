@@ -804,6 +804,64 @@ body {
   min-width: 0;
 }
 
+.program-framing-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 7px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.framing-select-group,
+.safe-guides-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.input-control.input-compact {
+  width: auto;
+  max-width: 100%;
+  flex: 0 1 auto;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+#btn-safe-guides.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #ffd8a8;
+}
+
+.safe-guide-chip.is-dimmed {
+  opacity: 0.62;
+}
+
+.safe-guide-chip.is-active {
+  background: var(--accent-blue-soft);
+  border-color: var(--accent-blue);
+  color: #b8d2ff;
+}
+
+.safe-guide-chip[data-safe-guide="titleSafe"].is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #ffd8a8;
+}
+
+.safe-guide-chip[data-safe-guide="socialHud"].is-active {
+  background: var(--status-fail-soft);
+  border-color: var(--status-fail);
+  color: #ffd0cd;
+}
+
 .studio-canvas {
   display: block;
   width: 100%;
