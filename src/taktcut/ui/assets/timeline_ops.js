@@ -1,4 +1,84 @@
 export const SNAP_THRESHOLD_PX = 10;
+export const AUDIO_GAIN_DB_MIN = -24;
+export const AUDIO_GAIN_DB_MAX = 12;
+export const AUDIO_FADE_S_MIN = 0;
+export const AUDIO_FADE_S_MAX = 5;
+
+function clampNum(val, minVal, maxVal) {
+  return Math.min(maxVal, Math.max(minVal, val));
+}
+
+export function normalizeClipAudio(clip) {
+  const rawGain = clip && Number.isFinite(Number(clip.audio_gain_db)) ? Number(clip.audio_gain_db) : 0;
+  const rawIn = clip && Number.isFinite(Number(clip.fade_in_s)) ? Number(clip.fade_in_s) : 0;
+  const rawOut = clip && Number.isFinite(Number(clip.fade_out_s)) ? Number(clip.fade_out_s) : 0;
+  return {
+    gainDb: clampNum(rawGain, AUDIO_GAIN_DB_MIN, AUDIO_GAIN_DB_MAX),
+    fadeInS: clampNum(rawIn, AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX),
+    fadeOutS: clampNum(rawOut, AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+  };
+}
+
+export function isTrackAudiblyMuted(track, allTracks) {
+  if (!track) return false;
+  if (track.muted) return true;
+  const anySolo = Array.isArray(allTracks) && allTracks.some((t) => Boolean(t && t.solo));
+  return anySolo && !track.solo;
+}
+
+export function compileAudioFilterClient(params, clipDurationS = null, targetLufs = null) {
+  const p = params || {};
+  const gainDb = clampNum(
+    Number.isFinite(Number(p.gain_db)) ? Number(p.gain_db) : 0,
+    AUDIO_GAIN_DB_MIN,
+    AUDIO_GAIN_DB_MAX
+  );
+  const fadeInS = clampNum(
+    Number.isFinite(Number(p.fade_in_s)) ? Number(p.fade_in_s) : 0,
+    AUDIO_FADE_S_MIN,
+    AUDIO_FADE_S_MAX
+  );
+  const fadeOutS = clampNum(
+    Number.isFinite(Number(p.fade_out_s)) ? Number(p.fade_out_s) : 0,
+    AUDIO_FADE_S_MIN,
+    AUDIO_FADE_S_MAX
+  );
+  const muted = Boolean(p.muted);
+  const dur =
+    clipDurationS !== null && clipDurationS !== undefined && Number.isFinite(Number(clipDurationS)) && Number(clipDurationS) > 0
+      ? Number(clipDurationS)
+      : null;
+
+  const parts = [];
+  if (muted) {
+    parts.push("volume=0");
+  } else {
+    if (Math.abs(gainDb) > 1e-6) {
+      parts.push(`volume=${gainDb.toFixed(2)}dB`);
+    }
+    if (fadeInS > 1e-6) {
+      const inD = dur !== null ? Math.min(fadeInS, dur) : fadeInS;
+      if (inD > 1e-6) parts.push(`afade=t=in:st=0.000:d=${inD.toFixed(3)}`);
+    }
+    if (fadeOutS > 1e-6 && dur !== null) {
+      const outD = Math.min(fadeOutS, dur);
+      const outSt = Math.max(0, dur - outD);
+      if (outD > 1e-6) parts.push(`afade=t=out:st=${outSt.toFixed(3)}:d=${outD.toFixed(3)}`);
+    }
+    if (targetLufs !== null && targetLufs !== undefined && Number.isFinite(Number(targetLufs))) {
+      const lufs = Number(targetLufs);
+      const lra = lufs >= -16.0 ? 11.0 : 7.0;
+      parts.push(`loudnorm=I=${lufs.toFixed(1)}:TP=-1.0:LRA=${lra.toFixed(1)}`);
+    }
+  }
+  const filtergraph = parts.join(",");
+  return {
+    filtergraph,
+    ffmpeg_af_args: filtergraph ? ["-af", filtergraph] : [],
+    is_identity: filtergraph === "",
+    params: { gain_db: gainDb, fade_in_s: fadeInS, fade_out_s: fadeOutS, muted }
+  };
+}
 
 export function cloneTimelineDoc(doc) {
   if (!doc) return null;
@@ -298,16 +378,24 @@ export function splitClipInDocument(doc, trackKind, trackIndex, clipIndex, split
   const leftDur = cut - clip.start_frame;
   const rightDur = origEnd - cut;
   const srcDelta = computeSourceFrameDelta(leftDur, clip.source_fps, nextDoc.fps);
+  const fpsRate = nextDoc.fps ? Math.max(1, nextDoc.fps.num / Math.max(1, nextDoc.fps.den)) : 25;
+  const audioNorm = normalizeClipAudio(clip);
 
   const leftClip = {
     ...clip,
-    duration_frames: leftDur
+    duration_frames: leftDur,
+    audio_gain_db: audioNorm.gainDb,
+    fade_in_s: Number(Math.min(audioNorm.fadeInS, leftDur / fpsRate).toFixed(2)),
+    fade_out_s: 0
   };
   const rightClip = {
     ...clip,
     start_frame: cut,
     duration_frames: rightDur,
-    source_in_frame: Math.max(0, (clip.source_in_frame || 0) + srcDelta)
+    source_in_frame: Math.max(0, (clip.source_in_frame || 0) + srcDelta),
+    audio_gain_db: audioNorm.gainDb,
+    fade_in_s: 0,
+    fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2))
   };
 
   trk.clips.splice(clipIndex, 1, leftClip, rightClip);
@@ -342,6 +430,7 @@ export function splitClipsAtPlayhead(doc, playheadFrame, selectedClip = null) {
   const nextDoc = cloneTimelineDoc(doc);
   let splitCount = 0;
   let focusClip = null;
+  const fpsRate = nextDoc.fps ? Math.max(1, nextDoc.fps.num / Math.max(1, nextDoc.fps.den)) : 25;
 
   for (const trk of nextDoc.tracks) {
     const newClips = [];
@@ -351,12 +440,22 @@ export function splitClipsAtPlayhead(doc, playheadFrame, selectedClip = null) {
         const leftDur = cut - clip.start_frame;
         const rightDur = endF - cut;
         const srcDelta = computeSourceFrameDelta(leftDur, clip.source_fps, nextDoc.fps);
-        const leftClip = { ...clip, duration_frames: leftDur };
+        const audioNorm = normalizeClipAudio(clip);
+        const leftClip = {
+          ...clip,
+          duration_frames: leftDur,
+          audio_gain_db: audioNorm.gainDb,
+          fade_in_s: Number(Math.min(audioNorm.fadeInS, leftDur / fpsRate).toFixed(2)),
+          fade_out_s: 0
+        };
         const rightClip = {
           ...clip,
           start_frame: cut,
           duration_frames: rightDur,
-          source_in_frame: Math.max(0, (clip.source_in_frame || 0) + srcDelta)
+          source_in_frame: Math.max(0, (clip.source_in_frame || 0) + srcDelta),
+          audio_gain_db: audioNorm.gainDb,
+          fade_in_s: 0,
+          fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2))
         };
         newClips.push(leftClip, rightClip);
         splitCount += 1;
@@ -373,6 +472,66 @@ export function splitClipsAtPlayhead(doc, playheadFrame, selectedClip = null) {
     splitCount,
     focusClip
   };
+}
+
+export function updateClipAudioInDocument(doc, trackKind, trackIndex, clipIndex, patch) {
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origNorm = normalizeClipAudio(foundOrig.clip);
+  const nextGain =
+    patch.audio_gain_db !== undefined
+      ? clampNum(Number(patch.audio_gain_db), AUDIO_GAIN_DB_MIN, AUDIO_GAIN_DB_MAX)
+      : origNorm.gainDb;
+  const nextIn =
+    patch.fade_in_s !== undefined
+      ? clampNum(Number(patch.fade_in_s), AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+      : origNorm.fadeInS;
+  const nextOut =
+    patch.fade_out_s !== undefined
+      ? clampNum(Number(patch.fade_out_s), AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+      : origNorm.fadeOutS;
+
+  if (
+    !Number.isFinite(nextGain) ||
+    !Number.isFinite(nextIn) ||
+    !Number.isFinite(nextOut)
+  ) {
+    return { doc, clip: null, changed: false };
+  }
+
+  const unchanged =
+    Math.abs(nextGain - origNorm.gainDb) < 1e-6 &&
+    Math.abs(nextIn - origNorm.fadeInS) < 1e-6 &&
+    Math.abs(nextOut - origNorm.fadeOutS) < 1e-6;
+  if (unchanged) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) return { doc, clip: null, changed: false };
+  found.clip.audio_gain_db = Number(nextGain.toFixed(2));
+  found.clip.fade_in_s = Number(nextIn.toFixed(2));
+  found.clip.fade_out_s = Number(nextOut.toFixed(2));
+  return { doc: nextDoc, clip: found.clip, changed: true };
+}
+
+export function toggleTrackMuteInDocument(doc, trackKind, trackIndex) {
+  if (!doc || !Array.isArray(doc.tracks)) return { doc, track: null, changed: false };
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = nextDoc.tracks.find((t) => t.kind === trackKind && t.index === trackIndex);
+  if (!trk) return { doc, track: null, changed: false };
+  trk.muted = !Boolean(trk.muted);
+  return { doc: nextDoc, track: trk, changed: true };
+}
+
+export function toggleTrackSoloInDocument(doc, trackKind, trackIndex) {
+  if (!doc || !Array.isArray(doc.tracks)) return { doc, track: null, changed: false };
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = nextDoc.tracks.find((t) => t.kind === trackKind && t.index === trackIndex);
+  if (!trk) return { doc, track: null, changed: false };
+  trk.solo = !Boolean(trk.solo);
+  return { doc: nextDoc, track: trk, changed: true };
 }
 
 export function hasSplittableClipAtFrame(doc, frame, selectedClip = null) {

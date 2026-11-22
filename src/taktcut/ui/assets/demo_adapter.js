@@ -1,5 +1,5 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
-import { validateTimelineClient } from "./timeline_ops.js";
+import { compileAudioFilterClient, validateTimelineClient } from "./timeline_ops.js";
 
 function buildDemoTimeline(preset) {
   const fps25 = { num: 25, den: 1 };
@@ -75,9 +75,9 @@ function buildDemoTimeline(preset) {
         kind: "audio",
         name: "A1 Dialogue / VO",
         clips: [
-          { name: "VO_Intro_Clean", track_index: 1, media_type: "audio", start_frame: 0, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_intro.wav", enabled: true },
+          { name: "VO_Intro_Clean", track_index: 1, media_type: "audio", start_frame: 0, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_intro.wav", enabled: true, audio_gain_db: 1.5, fade_in_s: 0.4, fade_out_s: 0.0 },
           { name: "VO_Feature_Main", track_index: 1, media_type: "audio", start_frame: 125, duration_frames: 250, source_in_frame: 0, source_path: "audio/vo_feature.wav", enabled: true },
-          { name: "VO_Tagline_End", track_index: 1, media_type: "audio", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_tagline.wav", enabled: true }
+          { name: "VO_Tagline_End", track_index: 1, media_type: "audio", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_tagline.wav", enabled: true, fade_out_s: 0.6 }
         ]
       },
       {
@@ -85,7 +85,7 @@ function buildDemoTimeline(preset) {
         kind: "audio",
         name: "A2 Music Stem",
         clips: [
-          { name: "MX_Bed_Full_20s", track_index: 2, media_type: "audio", start_frame: 0, duration_frames: 500, source_in_frame: 0, source_path: "audio/mx_bed_20s.wav", enabled: true }
+          { name: "MX_Bed_Full_20s", track_index: 2, media_type: "audio", start_frame: 0, duration_frames: 500, source_in_frame: 0, source_path: "audio/mx_bed_20s.wav", enabled: true, audio_gain_db: -6.0, fade_in_s: 1.2, fade_out_s: 2.0 }
         ]
       }
     ],
@@ -313,7 +313,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.1",
+      version: "0.1.2",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -529,7 +529,17 @@ export function createApiClient() {
           vfParts.push(`lut3d=file='${body.lut_path || "studio_grade.cube"}':interp=tetrahedral,format=${pixFmt}`);
         }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
-        const af = body.target_lufs !== null && body.target_lufs !== undefined ? `loudnorm=I=${Number(body.target_lufs).toFixed(1)}:TP=-1.0:LRA=11.0` : null;
+        let af = null;
+        if (body.audio_params) {
+          const compiledAudio = compileAudioFilterClient(
+            body.audio_params,
+            body.clip_duration_s ?? null,
+            body.target_lufs ?? null
+          );
+          af = compiledAudio.filtergraph || null;
+        } else if (body.target_lufs !== null && body.target_lufs !== undefined) {
+          af = `loudnorm=I=${Number(body.target_lufs).toFixed(1)}:TP=-1.0:LRA=11.0`;
+        }
         const argv = ["ffmpeg", "-hide_banner", "-y", "-i", body.input_path, "-fps_mode", "cfr", "-r", body.fps || "25", "-c:v", encoder, "-pix_fmt", pixFmt, "-g", String(gop)];
         if (vf) argv.push("-vf", vf);
         if (af) argv.push("-af", af);
@@ -614,14 +624,24 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.1",
-          latest_version: "0.1.1",
+          current_version: "0.1.2",
+          latest_version: "0.1.2",
           update_available: false,
           can_apply_ota: false,
           error: null
         };
       }
       return requestJson("/api/update/check");
+    },
+    async compileAudioFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileAudioFilterClient(
+          payload.audio_params || payload,
+          payload.clip_duration_s ?? null,
+          payload.target_lufs ?? null
+        );
+      }
+      return requestJson("/api/audio/compile", { method: "POST", body: payload });
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {

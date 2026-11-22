@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from fractions import Fraction
 from math import gcd
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def _check_finite_number(raw: Any, field_name: str) -> float:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"{field_name} must be a finite number, got {raw!r}")
+    val = float(raw)
+    if not math.isfinite(val):
+        raise ValueError(f"{field_name} must be finite, got {raw!r}")
+    return val
 
 
 class RationalFrameRate(BaseModel):
@@ -102,6 +112,14 @@ class TimelineClip(BaseModel):
     media_ref: str = ""
     source_fps: RationalFrameRate | None = None
     enabled: bool = True
+    audio_gain_db: float = Field(default=0.0, ge=-24.0, le=12.0)
+    fade_in_s: float = Field(default=0.0, ge=0.0, le=5.0)
+    fade_out_s: float = Field(default=0.0, ge=0.0, le=5.0)
+
+    @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", mode="before")
+    @classmethod
+    def _validate_audio_float(cls, raw: Any, info: Any) -> float:
+        return _check_finite_number(raw, str(info.field_name))
 
     @property
     def end_frame_exclusive(self) -> int:
@@ -114,6 +132,8 @@ class TimelineTrack(BaseModel):
     index: int = Field(ge=1)
     kind: Literal["video", "audio"] = "video"
     name: str = ""
+    muted: bool = False
+    solo: bool = False
     clips: list[TimelineClip] = Field(default_factory=list)
 
 

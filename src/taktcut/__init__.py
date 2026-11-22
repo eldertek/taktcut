@@ -18,12 +18,15 @@ from taktcut.models import (
     TimelineTrack,
     TimelineValidationResult,
 )
+from taktcut.render import ClipAudioParams, compile_audio_filter
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "__version__",
     "AscCdlParams",
+    "ClipAudioParams",
+    "compile_audio_filter",
     "CubeLutInfo",
     "GapIssue",
     "HardwareCapabilities",

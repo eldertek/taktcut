@@ -63,7 +63,13 @@ from taktcut.remote_render import (
     RemoteRenderClient,
     RemoteRenderJobRequest,
 )
-from taktcut.render import build_render_plan, execute_render_plan, probe_hardware_capabilities
+from taktcut.render import (
+    ClipAudioParams,
+    build_render_plan,
+    compile_audio_filter_result,
+    execute_render_plan,
+    probe_hardware_capabilities,
+)
 from taktcut.ui.desktop import has_pywebview, open_studio_window, run_with_pywebview
 from taktcut.ui.samples import build_sample_timeline, generate_synthetic_sample_clip
 from taktcut.ui.security import (
@@ -242,6 +248,51 @@ def _build_color_grade_from_payload(payload: dict[str, Any]) -> ColorGradeParams
     )
 
 
+def _build_audio_params_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> tuple[ClipAudioParams | None, float | None]:
+    raw_clip_dur = payload.get("clip_duration_s")
+    clip_duration_s: float | None = None
+    if raw_clip_dur not in (None, ""):
+        if isinstance(raw_clip_dur, bool) or not isinstance(raw_clip_dur, (int, float)):
+            raise ValueError("clip_duration_s must be a finite number")
+        clip_duration_s = float(raw_clip_dur)
+
+    raw_audio = payload.get("audio_params")
+    if raw_audio is None:
+        raw_audio = payload.get("audio")
+    if raw_audio is not None:
+        if not isinstance(raw_audio, dict):
+            raise ValueError("'audio_params' must be a JSON object")
+        return (
+            ClipAudioParams.model_validate(
+                {
+                    "gain_db": raw_audio.get("gain_db", 0.0),
+                    "fade_in_s": raw_audio.get("fade_in_s", 0.0),
+                    "fade_out_s": raw_audio.get("fade_out_s", 0.0),
+                    "muted": bool(raw_audio.get("muted", False)),
+                }
+            ),
+            clip_duration_s,
+        )
+
+    if allow_top_level:
+        return (
+            ClipAudioParams.model_validate(
+                {
+                    "gain_db": payload.get("gain_db", 0.0),
+                    "fade_in_s": payload.get("fade_in_s", 0.0),
+                    "fade_out_s": payload.get("fade_out_s", 0.0),
+                    "muted": bool(payload.get("muted", False)),
+                }
+            ),
+            clip_duration_s,
+        )
+    return None, clip_duration_s
+
+
 def _resolve_timeline_from_payload(
     state: UiAppState,
     payload: dict[str, Any],
@@ -291,7 +342,7 @@ def _resolve_timeline_from_payload(
 class TaktcutRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler serving static studio assets and real taktcut APIs."""
 
-    server_version = "taktcut-studio/0.1"
+    server_version = f"taktcut-studio/{__version__}"
     protocol_version = "HTTP/1.1"
 
     @property
@@ -827,6 +878,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 if compiled_fx.filtergraph:
                     fx_filtergraph = compiled_fx.filtergraph
 
+            audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+
             plan = build_render_plan(
                 input_path=in_file,
                 output_path=out_file,
@@ -835,6 +888,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 lut_path=lut_file,
                 color_grade=color_grade_obj,
                 fx_filtergraph=fx_filtergraph,
+                audio_params=audio_params,
+                clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
                 prefer_hw=prefer_hw,
                 caps=caps,
@@ -848,6 +903,21 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 result = execute_render_plan(plan)
                 response["result"] = result.model_dump(mode="json")
             self._send_json(HTTPStatus.OK, response)
+            return
+
+        if route == "/api/audio/compile":
+            audio_params, clip_duration_s = _build_audio_params_from_payload(
+                payload, allow_top_level=True
+            )
+            assert audio_params is not None
+            raw_lufs = payload.get("target_lufs")
+            target_lufs_val = float(raw_lufs) if raw_lufs not in (None, "") else None
+            compiled_audio = compile_audio_filter_result(
+                audio_params,
+                clip_duration_s=clip_duration_s,
+                target_lufs=target_lufs_val,
+            )
+            self._send_json(HTTPStatus.OK, compiled_audio.model_dump(mode="json"))
             return
 
         if route == "/api/fx/compile":
@@ -1005,6 +1075,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             if isinstance(raw_fx, list) and len(raw_fx) > 0:
                 fx_nodes = [FxNode.model_validate(item) for item in raw_fx]
 
+            audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+
             job_req = RemoteRenderJobRequest(
                 input_filename=in_file.name,
                 input_base64=base64.b64encode(raw_media).decode("ascii"),
@@ -1017,6 +1089,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 cdl=cdl_params,
                 color_grade=color_grade_remote,
                 lut_cube_text=lut_cube_text,
+                audio_params=audio_params,
+                clip_duration_s=clip_duration_s,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
             job = client.submit_job(job_req)

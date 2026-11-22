@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import math
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, field_validator
 
 from taktcut.color import (
     REC709_FFMPEG_FLAGS,
@@ -19,6 +24,184 @@ from taktcut.models import (
     RenderProfile,
     RenderResult,
 )
+
+AUDIO_GAIN_DB_MIN: float = -24.0
+AUDIO_GAIN_DB_MAX: float = 12.0
+AUDIO_FADE_S_MIN: float = 0.0
+AUDIO_FADE_S_MAX: float = 5.0
+CLIP_DURATION_MAX_S: float = 86400.0
+TARGET_LUFS_MIN: float = -70.0
+TARGET_LUFS_MAX: float = -5.0
+
+
+def _validate_bounded_float(
+    raw: Any,
+    field_name: str,
+    min_val: float,
+    max_val: float,
+    *,
+    strict_gt_min: bool = False,
+) -> float:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"{field_name} must be a finite number, got {raw!r}")
+    val = float(raw)
+    if not math.isfinite(val):
+        raise ValueError(f"{field_name} must be finite, got {raw!r}")
+    if strict_gt_min:
+        if val <= min_val or val > max_val:
+            raise ValueError(
+                f"{field_name} must be within ({min_val}, {max_val}], got {val}"
+            )
+    elif val < min_val or val > max_val:
+        raise ValueError(
+            f"{field_name} must be within [{min_val}, {max_val}], got {val}"
+        )
+    return val
+
+
+class ClipAudioParams(BaseModel):
+    """Per-clip audio gain and fade-in/out parameters with strict numeric bounds."""
+
+    gain_db: float = 0.0
+    fade_in_s: float = 0.0
+    fade_out_s: float = 0.0
+    muted: bool = False
+
+    @field_validator("gain_db", mode="before")
+    @classmethod
+    def _validate_gain_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "gain_db", AUDIO_GAIN_DB_MIN, AUDIO_GAIN_DB_MAX)
+
+    @field_validator("fade_in_s", mode="before")
+    @classmethod
+    def _validate_fade_in_s(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "fade_in_s", AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+
+    @field_validator("fade_out_s", mode="before")
+    @classmethod
+    def _validate_fade_out_s(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "fade_out_s", AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+
+    def is_identity(self) -> bool:
+        """Return True when gain is 0 dB, fades are 0 s, and track is unmuted."""
+        return (
+            not self.muted
+            and math.isclose(self.gain_db, 0.0, abs_tol=1e-6)
+            and math.isclose(self.fade_in_s, 0.0, abs_tol=1e-6)
+            and math.isclose(self.fade_out_s, 0.0, abs_tol=1e-6)
+        )
+
+
+class AudioCompileResult(BaseModel):
+    """Compiled FFmpeg audio filtergraph and validated clip audio parameters."""
+
+    filtergraph: str
+    ffmpeg_af_args: list[str]
+    is_identity: bool
+    params: ClipAudioParams
+
+
+def compile_audio_filter(
+    params: ClipAudioParams,
+    *,
+    clip_duration_s: float | None = None,
+) -> str | None:
+    """Compile validated clip gain, fade-in, fade-out, and mute into an FFmpeg -af filter."""
+    validated_dur: float | None = None
+    if clip_duration_s is not None:
+        validated_dur = _validate_bounded_float(
+            clip_duration_s,
+            "clip_duration_s",
+            0.0,
+            CLIP_DURATION_MAX_S,
+            strict_gt_min=True,
+        )
+
+    if params.muted:
+        return "volume=0"
+
+    parts: list[str] = []
+    if not math.isclose(params.gain_db, 0.0, abs_tol=1e-6):
+        parts.append(f"volume={params.gain_db:.2f}dB")
+
+    if params.fade_in_s > 1e-6:
+        fade_in_d = (
+            min(params.fade_in_s, validated_dur)
+            if validated_dur is not None
+            else params.fade_in_s
+        )
+        if fade_in_d > 1e-6:
+            parts.append(f"afade=t=in:st=0.000:d={fade_in_d:.3f}")
+
+    if params.fade_out_s > 1e-6:
+        if validated_dur is None:
+            raise ValueError("clip_duration_s must be provided when fade_out_s > 0")
+        fade_out_d = min(params.fade_out_s, validated_dur)
+        fade_out_st = max(0.0, validated_dur - fade_out_d)
+        if fade_out_d > 1e-6:
+            parts.append(f"afade=t=out:st={fade_out_st:.3f}:d={fade_out_d:.3f}")
+
+    return ",".join(parts) if parts else None
+
+
+def compile_audio_filter_result(
+    params: ClipAudioParams,
+    *,
+    clip_duration_s: float | None = None,
+    target_lufs: float | None = None,
+) -> AudioCompileResult:
+    """Compile clip audio controls and optional loudnorm into an AudioCompileResult."""
+    af_parts: list[str] = []
+    clip_af = compile_audio_filter(params, clip_duration_s=clip_duration_s)
+    if clip_af is not None:
+        af_parts.append(clip_af)
+    if target_lufs is not None and not params.muted:
+        validated_lufs = _validate_bounded_float(
+            target_lufs,
+            "target_lufs",
+            TARGET_LUFS_MIN,
+            TARGET_LUFS_MAX,
+        )
+        lra = 11.0 if validated_lufs >= -16.0 else 7.0
+        af_parts.append(f"loudnorm=I={validated_lufs:.1f}:TP=-1.0:LRA={lra:.1f}")
+    fg = ",".join(af_parts)
+    return AudioCompileResult(
+        filtergraph=fg,
+        ffmpeg_af_args=["-af", fg] if fg else [],
+        is_identity=(fg == ""),
+        params=params,
+    )
+
+
+def _probe_media_duration_s(media_path: Path) -> float | None:
+    """Best-effort ffprobe container duration lookup for real files."""
+    ffprobe_bin = shutil.which("ffprobe")
+    if ffprobe_bin is None or not media_path.is_file():
+        return None
+    proc = subprocess.run(
+        [
+            ffprobe_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(media_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        payload = json.loads(proc.stdout)
+        dur = float(payload["format"]["duration"])
+        return dur if math.isfinite(dur) and dur > 0.0 else None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _test_nvenc_runtime(ffmpeg_bin: str, encoder: str) -> bool:
@@ -108,6 +291,8 @@ def build_render_plan(
     lut_path: Path | None = None,
     color_grade: ColorGradeParams | None = None,
     fx_filtergraph: str | None = None,
+    audio_params: ClipAudioParams | None = None,
+    clip_duration_s: float | None = None,
     target_lufs: float | None = None,
     prefer_hw: bool = True,
     caps: HardwareCapabilities | None = None,
@@ -132,10 +317,30 @@ def build_render_plan(
         vf_parts.append(build_rec709_lut_filter(lut_path, target_pix_fmt=pix_fmt))
     video_filter = ",".join(vf_parts) if vf_parts else None
 
-    audio_filter: str | None = None
-    if target_lufs is not None:
-        lra = 11.0 if target_lufs >= -16.0 else 7.0
-        audio_filter = f"loudnorm=I={target_lufs:.1f}:TP=-1.0:LRA={lra:.1f}"
+    resolved_clip_dur = clip_duration_s
+    if (
+        resolved_clip_dur is None
+        and audio_params is not None
+        and not audio_params.muted
+        and audio_params.fade_out_s > 1e-6
+    ):
+        resolved_clip_dur = _probe_media_duration_s(input_path)
+
+    af_parts: list[str] = []
+    if audio_params is not None:
+        clip_af = compile_audio_filter(audio_params, clip_duration_s=resolved_clip_dur)
+        if clip_af is not None:
+            af_parts.append(clip_af)
+    if target_lufs is not None and not (audio_params is not None and audio_params.muted):
+        validated_lufs = _validate_bounded_float(
+            target_lufs,
+            "target_lufs",
+            TARGET_LUFS_MIN,
+            TARGET_LUFS_MAX,
+        )
+        lra = 11.0 if validated_lufs >= -16.0 else 7.0
+        af_parts.append(f"loudnorm=I={validated_lufs:.1f}:TP=-1.0:LRA={lra:.1f}")
+    audio_filter: str | None = ",".join(af_parts) if af_parts else None
 
     argv: list[str] = [
         hw.ffmpeg_path,

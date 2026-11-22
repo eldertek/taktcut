@@ -136,6 +136,41 @@
                 <span data-i18n="timeline.inspector.title">Selected Clip / Marker Inspector</span>
               </div>
               <div id="timeline-selection-detail" class="kv-grid mono"></div>
+
+              <div id="timeline-audio-inspector" class="audio-inspector-dock">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.audio.title">Clip Audio &amp; Track Mixer</span>
+                  <div class="viewer-controls">
+                    <span id="clip-audio-af-preview" class="nle-tag mono">UNITY 0.0 dB</span>
+                    <button type="button" id="btn-clip-audio-to-deliver" class="btn btn-mini" data-i18n="timeline.audio.sendDeliver">Use in Deliver</button>
+                  </div>
+                </div>
+                <div id="clip-audio-controls" class="audio-ctrl-grid mono">
+                  <div class="audio-ctrl-row">
+                    <label for="clip-audio-gain-range" data-i18n="timeline.audio.gain">Gain (dB)</label>
+                    <input type="range" id="clip-audio-gain-range" min="-24" max="12" step="0.5" value="0">
+                    <input type="number" id="clip-audio-gain-num" class="input-num" min="-24" max="12" step="0.5" value="0.0" aria-label="Clip audio gain in dB">
+                    <button type="button" id="btn-clip-gain-reset" class="btn btn-mini" aria-label="Reset clip audio gain">Rst</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-fade-in-range" data-i18n="timeline.audio.fadeIn">Fade In (s)</label>
+                    <input type="range" id="clip-fade-in-range" min="0" max="5" step="0.05" value="0">
+                    <input type="number" id="clip-fade-in-num" class="input-num" min="0" max="5" step="0.05" value="0.00" aria-label="Clip fade in seconds">
+                    <button type="button" id="btn-clip-fade-in-reset" class="btn btn-mini" aria-label="Reset clip fade in">Rst</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-fade-out-range" data-i18n="timeline.audio.fadeOut">Fade Out (s)</label>
+                    <input type="range" id="clip-fade-out-range" min="0" max="5" step="0.05" value="0">
+                    <input type="number" id="clip-fade-out-num" class="input-num" min="0" max="5" step="0.05" value="0.00" aria-label="Clip fade out seconds">
+                    <button type="button" id="btn-clip-fade-out-reset" class="btn btn-mini" aria-label="Reset clip fade out">Rst</button>
+                  </div>
+                </div>
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.mixer.title">Track Mute / Solo Mixer</span>
+                  <span id="track-mixer-summary" class="nle-tag mono">ALL ACTIVE</span>
+                </div>
+                <div id="track-mixer-strip" class="track-mixer-strip" role="group" aria-label="Track Mute and Solo Mixer"></div>
+              </div>
             </div>
           </section>
 
@@ -647,6 +682,10 @@
                   <span data-i18n="render.check.studioFx">Apply active FX Studio filtergraph stack</span>
                 </label>
                 <label class="check-label">
+                  <input type="checkbox" id="render-use-clip-audio" checked>
+                  <span data-i18n="render.check.clipAudio">Apply selected clip audio gain, fades &amp; track mute/solo</span>
+                </label>
+                <label class="check-label">
                   <input type="checkbox" id="render-prefer-hw" checked>
                   <span data-i18n="render.check.preferHw">Prefer GPU NVENC encoder (fallback to CPU libx264/libx265)</span>
                 </label>
@@ -804,7 +843,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | Ctrl+Z/Y: Undo/Redo</span>
       </span>
-      <span id="version-badge">v0.1.1</span>
+      <span id="version-badge">v0.1.2</span>
     </footer>
   </div>
 

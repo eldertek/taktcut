@@ -39,7 +39,12 @@ from taktcut.models import (
     RenderProfile,
     RenderResult,
 )
-from taktcut.render import build_render_plan, execute_render_plan, probe_hardware_capabilities
+from taktcut.render import (
+    ClipAudioParams,
+    build_render_plan,
+    execute_render_plan,
+    probe_hardware_capabilities,
+)
 from taktcut.security import (
     LUT_SUFFIXES,
     MEDIA_SUFFIXES,
@@ -214,6 +219,8 @@ class RemoteRenderJobRequest(BaseModel):
     cdl: AscCdlParams | None = None
     color_grade: ColorGradeParams | None = None
     lut_cube_text: str | None = None
+    audio_params: ClipAudioParams | None = None
+    clip_duration_s: float | None = None
 
     @field_validator("input_filename", "output_filename")
     @classmethod
@@ -483,6 +490,8 @@ class RemoteRenderState:
             lut_path=lut_file,
             color_grade=req.color_grade if lut_file is None else None,
             fx_filtergraph=fx_filtergraph,
+            audio_params=req.audio_params,
+            clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,
             prefer_hw=req.prefer_hw,
             caps=caps,
@@ -560,7 +569,7 @@ class RemoteRenderState:
 class RemoteRenderHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the taktcut Remote Render Node."""
 
-    server_version = "taktcut-remote-node/0.1"
+    server_version = f"taktcut-remote-node/{__version__}"
     protocol_version = "HTTP/1.1"
 
     @property

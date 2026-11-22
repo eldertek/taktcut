@@ -97,6 +97,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
+    assert health["version"] == "0.1.2"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -321,6 +322,76 @@ def test_ui_color_presets_compile_and_render_plan(ui_server: tuple[str, Path]) -
     assert "eq=contrast=1.1400:saturation=1.1800" in plan_data["plan"]["video_filter"]
 
 
+def test_ui_audio_compile_and_render_plan_audio_filters(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    ok_status, _, ok_raw = _http_call(
+        f"{base_url}/api/audio/compile",
+        method="POST",
+        payload={
+            "gain_db": -6.0,
+            "fade_in_s": 0.5,
+            "fade_out_s": 1.25,
+            "muted": False,
+            "clip_duration_s": 8.0,
+        },
+    )
+    assert ok_status == 200
+    ok_data = json.loads(ok_raw.decode("utf-8"))
+    assert ok_data["filtergraph"] == (
+        "volume=-6.00dB,afade=t=in:st=0.000:d=0.500,afade=t=out:st=6.750:d=1.250"
+    )
+    assert ok_data["is_identity"] is False
+
+    mute_status, _, mute_raw = _http_call(
+        f"{base_url}/api/audio/compile",
+        method="POST",
+        payload={"gain_db": 4.0, "muted": True},
+    )
+    assert mute_status == 200
+    assert json.loads(mute_raw.decode("utf-8"))["filtergraph"] == "volume=0"
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/audio/compile",
+        method="POST",
+        payload={"gain_db": 18.0},
+    )
+    assert bad_status == 400
+
+    bad_fade_status, _, _ = _http_call(
+        f"{base_url}/api/audio/compile",
+        method="POST",
+        payload={"fade_in_s": 6.5},
+    )
+    assert bad_fade_status == 400
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/audio_mix.mp4",
+            "profile": "web_h264",
+            "audio_params": {
+                "gain_db": 3.0,
+                "fade_in_s": 0.25,
+                "fade_out_s": 0.75,
+                "muted": False,
+            },
+            "clip_duration_s": 4.0,
+            "target_lufs": -14.0,
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan_data = json.loads(plan_raw.decode("utf-8"))
+    assert plan_data["plan"]["audio_filter"] == (
+        "volume=3.00dB,afade=t=in:st=0.000:d=0.250,"
+        "afade=t=out:st=3.250:d=0.750,loudnorm=I=-14.0:TP=-1.0:LRA=11.0"
+    )
+
+
 def test_ui_render_plan_execute_and_qa_gate_roundtrip(ui_server: tuple[str, Path]) -> None:
     base_url, workspace = ui_server
 
@@ -506,8 +577,18 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "grade-saturation-range",
         "grade-temperature-range",
         "color-filtergraph-output",
+        "clip-audio-gain-range",
+        "clip-audio-gain-num",
+        "clip-fade-in-range",
+        "clip-fade-in-num",
+        "clip-fade-out-range",
+        "clip-fade-out-num",
+        "clip-audio-af-preview",
+        "track-mixer-strip",
+        "render-use-clip-audio",
     ):
         assert elem_id in html_text
+    assert "v0.1.2" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -526,6 +607,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Sélection"' in i18n_text
     assert '"Rasoir"' in i18n_text
     assert '"Magnétisme"' in i18n_text
+    assert '"Audio du Plan & Mixeur Pistes"' in i18n_text
+    assert '"Fondu Entrée (s)"' in i18n_text
+    assert '"Fondu Sortie (s)"' in i18n_text
     assert '"statusbar.shortcuts"' in i18n_text
     assert "innerHTML" not in i18n_text
     for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
@@ -554,10 +638,16 @@ def test_timeline_ops_js_unit_suite() -> None:
 import assert from "node:assert/strict";
 import {{
   collectSnapTargets,
+  compileAudioFilterClient,
   findMagneticSnap,
+  isTrackAudiblyMuted,
+  normalizeClipAudio,
   splitClipInDocument,
   splitClipsAtPlayhead,
+  toggleTrackMuteInDocument,
+  toggleTrackSoloInDocument,
   trimClipInDocument,
+  updateClipAudioInDocument,
   validateTimelineClient
 }} from {json.dumps(ops_path)};
 
@@ -625,6 +715,43 @@ assert.equal(trimLeft.changed, true);
 assert.equal(trimLeft.clip.start_frame, 120);
 assert.equal(trimLeft.clip.duration_frames, 80);
 assert.equal(trimLeft.clip.source_in_frame, 20);
+
+const audioDoc = updateClipAudioInDocument(doc, "video", 1, 0, {{
+  audio_gain_db: -6.0,
+  fade_in_s: 1.0,
+  fade_out_s: 1.5
+}});
+assert.equal(audioDoc.changed, true);
+assert.equal(audioDoc.clip.audio_gain_db, -6);
+assert.equal(audioDoc.clip.fade_in_s, 1);
+assert.equal(audioDoc.clip.fade_out_s, 1.5);
+
+const splitAudio = splitClipInDocument(audioDoc.doc, "video", 1, 0, 50);
+assert.equal(splitAudio.split, true);
+assert.equal(splitAudio.leftClip.audio_gain_db, -6);
+assert.equal(splitAudio.leftClip.fade_in_s, 1);
+assert.equal(splitAudio.leftClip.fade_out_s, 0);
+assert.equal(splitAudio.rightClip.audio_gain_db, -6);
+assert.equal(splitAudio.rightClip.fade_in_s, 0);
+assert.equal(splitAudio.rightClip.fade_out_s, 1.5);
+
+const mutedDoc = toggleTrackMuteInDocument(audioDoc.doc, "video", 1);
+assert.equal(mutedDoc.changed, true);
+assert.equal(isTrackAudiblyMuted(mutedDoc.track, mutedDoc.doc.tracks), true);
+
+const soloDoc = toggleTrackSoloInDocument(audioDoc.doc, "video", 1);
+assert.equal(soloDoc.changed, true);
+assert.equal(isTrackAudiblyMuted(soloDoc.track, soloDoc.doc.tracks), false);
+
+const compiledAf = compileAudioFilterClient(
+  {{ gain_db: -6, fade_in_s: 1.0, fade_out_s: 1.5, muted: false }},
+  10.0,
+  null
+);
+assert.equal(
+  compiledAf.filtergraph,
+  "volume=-6.00dB,afade=t=in:st=0.000:d=1.000,afade=t=out:st=8.500:d=1.500"
+);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -647,7 +774,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            for width, height in ((375, 812), (390, 844), (1440, 900)):
+            for width, height in ((375, 812), (390, 844), (768, 1024), (1440, 900)):
                 ctx = browser.new_context(viewport={"width": width, "height": height})
                 page = ctx.new_page()
                 errors: list[str] = []
@@ -706,6 +833,30 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.mouse.up()
                     assert frame_down != frame_mid
                     assert page.locator("#program-tc").text_content() != "00:00:00:00"
+
+                    # Verify Clip Audio Gain / Fade Controls & Track Mute/Solo Mixer
+                    page.locator("#clip-audio-gain-num").fill("-6.0")
+                    page.locator("#clip-audio-gain-num").press("Enter")
+                    page.locator("#clip-fade-in-num").fill("1.25")
+                    page.locator("#clip-fade-in-num").press("Enter")
+                    page.locator("#clip-fade-out-num").fill("0.75")
+                    page.locator("#clip-fade-out-num").press("Enter")
+                    af_preview = page.locator("#clip-audio-af-preview").text_content() or ""
+                    assert "volume=-6.00dB" in af_preview
+                    assert "afade=t=in:st=0.000:d=1.250" in af_preview
+                    assert "afade=t=out:" in af_preview
+
+                    page.locator('[data-track-mute="V1"]').click()
+                    assert page.locator("#track-mixer-summary").text_content() == "1 MUTED"
+                    muted_af = page.locator("#clip-audio-af-preview").text_content() or ""
+                    assert "volume=0" in muted_af
+                    page.locator('[data-track-mute="V1"]').click()
+                    assert page.locator("#track-mixer-summary").text_content() == "ALL ACTIVE"
+
+                    page.locator('[data-track-solo="A2"]').click()
+                    assert page.locator("#track-mixer-summary").text_content() == "SOLO ACTIVE"
+                    page.locator('[data-track-solo="A2"]').click()
+                    assert page.locator("#track-mixer-summary").text_content() == "ALL ACTIVE"
 
                 # Verify Color Grading Panel responsiveness and 4 presets at all viewports
                 page.locator("#tab-color").click()

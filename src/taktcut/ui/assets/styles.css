@@ -741,7 +741,8 @@ body {
 }
 
 #timeline-canvas.is-scrubbing,
-#timeline-canvas.is-trimming {
+#timeline-canvas.is-trimming,
+#timeline-canvas.is-fading {
   cursor: ew-resize !important;
 }
 
@@ -1273,6 +1274,124 @@ input[type="range"] {
   overflow-wrap: anywhere;
 }
 
+/* CLIP AUDIO GAIN, FADE HANDLES & TRACK MIXER */
+.audio-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.audio-inspector-dock .pane-subheader {
+  flex-wrap: wrap;
+}
+
+#clip-audio-af-preview {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
+.audio-ctrl-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.audio-ctrl-grid.is-disabled {
+  opacity: 0.55;
+}
+
+.audio-ctrl-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) 64px auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.audio-ctrl-row label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.track-mixer-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mixer-ch-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+}
+
+.mixer-ch-pill.is-muted-effective {
+  opacity: 0.62;
+  border-color: var(--border-strong);
+}
+
+.mixer-ch-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mixer-ch-tag.is-audio {
+  color: #5eead4;
+}
+
+.mixer-ch-tag.is-video {
+  color: #8cb4ff;
+}
+
+.mixer-btn {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.mixer-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-amber);
+}
+
+.mixer-btn.is-mute {
+  background: var(--status-fail-soft);
+  border-color: var(--status-fail);
+  color: #ff8e88;
+}
+
+.mixer-btn.is-solo {
+  background: var(--status-warn-soft);
+  border-color: var(--status-warn);
+  color: #ffd166;
+}
+
 .issue-list {
   display: flex;
   flex-direction: column;
@@ -1496,10 +1615,17 @@ input[type="range"] {
   .engine-btn,
   .fx-bypass-btn,
   .fx-color-input,
+  .mixer-btn,
   .lang-btn,
   .input-control,
   .input-select,
   .input-num {
+    min-height: 44px;
+  }
+  .mixer-btn {
+    min-width: 44px;
+  }
+  .audio-ctrl-row input[type="range"] {
     min-height: 44px;
   }
 }
@@ -1544,6 +1670,13 @@ input[type="range"] {
   }
   .grade-tone-row input[type="range"] {
     min-height: 44px;
+  }
+  .audio-ctrl-row {
+    grid-template-columns: minmax(0, 1fr) 64px auto;
+    gap: 5px;
+  }
+  .audio-ctrl-row label {
+    grid-column: 1 / -1;
   }
   .kv-grid {
     grid-template-columns: minmax(0, 1fr);

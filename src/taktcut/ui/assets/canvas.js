@@ -793,16 +793,24 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 
   // Track lanes and clips
   const selected = opts ? opts.selected : null;
+  const anySolo = tracks.some((t) => Boolean(t && t.solo));
+  const fpsFloat = doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+
   tracks.forEach((trk, idx) => {
     const rowY = rulerHeight + idx * trackHeight;
     const isAudio = trk.kind === "audio";
+    const isDirectMuted = Boolean(trk.muted);
+    const isSolo = Boolean(trk.solo);
+    const trackAudiblyMuted = isDirectMuted || (anySolo && !isSolo);
 
     // Track label rail
-    ctx.fillStyle = "#252529";
+    ctx.fillStyle = trackAudiblyMuted ? "#1f1f24" : "#252529";
     ctx.fillRect(0, rowY, labelColW, trackHeight);
 
     // Track timeline surface
-    ctx.fillStyle = idx % 2 === 0 ? "#1b1b1f" : "#1e1e22";
+    ctx.fillStyle = trackAudiblyMuted
+      ? "#161619"
+      : idx % 2 === 0 ? "#1b1b1f" : "#1e1e22";
     ctx.fillRect(timelineX, rowY, width - timelineX, trackHeight);
     ctx.strokeStyle = "#111114";
     ctx.beginPath();
@@ -811,23 +819,71 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.stroke();
 
     // Track tag
+    const tagX = width < 480 ? 4 : 6;
+    const tagW = width < 480 ? 21 : 23;
     ctx.fillStyle = isAudio ? "#255c4e" : "#2c4e7c";
-    roundRectPath(ctx, 8, rowY + 12, 24, 20, 2);
+    roundRectPath(ctx, tagX, rowY + 12, tagW, 20, 2);
     ctx.fill();
     ctx.strokeStyle = isAudio ? "#3d8c78" : "#4c74ab";
     ctx.stroke();
 
     ctx.fillStyle = "#d8d8de";
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 9px ui-monospace, monospace";
     const shortCode = `${isAudio ? "A" : "V"}${trk.index}`;
-    ctx.fillText(shortCode, 13, rowY + 26);
+    ctx.fillText(shortCode, tagX + 4, rowY + 25);
 
     if (width >= 480) {
-      ctx.fillStyle = "#b4b4be";
-      ctx.font = "500 11px system-ui, sans-serif";
-      const tName = (trk.name || shortCode).slice(0, 11);
-      ctx.fillText(tName, 38, rowY + 26);
+      ctx.fillStyle = trackAudiblyMuted ? "#7a7a86" : "#b4b4be";
+      ctx.font = "500 10px system-ui, sans-serif";
+      const tName = (trk.name || shortCode).slice(0, 8);
+      ctx.fillText(tName, 33, rowY + 25);
     }
+
+    // Track Mute (M) and Solo (S) buttons on label rail
+    const msBtnW = width < 480 ? 13 : 16;
+    const msBtnH = 18;
+    const msBtnY = rowY + 13;
+    const muteX = width < 480 ? 28 : 79;
+    const soloX = width < 480 ? 43 : 97;
+
+    ctx.fillStyle = isDirectMuted ? "#e5534b" : "#19191c";
+    roundRectPath(ctx, muteX, msBtnY, msBtnW, msBtnH, 2);
+    ctx.fill();
+    ctx.strokeStyle = isDirectMuted ? "#f87171" : "#34343c";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = isDirectMuted ? "#ffffff" : "#8e8e98";
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.fillText("M", muteX + (width < 480 ? 3.5 : 4.5), msBtnY + 12);
+
+    ctx.fillStyle = isSolo ? "#d29922" : "#19191c";
+    roundRectPath(ctx, soloX, msBtnY, msBtnW, msBtnH, 2);
+    ctx.fill();
+    ctx.strokeStyle = isSolo ? "#ffd166" : "#34343c";
+    ctx.stroke();
+    ctx.fillStyle = isSolo ? "#111114" : "#8e8e98";
+    ctx.fillText("S", soloX + (width < 480 ? 3.5 : 4.5), msBtnY + 12);
+
+    hitboxes.push({
+      kind: "track_mute",
+      x: muteX,
+      y: msBtnY,
+      w: msBtnW,
+      h: msBtnH,
+      trackKind: trk.kind,
+      trackIndex: trk.index,
+      data: trk
+    });
+    hitboxes.push({
+      kind: "track_solo",
+      x: soloX,
+      y: msBtnY,
+      w: msBtnW,
+      h: msBtnH,
+      trackKind: trk.kind,
+      trackIndex: trk.index,
+      data: trk
+    });
 
     // Clips
     const clipList = trk.clips || [];
@@ -839,6 +895,9 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       const drawX = Math.max(timelineX, cx);
       const drawW = Math.min(timelineX + timelineW, cx + cw) - drawX;
       if (drawW <= 1) continue;
+
+      const clipY = rowY + 4;
+      const clipH = trackHeight - 8;
 
       const isSelected =
         selected &&
@@ -856,20 +915,146 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         trimTarget.trackIndex === trk.index &&
         trimTarget.clipIndex === clipIndex;
 
-      const baseFill = isAudio
-        ? clip.enabled ? "#214f44" : "#252529"
-        : clip.enabled ? "#294670" : "#252529";
+      const fadeTarget = (opts && (opts.activeFade || opts.hoverFade)) || null;
+      const isFadeClip =
+        fadeTarget &&
+        fadeTarget.trackKind === trk.kind &&
+        fadeTarget.trackIndex === trk.index &&
+        fadeTarget.clipIndex === clipIndex;
+
+      const baseFill = trackAudiblyMuted
+        ? (isAudio ? "#1b2b27" : "#1e2736")
+        : isAudio
+          ? clip.enabled ? "#214f44" : "#252529"
+          : clip.enabled ? "#294670" : "#252529";
       const borderCol = isSelected
         ? "#e07b39"
-        : isAudio ? "#3d8c78" : "#4e78b0";
+        : trackAudiblyMuted
+          ? "#3b3b44"
+          : isAudio ? "#3d8c78" : "#4e78b0";
 
       ctx.fillStyle = baseFill;
-      roundRectPath(ctx, drawX, rowY + 4, drawW, trackHeight - 8, 2);
+      roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
       ctx.fill();
 
       ctx.strokeStyle = borderCol;
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.stroke();
+
+      // Audio gain level line + Fade-In / Fade-Out curves inside clip
+      const gainDb = Number.isFinite(Number(clip.audio_gain_db))
+        ? Math.max(-24, Math.min(12, Number(clip.audio_gain_db)))
+        : 0;
+      const fadeInS = Number.isFinite(Number(clip.fade_in_s))
+        ? Math.max(0, Math.min(5, Number(clip.fade_in_s)))
+        : 0;
+      const fadeOutS = Number.isFinite(Number(clip.fade_out_s))
+        ? Math.max(0, Math.min(5, Number(clip.fade_out_s)))
+        : 0;
+
+      const gainNorm = (gainDb + 24) / 36;
+      const gainY = clipY + clipH - 4 - gainNorm * (clipH - 10);
+      let fadeInPx = Math.max(0, fadeInS * fpsFloat * pxPerFrame);
+      let fadeOutPx = Math.max(0, fadeOutS * fpsFloat * pxPerFrame);
+      if (fadeInPx + fadeOutPx > cw && cw > 0) {
+        const scale = cw / (fadeInPx + fadeOutPx);
+        fadeInPx *= scale;
+        fadeOutPx *= scale;
+      }
+
+      const hasAudioCurve =
+        isSelected || Math.abs(gainDb) > 0.05 || fadeInS > 0.005 || fadeOutS > 0.005;
+
+      if (hasAudioCurve && drawW > 8) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(drawX + 1, clipY + 1, drawW - 2, clipH - 2);
+        ctx.clip();
+
+        const clipBottom = clipY + clipH;
+        const fadeInEndX = cx + fadeInPx;
+        const fadeOutStartX = cx + cw - fadeOutPx;
+
+        // Attenuated wedge overlays for Fade-In and Fade-Out
+        if (fadeInPx >= 2) {
+          ctx.fillStyle = "rgba(17, 17, 20, 0.54)";
+          ctx.beginPath();
+          ctx.moveTo(cx, clipY);
+          ctx.lineTo(fadeInEndX, clipY);
+          ctx.lineTo(fadeInEndX, gainY);
+          ctx.quadraticCurveTo(cx + fadeInPx * 0.42, gainY, cx, clipBottom);
+          ctx.closePath();
+          ctx.fill();
+        }
+        if (fadeOutPx >= 2) {
+          ctx.fillStyle = "rgba(17, 17, 20, 0.54)";
+          ctx.beginPath();
+          ctx.moveTo(fadeOutStartX, clipY);
+          ctx.lineTo(cx + cw, clipY);
+          ctx.lineTo(cx + cw, clipBottom);
+          ctx.quadraticCurveTo(cx + cw - fadeOutPx * 0.42, gainY, fadeOutStartX, gainY);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Gain & Fade envelope curve line
+        const curveColor = trackAudiblyMuted
+          ? "#6e6e78"
+          : gainDb > 0.05
+            ? "#f4a46b"
+            : gainDb < -0.05
+              ? "#689cff"
+              : isAudio
+                ? "#5eead4"
+                : "#9ec2ff";
+        ctx.strokeStyle = curveColor;
+        ctx.lineWidth = Math.abs(gainDb) > 0.05 || fadeInS > 0 || fadeOutS > 0 ? 1.5 : 1;
+        if (Math.abs(gainDb) <= 0.05 && fadeInS === 0 && fadeOutS === 0) {
+          ctx.setLineDash([3, 3]);
+        }
+        ctx.beginPath();
+        if (fadeInPx >= 2) {
+          ctx.moveTo(cx, clipBottom);
+          ctx.quadraticCurveTo(cx + fadeInPx * 0.42, gainY, fadeInEndX, gainY);
+        } else {
+          ctx.moveTo(cx, gainY);
+        }
+        ctx.lineTo(fadeOutStartX, gainY);
+        if (fadeOutPx >= 2) {
+          ctx.quadraticCurveTo(cx + cw - fadeOutPx * 0.42, gainY, cx + cw, clipBottom);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
+      // Fade-In and Fade-Out draggable corner handles
+      const showFadeHandles =
+        drawW >= 28 && (isSelected || isFadeClip || fadeInS > 0.005 || fadeOutS > 0.005);
+      const fadeHandleY = clipY + 6;
+      const fadeInHandleX = Math.max(drawX + 7, Math.min(drawX + drawW - 14, cx + fadeInPx));
+      const fadeOutHandleX = Math.min(drawX + drawW - 7, Math.max(drawX + 14, cx + cw - fadeOutPx));
+
+      if (showFadeHandles) {
+        const inActive = isFadeClip && fadeTarget.edge === "in";
+        const outActive = isFadeClip && fadeTarget.edge === "out";
+
+        // Fade-In handle
+        ctx.fillStyle = inActive ? "#ffd166" : fadeInS > 0.005 ? "#5eead4" : "#d8d8de";
+        ctx.strokeStyle = "#111114";
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.arc(fadeInHandleX, fadeHandleY, inActive ? 4.5 : 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Fade-Out handle
+        ctx.fillStyle = outActive ? "#ffd166" : fadeOutS > 0.005 ? "#5eead4" : "#d8d8de";
+        ctx.beginPath();
+        ctx.arc(fadeOutHandleX, fadeHandleY, outActive ? 4.5 : 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
 
       // Trim handle brackets on selected or hovered trim edge
       const trimHandleW = drawW >= 12 ? Math.min(8, Math.max(4, drawW * 0.22)) : 0;
@@ -878,38 +1063,50 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         const rightActive = isTrimClip && trimTarget.edge === "right";
         if (isSelected || leftActive) {
           ctx.fillStyle = leftActive ? "#ffd166" : "rgba(255, 216, 168, 0.72)";
-          ctx.fillRect(drawX + 1, rowY + 6, leftActive ? 3 : 2, trackHeight - 12);
+          ctx.fillRect(drawX + 1, clipY + 2, leftActive ? 3 : 2, clipH - 4);
         }
         if (isSelected || rightActive) {
           ctx.fillStyle = rightActive ? "#ffd166" : "rgba(255, 216, 168, 0.72)";
-          ctx.fillRect(drawX + drawW - (rightActive ? 4 : 3), rowY + 6, rightActive ? 3 : 2, trackHeight - 12);
+          ctx.fillRect(drawX + drawW - (rightActive ? 4 : 3), clipY + 2, rightActive ? 3 : 2, clipH - 4);
         }
       }
 
       if (drawW > 34) {
         ctx.save();
         ctx.beginPath();
-        ctx.rect(drawX + 4, rowY + 4, drawW - 8, trackHeight - 8);
+        ctx.rect(drawX + 4, clipY, drawW - 8, clipH);
         ctx.clip();
-        ctx.fillStyle = "#e6e6eb";
+        ctx.fillStyle = trackAudiblyMuted ? "#9696a0" : "#e6e6eb";
         ctx.font = "600 11px system-ui, sans-serif";
         ctx.fillText(clip.name, drawX + 6, rowY + 19);
         ctx.fillStyle = "#a2a2ad";
         ctx.font = "10px ui-monospace, monospace";
-        ctx.fillText(`${clip.start_frame}-${clip.start_frame + clip.duration_frames}f`, drawX + 6, rowY + 32);
+        const gainTag = Math.abs(gainDb) >= 0.05
+          ? ` | ${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)}dB`
+          : "";
+        const muteTag = trackAudiblyMuted ? " | MUTED" : "";
+        ctx.fillText(
+          `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${gainTag}${muteTag}`,
+          drawX + 6,
+          rowY + 32
+        );
         ctx.restore();
       }
 
       hitboxes.push({
         kind: "clip",
         x: drawX,
-        y: rowY + 4,
+        y: clipY,
         w: drawW,
-        h: trackHeight - 8,
+        h: clipH,
         trackKind: trk.kind,
         trackIndex: trk.index,
         clipIndex,
         trimHandleW,
+        fadeHandlesEnabled: drawW >= 28,
+        fadeInHandleX,
+        fadeOutHandleX,
+        fadeHandleY,
         data: clip
       });
     }
@@ -1059,6 +1256,24 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       }
       ctx.restore();
     }
+  }
+
+  // Active Fade Drag Readout Pill
+  if (opts && opts.activeFade && typeof opts.activeFade.seconds === "number") {
+    const label = `${opts.activeFade.edge === "in" ? "FADE IN" : "FADE OUT"} ${opts.activeFade.seconds.toFixed(2)}s`;
+    ctx.save();
+    ctx.font = "700 9px ui-monospace, monospace";
+    const tw = ctx.measureText(label).width + 10;
+    const pillX = Math.max(timelineX + 4, Math.min(timelineX + timelineW - tw - 4, opts.activeFade.x - tw / 2));
+    const pillY = Math.max(rulerHeight + 2, (opts.activeFade.y || rulerHeight + 10) - 16);
+    ctx.fillStyle = "rgba(17, 17, 20, 0.92)";
+    ctx.fillRect(pillX, pillY, tw, 14);
+    ctx.strokeStyle = "#5eead4";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pillX, pillY, tw, 14);
+    ctx.fillStyle = "#5eead4";
+    ctx.fillText(label, pillX + 5, pillY + 10);
+    ctx.restore();
   }
 
   return {
