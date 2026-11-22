@@ -74,6 +74,11 @@ from taktcut.remote_render import (
     RemoteRenderJobRequest,
 )
 from taktcut.render import (
+    RENDER_AUDIO_BITRATE_KBPS_MAX,
+    RENDER_AUDIO_BITRATE_KBPS_MIN,
+    RENDER_AUDIO_BITRATE_OPTIONS_KBPS,
+    RENDER_CRF_MAX,
+    RENDER_CRF_MIN,
     ClipAudioParams,
     ClipRetimeParams,
     FramingParams,
@@ -83,6 +88,7 @@ from taktcut.render import (
     compile_retime_filter_result,
     execute_render_plan,
     list_aspect_presets,
+    list_delivery_presets,
     probe_hardware_capabilities,
 )
 from taktcut.subtitles import (
@@ -391,15 +397,18 @@ def _build_framing_params_from_payload(
             raise ValueError("'framing' must be a JSON object")
         preset_val = raw_framing.get("preset", raw_framing.get("aspect_preset", "16:9"))
         enabled_val = raw_framing.get("enabled", True)
-        return FramingParams.model_validate(
-            {
-                "preset": preset_val,
-                "mode": raw_framing.get("mode", "fill"),
-                "pan_x": raw_framing.get("pan_x", 0.0),
-                "pan_y": raw_framing.get("pan_y", 0.0),
-                "enabled": enabled_val,
-            }
-        )
+        framing_payload: dict[str, Any] = {
+            "preset": preset_val,
+            "mode": raw_framing.get("mode", "fill"),
+            "pan_x": raw_framing.get("pan_x", 0.0),
+            "pan_y": raw_framing.get("pan_y", 0.0),
+            "enabled": enabled_val,
+        }
+        if raw_framing.get("target_width") is not None:
+            framing_payload["target_width"] = raw_framing.get("target_width")
+        if raw_framing.get("target_height") is not None:
+            framing_payload["target_height"] = raw_framing.get("target_height")
+        return FramingParams.model_validate(framing_payload)
 
     has_top_level = any(
         key in payload for key in ("aspect_preset", "framing_preset", "framing_mode")
@@ -740,6 +749,23 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "ffmpeg_available": caps is not None,
                     "capabilities": caps.model_dump(mode="json") if caps else None,
                     "error": err,
+                },
+            )
+            return
+
+        if route == "/api/render/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_delivery_presets()],
+                    "audio_bitrates_kbps": list(RENDER_AUDIO_BITRATE_OPTIONS_KBPS),
+                    "bounds": {
+                        "crf": {"min": RENDER_CRF_MIN, "max": RENDER_CRF_MAX},
+                        "audio_bitrate_kbps": {
+                            "min": RENDER_AUDIO_BITRATE_KBPS_MIN,
+                            "max": RENDER_AUDIO_BITRATE_KBPS_MAX,
+                        },
+                    },
                 },
             )
             return
@@ -1169,7 +1195,41 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 allowed_suffixes=MEDIA_SUFFIXES,
             )
 
-            profile = RenderProfile(str(payload.get("profile", RenderProfile.WEB_H264.value)))
+            raw_preset = payload.get("delivery_preset")
+            delivery_preset: str | None = None
+            if raw_preset not in (None, ""):
+                if not isinstance(raw_preset, str):
+                    raise ValueError("delivery_preset must be a string")
+                delivery_preset = raw_preset.strip()
+
+            raw_profile = payload.get("profile")
+            profile: RenderProfile | None = None
+            if raw_profile not in (None, ""):
+                profile = RenderProfile(str(raw_profile))
+            elif delivery_preset is None:
+                profile = RenderProfile.WEB_H264
+
+            raw_crf = payload.get("video_crf")
+            video_crf: int | None = None
+            if raw_crf not in (None, ""):
+                if isinstance(raw_crf, bool) or not isinstance(raw_crf, int):
+                    raise ValueError("video_crf must be an integer")
+                video_crf = raw_crf
+
+            raw_audio_kbps = payload.get("audio_bitrate_kbps")
+            audio_bitrate_kbps: int | None = None
+            if raw_audio_kbps not in (None, ""):
+                if isinstance(raw_audio_kbps, bool) or not isinstance(raw_audio_kbps, int):
+                    raise ValueError("audio_bitrate_kbps must be an integer")
+                audio_bitrate_kbps = raw_audio_kbps
+
+            raw_enc_preset = payload.get("encoder_preset")
+            encoder_preset: str | None = None
+            if raw_enc_preset not in (None, ""):
+                if not isinstance(raw_enc_preset, str):
+                    raise ValueError("encoder_preset must be a string")
+                encoder_preset = raw_enc_preset
+
             raw_fps = payload.get("fps")
             fps = RationalFrameRate.from_str(str(raw_fps)) if raw_fps else None
 
@@ -1207,7 +1267,12 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             fx_filtergraph: str | None = None
             raw_fx = payload.get("fx_stack")
             if isinstance(raw_fx, list) and len(raw_fx) > 0:
-                is_prores = profile == RenderProfile.PRORES_HQ
+                effective_fx_profile = profile or RenderProfile.WEB_H264
+                if delivery_preset and profile is None:
+                    from taktcut.render import get_delivery_preset
+
+                    effective_fx_profile = get_delivery_preset(delivery_preset).profile
+                is_prores = effective_fx_profile == RenderProfile.PRORES_HQ
                 fx_pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
                 compiled_fx = compile_fx_filtergraph(
                     raw_fx,
@@ -1264,6 +1329,10 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 target_lufs=target_lufs,
                 prefer_hw=prefer_hw,
                 caps=caps,
+                delivery_preset=delivery_preset,
+                video_crf=video_crf,
+                audio_bitrate_kbps=audio_bitrate_kbps,
+                encoder_preset=encoder_preset,
             )
             response: dict[str, Any] = {
                 "plan": plan.model_dump(mode="json"),

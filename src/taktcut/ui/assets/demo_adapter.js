@@ -1,11 +1,13 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ASPECT_RATIO_PRESETS,
+  DELIVERY_PRESETS,
   TRANSITION_PRESETS,
   compileAudioFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
+  getDeliveryPresetClient,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -861,18 +863,53 @@ export function createApiClient() {
       }
       return requestJson("/api/render/capabilities?verify_nvenc=true&refresh=true");
     },
+    async getRenderPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: DELIVERY_PRESETS,
+          audio_bitrates_kbps: [96, 128, 160, 192, 256, 320],
+          bounds: {
+            crf: { min: 0, max: 51 },
+            audio_bitrate_kbps: { min: 64, max: 512 }
+          }
+        };
+      }
+      return requestJson("/api/render/presets");
+    },
     async buildOrExecuteRender(body) {
       if (resolvedMode === "static-demo") {
         if (body.execute) {
           throw new Error("FFmpeg execution requires running `taktcut ui` locally on your machine.");
         }
+        const presetObj = body.delivery_preset ? getDeliveryPresetClient(body.delivery_preset) : null;
+        const resolvedProfile = body.profile || (presetObj ? presetObj.profile : "web_h264");
         const fpsParts = String(body.fps || "25").split("/");
         const fpsNum = Number.parseInt(fpsParts[0], 10) || 25;
         const fpsDen = Number.parseInt(fpsParts[1] || "1", 10) || 1;
-        const isProres = body.profile === "prores_hq";
-        const encoder = isProres ? "prores_ks" : body.profile === "master_hevc" ? "libx265" : "libx264";
+        const isProres = resolvedProfile === "prores_hq";
+        const encoder = isProres ? "prores_ks" : resolvedProfile === "master_hevc" ? "libx265" : "libx264";
         const pixFmt = isProres ? "yuv422p10le" : "yuv420p";
         const gop = Math.max(2, Math.round((2 * fpsNum) / fpsDen));
+        const effectiveCrf = isProres
+          ? null
+          : Number.isInteger(body.video_crf)
+            ? body.video_crf
+            : presetObj && presetObj.crf !== null
+              ? presetObj.crf
+              : resolvedProfile === "master_hevc"
+                ? 20
+                : 18;
+        const effectiveAudioKbps = isProres
+          ? null
+          : Number.isInteger(body.audio_bitrate_kbps)
+            ? body.audio_bitrate_kbps
+            : presetObj && presetObj.audio_bitrate_kbps !== null
+              ? presetObj.audio_bitrate_kbps
+              : 192;
+        const effectiveEncPreset = isProres
+          ? null
+          : body.encoder_preset || (presetObj && presetObj.encoder_preset) || "medium";
+        const x26xPreset = effectiveEncPreset === "fast" ? "veryfast" : effectiveEncPreset === "slow" ? "slow" : "medium";
         const vfParts = [];
         const afParts = [];
         let targetWidth = null;
@@ -885,8 +922,19 @@ export function createApiClient() {
             if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
           }
         }
-        if (body.framing) {
-          const compiledFraming = compileFramingFilterClient(body.framing);
+        const effectiveFraming =
+          body.framing ||
+          (presetObj
+            ? {
+                preset: presetObj.aspect_ratio,
+                mode: presetObj.framing_mode,
+                target_width: presetObj.width,
+                target_height: presetObj.height,
+                enabled: true
+              }
+            : null);
+        if (effectiveFraming) {
+          const compiledFraming = compileFramingFilterClient(effectiveFraming);
           if (!compiledFraming.is_identity && compiledFraming.filtergraph) {
             vfParts.push(compiledFraming.filtergraph);
             targetWidth = compiledFraming.target_width;
@@ -924,35 +972,68 @@ export function createApiClient() {
           }
         }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
+        const effectiveLufs =
+          body.target_lufs !== null && body.target_lufs !== undefined
+            ? body.target_lufs
+            : presetObj
+              ? presetObj.target_lufs
+              : null;
         if (body.audio_params) {
           const compiledAudio = compileAudioFilterClient(
             body.audio_params,
             body.clip_duration_s ?? null,
-            body.target_lufs ?? null
+            effectiveLufs
           );
           if (compiledAudio.filtergraph) afParts.push(compiledAudio.filtergraph);
-        } else if (body.target_lufs !== null && body.target_lufs !== undefined) {
-          const lufs = Number(body.target_lufs);
+        } else if (effectiveLufs !== null && effectiveLufs !== undefined) {
+          const lufs = Number(effectiveLufs);
           const lra = lufs >= -16.0 ? 11.0 : 7.0;
           afParts.push(`loudnorm=I=${lufs.toFixed(1)}:TP=-1.0:LRA=${lra.toFixed(1)}`);
         }
         const af = afParts.length > 0 ? afParts.join(",") : null;
-        const argv = ["ffmpeg", "-hide_banner", "-y", "-i", body.input_path, "-fps_mode", "cfr", "-r", body.fps || "25", "-c:v", encoder, "-pix_fmt", pixFmt, "-g", String(gop)];
+        const argv = [
+          "ffmpeg",
+          "-hide_banner",
+          "-y",
+          "-i",
+          body.input_path,
+          "-fps_mode",
+          "cfr",
+          "-r",
+          body.fps || "25",
+          "-c:v",
+          encoder
+        ];
+        if (isProres) {
+          argv.push("-profile:v", "3");
+        } else {
+          argv.push("-preset", x26xPreset, "-crf", String(effectiveCrf));
+        }
+        argv.push("-pix_fmt", pixFmt, "-g", String(gop));
         if (vf) argv.push("-vf", vf);
         if (af) argv.push("-af", af);
+        if (isProres) {
+          argv.push("-c:a", "pcm_s24le", "-ar", "48000");
+        } else {
+          argv.push("-c:a", "aac", "-b:a", `${effectiveAudioKbps}k`, "-ar", "48000", "-ac", "2");
+        }
         if (!isProres) argv.push("-movflags", "+faststart");
         argv.push(body.output_path);
         return {
           plan: {
             input_path: body.input_path,
             output_path: body.output_path,
-            profile: body.profile,
+            profile: resolvedProfile,
             encoder,
             fps: { num: fpsNum, den: fpsDen },
             gop_frames: gop,
             pix_fmt: pixFmt,
             faststart: !isProres,
-            target_lufs: body.target_lufs,
+            delivery_preset: presetObj ? presetObj.id : null,
+            video_crf: effectiveCrf,
+            audio_bitrate_kbps: effectiveAudioKbps,
+            encoder_preset: effectiveEncPreset,
+            target_lufs: effectiveLufs,
             target_width: targetWidth,
             target_height: targetHeight,
             framing_mode: framingMode,

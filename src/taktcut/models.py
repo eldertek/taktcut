@@ -406,6 +406,10 @@ class RenderPlan(BaseModel):
     gop_frames: int
     pix_fmt: str
     faststart: bool
+    delivery_preset: str | None = None
+    video_crf: int | None = None
+    audio_bitrate_kbps: int | None = None
+    encoder_preset: str | None = None
     target_lufs: float | None = None
     target_width: int | None = None
     target_height: int | None = None

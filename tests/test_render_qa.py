@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from taktcut.color import bake_cdl_to_cube
 from taktcut.models import (
     AscCdlParams,
+    HardwareCapabilities,
     RationalFrameRate,
     RenderProfile,
     TimelineClip,
@@ -31,7 +32,9 @@ from taktcut.render import (
     compile_retime_filter,
     compile_retime_filter_result,
     execute_render_plan,
+    get_delivery_preset,
     list_aspect_presets,
+    list_delivery_presets,
 )
 
 
@@ -444,3 +447,155 @@ def test_real_render_9_16_crop_and_1_1_pad(tmp_path: Path) -> None:
     assert probe_11.width == 1080
     assert probe_11.height == 1080
     assert probe_11.is_cfr is True
+
+
+def test_delivery_presets_produce_valid_safe_render_plans(tmp_path: Path) -> None:
+    presets = list_delivery_presets()
+    assert [p.id for p in presets] == [
+        "youtube_1080p_h264",
+        "youtube_4k_hevc",
+        "reels_tiktok_9_16",
+        "broadcast_prores_422",
+        "fast_draft_720p",
+    ]
+    assert [p.label for p in presets] == [
+        "YouTube 1080p H.264",
+        "YouTube 4K HEVC",
+        "Reels / TikTok 9:16",
+        "Broadcast ProRes 422",
+        "Fast Draft 720p",
+    ]
+    assert get_delivery_preset("  YOUTUBE_4K_HEVC ").id == "youtube_4k_hevc"
+
+    sw_caps = HardwareCapabilities(
+        ffmpeg_path="ffmpeg",
+        h264_nvenc=False,
+        hevc_nvenc=False,
+        libx264=True,
+        libx265=True,
+        prores_ks=True,
+    )
+    hw_caps = HardwareCapabilities(
+        ffmpeg_path="ffmpeg",
+        h264_nvenc=True,
+        hevc_nvenc=True,
+        libx264=True,
+        libx265=True,
+        prores_ks=True,
+    )
+
+    for preset in presets:
+        src = tmp_path / "source.mp4"
+        out = tmp_path / f"{preset.id}.{preset.container}"
+
+        sw_plan = build_render_plan(
+            input_path=src,
+            output_path=out,
+            fps=RationalFrameRate(num=25, den=1),
+            prefer_hw=False,
+            caps=sw_caps,
+            delivery_preset=preset.id,
+        )
+        assert sw_plan.delivery_preset == preset.id
+        assert sw_plan.profile == preset.profile
+        assert sw_plan.target_width == preset.width
+        assert sw_plan.target_height == preset.height
+        assert sw_plan.framing_mode == preset.framing_mode
+        assert sw_plan.faststart is (preset.container == "mp4")
+        assert sw_plan.video_crf == preset.crf
+        assert sw_plan.audio_bitrate_kbps == preset.audio_bitrate_kbps
+        assert sw_plan.target_lufs == preset.target_lufs
+        assert sw_plan.video_filter is not None
+        assert f"scale=w={preset.width}:h={preset.height}" in sw_plan.video_filter
+        assert f"crop=w={preset.width}:h={preset.height}" in sw_plan.video_filter
+        assert sw_plan.audio_filter is not None
+        assert f"loudnorm=I={preset.target_lufs:.1f}" in sw_plan.audio_filter
+
+        if preset.profile == RenderProfile.PRORES_HQ:
+            assert sw_plan.encoder == "prores_ks"
+            assert sw_plan.pix_fmt == "yuv422p10le"
+            assert "pcm_s24le" in sw_plan.argv
+            assert "-movflags" not in sw_plan.argv
+        else:
+            expected_enc = "libx265" if preset.profile == RenderProfile.MASTER_HEVC else "libx264"
+            assert sw_plan.encoder == expected_enc
+            assert sw_plan.pix_fmt == "yuv420p"
+            assert "-crf" in sw_plan.argv
+            assert str(preset.crf) in sw_plan.argv
+            assert f"{preset.audio_bitrate_kbps}k" in sw_plan.argv
+            assert "+faststart" in sw_plan.argv
+
+        hw_plan = build_render_plan(
+            input_path=src,
+            output_path=out,
+            fps=RationalFrameRate(num=25, den=1),
+            prefer_hw=True,
+            caps=hw_caps,
+            delivery_preset=preset.id,
+        )
+        if preset.id == "youtube_4k_hevc":
+            assert hw_plan.encoder == "hevc_nvenc"
+            assert "-cq" in hw_plan.argv
+            assert "20" in hw_plan.argv
+        elif preset.id == "fast_draft_720p":
+            assert hw_plan.encoder == "h264_nvenc"
+            assert "p3" in hw_plan.argv
+            assert "26" in hw_plan.argv
+            assert "veryfast" in sw_plan.argv
+
+    # Validation bounds for custom CRF, audio bitrate, encoder preset, and custom raster
+    for bad_preset in ("", "unknown_preset", "youtube;evil"):
+        with pytest.raises(ValueError):
+            get_delivery_preset(bad_preset)
+    for bad_crf in (-1, 52, True):
+        with pytest.raises(ValueError):
+            build_render_plan(
+                input_path=tmp_path / "in.mp4",
+                output_path=tmp_path / "out.mp4",
+                prefer_hw=False,
+                caps=sw_caps,
+                video_crf=bad_crf,  # type: ignore[arg-type]
+            )
+    for bad_kbps in (32, 640, False):
+        with pytest.raises(ValueError):
+            build_render_plan(
+                input_path=tmp_path / "in.mp4",
+                output_path=tmp_path / "out.mp4",
+                prefer_hw=False,
+                caps=sw_caps,
+                audio_bitrate_kbps=bad_kbps,  # type: ignore[arg-type]
+            )
+    with pytest.raises(ValueError):
+        build_render_plan(
+            input_path=tmp_path / "in.mp4",
+            output_path=tmp_path / "out.mp4",
+            prefer_hw=False,
+            caps=sw_caps,
+            encoder_preset="ultrafast;rm",
+        )
+    for bad_framing in (
+        {"target_width": 1280},
+        {"target_width": 1281, "target_height": 720},
+        {"target_width": 64, "target_height": 64},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            FramingParams(**bad_framing)  # type: ignore[arg-type]
+
+    # Real FFmpeg execution check for Fast Draft 720p preset
+    real_src = tmp_path / "preset_exec_src.mp4"
+    _generate_synthetic_clip(real_src)
+    draft_out = tmp_path / "fast_draft_720p.mp4"
+    draft_plan = build_render_plan(
+        input_path=real_src,
+        output_path=draft_out,
+        fps=RationalFrameRate(num=25, den=1),
+        prefer_hw=False,
+        delivery_preset="fast_draft_720p",
+    )
+    draft_res = execute_render_plan(draft_plan)
+    assert draft_res.success is True, draft_res.stderr_tail
+    draft_probe = probe_media(draft_out)
+    assert draft_probe.width == 1280
+    assert draft_probe.height == 720
+    assert draft_probe.video_codec == "h264"
+    assert draft_probe.has_faststart is True

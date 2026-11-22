@@ -535,6 +535,85 @@ def test_ui_framing_presets_compile_and_render_plan(ui_server: tuple[str, Path])
     assert "pad=w=1080:h=1350" in (fit_data["plan"]["video_filter"] or "")
 
 
+def test_ui_render_presets_endpoint_and_plan(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+    p_status, _, p_raw = _http_call(f"{base_url}/api/render/presets")
+    assert p_status == 200
+    presets_data = json.loads(p_raw.decode("utf-8"))
+    assert [p["id"] for p in presets_data["presets"]] == [
+        "youtube_1080p_h264",
+        "youtube_4k_hevc",
+        "reels_tiktok_9_16",
+        "broadcast_prores_422",
+        "fast_draft_720p",
+    ]
+    assert presets_data["audio_bitrates_kbps"] == [96, 128, 160, 192, 256, 320]
+
+    uhd_status, _, uhd_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/youtube_4k_hevc.mp4",
+            "delivery_preset": "youtube_4k_hevc",
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert uhd_status == 200
+    uhd_plan = json.loads(uhd_raw.decode("utf-8"))["plan"]
+    assert uhd_plan["delivery_preset"] == "youtube_4k_hevc"
+    assert uhd_plan["profile"] == "master_hevc"
+    assert uhd_plan["target_width"] == 3840
+    assert uhd_plan["target_height"] == 2160
+    assert uhd_plan["video_crf"] == 20
+    assert uhd_plan["audio_bitrate_kbps"] == 320
+    assert "320k" in uhd_plan["argv"]
+
+    draft_status, _, draft_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/custom_draft.mp4",
+            "delivery_preset": "fast_draft_720p",
+            "video_crf": 24,
+            "audio_bitrate_kbps": 160,
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert draft_status == 200
+    draft_plan = json.loads(draft_raw.decode("utf-8"))["plan"]
+    assert draft_plan["video_crf"] == 24
+    assert draft_plan["audio_bitrate_kbps"] == 160
+    assert "160k" in draft_plan["argv"]
+
+    for bad_payload in (
+        {
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/bad.mp4",
+            "delivery_preset": "invalid_preset",
+        },
+        {
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/bad.mp4",
+            "video_crf": 99,
+        },
+        {
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/bad.mp4",
+            "audio_bitrate_kbps": 16,
+        },
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload=bad_payload,
+        )
+        assert bad_status == 400
+
+
 def test_ui_render_plan_execute_and_qa_gate_roundtrip(ui_server: tuple[str, Path]) -> None:
     base_url, workspace = ui_server
 
@@ -743,6 +822,12 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-scope-parade",
         "btn-scope-waveform",
         "btn-scope-vectorscope",
+        "render-preset-strip",
+        "render-active-preset-badge",
+        "render-container",
+        "render-crf",
+        "render-audio-bitrate",
+        "render-resolution",
     ):
         assert elem_id in html_text
     assert "v0.1.5" in html_text
@@ -802,11 +887,13 @@ import {{
   BPM_DEFAULT,
   BPM_MAX,
   BPM_MIN,
+  DELIVERY_PRESETS,
   MARKER_COLORS,
   addMarkerInDocument,
   buildAtempoStagesClient,
   collectSnapTargets,
   compileAudioFilterClient,
+  compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   computeBpmBeatFrames,
@@ -816,6 +903,7 @@ import {{
   findAllCutJunctions,
   findMagneticSnap,
   formatRetimeBadgeText,
+  getDeliveryPresetClient,
   isTrackAudiblyMuted,
   normalizeBpmConfig,
   normalizeClipAudio,
@@ -1071,6 +1159,32 @@ assert.equal(mkSnap.kind, "marker");
 const deletedMk = deleteMarkerInDocument(updatedMk.doc, 1);
 assert.equal(deletedMk.changed, true);
 assert.equal(deletedMk.doc.markers.length, 1);
+
+assert.equal(DELIVERY_PRESETS.length, 5);
+assert.deepEqual(
+  DELIVERY_PRESETS.map((p) => p.id),
+  [
+    "youtube_1080p_h264",
+    "youtube_4k_hevc",
+    "reels_tiktok_9_16",
+    "broadcast_prores_422",
+    "fast_draft_720p"
+  ]
+);
+const uhdPreset = getDeliveryPresetClient("youtube_4k_hevc");
+assert.equal(uhdPreset.width, 3840);
+assert.equal(uhdPreset.height, 2160);
+assert.equal(uhdPreset.audio_bitrate_kbps, 320);
+const uhdFraming = compileFramingFilterClient({{
+  preset: uhdPreset.aspect_ratio,
+  mode: uhdPreset.framing_mode,
+  target_width: uhdPreset.width,
+  target_height: uhdPreset.height,
+  enabled: true
+}});
+assert.equal(uhdFraming.target_width, 3840);
+assert.equal(uhdFraming.target_height, 2160);
+assert.ok(uhdFraming.filtergraph.includes("scale=w=3840:h=2160"));
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -1705,6 +1819,42 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert (
                         page.locator("#btn-fx-matte-final").get_attribute("aria-pressed") == "true"
                     )
+
+                # Verify Deliver Quick-Export Preset Strip at all viewports (1440px and 375px)
+                page.locator("#tab-render").click()
+                page.wait_for_selector("#panel-render:not(.is-hidden)")
+                page.wait_for_selector('[data-delivery-preset="youtube_1080p_h264"]')
+                render_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert render_overflow <= 0, (
+                    f"Deliver page horizontal overflow at {width}x{height}: {render_overflow}px"
+                )
+                page.locator('[data-delivery-preset="youtube_4k_hevc"]').click()
+                assert page.locator("#render-profile").input_value() == "master_hevc"
+                assert page.locator("#render-container").input_value() == "mp4"
+                assert page.locator("#render-resolution").input_value() == "3840x2160"
+                assert page.locator("#render-crf").input_value() == "20"
+                assert page.locator("#render-audio-bitrate").input_value() == "320"
+                assert (
+                    page.locator('[data-delivery-preset="youtube_4k_hevc"]').get_attribute(
+                        "aria-pressed"
+                    )
+                    == "true"
+                )
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('3840')"
+                )
+                argv_text = page.locator("#render-argv-output").text_content() or ""
+                assert "320k" in argv_text
+
+                page.locator('[data-delivery-preset="broadcast_prores_422"]').click()
+                assert page.locator("#render-profile").input_value() == "prores_hq"
+                assert page.locator("#render-container").input_value() == "mov"
+                assert page.locator("#render-output-path").input_value().endswith(".mov")
+                assert page.locator("#render-crf").is_disabled() is True
 
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"

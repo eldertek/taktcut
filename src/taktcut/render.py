@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from taktcut.color import (
     REC709_FFMPEG_FLAGS,
@@ -37,6 +37,35 @@ RETIME_SPEED_MAX: float = 4.0
 CLIP_DURATION_MAX_S: float = 86400.0
 TARGET_LUFS_MIN: float = -70.0
 TARGET_LUFS_MAX: float = -5.0
+RENDER_CRF_MIN: int = 0
+RENDER_CRF_MAX: int = 51
+RENDER_AUDIO_BITRATE_KBPS_MIN: int = 64
+RENDER_AUDIO_BITRATE_KBPS_MAX: int = 512
+RENDER_AUDIO_BITRATE_OPTIONS_KBPS: tuple[int, ...] = (96, 128, 160, 192, 256, 320)
+RENDER_DIMENSION_MIN: int = 128
+RENDER_DIMENSION_MAX: int = 7680
+ENCODER_PRESET_MAP: dict[str, tuple[str, str]] = {
+    "fast": ("p3", "veryfast"),
+    "medium": ("p5", "medium"),
+    "slow": ("p7", "slow"),
+}
+
+
+def _validate_bounded_int(
+    raw: Any,
+    field_name: str,
+    min_val: int,
+    max_val: int,
+    *,
+    even: bool = False,
+) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(f"{field_name} must be an integer, got {raw!r}")
+    if raw < min_val or raw > max_val:
+        raise ValueError(f"{field_name} must be within [{min_val}, {max_val}], got {raw}")
+    if even and raw % 2 != 0:
+        raise ValueError(f"{field_name} must be divisible by 2, got {raw}")
+    return raw
 
 
 def _validate_bounded_float(
@@ -341,6 +370,8 @@ class FramingParams(BaseModel):
     pan_x: float = 0.0
     pan_y: float = 0.0
     enabled: bool = True
+    target_width: int | None = None
+    target_height: int | None = None
 
     @field_validator("preset", mode="before")
     @classmethod
@@ -369,9 +400,198 @@ class FramingParams(BaseModel):
             raise ValueError(f"enabled must be a boolean, got {raw!r}")
         return raw
 
+    @field_validator("target_width", "target_height", mode="before")
+    @classmethod
+    def _validate_target_dim(cls, raw: Any, info: Any) -> int | None:
+        if raw is None:
+            return None
+        return _validate_bounded_int(
+            raw,
+            str(info.field_name),
+            RENDER_DIMENSION_MIN,
+            RENDER_DIMENSION_MAX,
+            even=True,
+        )
+
+    @model_validator(mode="after")
+    def _validate_target_pair(self) -> FramingParams:
+        if (self.target_width is None) != (self.target_height is None):
+            raise ValueError("target_width and target_height must be provided together")
+        return self
+
     def target_dimensions(self) -> tuple[int, int]:
+        if self.target_width is not None and self.target_height is not None:
+            return (self.target_width, self.target_height)
         spec = _ASPECT_PRESET_MAP[self.preset]
         return (spec.width, spec.height)
+
+
+DeliveryPresetId = Literal[
+    "youtube_1080p_h264",
+    "youtube_4k_hevc",
+    "reels_tiktok_9_16",
+    "broadcast_prores_422",
+    "fast_draft_720p",
+]
+EncoderPresetId = Literal["fast", "medium", "slow"]
+
+
+class DeliveryPreset(BaseModel):
+    """Curated 1-click DaVinci-style quick-export delivery preset."""
+
+    id: DeliveryPresetId
+    label: str
+    label_fr: str
+    badge: str
+    profile: RenderProfile
+    codec_label: str
+    container: Literal["mp4", "mov"]
+    aspect_ratio: AspectRatioPresetId
+    width: int
+    height: int
+    framing_mode: FramingMode
+    crf: int | None = None
+    encoder_preset: EncoderPresetId | None = None
+    audio_codec: Literal["aac", "pcm_s24le"]
+    audio_bitrate_kbps: int | None = None
+    target_lufs: float
+    default_output_path: str
+    description: str
+    description_fr: str
+
+
+DELIVERY_PRESETS: tuple[DeliveryPreset, ...] = (
+    DeliveryPreset(
+        id="youtube_1080p_h264",
+        label="YouTube 1080p H.264",
+        label_fr="YouTube 1080p H.264",
+        badge="1080p H.264",
+        profile=RenderProfile.WEB_H264,
+        codec_label="H.264",
+        container="mp4",
+        aspect_ratio="16:9",
+        width=1920,
+        height=1080,
+        framing_mode="fill",
+        crf=18,
+        encoder_preset="medium",
+        audio_codec="aac",
+        audio_bitrate_kbps=192,
+        target_lufs=-14.0,
+        default_output_path="renders/youtube_1080p.mp4",
+        description="1080p 16:9 H.264 MP4 (+faststart) at CRF 18, AAC 192 kbps, -14 LUFS.",
+        description_fr="MP4 H.264 1080p 16:9 (+faststart), CRF 18, AAC 192 kbps, -14 LUFS.",
+    ),
+    DeliveryPreset(
+        id="youtube_4k_hevc",
+        label="YouTube 4K HEVC",
+        label_fr="YouTube 4K HEVC",
+        badge="4K HEVC",
+        profile=RenderProfile.MASTER_HEVC,
+        codec_label="HEVC",
+        container="mp4",
+        aspect_ratio="16:9",
+        width=3840,
+        height=2160,
+        framing_mode="fill",
+        crf=20,
+        encoder_preset="medium",
+        audio_codec="aac",
+        audio_bitrate_kbps=320,
+        target_lufs=-14.0,
+        default_output_path="renders/youtube_4k_hevc.mp4",
+        description="4K UHD 16:9 HEVC MP4 (+faststart) at CRF 20, AAC 320 kbps, -14 LUFS.",
+        description_fr="MP4 HEVC 4K UHD 16:9 (+faststart), CRF 20, AAC 320 kbps, -14 LUFS.",
+    ),
+    DeliveryPreset(
+        id="reels_tiktok_9_16",
+        label="Reels / TikTok 9:16",
+        label_fr="Reels / TikTok 9:16",
+        badge="9:16 Social",
+        profile=RenderProfile.WEB_H264,
+        codec_label="H.264",
+        container="mp4",
+        aspect_ratio="9:16",
+        width=1080,
+        height=1920,
+        framing_mode="fill",
+        crf=18,
+        encoder_preset="medium",
+        audio_codec="aac",
+        audio_bitrate_kbps=192,
+        target_lufs=-14.0,
+        default_output_path="renders/reels_tiktok_9_16.mp4",
+        description="Vertical 9:16 H.264 MP4 (1080x1920 fill crop) at CRF 18, AAC 192 kbps.",
+        description_fr="MP4 H.264 vertical 9:16 (1080x1920 recadré), CRF 18, AAC 192 kbps.",
+    ),
+    DeliveryPreset(
+        id="broadcast_prores_422",
+        label="Broadcast ProRes 422",
+        label_fr="Broadcast ProRes 422",
+        badge="ProRes MOV",
+        profile=RenderProfile.PRORES_HQ,
+        codec_label="ProRes 422",
+        container="mov",
+        aspect_ratio="16:9",
+        width=1920,
+        height=1080,
+        framing_mode="fill",
+        crf=None,
+        encoder_preset=None,
+        audio_codec="pcm_s24le",
+        audio_bitrate_kbps=None,
+        target_lufs=-23.0,
+        default_output_path="renders/broadcast_prores_422.mov",
+        description=(
+            "Broadcast ProRes 422 HQ MOV (10-bit 4:2:2), 24-bit PCM 48 kHz, -23 LUFS EBU R128."
+        ),
+        description_fr=(
+            "MOV ProRes 422 HQ Broadcast (10 bits 4:2:2), PCM 24 bits 48 kHz, -23 LUFS EBU R128."
+        ),
+    ),
+    DeliveryPreset(
+        id="fast_draft_720p",
+        label="Fast Draft 720p",
+        label_fr="Brouillon Rapide 720p",
+        badge="720p Draft",
+        profile=RenderProfile.WEB_H264,
+        codec_label="H.264",
+        container="mp4",
+        aspect_ratio="16:9",
+        width=1280,
+        height=720,
+        framing_mode="fill",
+        crf=26,
+        encoder_preset="fast",
+        audio_codec="aac",
+        audio_bitrate_kbps=128,
+        target_lufs=-14.0,
+        default_output_path="renders/fast_draft_720p.mp4",
+        description="Fast 720p H.264 review draft at CRF 26, AAC 128 kbps, fast encode.",
+        description_fr="Brouillon rapide 720p H.264, CRF 26, AAC 128 kbps, encodage rapide.",
+    ),
+)
+
+_DELIVERY_PRESET_MAP: dict[str, DeliveryPreset] = {p.id: p for p in DELIVERY_PRESETS}
+
+
+def list_delivery_presets() -> list[DeliveryPreset]:
+    """Return all curated quick-export delivery presets in deterministic display order."""
+    return list(DELIVERY_PRESETS)
+
+
+def get_delivery_preset(preset_id: str) -> DeliveryPreset:
+    """Lookup a curated quick-export delivery preset by canonical id."""
+    if not isinstance(preset_id, str):
+        raise ValueError(f"delivery_preset must be a string, got {preset_id!r}")
+    cleaned = preset_id.strip().lower()
+    preset = _DELIVERY_PRESET_MAP.get(cleaned)
+    if preset is None:
+        allowed = ", ".join(_DELIVERY_PRESET_MAP.keys())
+        raise ValueError(
+            f"Unsupported delivery preset {preset_id!r}; expected one of: {allowed}"
+        )
+    return preset
 
 
 class FramingCompileResult(BaseModel):
@@ -540,10 +760,22 @@ def select_encoder(
     return "prores"
 
 
+def _validate_encoder_preset(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError(f"encoder_preset must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned not in ENCODER_PRESET_MAP:
+        allowed = ", ".join(ENCODER_PRESET_MAP.keys())
+        raise ValueError(f"Unsupported encoder_preset {raw!r}; expected one of: {allowed}")
+    return cleaned
+
+
 def build_render_plan(
     input_path: Path,
     output_path: Path,
-    profile: RenderProfile = RenderProfile.WEB_H264,
+    profile: RenderProfile | None = None,
     fps: RationalFrameRate | None = None,
     lut_path: Path | None = None,
     color_grade: ColorGradeParams | None = None,
@@ -559,16 +791,93 @@ def build_render_plan(
     prefer_hw: bool = True,
     caps: HardwareCapabilities | None = None,
     ffmpeg_bin: str = "ffmpeg",
+    *,
+    delivery_preset: str | None = None,
+    video_crf: int | None = None,
+    audio_bitrate_kbps: int | None = None,
+    encoder_preset: str | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
+    preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
+    resolved_profile = (
+        profile
+        if profile is not None
+        else (preset_obj.profile if preset_obj is not None else RenderProfile.WEB_H264)
+    )
+    validated_crf = (
+        _validate_bounded_int(video_crf, "video_crf", RENDER_CRF_MIN, RENDER_CRF_MAX)
+        if video_crf is not None
+        else None
+    )
+    validated_audio_kbps = (
+        _validate_bounded_int(
+            audio_bitrate_kbps,
+            "audio_bitrate_kbps",
+            RENDER_AUDIO_BITRATE_KBPS_MIN,
+            RENDER_AUDIO_BITRATE_KBPS_MAX,
+        )
+        if audio_bitrate_kbps is not None
+        else None
+    )
+    validated_enc_preset = _validate_encoder_preset(encoder_preset)
+
     hw = caps or probe_hardware_capabilities(ffmpeg_bin=ffmpeg_bin, verify_nvenc_runtime=prefer_hw)
-    encoder = select_encoder(profile, hw, prefer_hw=prefer_hw)
+    encoder = select_encoder(resolved_profile, hw, prefer_hw=prefer_hw)
     target_fps = fps or RationalFrameRate(num=25, den=1)
     gop = max(2, round(2 * target_fps.as_float))
 
-    is_prores = profile == RenderProfile.PRORES_HQ
+    is_prores = resolved_profile == RenderProfile.PRORES_HQ
     pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
     faststart = not is_prores
+
+    effective_crf: int | None = None
+    effective_audio_kbps: int | None = None
+    effective_enc_preset: str | None = None
+    if not is_prores:
+        default_crf = 20 if resolved_profile == RenderProfile.MASTER_HEVC else 18
+        effective_crf = (
+            validated_crf
+            if validated_crf is not None
+            else (
+                preset_obj.crf
+                if preset_obj is not None and preset_obj.crf is not None
+                else default_crf
+            )
+        )
+        effective_audio_kbps = (
+            validated_audio_kbps
+            if validated_audio_kbps is not None
+            else (
+                preset_obj.audio_bitrate_kbps
+                if preset_obj is not None and preset_obj.audio_bitrate_kbps is not None
+                else 192
+            )
+        )
+        effective_enc_preset = (
+            validated_enc_preset
+            if validated_enc_preset is not None
+            else (
+                preset_obj.encoder_preset
+                if preset_obj is not None and preset_obj.encoder_preset is not None
+                else "medium"
+            )
+        )
+
+    effective_framing = framing
+    if effective_framing is None and preset_obj is not None:
+        effective_framing = FramingParams(
+            preset=preset_obj.aspect_ratio,
+            mode=preset_obj.framing_mode,
+            target_width=preset_obj.width,
+            target_height=preset_obj.height,
+            enabled=True,
+        )
+
+    effective_lufs = (
+        target_lufs
+        if target_lufs is not None
+        else (preset_obj.target_lufs if preset_obj is not None else None)
+    )
 
     retime_vf: str | None = None
     retime_af: str | None = None
@@ -579,11 +888,11 @@ def build_render_plan(
     target_width: int | None = None
     target_height: int | None = None
     framing_mode: str | None = None
-    if framing is not None and framing.enabled:
-        framing_vf = compile_framing_filter(framing)
+    if effective_framing is not None and effective_framing.enabled:
+        framing_vf = compile_framing_filter(effective_framing)
         if framing_vf is not None:
-            target_width, target_height = framing.target_dimensions()
-            framing_mode = framing.mode
+            target_width, target_height = effective_framing.target_dimensions()
+            framing_mode = effective_framing.mode
 
     vf_parts: list[str] = []
     if retime_vf is not None:
@@ -629,9 +938,9 @@ def build_render_plan(
         clip_af = compile_audio_filter(audio_params, clip_duration_s=resolved_clip_dur)
         if clip_af is not None:
             af_parts.append(clip_af)
-    if target_lufs is not None and not (audio_params is not None and audio_params.muted):
+    if effective_lufs is not None and not (audio_params is not None and audio_params.muted):
         validated_lufs = _validate_bounded_float(
-            target_lufs,
+            effective_lufs,
             "target_lufs",
             TARGET_LUFS_MIN,
             TARGET_LUFS_MAX,
@@ -658,14 +967,21 @@ def build_render_plan(
     argv.extend(["-fps_mode", "cfr", "-r", target_fps.ffmpeg_rate])
     argv.extend(["-c:v", encoder])
 
+    nvenc_preset, x26x_preset = ENCODER_PRESET_MAP[effective_enc_preset or "medium"]
+    crf_h264 = effective_crf if effective_crf is not None else 18
+    crf_hevc = effective_crf if effective_crf is not None else 20
     if encoder == "h264_nvenc":
-        argv.extend(["-preset", "p5", "-rc", "vbr", "-cq", "18", "-b:v", "0"])
+        argv.extend(
+            ["-preset", nvenc_preset, "-rc", "vbr", "-cq", str(crf_h264), "-b:v", "0"]
+        )
     elif encoder == "hevc_nvenc":
-        argv.extend(["-preset", "p5", "-rc", "vbr", "-cq", "20", "-b:v", "0"])
+        argv.extend(
+            ["-preset", nvenc_preset, "-rc", "vbr", "-cq", str(crf_hevc), "-b:v", "0"]
+        )
     elif encoder == "libx264":
-        argv.extend(["-preset", "medium", "-crf", "18"])
+        argv.extend(["-preset", x26x_preset, "-crf", str(crf_h264)])
     elif encoder == "libx265":
-        argv.extend(["-preset", "medium", "-crf", "20"])
+        argv.extend(["-preset", x26x_preset, "-crf", str(crf_hevc)])
     elif encoder == "prores_ks":
         argv.extend(["-profile:v", "3"])
 
@@ -678,7 +994,18 @@ def build_render_plan(
     if is_prores:
         argv.extend(["-c:a", "pcm_s24le", "-ar", "48000"])
     else:
-        argv.extend(["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"])
+        argv.extend(
+            [
+                "-c:a",
+                "aac",
+                "-b:a",
+                f"{effective_audio_kbps or 192}k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+            ]
+        )
 
     if faststart:
         argv.extend(["-movflags", "+faststart"])
@@ -688,13 +1015,17 @@ def build_render_plan(
     return RenderPlan(
         input_path=str(input_path),
         output_path=str(output_path),
-        profile=profile,
+        profile=resolved_profile,
         encoder=encoder,
         fps=target_fps,
         gop_frames=gop,
         pix_fmt=pix_fmt,
         faststart=faststart,
-        target_lufs=target_lufs,
+        delivery_preset=preset_obj.id if preset_obj is not None else None,
+        video_crf=effective_crf,
+        audio_bitrate_kbps=effective_audio_kbps,
+        encoder_preset=effective_enc_preset,
+        target_lufs=effective_lufs,
         target_width=target_width,
         target_height=target_height,
         framing_mode=framing_mode,

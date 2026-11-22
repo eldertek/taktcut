@@ -22,6 +22,7 @@ import {
   BPM_MIN,
   BPM_OFFSET_MAX_S,
   BPM_OFFSET_MIN_S,
+  DELIVERY_PRESETS,
   MARKER_COLOR_HEX,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
@@ -291,6 +292,13 @@ const state = {
       socialHud: true
     }
   },
+  deliveryPresetsCatalog: null,
+  activeDeliveryPresetId: null,
+  renderConfig: {
+    targetWidth: 1920,
+    targetHeight: 1080,
+    encoderPreset: "medium"
+  },
   renderEngine: "local",
   remotePollTimer: null
 };
@@ -372,6 +380,7 @@ function setLanguage(lang) {
   renderUpdateButton();
   renderTimelineUI();
   renderFxStack();
+  renderDeliveryPresetStrip();
   updateTitleTimingBadges();
   updateSubtitleTimingBadges();
   if (state.fxLastCompile) renderFxCompileResult(state.fxLastCompile);
@@ -2958,12 +2967,167 @@ function renderRemoteJobTelemetry(data) {
     .join("\n");
 }
 
+function getDeliveryPresetsList() {
+  return state.deliveryPresetsCatalog && state.deliveryPresetsCatalog.length > 0
+    ? state.deliveryPresetsCatalog
+    : DELIVERY_PRESETS;
+}
+
+function getDeliveryPresetLabel(preset) {
+  if (!preset) return t("render.presets.custom");
+  if (state.lang === "fr" && preset.label_fr) return preset.label_fr;
+  return preset.label;
+}
+
+function syncDeliverProfileControlsState() {
+  const profileEl = byId("render-profile");
+  const containerEl = byId("render-container");
+  const crfEl = byId("render-crf");
+  const audioEl = byId("render-audio-bitrate");
+  if (!profileEl) return;
+  const prof = profileEl.value;
+  const isProres = prof === "prores_hq";
+  if (containerEl) {
+    containerEl.value = isProres ? "mov" : "mp4";
+  }
+  if (crfEl) {
+    crfEl.disabled = isProres;
+    if (isProres) {
+      crfEl.value = "";
+      crfEl.placeholder = "N/A (ProRes)";
+    } else {
+      crfEl.placeholder = prof === "master_hevc" ? "20" : "18";
+      if (!crfEl.value.trim()) {
+        crfEl.value = prof === "master_hevc" ? "20" : "18";
+      }
+    }
+  }
+  if (audioEl) {
+    audioEl.disabled = isProres;
+    if (isProres) {
+      audioEl.value = "pcm_s24le";
+    } else if (audioEl.value === "pcm_s24le") {
+      audioEl.value = "192";
+    }
+  }
+}
+
+function renderDeliveryPresetStrip() {
+  const strip = byId("render-preset-strip");
+  const badge = byId("render-active-preset-badge");
+  const presets = getDeliveryPresetsList();
+  const activePreset = presets.find((p) => p.id === state.activeDeliveryPresetId) || null;
+  if (badge) {
+    badge.textContent = activePreset ? getDeliveryPresetLabel(activePreset) : t("render.presets.custom");
+    badge.className = `nle-tag mono${activePreset ? " is-active" : ""}`;
+  }
+  if (!strip) return;
+
+  const cards = [];
+  for (const preset of presets) {
+    const isActive = preset.id === state.activeDeliveryPresetId;
+    const btn = dom("button", `deliver-preset-card${isActive ? " is-active" : ""}`);
+    btn.type = "button";
+    btn.setAttribute("data-delivery-preset", preset.id);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+    const desc = state.lang === "fr" && preset.description_fr ? preset.description_fr : preset.description;
+    if (desc) btn.title = desc;
+
+    const top = dom("div", "deliver-preset-top");
+    top.appendChild(dom("span", "deliver-preset-title", getDeliveryPresetLabel(preset)));
+    top.appendChild(dom("span", "deliver-preset-badge mono", String(preset.container || "mp4").toUpperCase()));
+
+    const qualityTag =
+      preset.crf !== null && preset.crf !== undefined ? `CRF ${preset.crf}` : "10b 4:2:2";
+    const audioTag = preset.audio_bitrate_kbps ? `${preset.audio_bitrate_kbps}k` : "PCM 24b";
+    const meta = dom(
+      "div",
+      "deliver-preset-meta mono",
+      `${preset.codec_label} | ${preset.width}x${preset.height} | ${qualityTag} | ${audioTag}`
+    );
+
+    btn.appendChild(top);
+    btn.appendChild(meta);
+    btn.addEventListener("click", () => applyDeliveryPreset(preset.id));
+    cards.push(btn);
+  }
+  strip.replaceChildren(...cards);
+}
+
+function markDeliverPresetCustom() {
+  if (state.activeDeliveryPresetId !== null) {
+    state.activeDeliveryPresetId = null;
+    renderDeliveryPresetStrip();
+  }
+}
+
+function applyDeliveryPreset(presetId) {
+  const presets = getDeliveryPresetsList();
+  const preset = presets.find((p) => p.id === presetId);
+  if (!preset) return;
+
+  state.activeDeliveryPresetId = preset.id;
+  state.renderConfig.targetWidth = preset.width;
+  state.renderConfig.targetHeight = preset.height;
+  state.renderConfig.encoderPreset = preset.encoder_preset || "medium";
+
+  const profileEl = byId("render-profile");
+  const containerEl = byId("render-container");
+  const outEl = byId("render-output-path");
+  const crfEl = byId("render-crf");
+  const audioEl = byId("render-audio-bitrate");
+  const lufsEl = byId("render-lufs");
+  const resEl = byId("render-resolution");
+  const useFramingEl = byId("render-use-framing");
+
+  if (profileEl) profileEl.value = preset.profile;
+  if (containerEl) containerEl.value = preset.container;
+  if (outEl && preset.default_output_path) outEl.value = preset.default_output_path;
+  if (crfEl) {
+    if (preset.crf !== null && preset.crf !== undefined) {
+      crfEl.value = String(preset.crf);
+    } else {
+      crfEl.value = "";
+    }
+  }
+  syncDeliverProfileControlsState();
+  if (audioEl) {
+    audioEl.value = preset.audio_bitrate_kbps ? String(preset.audio_bitrate_kbps) : "pcm_s24le";
+  }
+  if (lufsEl && Number.isFinite(Number(preset.target_lufs))) {
+    lufsEl.value = Number(preset.target_lufs).toFixed(1);
+  }
+
+  state.framing.preset = preset.aspect_ratio;
+  state.framing.mode = preset.framing_mode === "fit" ? "fit" : "fill";
+  if (resEl) {
+    const resKey = `${preset.width}x${preset.height}`;
+    resEl.value = resKey;
+  }
+  if (useFramingEl) useFramingEl.checked = true;
+
+  syncFramingControlsUI();
+  renderDeliveryPresetStrip();
+  redrawActiveCanvases();
+  showBanner(`${getDeliveryPresetLabel(preset)} (${preset.width}x${preset.height}, ${preset.container.toUpperCase()})`, "info");
+}
+
 async function buildOrExecuteRender(execute) {
   try {
     stopRemotePoll();
     const inputPath = byId("render-input-path").value.trim();
     const outputPath = byId("render-output-path").value.trim();
     const profile = byId("render-profile").value;
+    const isProres = profile === "prores_hq";
+    const crfRaw = byId("render-crf") ? byId("render-crf").value.trim() : "";
+    const parsedCrf =
+      !isProres && crfRaw !== "" && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
+    if (!isProres && crfRaw !== "" && (parsedCrf === null || parsedCrf < 0 || parsedCrf > 51)) {
+      throw new Error("Video CRF must be an integer between 0 and 51.");
+    }
+    const audioRaw = byId("render-audio-bitrate") ? byId("render-audio-bitrate").value : "192";
+    const parsedAudioKbps =
+      !isProres && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
     const fps = byId("render-fps").value.trim() || null;
     const lutPath = byId("render-lut-path").value.trim() || null;
     const lufsRaw = byId("render-lufs").value.trim();
@@ -3016,7 +3180,13 @@ async function buildOrExecuteRender(execute) {
     const useFramingEl = byId("render-use-framing");
     const framingPayload =
       useFramingEl && useFramingEl.checked
-        ? { preset: state.framing.preset, mode: state.framing.mode, enabled: true }
+        ? {
+            preset: state.framing.preset,
+            mode: state.framing.mode,
+            target_width: state.renderConfig.targetWidth,
+            target_height: state.renderConfig.targetHeight,
+            enabled: true
+          }
         : null;
 
     if (execute && state.renderEngine === "remote") {
@@ -3075,6 +3245,10 @@ async function buildOrExecuteRender(execute) {
       input_path: inputPath,
       output_path: outputPath,
       profile,
+      delivery_preset: state.activeDeliveryPresetId || null,
+      video_crf: parsedCrf,
+      audio_bitrate_kbps: parsedAudioKbps,
+      encoder_preset: !isProres ? state.renderConfig.encoderPreset || "medium" : null,
       fps,
       lut_path: lutPath,
       color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
@@ -3102,10 +3276,23 @@ async function buildOrExecuteRender(execute) {
       plan.target_width && plan.target_height
         ? `${plan.target_width}x${plan.target_height} (${plan.framing_mode || "fill"})`
         : "Source (Native)";
+    const qualityLabel =
+      plan.video_crf !== null && plan.video_crf !== undefined
+        ? `CRF ${plan.video_crf} (${plan.encoder_preset || "medium"})`
+        : "ProRes 422 HQ (10-bit)";
+    const audioBitrateLabel = plan.audio_bitrate_kbps
+      ? `AAC ${plan.audio_bitrate_kbps} kbps`
+      : "PCM 24-bit 48 kHz";
+    const presetObj = plan.delivery_preset
+      ? getDeliveryPresetsList().find((p) => p.id === plan.delivery_preset)
+      : null;
     renderKv(byId("render-plan-kv"), [
+      ["Preset", presetObj ? getDeliveryPresetLabel(presetObj) : t("render.presets.custom")],
       ["Profile", plan.profile],
       ["Encoder", plan.encoder],
       ["Target Raster", rasterLabel],
+      ["Video Quality", qualityLabel],
+      ["Audio Stream", audioBitrateLabel],
       ["Rational FPS", fpsLabel],
       ["GOP Frames", String(plan.gop_frames)],
       ["Pixel Format", plan.pix_fmt],
@@ -5875,15 +6062,64 @@ function wireEvents() {
     const cur = byId("render-output-path").value.trim() || "renders/delivery.mp4";
     const stem = cur.replace(/\.(mp4|mov)$/i, "");
     byId("render-output-path").value = prof === "prores_hq" ? `${stem}.mov` : `${stem}.mp4`;
+    state.renderConfig.encoderPreset = "medium";
+    syncDeliverProfileControlsState();
+    markDeliverPresetCustom();
   });
+  const renderContainerEl = byId("render-container");
+  if (renderContainerEl) {
+    renderContainerEl.addEventListener("change", () => {
+      const ext = renderContainerEl.value === "mov" ? "mov" : "mp4";
+      const cur = byId("render-output-path").value.trim() || `renders/delivery.${ext}`;
+      const stem = cur.replace(/\.(mp4|mov)$/i, "");
+      byId("render-output-path").value = `${stem}.${ext}`;
+      markDeliverPresetCustom();
+    });
+  }
+  const renderCrfEl = byId("render-crf");
+  if (renderCrfEl) {
+    renderCrfEl.addEventListener("input", markDeliverPresetCustom);
+  }
+  const renderAudioBitrateEl = byId("render-audio-bitrate");
+  if (renderAudioBitrateEl) {
+    renderAudioBitrateEl.addEventListener("change", markDeliverPresetCustom);
+  }
+  const renderLufsEl = byId("render-lufs");
+  if (renderLufsEl) {
+    renderLufsEl.addEventListener("input", markDeliverPresetCustom);
+  }
+  const renderResEl = byId("render-resolution");
+  if (renderResEl) {
+    renderResEl.addEventListener("change", () => {
+      const [rw, rh] = renderResEl.value.split("x").map((n) => Number.parseInt(n, 10));
+      if (Number.isInteger(rw) && Number.isInteger(rh)) {
+        state.renderConfig.targetWidth = rw;
+        state.renderConfig.targetHeight = rh;
+        if (rw === 1080 && rh === 1920) state.framing.preset = "9:16";
+        else if (rw === 1080 && rh === 1080) state.framing.preset = "1:1";
+        else if (rw === 1080 && rh === 1350) state.framing.preset = "4:5";
+        else state.framing.preset = "16:9";
+        const useFraming = byId("render-use-framing");
+        if (useFraming) useFraming.checked = true;
+        syncFramingControlsUI();
+        redrawActiveCanvases();
+        markDeliverPresetCustom();
+      }
+    });
+  }
   const renderAspect = byId("render-aspect-preset");
   if (renderAspect) {
     renderAspect.addEventListener("change", () => {
       state.framing.preset = renderAspect.value;
+      const spec = getAspectRatioPreset(renderAspect.value);
+      state.renderConfig.targetWidth = spec.width;
+      state.renderConfig.targetHeight = spec.height;
+      if (renderResEl) renderResEl.value = `${spec.width}x${spec.height}`;
       const useFraming = byId("render-use-framing");
       if (useFraming) useFraming.checked = true;
       syncFramingControlsUI();
       redrawActiveCanvases();
+      markDeliverPresetCustom();
     });
   }
   const renderMode = byId("render-framing-mode");
@@ -5894,6 +6130,7 @@ function wireEvents() {
       if (useFraming) useFraming.checked = true;
       syncFramingControlsUI();
       redrawActiveCanvases();
+      markDeliverPresetCustom();
     });
   }
   byId("btn-verify-nvenc").addEventListener("click", async () => {
@@ -5987,9 +6224,23 @@ async function loadTransitionsCatalog() {
   }
 }
 
+async function loadRenderPresetsCatalog() {
+  try {
+    const data = await api.getRenderPresets();
+    if (data && Array.isArray(data.presets) && data.presets.length > 0) {
+      state.deliveryPresetsCatalog = data.presets;
+      renderDeliveryPresetStrip();
+    }
+  } catch {
+    // Fallback to built-in DELIVERY_PRESETS constants
+  }
+}
+
 async function bootstrap() {
   wireEvents();
   syncFramingControlsUI();
+  syncDeliverProfileControlsState();
+  renderDeliveryPresetStrip();
   syncColorInputsFromState();
   compileColorNow();
   syncTitleInputsFromState();
@@ -6031,7 +6282,8 @@ async function bootstrap() {
     loadFxCatalog(),
     loadColorCatalog(),
     loadTitlesCatalog(),
-    loadTransitionsCatalog()
+    loadTransitionsCatalog(),
+    loadRenderPresetsCatalog()
   ]);
 }
 

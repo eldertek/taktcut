@@ -41,6 +41,111 @@ export const ASPECT_RATIO_PRESETS = [
   { id: "4:5", label: "4:5 1080x1350 Feed", width: 1080, height: 1350 }
 ];
 
+export const DELIVERY_PRESETS = [
+  {
+    id: "youtube_1080p_h264",
+    label: "YouTube 1080p H.264",
+    label_fr: "YouTube 1080p H.264",
+    badge: "1080p H.264",
+    profile: "web_h264",
+    codec_label: "H.264",
+    container: "mp4",
+    aspect_ratio: "16:9",
+    width: 1920,
+    height: 1080,
+    framing_mode: "fill",
+    crf: 18,
+    encoder_preset: "medium",
+    audio_codec: "aac",
+    audio_bitrate_kbps: 192,
+    target_lufs: -14.0,
+    default_output_path: "renders/youtube_1080p.mp4"
+  },
+  {
+    id: "youtube_4k_hevc",
+    label: "YouTube 4K HEVC",
+    label_fr: "YouTube 4K HEVC",
+    badge: "4K HEVC",
+    profile: "master_hevc",
+    codec_label: "HEVC",
+    container: "mp4",
+    aspect_ratio: "16:9",
+    width: 3840,
+    height: 2160,
+    framing_mode: "fill",
+    crf: 20,
+    encoder_preset: "medium",
+    audio_codec: "aac",
+    audio_bitrate_kbps: 320,
+    target_lufs: -14.0,
+    default_output_path: "renders/youtube_4k_hevc.mp4"
+  },
+  {
+    id: "reels_tiktok_9_16",
+    label: "Reels / TikTok 9:16",
+    label_fr: "Reels / TikTok 9:16",
+    badge: "9:16 Social",
+    profile: "web_h264",
+    codec_label: "H.264",
+    container: "mp4",
+    aspect_ratio: "9:16",
+    width: 1080,
+    height: 1920,
+    framing_mode: "fill",
+    crf: 18,
+    encoder_preset: "medium",
+    audio_codec: "aac",
+    audio_bitrate_kbps: 192,
+    target_lufs: -14.0,
+    default_output_path: "renders/reels_tiktok_9_16.mp4"
+  },
+  {
+    id: "broadcast_prores_422",
+    label: "Broadcast ProRes 422",
+    label_fr: "Broadcast ProRes 422",
+    badge: "ProRes MOV",
+    profile: "prores_hq",
+    codec_label: "ProRes 422",
+    container: "mov",
+    aspect_ratio: "16:9",
+    width: 1920,
+    height: 1080,
+    framing_mode: "fill",
+    crf: null,
+    encoder_preset: null,
+    audio_codec: "pcm_s24le",
+    audio_bitrate_kbps: null,
+    target_lufs: -23.0,
+    default_output_path: "renders/broadcast_prores_422.mov"
+  },
+  {
+    id: "fast_draft_720p",
+    label: "Fast Draft 720p",
+    label_fr: "Brouillon Rapide 720p",
+    badge: "720p Draft",
+    profile: "web_h264",
+    codec_label: "H.264",
+    container: "mp4",
+    aspect_ratio: "16:9",
+    width: 1280,
+    height: 720,
+    framing_mode: "fill",
+    crf: 26,
+    encoder_preset: "fast",
+    audio_codec: "aac",
+    audio_bitrate_kbps: 128,
+    target_lufs: -14.0,
+    default_output_path: "renders/fast_draft_720p.mp4"
+  }
+];
+
+const DELIVERY_PRESET_MAP = new Map(DELIVERY_PRESETS.map((p) => [p.id, p]));
+
+export function getDeliveryPresetClient(presetId) {
+  const clean = typeof presetId === "string" ? presetId.trim().toLowerCase() : "";
+  return DELIVERY_PRESET_MAP.get(clean) || null;
+}
+
 const ASPECT_PRESET_MAP = new Map(ASPECT_RATIO_PRESETS.map((p) => [p.id, p]));
 
 export function getAspectRatioPreset(presetId) {
@@ -55,20 +160,22 @@ export function compileFramingFilterClient(params) {
   const enabled = p.enabled !== false;
   const panX = clampNum(Number.isFinite(Number(p.pan_x)) ? Number(p.pan_x) : 0, -1, 1);
   const panY = clampNum(Number.isFinite(Number(p.pan_y)) ? Number(p.pan_y) : 0, -1, 1);
+  const hasCustomW = Number.isInteger(p.target_width) && p.target_width >= 128 && p.target_width <= 7680 && p.target_width % 2 === 0;
+  const hasCustomH = Number.isInteger(p.target_height) && p.target_height >= 128 && p.target_height <= 7680 && p.target_height % 2 === 0;
+  const w = hasCustomW && hasCustomH ? p.target_width : preset.width;
+  const h = hasCustomW && hasCustomH ? p.target_height : preset.height;
 
   if (!enabled) {
     return {
       filtergraph: "",
       ffmpeg_vf_args: [],
-      target_width: preset.width,
-      target_height: preset.height,
+      target_width: w,
+      target_height: h,
       is_identity: true,
       params: { preset: preset.id, mode, pan_x: panX, pan_y: panY, enabled: false }
     };
   }
 
-  const w = preset.width;
-  const h = preset.height;
   let fg = "";
   if (mode === "fill") {
     const xExpr =

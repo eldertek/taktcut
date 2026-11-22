@@ -1073,6 +1073,16 @@
           </div>
         </section>
 
+        <section class="nle-pane deliver-presets-pane">
+          <div class="pane-header">
+            <h2 data-i18n="render.presets.title">Quick-Export Presets (DaVinci Deliver)</h2>
+            <span id="render-active-preset-badge" class="nle-tag mono" data-i18n="render.presets.custom">Custom</span>
+          </div>
+          <div class="pane-body">
+            <div id="render-preset-strip" class="deliver-preset-strip" role="group" aria-label="Quick-Export Delivery Presets"></div>
+          </div>
+        </section>
+
         <div class="nle-two-col">
           <section class="nle-pane">
             <div class="pane-header">
@@ -1128,28 +1138,64 @@
                   </select>
                 </div>
                 <div class="form-row">
-                  <label for="render-fps" data-i18n="render.label.fps">Target Rational FPS</label>
-                  <input type="text" id="render-fps" class="input-control mono" value="25" placeholder="25 or 24000/1001">
+                  <label for="render-container" data-i18n="render.label.container">Container Format</label>
+                  <select id="render-container" class="input-control mono">
+                    <option value="mp4">MP4 (.mp4 + faststart)</option>
+                    <option value="mov">QuickTime (.mov)</option>
+                  </select>
                 </div>
               </div>
               <div class="form-row-two">
                 <div class="form-row">
-                  <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
-                  <input type="text" id="render-lut-path" class="input-control mono" placeholder="luts/editorial_look.cube">
+                  <label for="render-crf" data-i18n="render.label.crf">Video Quality (CRF / CQ)</label>
+                  <input type="number" id="render-crf" class="input-control mono" min="0" max="51" step="1" value="18" placeholder="18">
+                </div>
+                <div class="form-row">
+                  <label for="render-audio-bitrate" data-i18n="render.label.audioBitrate">Audio Bitrate</label>
+                  <select id="render-audio-bitrate" class="input-control mono">
+                    <option value="96">AAC 96 kbps</option>
+                    <option value="128">AAC 128 kbps</option>
+                    <option value="160">AAC 160 kbps</option>
+                    <option value="192" selected>AAC 192 kbps</option>
+                    <option value="256">AAC 256 kbps</option>
+                    <option value="320">AAC 320 kbps</option>
+                    <option value="pcm_s24le">PCM 24-bit 48 kHz</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="render-fps" data-i18n="render.label.fps">Target Rational FPS</label>
+                  <input type="text" id="render-fps" class="input-control mono" value="25" placeholder="25 or 24000/1001">
                 </div>
                 <div class="form-row">
                   <label for="render-lufs" data-i18n="render.label.lufs">Target Loudness (LUFS)</label>
                   <input type="number" id="render-lufs" class="input-control mono" step="0.5" value="-14.0" placeholder="-14.0">
                 </div>
               </div>
-              <div class="form-row-two">
+              <div class="form-row">
+                <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
+                <input type="text" id="render-lut-path" class="input-control mono" placeholder="luts/editorial_look.cube">
+              </div>
+              <div class="form-row-three">
                 <div class="form-row">
                   <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>
                   <select id="render-aspect-preset" class="input-control mono">
-                    <option value="16:9">16:9 1920x1080</option>
-                    <option value="9:16">9:16 1080x1920 Reels/Shorts</option>
-                    <option value="1:1">1:1 1080x1080 Square</option>
-                    <option value="4:5">4:5 1080x1350 Feed</option>
+                    <option value="16:9">16:9</option>
+                    <option value="9:16">9:16 Reels/Shorts</option>
+                    <option value="1:1">1:1 Square</option>
+                    <option value="4:5">4:5 Feed</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label for="render-resolution" data-i18n="render.label.resolution">Target Resolution</label>
+                  <select id="render-resolution" class="input-control mono">
+                    <option value="1920x1080">1920x1080 (FHD 1080p)</option>
+                    <option value="3840x2160">3840x2160 (4K UHD)</option>
+                    <option value="1280x720">1280x720 (HD 720p)</option>
+                    <option value="1080x1920">1080x1920 (9:16 Vertical)</option>
+                    <option value="1080x1080">1080x1080 (1:1 Square)</option>
+                    <option value="1080x1350">1080x1350 (4:5 Feed)</option>
                   </select>
                 </div>
                 <div class="form-row">
