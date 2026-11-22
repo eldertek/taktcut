@@ -191,7 +191,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.fillStyle = "#8e8e98";
     ctx.font = "11px ui-monospace, monospace";
     ctx.fillText("No timeline loaded.", 14, 24);
-    return { hitboxes, frameToX: null, xToFrame: null };
+    return { hitboxes, frameToX: null, xToFrame: null, rulerHeight, labelColW: 0 };
   }
 
   const labelColW = width < 480 ? 58 : 118;
@@ -429,7 +429,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.fill();
   }
 
-  return { hitboxes, frameToX, xToFrame };
+  return { hitboxes, frameToX, xToFrame, rulerHeight, labelColW };
 }
 
 const SMPTE_BARS = [

@@ -429,6 +429,8 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert "innerHTML" not in i18n_text
     assert "\u2013" not in _http_call(f"{base_url}/app.js")[2].decode("utf-8")
     assert "\u2014" not in _http_call(f"{base_url}/app.js")[2].decode("utf-8")
+    assert "\u2013" not in _http_call(f"{base_url}/canvas.js")[2].decode("utf-8")
+    assert "\u2014" not in _http_call(f"{base_url}/canvas.js")[2].decode("utf-8")
 
 
 def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None:
@@ -486,6 +488,20 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.keyboard.press("l")
                     page.keyboard.press("Space")
                     assert page.locator("#transport-state-pill").text_content() == "STOP"
+
+                    tl_box = page.locator("#timeline-canvas").bounding_box()
+                    assert tl_box is not None
+                    start_x = tl_box["x"] + 220
+                    end_x = tl_box["x"] + tl_box["width"] * 0.72
+                    ruler_y = tl_box["y"] + 24
+                    page.mouse.move(start_x, ruler_y)
+                    page.mouse.down()
+                    frame_down = page.locator("#program-frame-counter").text_content()
+                    page.mouse.move(end_x, ruler_y, steps=8)
+                    frame_mid = page.locator("#program-frame-counter").text_content()
+                    page.mouse.up()
+                    assert frame_down != frame_mid
+                    assert page.locator("#program-tc").text_content() != "00:00:00:00"
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"
                 ctx.close()

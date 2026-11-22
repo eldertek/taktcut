@@ -52,7 +52,10 @@ const state = {
   timelineDoc: null,
   timelineValidation: null,
   timelineHitboxes: [],
+  timelineFrameToX: null,
   timelineXToFrame: null,
+  timelineRulerHeight: 36,
+  timelineLabelColW: 118,
   timelineSelected: null,
   timelineZoom: 1,
   playheadFrame: 25,
@@ -189,7 +192,10 @@ function redrawActiveCanvases() {
       { zoom: state.timelineZoom, selected: state.timelineSelected, playheadFrame: state.playheadFrame }
     );
     state.timelineHitboxes = tlDraw.hitboxes;
+    state.timelineFrameToX = tlDraw.frameToX;
     state.timelineXToFrame = tlDraw.xToFrame;
+    state.timelineRulerHeight = tlDraw.rulerHeight;
+    state.timelineLabelColW = tlDraw.labelColW;
   } else if (state.activeTab === "color") {
     drawColorPreviewCanvas(byId("color-preview-canvas"), state.cdl, state.wipeRatio);
     drawColorScopeCanvas(byId("color-scope-canvas"), state.cdl);
@@ -977,6 +983,173 @@ function handleTransportKeydown(ev) {
   }
 }
 
+function hitTestTimeline(x, y) {
+  const boxes = state.timelineHitboxes || [];
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      return { kind: b.kind, data: b.data };
+    }
+  }
+  return null;
+}
+
+function bindTimelineCanvasScrub(canvas) {
+  const ptr = {
+    active: false,
+    pointerId: null,
+    mode: null,
+    startX: 0,
+    startY: 0,
+    moved: false
+  };
+
+  const getCanvasPos = (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ev.clientX - rect.left,
+      y: ev.clientY - rect.top
+    };
+  };
+
+  const isNearPlayhead = (x) => {
+    if (!state.timelineFrameToX) return false;
+    const phX = state.timelineFrameToX(state.playheadFrame);
+    return Math.abs(x - phX) <= 10;
+  };
+
+  canvas.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    stopPlayback();
+    if (!state.timelineDoc || !state.timelineXToFrame) return;
+
+    const { x, y } = getCanvasPos(ev);
+    const rulerH = state.timelineRulerHeight || 36;
+    const labelW = state.timelineLabelColW || 0;
+    const inRuler = y <= rulerH;
+    const nearPh = isNearPlayhead(x);
+    const inTrackArea = x >= labelW;
+
+    if (!inRuler && !nearPh && !inTrackArea) return;
+
+    ptr.active = true;
+    ptr.pointerId = ev.pointerId;
+    ptr.startX = x;
+    ptr.startY = y;
+    ptr.moved = false;
+
+    if (canvas.setPointerCapture) {
+      try {
+        canvas.setPointerCapture(ev.pointerId);
+      } catch {
+        // Ignore synthetic pointer events without active browser capture
+      }
+    }
+
+    if (inRuler || nearPh) {
+      ptr.mode = "scrub";
+      canvas.classList.add("is-scrubbing");
+      setPlayhead(state.timelineXToFrame(x));
+    } else {
+      ptr.mode = "pending";
+    }
+  });
+
+  canvas.addEventListener("pointermove", (ev) => {
+    const { x, y } = getCanvasPos(ev);
+    if (!ptr.active) {
+      if (state.timelineDoc && state.timelineFrameToX) {
+        const rulerH = state.timelineRulerHeight || 36;
+        const labelW = state.timelineLabelColW || 0;
+        const hoverScrub = (y <= rulerH && x >= labelW) || isNearPlayhead(x);
+        canvas.style.cursor = hoverScrub ? "ew-resize" : "crosshair";
+      }
+      return;
+    }
+    if (ev.pointerId !== ptr.pointerId || !state.timelineXToFrame) return;
+
+    if (Math.hypot(x - ptr.startX, y - ptr.startY) >= 4) {
+      ptr.moved = true;
+    }
+    if (ptr.mode === "pending" && ptr.moved) {
+      ptr.mode = "scrub";
+      canvas.classList.add("is-scrubbing");
+    }
+    if (ptr.mode === "scrub") {
+      const nextFrame = state.timelineXToFrame(x);
+      if (nextFrame !== state.playheadFrame) {
+        setPlayhead(nextFrame);
+      }
+    }
+  });
+
+  const finishPointer = (ev, cancelled) => {
+    if (!ptr.active || ev.pointerId !== ptr.pointerId) return;
+    const { x, y } = getCanvasPos(ev);
+    const wasScrub = ptr.mode === "scrub";
+    const wasMoved = ptr.moved;
+
+    ptr.active = false;
+    ptr.pointerId = null;
+    ptr.mode = null;
+    canvas.classList.remove("is-scrubbing");
+
+    if (canvas.releasePointerCapture) {
+      try {
+        if (!canvas.hasPointerCapture || canvas.hasPointerCapture(ev.pointerId)) {
+          canvas.releasePointerCapture(ev.pointerId);
+        }
+      } catch {
+        // Ignore pointer capture release errors
+      }
+    }
+
+    if (cancelled || !state.timelineXToFrame) return;
+
+    if (wasScrub) {
+      const finalFrame = state.timelineXToFrame(x);
+      if (finalFrame !== state.playheadFrame) {
+        setPlayhead(finalFrame);
+      }
+      if (!wasMoved) {
+        const match = hitTestTimeline(x, y);
+        if (match && match.kind === "marker") {
+          state.timelineSelected = match;
+          setPlayhead(match.data.frame);
+          renderTimelineSelection();
+          redrawActiveCanvases();
+        }
+      }
+      return;
+    }
+
+    if (!wasMoved) {
+      const match = hitTestTimeline(x, y);
+      state.timelineSelected = match;
+      if (match && match.kind === "clip") {
+        state.playheadFrame = match.data.start_frame;
+        updatePlayheadReadout();
+      } else if (match && match.kind === "marker") {
+        state.playheadFrame = match.data.frame;
+        updatePlayheadReadout();
+      } else {
+        state.playheadFrame = state.timelineXToFrame(x);
+        updatePlayheadReadout();
+      }
+      renderTimelineSelection();
+      redrawActiveCanvases();
+    }
+  };
+
+  canvas.addEventListener("pointerup", (ev) => finishPointer(ev, false));
+  canvas.addEventListener("pointercancel", (ev) => finishPointer(ev, true));
+  canvas.addEventListener("pointerleave", () => {
+    if (!ptr.active) {
+      canvas.style.cursor = "crosshair";
+    }
+  });
+}
+
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   byId("lang-en").addEventListener("click", () => setLanguage("en"));
@@ -1101,39 +1274,7 @@ function wireEvents() {
     setPlayhead(state.timelineMaxFrame);
   });
 
-  byId("timeline-canvas").addEventListener("click", (ev) => {
-    stopPlayback();
-    const canvas = byId("timeline-canvas");
-    const rect = canvas.getBoundingClientRect();
-    const x = ev.clientX - rect.left;
-    const y = ev.clientY - rect.top;
-    if (y <= 36 && state.timelineXToFrame) {
-      setPlayhead(state.timelineXToFrame(x));
-      return;
-    }
-    const boxes = state.timelineHitboxes || [];
-    let match = null;
-    for (let i = boxes.length - 1; i >= 0; i--) {
-      const b = boxes[i];
-      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-        match = { kind: b.kind, data: b.data };
-        break;
-      }
-    }
-    state.timelineSelected = match;
-    if (match && match.kind === "clip") {
-      state.playheadFrame = match.data.start_frame;
-      updatePlayheadReadout();
-    } else if (match && match.kind === "marker") {
-      state.playheadFrame = match.data.frame;
-      updatePlayheadReadout();
-    } else if (state.timelineXToFrame) {
-      state.playheadFrame = state.timelineXToFrame(x);
-      updatePlayheadReadout();
-    }
-    renderTimelineSelection();
-    redrawActiveCanvases();
-  });
+  bindTimelineCanvasScrub(byId("timeline-canvas"));
 
   // Color page events
   wireCdlInputs();

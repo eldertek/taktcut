@@ -395,6 +395,16 @@ body {
   width: 100%;
   height: auto;
   cursor: crosshair;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#timeline-canvas {
+  touch-action: none;
+}
+
+#timeline-canvas.is-scrubbing {
+  cursor: ew-resize !important;
 }
 
 .tc-group {
