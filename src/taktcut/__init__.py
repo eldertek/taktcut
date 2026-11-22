@@ -1,5 +1,17 @@
 """taktcut: Clean-room timeline interchange, color science, FFmpeg/NVENC render, and QA toolkit."""
 
+from taktcut.fx import (
+    ChromaKeyCompileResult,
+    ChromaKeyParams,
+    ChromaKeyPreset,
+    ChromaKeyPresetId,
+    DespillType,
+    apply_chroma_key_preset,
+    compile_chroma_key,
+    compile_chroma_key_filter,
+    get_chroma_key_preset,
+    list_chroma_key_presets,
+)
 from taktcut.models import (
     MARKER_COLOR_PRESETS,
     AscCdlParams,
@@ -69,6 +81,7 @@ __version__ = "0.1.4"
 
 __all__ = [
     "__version__",
+    "apply_chroma_key_preset",
     "apply_transition_preset",
     "AscCdlParams",
     "AspectRatioPreset",
@@ -76,10 +89,16 @@ __all__ = [
     "BpmGridConfig",
     "CaptionStyleId",
     "CaptionStyleSpec",
+    "ChromaKeyCompileResult",
+    "ChromaKeyParams",
+    "ChromaKeyPreset",
+    "ChromaKeyPresetId",
     "ClipAudioParams",
     "ClipRetimeParams",
     "ClipTransition",
     "compile_audio_filter",
+    "compile_chroma_key",
+    "compile_chroma_key_filter",
     "compile_framing_filter",
     "compile_framing_filter_result",
     "compile_retime_filter",
@@ -91,6 +110,7 @@ __all__ = [
     "compute_bpm_beat_frames",
     "CubeLutInfo",
     "CutJunction",
+    "DespillType",
     "export_srt",
     "export_vtt",
     "find_adjacent_cut_junctions",
@@ -98,10 +118,12 @@ __all__ = [
     "FramingParams",
     "GapIssue",
     "get_caption_style",
+    "get_chroma_key_preset",
     "get_transition_preset",
     "HardwareCapabilities",
     "list_aspect_presets",
     "list_caption_styles",
+    "list_chroma_key_presets",
     "list_transition_presets",
     "LoudnessReport",
     "MARKER_COLOR_PRESETS",

@@ -818,7 +818,192 @@ export function drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState) {
   ctx.restore();
 }
 
-function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips, framingMode, srcAspect, targetAspect) {
+function drawTransparencyCheckerboard(ctx, x, y, w, h, tile = 10) {
+  ctx.fillStyle = "#1f1f24";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = "#2b2b33";
+  const cols = Math.ceil(w / tile);
+  const rows = Math.ceil(h / tile);
+  for (let r = 0; r < rows; r += 1) {
+    const ty = y + r * tile;
+    const th = Math.min(tile, y + h - ty);
+    for (let c = r % 2; c < cols; c += 2) {
+      const tx = x + c * tile;
+      const tw = Math.min(tile, x + w - tx);
+      ctx.fillRect(tx, ty, tw, th);
+    }
+  }
+}
+
+function drawStudioKeyerPlate(targetCtx, w, h, doc, playheadFrame, cdl, activeClips, ckState) {
+  const isBlueScreen =
+    ckState &&
+    (ckState.preset === "chroma_blue" ||
+      (ckState.preset === "custom" && ckState.despill_type === "blue"));
+  const baseRgb = isBlueScreen ? [0 / 255, 71 / 255, 187 / 255] : [0 / 255, 177 / 255, 64 / 255];
+  const hiRgb = isBlueScreen ? [20 / 255, 92 / 255, 208 / 255] : [18 / 255, 198 / 255, 84 / 255];
+  const loRgb = isBlueScreen ? [0 / 255, 52 / 255, 146 / 255] : [0 / 255, 140 / 255, 50 / 255];
+
+  const cCenter = applyGradeOrCdlRgb(hiRgb[0], hiRgb[1], hiRgb[2], cdl);
+  const cMid = applyGradeOrCdlRgb(baseRgb[0], baseRgb[1], baseRgb[2], cdl);
+  const cEdge = applyGradeOrCdlRgb(loRgb[0], loRgb[1], loRgb[2], cdl);
+
+  const bgGrad = targetCtx.createRadialGradient(w * 0.5, h * 0.44, Math.min(w, h) * 0.08, w * 0.5, h * 0.5, Math.max(w, h) * 0.72);
+  bgGrad.addColorStop(0, toCssRgb(cCenter[0], cCenter[1], cCenter[2]));
+  bgGrad.addColorStop(0.55, toCssRgb(cMid[0], cMid[1], cMid[2]));
+  bgGrad.addColorStop(1, toCssRgb(cEdge[0], cEdge[1], cEdge[2]));
+  targetCtx.fillStyle = bgGrad;
+  targetCtx.fillRect(0, 0, w, h);
+
+  // Subtle green/blue screen studio tracking markers (+)
+  const markerRgb = isBlueScreen ? [0.16, 0.45, 0.85] : [0.12, 0.82, 0.36];
+  targetCtx.strokeStyle = toCssRgb(markerRgb[0], markerRgb[1], markerRgb[2]);
+  targetCtx.lineWidth = 1.5;
+  const markers = [
+    [0.16, 0.24],
+    [0.84, 0.24],
+    [0.16, 0.74],
+    [0.84, 0.74]
+  ];
+  for (const [mx, my] of markers) {
+    const px = w * mx;
+    const py = h * my;
+    targetCtx.beginPath();
+    targetCtx.moveTo(px - 6, py);
+    targetCtx.lineTo(px + 6, py);
+    targetCtx.moveTo(px, py - 6);
+    targetCtx.lineTo(px, py + 6);
+    targetCtx.stroke();
+  }
+
+  // Subtle green/blue rim spill halo around subject to demonstrate despill toggle
+  const cx = w * 0.5;
+  const cy = h * 0.56;
+  const spillColor = isBlueScreen ? "rgba(56, 128, 255, 0.85)" : "rgba(44, 214, 96, 0.85)";
+  const headR = Math.max(14, Math.min(w, h) * 0.145);
+  const headY = h * 0.36;
+  const shoulderW = Math.max(44, w * 0.24);
+  const shoulderTop = headY + headR * 0.88;
+
+  // Spill edge glow on shoulders and head rim
+  targetCtx.save();
+  targetCtx.strokeStyle = spillColor;
+  targetCtx.lineWidth = Math.max(4, Math.round(h * 0.028));
+  targetCtx.beginPath();
+  targetCtx.moveTo(cx - shoulderW, h);
+  targetCtx.quadraticCurveTo(cx - shoulderW * 0.92, shoulderTop, cx, shoulderTop - 4);
+  targetCtx.quadraticCurveTo(cx + shoulderW * 0.92, shoulderTop, cx + shoulderW, h);
+  targetCtx.stroke();
+  targetCtx.beginPath();
+  targetCtx.arc(cx, headY, headR + 1.5, 0, Math.PI * 2);
+  targetCtx.stroke();
+  targetCtx.restore();
+
+  // Foreground studio talent silhouette (wardrobe + skin + warm studio keylight)
+  const jacketGrad = targetCtx.createLinearGradient(cx - shoulderW, shoulderTop, cx + shoulderW, h);
+  jacketGrad.addColorStop(0, "#2b2f3a");
+  jacketGrad.addColorStop(0.55, "#1f222b");
+  jacketGrad.addColorStop(1, "#16181f");
+  targetCtx.fillStyle = jacketGrad;
+  targetCtx.beginPath();
+  targetCtx.moveTo(cx - shoulderW, h);
+  targetCtx.quadraticCurveTo(cx - shoulderW * 0.92, shoulderTop, cx, shoulderTop - 4);
+  targetCtx.quadraticCurveTo(cx + shoulderW * 0.92, shoulderTop, cx + shoulderW, h);
+  targetCtx.closePath();
+  targetCtx.fill();
+
+  // Crisp studio shirt V-collar
+  targetCtx.fillStyle = "#e6e8ee";
+  targetCtx.beginPath();
+  targetCtx.moveTo(cx - headR * 0.55, shoulderTop + 2);
+  targetCtx.lineTo(cx, shoulderTop + headR * 1.1);
+  targetCtx.lineTo(cx + headR * 0.55, shoulderTop + 2);
+  targetCtx.closePath();
+  targetCtx.fill();
+
+  // Neck + Head
+  targetCtx.fillStyle = "#c98b68";
+  targetCtx.fillRect(cx - headR * 0.34, headY + headR * 0.65, headR * 0.68, headR * 0.55);
+
+  const skinGrad = targetCtx.createRadialGradient(
+    cx - headR * 0.25,
+    headY - headR * 0.25,
+    2,
+    cx,
+    headY,
+    headR
+  );
+  skinGrad.addColorStop(0, "#e5b08f");
+  skinGrad.addColorStop(0.7, "#cc8f6d");
+  skinGrad.addColorStop(1, "#a36b4f");
+  targetCtx.fillStyle = skinGrad;
+  targetCtx.beginPath();
+  targetCtx.arc(cx, headY, headR, 0, Math.PI * 2);
+  targetCtx.fill();
+
+  // Hair cap
+  targetCtx.fillStyle = "#262122";
+  targetCtx.beginPath();
+  targetCtx.arc(cx, headY - headR * 0.14, headR * 1.02, Math.PI * 1.02, Math.PI * 1.98);
+  targetCtx.quadraticCurveTo(cx, headY - headR * 0.45, cx - headR * 1.02, headY - headR * 0.1);
+  targetCtx.fill();
+}
+
+function applyChromaKeyOnBuffer(bctx, bw, bh, ckState, matteView) {
+  const [kr, kg, kb] = hexToRgbTuple(ckState.key_color || "#00b140");
+  const sim = Math.max(0.01, Math.min(0.8, Number(ckState.similarity ?? 0.18)));
+  const blend = Math.max(0.0, Math.min(0.5, Number(ckState.blend ?? 0.08)));
+  const despill = Boolean(ckState.despill);
+  const despillType = ckState.despill_type === "blue" ? "blue" : "green";
+  const isAlphaMatte = matteView === "alpha_matte";
+  const maxDist = 441.6729559300637;
+
+  const img = bctx.getImageData(0, 0, bw, bh);
+  const data = img.data;
+  for (let i = 0; i < data.length; i += 4) {
+    let r = data[i];
+    let g = data[i + 1];
+    let b = data[i + 2];
+    const dist = Math.hypot(r - kr, g - kg, b - kb) / maxDist;
+    let alpha = 255;
+    if (dist <= sim) {
+      alpha = 0;
+    } else if (blend > 1e-5 && dist < sim + blend) {
+      alpha = Math.max(0, Math.min(255, Math.round(((dist - sim) / blend) * 255)));
+    }
+    if (despill && alpha > 0) {
+      if (despillType === "green") {
+        const limit = Math.max(r, b) * 0.55 + ((r + b) * 0.5) * 0.45;
+        if (g > limit) {
+          g = Math.round(g - (g - limit) * 0.85);
+        }
+      } else {
+        const limit = Math.max(r, g) * 0.55 + ((r + g) * 0.5) * 0.45;
+        if (b > limit) {
+          b = Math.round(b - (b - limit) * 0.85);
+        }
+      }
+    }
+    if (isAlphaMatte) {
+      data[i] = alpha;
+      data[i + 1] = alpha;
+      data[i + 2] = alpha;
+      data[i + 3] = 255;
+    } else {
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = alpha;
+    }
+  }
+  bctx.putImageData(img, 0, 0);
+}
+
+function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips, framingMode, srcAspect, targetAspect, ckState = null) {
+  if (ckState && ckState.enabled) {
+    drawStudioKeyerPlate(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips, ckState);
+    return;
+  }
   if (framingMode === "fit" && Math.abs(targetAspect - srcAspect) > 0.015) {
     targetCtx.fillStyle = "#000000";
     targetCtx.fillRect(0, 0, bufW, bufH);
@@ -850,7 +1035,8 @@ export function drawProgramMonitorCanvas(
   fxState = null,
   titleState = null,
   framingState = null,
-  subtitleState = null
+  subtitleState = null,
+  chromaKeyState = null
 ) {
   const { ctx, width, height } = setupCanvas(canvas, 244);
   ctx.fillStyle = "#141416";
@@ -889,6 +1075,9 @@ export function drawProgramMonitorCanvas(
   const rawNodes = fxState && Array.isArray(fxState.nodes) ? fxState.nodes : [];
   const bypassAll = Boolean(fxState && fxState.bypassAll);
   const activeFx = bypassAll ? [] : rawNodes.filter((n) => n && n.enabled !== false);
+  const ckRaw = chromaKeyState || (fxState && fxState.chromaKey) || null;
+  const ckActive = !bypassAll && Boolean(ckRaw && ckRaw.enabled);
+  const ckMatteView = ckRaw && ckRaw.matteView === "alpha_matte" ? "alpha_matte" : "final";
 
   // Compute spatial shake + gate-weave displacement
   let shiftX = 0;
@@ -934,7 +1123,7 @@ export function drawProgramMonitorCanvas(
     _transScratchA = activeTrans ? ensureScratchCanvas(_transScratchA, bw, bh) : _transScratchA;
     _transScratchB = activeTrans ? ensureScratchCanvas(_transScratchB, bw, bh) : _transScratchB;
 
-    if (activeTrans && _transScratchA && _transScratchB) {
+    if (activeTrans && _transScratchA && _transScratchB && !ckRaw?.enabled) {
       const ctxA = _transScratchA.getContext("2d");
       const ctxB = _transScratchB.getContext("2d");
       ctxA.setTransform(1, 0, 0, 1, 0, 0);
@@ -1046,13 +1235,18 @@ export function drawProgramMonitorCanvas(
         activeClips,
         framingMode,
         srcAspect,
-        targetAspect
+        targetAspect,
+        ckRaw
       );
+    }
+
+    if (ckActive && ckRaw) {
+      applyChromaKeyOnBuffer(bctx, bw, bh, ckRaw, ckMatteView);
     }
 
     // Apply Chroma Aberration RGB channel split directly on frame buffer
     const chromaNode = activeFx.find((n) => n.effect === "chroma_aberration");
-    if (chromaNode) {
+    if (chromaNode && !(ckActive && ckMatteView === "alpha_matte")) {
       const chromaMul = evaluateNodeIntensity(chromaNode, tSec);
       const p = chromaNode.params || {};
       const spread = Number(p.spread ?? 8) * chromaMul;
@@ -1077,11 +1271,15 @@ export function drawProgramMonitorCanvas(
             d[oi] = s[(rRowOff + rx) * 4];
             d[oi + 1] = s[oi + 1];
             d[oi + 2] = s[(bRowOff + bx) * 4 + 2];
-            d[oi + 3] = 255;
+            d[oi + 3] = s[oi + 3];
           }
         }
         bctx.putImageData(outImg, 0, 0);
       }
+    }
+
+    if (ckActive && ckMatteView === "final") {
+      drawTransparencyCheckerboard(ctx, fx, fy, frameW, frameH);
     }
 
     ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
@@ -1104,13 +1302,14 @@ export function drawProgramMonitorCanvas(
       activeClips,
       framingMode,
       srcAspect,
-      targetAspect
+      targetAspect,
+      ckRaw
     );
     ctx.restore();
   }
 
   // Apply optical/lighting FX passes over the 16:9 frame
-  for (const node of activeFx) {
+  if (!(ckActive && ckMatteView === "alpha_matte")) for (const node of activeFx) {
     const p = node.params || {};
     const kfMul = evaluateNodeIntensity(node, tSec);
     if (kfMul <= 0.0001) continue;
@@ -1267,11 +1466,16 @@ export function drawProgramMonitorCanvas(
     }
   }
 
-  // Composite Title & Lower-Third overlay over graded/FX video
-  const titleOnAir = drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState, tSec);
+  // Composite Title & Lower-Third / Subtitle overlays (suppressed in Keyer Studio mode so matte & checkerboard stay clean)
+  const suppressForKeyer = Boolean(ckRaw && ckRaw.enabled);
+  const titleOnAir = suppressForKeyer
+    ? false
+    : drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState, tSec);
 
   // Composite Active Subtitle / Caption Cue over video
-  const activeSubCue = drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitleState, tSec);
+  const activeSubCue = suppressForKeyer
+    ? null
+    : drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitleState, tSec);
 
   let leftPillY = fy + 16;
   if (titleState && titleState.showBadge) {
@@ -1318,18 +1522,32 @@ export function drawProgramMonitorCanvas(
     ctx.fillText(label, fx + 14, leftPillY + 12);
   }
 
-  // FX telemetry pill inside Program Monitor corner
-  if (rawNodes.length > 0) {
+  // FX & Chroma Key telemetry pill inside Program Monitor corner
+  if (rawNodes.length > 0 || (ckRaw && ckRaw.enabled)) {
+    const parts = [];
+    if (ckRaw && ckRaw.enabled) {
+      const hexTag = String(ckRaw.key_color || "#00b140").toUpperCase();
+      parts.push(ckMatteView === "alpha_matte" ? `KEY ${hexTag} (ALPHA)` : `KEY ${hexTag}`);
+    }
+    if (activeFx.length > 0) {
+      parts.push(
+        `${activeFx.map((n) => n.effect.toUpperCase()).slice(0, 2).join(" + ")}${activeFx.length > 2 ? " +" : ""}`
+      );
+    }
     const label = bypassAll
       ? "FX: BYPASSED (A/B)"
-      : activeFx.length > 0
-        ? `FX: ${activeFx.map((n) => n.effect.toUpperCase()).slice(0, 3).join(" + ")}${activeFx.length > 3 ? " +" : ""}`
+      : parts.length > 0
+        ? `FX: ${parts.join(" + ")}`
         : "FX: ALL OFF";
     ctx.font = "700 10px ui-monospace, monospace";
     const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
-    ctx.fillStyle = bypassAll || activeFx.length === 0 ? "rgba(20, 20, 22, 0.84)" : "rgba(230, 132, 66, 0.92)";
+    ctx.fillStyle = bypassAll || parts.length === 0
+      ? "rgba(20, 20, 22, 0.84)"
+      : ckActive
+        ? "rgba(63, 185, 80, 0.92)"
+        : "rgba(230, 132, 66, 0.92)";
     ctx.fillRect(fx + frameW - tw - 8, fy + 16, tw, 17);
-    ctx.fillStyle = bypassAll || activeFx.length === 0 ? "#a4a4ae" : "#111114";
+    ctx.fillStyle = bypassAll || parts.length === 0 ? "#a4a4ae" : "#111114";
     ctx.fillText(label, fx + frameW - tw - 2, fy + 28);
   }
 

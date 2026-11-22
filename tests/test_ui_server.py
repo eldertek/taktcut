@@ -1377,6 +1377,70 @@ def test_ui_subtitles_endpoints_and_render_integration(ui_server: tuple[str, Pat
     assert "fontcolor=0xffe047" in vf
 
 
+def test_ui_chroma_key_endpoints_and_render_integration(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    p_status, _, p_raw = _http_call(f"{base_url}/api/fx/chroma-key/presets")
+    assert p_status == 200
+    presets = json.loads(p_raw.decode("utf-8"))
+    assert [p["id"] for p in presets["presets"]] == ["studio_green", "chroma_blue", "custom"]
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/chroma-key/compile",
+        method="POST",
+        payload={
+            "preset": "studio_green",
+            "key_color": "#00B140",
+            "similarity": 0.22,
+            "blend": 0.10,
+            "despill": True,
+            "despill_type": "green",
+        },
+    )
+    assert c_status == 200
+    c_data = json.loads(c_raw.decode("utf-8"))
+    assert c_data["filtergraph"] == (
+        "format=rgba,colorkey=color=0x00b140:similarity=0.2200:blend=0.1000,despill=type=green"
+    )
+
+    r_status, _, r_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/keyed_out.mp4",
+            "profile": "web_h264",
+            "prefer_hw": False,
+            "execute": False,
+            "chroma_key": {
+                "preset": "chroma_blue",
+                "key_color": "#0047BB",
+                "similarity": 0.20,
+                "blend": 0.08,
+                "despill": True,
+                "despill_type": "blue",
+                "enabled": True,
+            },
+        },
+    )
+    assert r_status == 200
+    plan_data = json.loads(r_raw.decode("utf-8"))
+    vf = plan_data["plan"]["video_filter"] or ""
+    assert "colorkey=color=0x0047bb:similarity=0.2000:blend=0.0800" in vf
+    assert "despill=type=blue" in vf
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/bad_key.mp4",
+            "chroma_key": {"key_color": "#00b140;echo pwn"},
+        },
+    )
+    assert bad_status == 400
+
+
 def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None:
     try:
         from playwright.sync_api import sync_playwright
@@ -1587,6 +1651,54 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     title_fg = page.locator("#title-filtergraph-output").text_content() or ""
                     assert "drawbox=" in title_fg
                     assert "drawtext=" in title_fg
+
+                # Verify FX Studio + Chroma Key / Green Screen Studio & Matte View at all viewports
+                page.locator("#tab-fx").click()
+                page.wait_for_selector("#panel-fx:not(.is-hidden)")
+                page.locator('[data-keyer-preset="studio_green"]').click()
+                page.wait_for_function(
+                    "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
+                    ".includes('colorkey=color=0x00b140')"
+                )
+                assert page.locator("#btn-fx-keyer-toggle").get_attribute("aria-pressed") == "true"
+                fx_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert fx_overflow <= 0, (
+                    f"FX Chroma Key horizontal overflow at {width}x{height}: {fx_overflow}px"
+                )
+                if width == 1440:
+                    page.locator('[data-keyer-preset="chroma_blue"]').click()
+                    page.wait_for_function(
+                        "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
+                        ".includes('colorkey=color=0x0047bb')"
+                    )
+                    page.locator("#fx-keyer-hex-input").fill("#14C864")
+                    page.locator("#fx-keyer-hex-input").press("Enter")
+                    page.wait_for_function(
+                        "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
+                        ".includes('colorkey=color=0x14c864')"
+                    )
+                    page.locator("#btn-fx-matte-alpha").click()
+                    assert (
+                        page.locator("#btn-fx-matte-alpha").get_attribute("aria-pressed") == "true"
+                    )
+                    # Verify Alpha Matte renders crisp grayscale matte pixels on canvas
+                    is_grayscale = page.evaluate(
+                        """() => {
+                            const c = document.getElementById('fx-program-canvas');
+                            const ctx = c.getContext('2d');
+                            const x = Math.floor(c.width * 0.18);
+                            const y = Math.floor(c.height * 0.5);
+                            const p = ctx.getImageData(x, y, 1, 1).data;
+                            return Math.abs(p[0] - p[1]) <= 2 && Math.abs(p[1] - p[2]) <= 2;
+                        }"""
+                    )
+                    assert is_grayscale is True
+                    page.locator("#btn-fx-matte-final").click()
+                    assert (
+                        page.locator("#btn-fx-matte-final").get_attribute("aria-pressed") == "true"
+                    )
 
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"

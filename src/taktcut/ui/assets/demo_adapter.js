@@ -204,14 +204,94 @@ function bakeCubeTextClient(payload, size, title) {
   return lines.join("\n") + "\n";
 }
 
+const CHROMA_KEY_PRESETS_DEMO = [
+  {
+    id: "studio_green",
+    name: "Studio Green",
+    key_color: "#00b140",
+    similarity: 0.18,
+    blend: 0.08,
+    despill: true,
+    despill_type: "green",
+    description: "Broadcast studio green screen (#00B140) with green spill suppression."
+  },
+  {
+    id: "chroma_blue",
+    name: "Chroma Blue",
+    key_color: "#0047bb",
+    similarity: 0.20,
+    blend: 0.08,
+    despill: true,
+    despill_type: "blue",
+    description: "Broadcast chroma blue screen (#0047BB) with blue spill suppression."
+  },
+  {
+    id: "custom",
+    name: "Custom Hex",
+    key_color: "#00b140",
+    similarity: 0.18,
+    blend: 0.08,
+    despill: true,
+    despill_type: "green",
+    description: "Custom #RRGGBB key color with selectable green or blue spill suppression."
+  }
+];
+
+function compileChromaKeyClient(payload, opts = {}) {
+  const src = payload && payload.chroma_key ? payload.chroma_key : payload || {};
+  const enabled = src.enabled !== false;
+  const preset = ["studio_green", "chroma_blue", "custom"].includes(src.preset) ? src.preset : "studio_green";
+  const rawHex = String(src.key_color || "#00b140").trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(rawHex)) {
+    throw new Error(`Invalid hex color ${rawHex}; expected '#RRGGBB'`);
+  }
+  const keyColor = rawHex.toLowerCase();
+  const sim = Number(src.similarity ?? 0.18);
+  const blend = Number(src.blend ?? 0.08);
+  if (!Number.isFinite(sim) || sim < 0.01 || sim > 0.8) {
+    throw new Error(`similarity must be within [0.01, 0.80], got ${sim}`);
+  }
+  if (!Number.isFinite(blend) || blend < 0.0 || blend > 0.5) {
+    throw new Error(`blend must be within [0.0, 0.50], got ${blend}`);
+  }
+  const despill = Boolean(src.despill !== undefined ? src.despill : true);
+  const despillType = src.despill_type === "blue" ? "blue" : "green";
+  const pixFmt = opts.pix_fmt || null;
+  if (!enabled) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      is_active: false,
+      params: { preset, key_color: keyColor, similarity: sim, blend, despill, despill_type: despillType, enabled: false }
+    };
+  }
+  const parts = [
+    "format=rgba",
+    `colorkey=color=0x${keyColor.slice(1)}:similarity=${sim.toFixed(4)}:blend=${blend.toFixed(4)}`
+  ];
+  if (despill) parts.push(`despill=type=${despillType}`);
+  if (pixFmt && pixFmt !== "rgba") parts.push(`format=${pixFmt}`);
+  const fg = parts.join(",");
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: ["-vf", fg],
+    is_active: true,
+    params: { preset, key_color: keyColor, similarity: sim, blend, despill, despill_type: despillType, enabled: true }
+  };
+}
+
 function compileFxClient(nodes, opts = {}) {
   const active = (nodes || []).filter((n) => n && n.enabled !== false);
-  if (active.length === 0) {
+  const ckRaw = opts.chroma_key || null;
+  const ckCompiled = ckRaw ? compileChromaKeyClient(ckRaw, { pix_fmt: null }) : null;
+  const ckActive = Boolean(ckCompiled && ckCompiled.is_active);
+  if (active.length === 0 && !ckActive) {
     return {
       filtergraph: "",
       ffmpeg_vf_args: [],
       active_effects: [],
       keyframed_effects: [],
+      chroma_key_active: false,
       bypassed_count: (nodes || []).length,
       normalized_nodes: nodes || [],
       estimated_render_seconds: 0,
@@ -224,9 +304,13 @@ function compileFxClient(nodes, opts = {}) {
   const dur = Math.max(0.1, Number(opts.duration_seconds || 10));
   const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration"].includes(n.effect));
   const segs = [];
+  let totalWeight = 0;
+  if (ckActive && ckCompiled) {
+    segs.push(ckCompiled.filtergraph);
+    totalWeight += 0.75;
+  }
   if (needsRgb) segs.push("format=rgb24");
   const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65 };
-  let totalWeight = 0;
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -255,7 +339,7 @@ function compileFxClient(nodes, opts = {}) {
       segs.push(`rgbashift=rh=${rh}:rv=${rv}:bh=${-rh}:bv=${-rv}:edge=smear`);
     }
   });
-  if (needsRgb) segs.push(`format=${pixFmt}`);
+  if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);
   const fg = segs.join(",");
   const est = Number(Math.max(0.05, dur * (0.12 + totalWeight * 0.14) * (opts.use_gpu ? 0.38 : 1)).toFixed(2));
   return {
@@ -263,6 +347,7 @@ function compileFxClient(nodes, opts = {}) {
     ffmpeg_vf_args: ["-vf", fg],
     active_effects: active.map((n) => n.effect),
     keyframed_effects: keyframedEffects,
+    chroma_key_active: ckActive,
     bypassed_count: (nodes || []).length - active.length,
     normalized_nodes: nodes || [],
     estimated_render_seconds: est,
@@ -809,6 +894,12 @@ export function createApiClient() {
             framingMode = compiledFraming.params.mode;
           }
         }
+        if (body.chroma_key) {
+          const compiledCk = compileChromaKeyClient(body.chroma_key, { pix_fmt: pixFmt });
+          if (compiledCk.is_active && compiledCk.filtergraph) {
+            vfParts.push(compiledCk.filtergraph);
+          }
+        }
         if (Array.isArray(body.fx_stack) && body.fx_stack.length > 0) {
           const compiledFx = compileFxClient(body.fx_stack, { pix_fmt: pixFmt, use_gpu: Boolean(body.prefer_hw) });
           if (compiledFx.filtergraph) vfParts.push(compiledFx.filtergraph);
@@ -988,7 +1079,7 @@ export function createApiClient() {
     },
     async getFxPresets() {
       if (resolvedMode === "static-demo") {
-        return { presets: [], specs: {} };
+        return { presets: [], specs: {}, chroma_key_presets: CHROMA_KEY_PRESETS_DEMO };
       }
       return requestJson("/api/fx/presets");
     },
@@ -997,6 +1088,25 @@ export function createApiClient() {
         return compileFxClient(payload.nodes || [], payload);
       }
       return requestJson("/api/fx/compile", { method: "POST", body: payload });
+    },
+    async getChromaKeyPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: CHROMA_KEY_PRESETS_DEMO,
+          despill_types: ["green", "blue"],
+          bounds: {
+            similarity: { min: 0.01, max: 0.8, default: 0.18 },
+            blend: { min: 0.0, max: 0.5, default: 0.08 }
+          }
+        };
+      }
+      return requestJson("/api/fx/chroma-key/presets");
+    },
+    async compileChromaKey(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileChromaKeyClient(payload, payload);
+      }
+      return requestJson("/api/fx/chroma-key/compile", { method: "POST", body: payload });
     },
     async getTitlePresets() {
       if (resolvedMode === "static-demo") {

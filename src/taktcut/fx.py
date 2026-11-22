@@ -39,7 +39,18 @@ EASING_TYPES: tuple[EasingType, ...] = (
 MAX_KEYFRAMES_PER_NODE: int = 64
 
 ALLOWED_PIX_FMTS: frozenset[str] = frozenset({"yuv420p", "yuv422p10le", "rgb24", "yuv444p"})
+ALLOWED_CHROMA_PIX_FMTS: frozenset[str] = ALLOWED_PIX_FMTS | {"rgba"}
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+CHROMA_KEY_SIMILARITY_MIN: float = 0.01
+CHROMA_KEY_SIMILARITY_MAX: float = 0.80
+CHROMA_KEY_BLEND_MIN: float = 0.0
+CHROMA_KEY_BLEND_MAX: float = 0.50
+CHROMA_KEY_DEFAULT_SIMILARITY: float = 0.18
+CHROMA_KEY_DEFAULT_BLEND: float = 0.08
+
+ChromaKeyPresetId = Literal["studio_green", "chroma_blue", "custom"]
+DespillType = Literal["green", "blue"]
 
 _PARAM_ALIASES: dict[str, str] = {
     "Brightness": "brightness",
@@ -361,12 +372,163 @@ class FxCompileResult(BaseModel):
     ffmpeg_vf_args: list[str]
     active_effects: list[FxType]
     keyframed_effects: list[FxType] = Field(default_factory=list)
+    chroma_key_active: bool = False
     bypassed_count: int
     normalized_nodes: list[FxNode]
     estimated_render_seconds: float
     realtime_factor: float
     complexity_tier: Literal["idle", "light", "medium", "heavy"]
     warnings: list[str] = Field(default_factory=list)
+
+
+def _validate_finite_bound_float(
+    raw: Any,
+    field_name: str,
+    min_val: float,
+    max_val: float,
+) -> float:
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        raise ValueError(f"{field_name} must be a finite number, got {raw!r}")
+    val = float(raw)
+    if not math.isfinite(val):
+        raise ValueError(f"{field_name} must be finite, got {raw!r}")
+    if val < min_val or val > max_val:
+        raise ValueError(f"{field_name} must be within [{min_val}, {max_val}], got {val}")
+    return val
+
+
+class ChromaKeyParams(BaseModel):
+    """Validated Chroma Key / Green Screen Studio parameters for FFmpeg colorkey + despill."""
+
+    preset: ChromaKeyPresetId = "studio_green"
+    key_color: str = "#00b140"
+    similarity: float = CHROMA_KEY_DEFAULT_SIMILARITY
+    blend: float = CHROMA_KEY_DEFAULT_BLEND
+    despill: bool = True
+    despill_type: DespillType = "green"
+    enabled: bool = True
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in {"studio_green", "chroma_blue", "custom"}:
+            raise ValueError(
+                f"Unsupported chroma key preset {raw!r}; "
+                "expected 'studio_green', 'chroma_blue', or 'custom'"
+            )
+        return cleaned
+
+    @field_validator("key_color", mode="before")
+    @classmethod
+    def _validate_key_color(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"key_color must be a hex string '#RRGGBB', got {raw!r}")
+        trimmed = raw.strip()
+        if not _HEX_COLOR_RE.fullmatch(trimmed):
+            raise ValueError(f"Invalid hex color {raw!r}; expected '#RRGGBB'")
+        return trimmed.lower()
+
+    @field_validator("similarity", mode="before")
+    @classmethod
+    def _validate_similarity(cls, raw: Any) -> float:
+        return _validate_finite_bound_float(
+            raw,
+            "similarity",
+            CHROMA_KEY_SIMILARITY_MIN,
+            CHROMA_KEY_SIMILARITY_MAX,
+        )
+
+    @field_validator("blend", mode="before")
+    @classmethod
+    def _validate_blend(cls, raw: Any) -> float:
+        return _validate_finite_bound_float(
+            raw,
+            "blend",
+            CHROMA_KEY_BLEND_MIN,
+            CHROMA_KEY_BLEND_MAX,
+        )
+
+    @field_validator("despill", "enabled", mode="before")
+    @classmethod
+    def _validate_bool_flag(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("despill_type", mode="before")
+    @classmethod
+    def _validate_despill_type(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"despill_type must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in {"green", "blue"}:
+            raise ValueError(
+                f"Unsupported despill_type {raw!r}; expected 'green' or 'blue'"
+            )
+        return cleaned
+
+    def is_active(self) -> bool:
+        """Return True when chroma keying is enabled."""
+        return self.enabled
+
+
+class ChromaKeyPreset(BaseModel):
+    """Built-in broadcast chroma key studio preset."""
+
+    id: ChromaKeyPresetId
+    name: str
+    key_color: str
+    similarity: float
+    blend: float
+    despill: bool
+    despill_type: DespillType
+    description: str
+
+
+class ChromaKeyCompileResult(BaseModel):
+    """Compiled FFmpeg colorkey + optional despill filtergraph and validated parameters."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_active: bool
+    params: ChromaKeyParams
+
+
+CHROMA_KEY_PRESETS: tuple[ChromaKeyPreset, ...] = (
+    ChromaKeyPreset(
+        id="studio_green",
+        name="Studio Green",
+        key_color="#00b140",
+        similarity=0.18,
+        blend=0.08,
+        despill=True,
+        despill_type="green",
+        description="Broadcast studio green screen (#00B140) with green spill suppression.",
+    ),
+    ChromaKeyPreset(
+        id="chroma_blue",
+        name="Chroma Blue",
+        key_color="#0047bb",
+        similarity=0.20,
+        blend=0.08,
+        despill=True,
+        despill_type="blue",
+        description="Broadcast chroma blue screen (#0047BB) with blue spill suppression.",
+    ),
+    ChromaKeyPreset(
+        id="custom",
+        name="Custom Hex",
+        key_color="#00b140",
+        similarity=0.18,
+        blend=0.08,
+        despill=True,
+        despill_type="green",
+        description="Custom #RRGGBB key color with selectable green or blue spill suppression.",
+    ),
+)
 
 
 FX_PRESETS: tuple[FxPreset, ...] = (
@@ -1005,6 +1167,82 @@ def _compile_chroma_aberration(params: dict[str, float | int | str]) -> str:
     return segment
 
 
+def list_chroma_key_presets() -> list[ChromaKeyPreset]:
+    """Return all built-in Chroma Key / Green Screen Studio presets."""
+    return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
+
+
+def get_chroma_key_preset(preset_id: str) -> ChromaKeyPreset:
+    """Look up a built-in chroma key preset by id or case-insensitive display name."""
+    if not isinstance(preset_id, str):
+        raise ValueError(f"preset_id must be a string, got {preset_id!r}")
+    target = preset_id.strip().lower()
+    for preset in CHROMA_KEY_PRESETS:
+        if preset.id == target or preset.name.lower() == target:
+            return preset.model_copy(deep=True)
+    raise ValueError(f"Unknown chroma key preset: {preset_id!r}")
+
+
+def apply_chroma_key_preset(preset_id: str) -> ChromaKeyParams:
+    """Return a validated ChromaKeyParams object initialized from a built-in preset."""
+    preset = get_chroma_key_preset(preset_id)
+    return ChromaKeyParams(
+        preset=preset.id,
+        key_color=preset.key_color,
+        similarity=preset.similarity,
+        blend=preset.blend,
+        despill=preset.despill,
+        despill_type=preset.despill_type,
+        enabled=True,
+    )
+
+
+def _coerce_chroma_key_params(raw: ChromaKeyParams | dict[str, Any]) -> ChromaKeyParams:
+    if isinstance(raw, ChromaKeyParams):
+        return ChromaKeyParams.model_validate(raw.model_dump())
+    return ChromaKeyParams.model_validate(raw)
+
+
+def compile_chroma_key_filter(
+    chroma_key: ChromaKeyParams | dict[str, Any],
+    *,
+    pix_fmt: str | None = None,
+) -> str:
+    """Compile validated ChromaKeyParams into a safe FFmpeg colorkey + optional despill filter."""
+    params = _coerce_chroma_key_params(chroma_key)
+    if pix_fmt is not None and pix_fmt not in ALLOWED_CHROMA_PIX_FMTS:
+        raise ValueError(f"Unsupported pixel format: {pix_fmt!r}")
+    if not params.is_active():
+        return ""
+
+    ff_color = f"0x{params.key_color[1:].lower()}"
+    parts: list[str] = [
+        "format=rgba",
+        f"colorkey=color={ff_color}:similarity={params.similarity:.4f}:blend={params.blend:.4f}",
+    ]
+    if params.despill:
+        parts.append(f"despill=type={params.despill_type}")
+    if pix_fmt is not None and pix_fmt != "rgba":
+        parts.append(f"format={pix_fmt}")
+    return ",".join(parts)
+
+
+def compile_chroma_key(
+    chroma_key: ChromaKeyParams | dict[str, Any],
+    *,
+    pix_fmt: str | None = None,
+) -> ChromaKeyCompileResult:
+    """Compile Chroma Key parameters into an FFmpeg filtergraph, argv slice, and metadata."""
+    params = _coerce_chroma_key_params(chroma_key)
+    fg = compile_chroma_key_filter(params, pix_fmt=pix_fmt)
+    return ChromaKeyCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_active=bool(fg),
+        params=params,
+    )
+
+
 def compile_fx_filtergraph(
     nodes: Sequence[FxNode | dict[str, Any]],
     *,
@@ -1014,8 +1252,9 @@ def compile_fx_filtergraph(
     fps: float = 25.0,
     pix_fmt: str = "yuv420p",
     use_gpu: bool = False,
+    chroma_key: ChromaKeyParams | dict[str, Any] | None = None,
 ) -> FxCompileResult:
-    """Compile a multi-effect stack into a deterministic FFmpeg -vf filtergraph."""
+    """Compile a multi-effect stack (plus optional chroma keyer) into an FFmpeg -vf filtergraph."""
     if pix_fmt not in ALLOWED_PIX_FMTS:
         raise ValueError(f"Unsupported pixel format: {pix_fmt!r}")
 
@@ -1028,11 +1267,15 @@ def compile_fx_filtergraph(
     active_nodes = [item for item in normalized_nodes if item.enabled]
     bypassed_count = len(normalized_nodes) - len(active_nodes)
 
-    if not active_nodes:
+    ck_params = _coerce_chroma_key_params(chroma_key) if chroma_key is not None else None
+    ck_active = bool(ck_params is not None and ck_params.is_active())
+
+    if not active_nodes and not ck_active:
         return FxCompileResult(
             filtergraph="",
             ffmpeg_vf_args=[],
             active_effects=[],
+            chroma_key_active=False,
             bypassed_count=bypassed_count,
             normalized_nodes=normalized_nodes,
             estimated_render_seconds=0.0,
@@ -1046,10 +1289,16 @@ def compile_fx_filtergraph(
     )
 
     segments: list[str] = []
+    total_weight = 0.0
+    if ck_active and ck_params is not None:
+        ck_seg = compile_chroma_key_filter(ck_params, pix_fmt=None)
+        if ck_seg:
+            segments.append(ck_seg)
+            total_weight += 0.75
+
     if needs_rgb:
         segments.append("format=rgb24")
 
-    total_weight = 0.0
     active_effects: list[FxType] = []
     keyframed_effects: list[FxType] = []
 
@@ -1077,7 +1326,7 @@ def compile_fx_filtergraph(
             seg = _compile_chroma_aberration(node.params)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
-    if needs_rgb:
+    if needs_rgb or ck_active:
         segments.append(f"format={pix_fmt}")
 
     filtergraph = ",".join(segments)
@@ -1103,6 +1352,7 @@ def compile_fx_filtergraph(
         ffmpeg_vf_args=["-vf", filtergraph],
         active_effects=active_effects,
         keyframed_effects=keyframed_effects,
+        chroma_key_active=ck_active,
         bypassed_count=bypassed_count,
         normalized_nodes=normalized_nodes,
         estimated_render_seconds=est_seconds,

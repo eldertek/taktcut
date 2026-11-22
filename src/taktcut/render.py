@@ -17,6 +17,7 @@ from taktcut.color import (
     build_rec709_lut_filter,
     compile_color_grade_filter,
 )
+from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
     HardwareCapabilities,
     RationalFrameRate,
@@ -546,6 +547,7 @@ def build_render_plan(
     fps: RationalFrameRate | None = None,
     lut_path: Path | None = None,
     color_grade: ColorGradeParams | None = None,
+    chroma_key: ChromaKeyParams | None = None,
     fx_filtergraph: str | None = None,
     title_overlay: TitleOverlayParams | None = None,
     subtitle_track: SubtitleTrackParams | None = None,
@@ -588,6 +590,10 @@ def build_render_plan(
         vf_parts.append(retime_vf)
     if framing_vf is not None:
         vf_parts.append(framing_vf)
+    if chroma_key is not None and chroma_key.is_active():
+        ck_fg = compile_chroma_key_filter(chroma_key, pix_fmt=pix_fmt)
+        if ck_fg:
+            vf_parts.append(ck_fg)
     if fx_filtergraph:
         vf_parts.append(fx_filtergraph)
     if color_grade is not None and not color_grade.is_identity():

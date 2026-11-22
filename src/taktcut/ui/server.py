@@ -44,10 +44,20 @@ from taktcut.color import (
 )
 from taktcut.drp import export_otio, load_timeline, validate_timeline
 from taktcut.fx import (
+    CHROMA_KEY_BLEND_MAX,
+    CHROMA_KEY_BLEND_MIN,
+    CHROMA_KEY_DEFAULT_BLEND,
+    CHROMA_KEY_DEFAULT_SIMILARITY,
+    CHROMA_KEY_SIMILARITY_MAX,
+    CHROMA_KEY_SIMILARITY_MIN,
     FX_PARAM_SPECS,
+    ChromaKeyParams,
     FxNode,
+    apply_chroma_key_preset,
+    compile_chroma_key,
     compile_fx_filtergraph,
     get_fx_preset,
+    list_chroma_key_presets,
     list_fx_presets,
 )
 from taktcut.models import (
@@ -464,6 +474,49 @@ def _build_subtitle_track_from_payload(payload: dict[str, Any]) -> SubtitleTrack
     )
 
 
+def _build_chroma_key_from_payload(payload: dict[str, Any]) -> ChromaKeyParams:
+    raw_ck = payload.get("chroma_key")
+    if raw_ck is not None and not isinstance(raw_ck, dict):
+        raise ValueError("'chroma_key' must be a JSON object")
+    source: dict[str, Any] = raw_ck if isinstance(raw_ck, dict) else payload
+    if (
+        "preset" in source
+        and "key_color" not in source
+        and "similarity" not in source
+        and "blend" not in source
+        and "despill" not in source
+        and "despill_type" not in source
+    ):
+        preset_id = source.get("preset")
+        if not isinstance(preset_id, str) or not preset_id.strip():
+            raise ValueError("preset must be a non-empty string")
+        base = apply_chroma_key_preset(preset_id)
+        if "enabled" in source:
+            return ChromaKeyParams.model_validate(
+                {**base.model_dump(), "enabled": source["enabled"]}
+            )
+        return base
+
+    preset_val = source.get("preset", "studio_green")
+    valid_ck_presets = {"studio_green", "chroma_blue", "custom"}
+    base = (
+        apply_chroma_key_preset(preset_val)
+        if isinstance(preset_val, str) and preset_val.strip().lower() in valid_ck_presets
+        else ChromaKeyParams()
+    )
+    return ChromaKeyParams.model_validate(
+        {
+            "preset": source.get("preset", base.preset),
+            "key_color": source.get("key_color", base.key_color),
+            "similarity": source.get("similarity", base.similarity),
+            "blend": source.get("blend", base.blend),
+            "despill": source.get("despill", base.despill),
+            "despill_type": source.get("despill_type", base.despill_type),
+            "enabled": source.get("enabled", True),
+        }
+    )
+
+
 def _build_transition_params_from_payload(payload: dict[str, Any]) -> TransitionParams:
     raw_trans = payload.get("transition")
     if raw_trans is not None and not isinstance(raw_trans, dict):
@@ -699,6 +752,31 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "specs": {
                         fx: [s.model_dump(mode="json") for s in specs]
                         for fx, specs in FX_PARAM_SPECS.items()
+                    },
+                    "chroma_key_presets": [
+                        p.model_dump(mode="json") for p in list_chroma_key_presets()
+                    ],
+                },
+            )
+            return
+
+        if route == "/api/fx/chroma-key/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_chroma_key_presets()],
+                    "despill_types": ["green", "blue"],
+                    "bounds": {
+                        "similarity": {
+                            "min": CHROMA_KEY_SIMILARITY_MIN,
+                            "max": CHROMA_KEY_SIMILARITY_MAX,
+                            "default": CHROMA_KEY_DEFAULT_SIMILARITY,
+                        },
+                        "blend": {
+                            "min": CHROMA_KEY_BLEND_MIN,
+                            "max": CHROMA_KEY_BLEND_MAX,
+                            "default": CHROMA_KEY_DEFAULT_BLEND,
+                        },
                     },
                 },
             )
@@ -1139,6 +1217,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 if compiled_fx.filtergraph:
                     fx_filtergraph = compiled_fx.filtergraph
 
+            chroma_key_obj: ChromaKeyParams | None = None
+            raw_chroma_key = payload.get("chroma_key")
+            if raw_chroma_key is not None:
+                if not isinstance(raw_chroma_key, dict):
+                    raise ValueError("'chroma_key' must be a JSON object")
+                chroma_key_obj = _build_chroma_key_from_payload({"chroma_key": raw_chroma_key})
+
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1168,6 +1253,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 fps=fps,
                 lut_path=lut_file,
                 color_grade=color_grade_obj,
+                chroma_key=chroma_key_obj,
                 fx_filtergraph=fx_filtergraph,
                 title_overlay=title_overlay_obj,
                 subtitle_track=subtitle_track_obj,
@@ -1345,6 +1431,14 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, compiled_trans.model_dump(mode="json"))
             return
 
+        if route == "/api/fx/chroma-key/compile":
+            ck_params = _build_chroma_key_from_payload(payload)
+            raw_pix_fmt = payload.get("pix_fmt")
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            compiled_ck = compile_chroma_key(ck_params, pix_fmt=pix_fmt)
+            self._send_json(HTTPStatus.OK, compiled_ck.model_dump(mode="json"))
+            return
+
         if route == "/api/fx/compile":
             preset_id = payload.get("preset") or payload.get("preset_id")
             if preset_id is not None:
@@ -1361,6 +1455,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("'nodes' must be a list of FX node objects")
                 nodes = raw_nodes
 
+            chroma_key_compile: ChromaKeyParams | None = None
+            raw_ck = payload.get("chroma_key")
+            if raw_ck is not None:
+                if not isinstance(raw_ck, dict):
+                    raise ValueError("'chroma_key' must be a JSON object")
+                chroma_key_compile = _build_chroma_key_from_payload({"chroma_key": raw_ck})
+
             duration_s = float(payload.get("duration_seconds", 10.0))
             width_px = int(payload.get("width", 1920))
             height_px = int(payload.get("height", 1080))
@@ -1376,6 +1477,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 fps=fps_val,
                 pix_fmt=pix_fmt,
                 use_gpu=use_gpu,
+                chroma_key=chroma_key_compile,
             )
             self._send_json(HTTPStatus.OK, compiled.model_dump(mode="json"))
             return
@@ -1500,6 +1602,12 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             if isinstance(raw_fx, list) and len(raw_fx) > 0:
                 fx_nodes = [FxNode.model_validate(item) for item in raw_fx]
 
+            chroma_key_remote: ChromaKeyParams | None = None
+            if isinstance(payload.get("chroma_key"), dict):
+                chroma_key_remote = _build_chroma_key_from_payload(
+                    {"chroma_key": payload["chroma_key"]}
+                )
+
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1525,6 +1633,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 fx_stack=fx_nodes,
                 cdl=cdl_params,
                 color_grade=color_grade_remote,
+                chroma_key=chroma_key_remote,
                 lut_cube_text=lut_cube_text,
                 title_overlay=title_overlay_remote,
                 subtitle_track=subtitle_track_remote,

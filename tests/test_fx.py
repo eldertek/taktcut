@@ -15,20 +15,26 @@ from typing import Any
 import pytest
 
 from taktcut.fx import (
+    CHROMA_KEY_PRESETS,
     EASING_TYPES,
     FX_PRESETS,
     FX_TYPES,
     MAX_KEYFRAMES_PER_NODE,
+    ChromaKeyParams,
     FxNode,
     Keyframe,
+    apply_chroma_key_preset,
     build_fade_keyframes,
+    compile_chroma_key,
     compile_fx_filtergraph,
     compile_preset_filtergraph,
     default_fx_node,
     evaluate_easing,
     evaluate_keyframes,
     evaluate_node_intensity,
+    get_chroma_key_preset,
     get_fx_preset,
+    list_chroma_key_presets,
     normalize_fx_node,
     sample_keyframe_curve,
 )
@@ -399,3 +405,263 @@ def test_keyframed_filtergraphs_execute_in_real_ffmpeg() -> None:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
     assert proc.returncode == 0, f"FFmpeg rejected keyframed stack: {proc.stderr}"
+
+
+def test_chroma_key_presets_and_compile() -> None:
+    presets = list_chroma_key_presets()
+    assert len(presets) == 3
+    assert [p.id for p in CHROMA_KEY_PRESETS] == ["studio_green", "chroma_blue", "custom"]
+
+    green = apply_chroma_key_preset("studio_green")
+    assert green.key_color == "#00b140"
+    assert green.despill is True
+    assert green.despill_type == "green"
+    res_green = compile_chroma_key(green, pix_fmt="yuv420p")
+    assert res_green.is_active is True
+    assert res_green.filtergraph == (
+        "format=rgba,colorkey=color=0x00b140:similarity=0.1800:blend=0.0800,"
+        "despill=type=green,format=yuv420p"
+    )
+    assert res_green.ffmpeg_vf_args == ["-vf", res_green.filtergraph]
+
+    blue = get_chroma_key_preset("Chroma Blue")
+    assert blue.key_color == "#0047bb"
+    res_blue = compile_chroma_key(
+        ChromaKeyParams(
+            preset="chroma_blue",
+            key_color="#0047BB",
+            similarity=0.22,
+            blend=0.10,
+            despill=False,
+            despill_type="blue",
+        )
+    )
+    assert res_blue.filtergraph == (
+        "format=rgba,colorkey=color=0x0047bb:similarity=0.2200:blend=0.1000"
+    )
+    assert "despill=" not in res_blue.filtergraph
+
+    disabled = compile_chroma_key(ChromaKeyParams(enabled=False))
+    assert disabled.is_active is False
+    assert disabled.filtergraph == ""
+    assert disabled.ffmpeg_vf_args == []
+
+    combined = compile_fx_filtergraph(
+        [default_fx_node("glow")],
+        chroma_key=green,
+        pix_fmt="yuv420p",
+    )
+    assert combined.chroma_key_active is True
+    assert combined.active_effects == ["glow"]
+    assert combined.filtergraph.startswith(
+        "format=rgba,colorkey=color=0x00b140:similarity=0.1800:blend=0.0800,despill=type=green,"
+    )
+    assert "blend=all_mode=screen" in combined.filtergraph
+
+    with pytest.raises(ValueError, match="Unknown chroma key preset"):
+        get_chroma_key_preset("magenta_screen")
+
+
+def test_chroma_key_strict_hex_and_bounds_validation() -> None:
+    bad_colors = [
+        "#00b140; rm -rf /",
+        "0x00b140",
+        "#0f0",
+        "#gggggg",
+        "green",
+        123456,
+    ]
+    for bad in bad_colors:
+        with pytest.raises(ValueError, match="hex"):
+            ChromaKeyParams(key_color=bad)  # type: ignore[arg-type]
+
+    for bad_sim in (0.0, 0.009, 0.81, float("nan"), float("inf"), True):
+        with pytest.raises(ValueError):
+            ChromaKeyParams(similarity=bad_sim)  # type: ignore[arg-type]
+
+    for bad_blend in (-0.01, 0.51, float("nan"), float("-inf"), False):
+        with pytest.raises(ValueError):
+            ChromaKeyParams(blend=bad_blend)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="despill_type"):
+        ChromaKeyParams(despill_type="red")  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Unsupported pixel format"):
+        compile_chroma_key(ChromaKeyParams(), pix_fmt="yuv420p;id")
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_chroma_key_executes_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+
+    green_res = compile_chroma_key(apply_chroma_key_preset("studio_green"), pix_fmt="rgba")
+    cmd_green = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=#00b140:s=16x16:d=0.08:r=25",
+        "-vf",
+        green_res.filtergraph,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgba",
+        "-",
+    ]
+    proc_green = subprocess.run(cmd_green, capture_output=True, timeout=20, check=False)
+    assert proc_green.returncode == 0, proc_green.stderr.decode("utf-8", errors="replace")
+    assert len(proc_green.stdout) >= 4
+    assert proc_green.stdout[3] == 0
+
+    blue_res = compile_chroma_key(apply_chroma_key_preset("chroma_blue"), pix_fmt="rgba")
+    cmd_blue = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=#0047bb:s=16x16:d=0.08:r=25",
+        "-vf",
+        blue_res.filtergraph,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgba",
+        "-",
+    ]
+    proc_blue = subprocess.run(cmd_blue, capture_output=True, timeout=20, check=False)
+    assert proc_blue.returncode == 0, proc_blue.stderr.decode("utf-8", errors="replace")
+    assert len(proc_blue.stdout) >= 4
+    assert proc_blue.stdout[3] == 0
+
+    # Foreground skin/crimson color must remain opaque (alpha=255) when keying Studio Green
+    cmd_fg = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=#d44432:s=16x16:d=0.08:r=25",
+        "-vf",
+        green_res.filtergraph,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgba",
+        "-",
+    ]
+    proc_fg = subprocess.run(cmd_fg, capture_output=True, timeout=20, check=False)
+    assert proc_fg.returncode == 0
+    assert proc_fg.stdout[3] == 255
+
+    # Combined Chroma Key + Sapphire Glow executes cleanly to yuv420p
+    combined = compile_fx_filtergraph(
+        [default_fx_node("glow")],
+        chroma_key=apply_chroma_key_preset("studio_green"),
+        duration_seconds=0.2,
+        width=320,
+        height=180,
+        fps=25.0,
+        pix_fmt="yuv420p",
+    )
+    cmd_combo = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=0.2:size=320x180:rate=25",
+        "-vf",
+        combined.filtergraph,
+        "-frames:v",
+        "2",
+        "-f",
+        "null",
+        "-",
+    ]
+    proc_combo = subprocess.run(cmd_combo, capture_output=True, text=True, timeout=20, check=False)
+    assert proc_combo.returncode == 0, f"FFmpeg rejected chroma_key+glow: {proc_combo.stderr}"
+
+
+def test_chroma_key_http_endpoints(fx_ui_server: str) -> None:
+    base_url = fx_ui_server
+
+    p_status, p_raw = _http_call(f"{base_url}/api/fx/chroma-key/presets")
+    assert p_status == 200
+    p_data = json.loads(p_raw.decode("utf-8"))
+    assert [p["id"] for p in p_data["presets"]] == ["studio_green", "chroma_blue", "custom"]
+    assert p_data["bounds"]["similarity"] == {"min": 0.01, "max": 0.8, "default": 0.18}
+    assert p_data["bounds"]["blend"] == {"min": 0.0, "max": 0.5, "default": 0.08}
+
+    c_status, c_raw = _http_call(
+        f"{base_url}/api/fx/chroma-key/compile",
+        method="POST",
+        payload={
+            "preset": "custom",
+            "key_color": "#12AB34",
+            "similarity": 0.25,
+            "blend": 0.12,
+            "despill": True,
+            "despill_type": "green",
+            "pix_fmt": "yuv420p",
+        },
+    )
+    assert c_status == 200
+    c_data = json.loads(c_raw.decode("utf-8"))
+    assert c_data["is_active"] is True
+    assert c_data["filtergraph"] == (
+        "format=rgba,colorkey=color=0x12ab34:similarity=0.2500:blend=0.1200,"
+        "despill=type=green,format=yuv420p"
+    )
+
+    fx_status, fx_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={
+            "nodes": [],
+            "chroma_key": {
+                "preset": "chroma_blue",
+                "key_color": "#0047bb",
+                "similarity": 0.20,
+                "blend": 0.08,
+                "despill": True,
+                "despill_type": "blue",
+                "enabled": True,
+            },
+        },
+    )
+    assert fx_status == 200
+    fx_data = json.loads(fx_raw.decode("utf-8"))
+    assert fx_data["chroma_key_active"] is True
+    assert "colorkey=color=0x0047bb" in fx_data["filtergraph"]
+    assert "despill=type=blue" in fx_data["filtergraph"]
+
+    bad_hex_status, _ = _http_call(
+        f"{base_url}/api/fx/chroma-key/compile",
+        method="POST",
+        payload={"key_color": "#00b140;whoami"},
+    )
+    assert bad_hex_status == 400
+
+    bad_sim_status, _ = _http_call(
+        f"{base_url}/api/fx/chroma-key/compile",
+        method="POST",
+        payload={"key_color": "#00b140", "similarity": 0.95},
+    )
+    assert bad_sim_status == 400

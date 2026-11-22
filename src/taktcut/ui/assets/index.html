@@ -488,6 +488,10 @@
               <h2 data-i18n="fx.monitor.title">FX Program Monitor (Live Simulation)</h2>
               <div class="viewer-controls">
                 <span id="fx-active-badge" class="nle-tag mono">0 FX</span>
+                <div class="keyer-matte-switch" role="group" aria-label="Keyer matte view">
+                  <button type="button" id="btn-fx-matte-final" class="btn btn-mini is-active" data-fx-matte="final" aria-pressed="true" data-i18n="fx.keyer.matteFinal">Final</button>
+                  <button type="button" id="btn-fx-matte-alpha" class="btn btn-mini" data-fx-matte="alpha_matte" aria-pressed="false" data-i18n="fx.keyer.matteAlpha">Alpha Matte</button>
+                </div>
                 <button type="button" id="btn-fx-bypass-all" class="btn btn-secondary" aria-pressed="false" data-i18n="fx.btn.bypassAll">Bypass FX (A/B)</button>
                 <button type="button" id="btn-fx-reset-all" class="btn btn-secondary" data-i18n="fx.btn.resetAll">Clear FX</button>
               </div>
@@ -509,16 +513,87 @@
         </div>
 
         <div class="nle-fx-bottom">
-          <!-- LEFT: EFFECT CONTROLS STACK (PREMIERE / AE STYLE) -->
-          <section class="nle-pane">
-            <div class="pane-header">
-              <h2 data-i18n="fx.controls.title">Effect Controls (Premiere / AE Stack)</h2>
-              <span id="fx-stack-count" class="nle-tag mono">0 nodes</span>
-            </div>
-            <div class="pane-body">
-              <div id="fx-controls-stack" class="fx-stack"></div>
-            </div>
-          </section>
+          <div class="nle-fx-left-col">
+            <!-- CHROMA KEY / GREEN SCREEN STUDIO (RESOLVE DELTA KEYER / AE KEYLIGHT) -->
+            <section id="fx-keyer-pane" class="nle-pane">
+              <div class="pane-header">
+                <h2 data-i18n="fx.keyer.title">Chroma Key / Green Screen Studio</h2>
+                <div class="viewer-controls">
+                  <span id="fx-keyer-badge" class="nle-tag mono">OFF</span>
+                  <button type="button" id="btn-fx-keyer-toggle" class="fx-bypass-btn mono" aria-pressed="false" aria-label="Toggle Chroma Key">KEY</button>
+                </div>
+              </div>
+              <div class="pane-body">
+                <div class="keyer-preset-grid" role="group" aria-label="Chroma key presets">
+                  <button type="button" class="btn fx-preset-btn is-active" data-keyer-preset="studio_green" aria-pressed="true">
+                    <span class="keyer-preset-head">
+                      <span class="keyer-swatch keyer-swatch-green"></span>
+                      <span class="fx-preset-name" data-i18n="fx.keyer.presetGreen">Studio Green</span>
+                    </span>
+                    <span class="fx-preset-meta mono">#00B140</span>
+                  </button>
+                  <button type="button" class="btn fx-preset-btn" data-keyer-preset="chroma_blue" aria-pressed="false">
+                    <span class="keyer-preset-head">
+                      <span class="keyer-swatch keyer-swatch-blue"></span>
+                      <span class="fx-preset-name" data-i18n="fx.keyer.presetBlue">Chroma Blue</span>
+                    </span>
+                    <span class="fx-preset-meta mono">#0047BB</span>
+                  </button>
+                  <button type="button" class="btn fx-preset-btn" data-keyer-preset="custom" aria-pressed="false">
+                    <span class="keyer-preset-head">
+                      <span id="fx-keyer-custom-swatch" class="keyer-swatch keyer-swatch-custom"></span>
+                      <span class="fx-preset-name" data-i18n="fx.keyer.presetCustom">Custom Hex</span>
+                    </span>
+                    <span class="fx-preset-meta mono">#RRGGBB</span>
+                  </button>
+                </div>
+
+                <div class="keyer-color-row">
+                  <label class="keyer-color-field" for="fx-keyer-hex-input">
+                    <span class="fx-param-label" data-i18n="fx.keyer.color">Key Color</span>
+                    <div class="fx-color-control">
+                      <input type="color" id="fx-keyer-color-picker" class="fx-color-input" value="#00b140" aria-label="Chroma key color picker">
+                      <input type="text" id="fx-keyer-hex-input" class="input-control mono keyer-hex-input" value="#00B140" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Chroma key hex color">
+                    </div>
+                  </label>
+                  <div class="keyer-despill-group">
+                    <label class="check-label">
+                      <input type="checkbox" id="fx-keyer-despill" checked>
+                      <span data-i18n="fx.keyer.despill">Despill</span>
+                    </label>
+                    <select id="fx-keyer-despill-type" class="input-control mono" aria-label="Despill channel">
+                      <option value="green" selected data-i18n="fx.keyer.despillGreen">Green</option>
+                      <option value="blue" data-i18n="fx.keyer.despillBlue">Blue</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="fx-param-grid keyer-param-grid">
+                  <div class="fx-param-row">
+                    <label class="fx-param-label" for="fx-keyer-similarity-range" data-i18n="fx.keyer.similarity">Similarity</label>
+                    <input type="range" id="fx-keyer-similarity-range" min="0.01" max="0.80" step="0.01" value="0.18">
+                    <input type="number" id="fx-keyer-similarity-num" class="input-num mono" min="0.01" max="0.80" step="0.01" value="0.18" aria-label="Similarity value">
+                  </div>
+                  <div class="fx-param-row">
+                    <label class="fx-param-label" for="fx-keyer-blend-range" data-i18n="fx.keyer.blend">Blend</label>
+                    <input type="range" id="fx-keyer-blend-range" min="0.00" max="0.50" step="0.01" value="0.08">
+                    <input type="number" id="fx-keyer-blend-num" class="input-num mono" min="0.00" max="0.50" step="0.01" value="0.08" aria-label="Blend value">
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- LEFT: EFFECT CONTROLS STACK (PREMIERE / AE STYLE) -->
+            <section class="nle-pane">
+              <div class="pane-header">
+                <h2 data-i18n="fx.controls.title">Effect Controls (Premiere / AE Stack)</h2>
+                <span id="fx-stack-count" class="nle-tag mono">0 nodes</span>
+              </div>
+              <div class="pane-body">
+                <div id="fx-controls-stack" class="fx-stack"></div>
+              </div>
+            </section>
+          </div>
 
           <!-- RIGHT: FFMPEG FILTERGRAPH COMPILER & RENDER TIME ESTIMATOR -->
           <aside class="nle-pane">

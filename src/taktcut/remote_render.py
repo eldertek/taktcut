@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from taktcut import __version__
 from taktcut.color import ColorGradeParams, bake_cdl_to_cube, parse_cube_lut
-from taktcut.fx import FxNode, compile_fx_filtergraph
+from taktcut.fx import ChromaKeyParams, FxNode, compile_fx_filtergraph
 from taktcut.models import (
     AscCdlParams,
     HardwareCapabilities,
@@ -219,6 +219,7 @@ class RemoteRenderJobRequest(BaseModel):
     fps: str | None = None
     target_lufs: float | None = None
     prefer_hw: bool = True
+    chroma_key: ChromaKeyParams | None = None
     fx_stack: list[FxNode] = Field(default_factory=list)
     cdl: AscCdlParams | None = None
     color_grade: ColorGradeParams | None = None
@@ -497,6 +498,7 @@ class RemoteRenderState:
             fps=fps,
             lut_path=lut_file,
             color_grade=req.color_grade if lut_file is None else None,
+            chroma_key=req.chroma_key,
             fx_filtergraph=fx_filtergraph,
             title_overlay=req.title_overlay,
             subtitle_track=req.subtitle_track,

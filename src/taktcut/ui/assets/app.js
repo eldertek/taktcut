@@ -251,6 +251,17 @@ const state = {
   fxActivePresetId: "",
   fxLastCompile: null,
   fxCompileTimer: null,
+  chromaKey: {
+    enabled: false,
+    preset: "studio_green",
+    key_color: "#00b140",
+    similarity: 0.18,
+    blend: 0.08,
+    despill: true,
+    despill_type: "green",
+    matteView: "final"
+  },
+  chromaKeyPresetsCatalog: null,
   titleOverlay: cloneTitleParams(TITLE_PRESETS_FALLBACK.broadcast_lower_third.params),
   titlePresetsCatalog: null,
   titleLastCompile: null,
@@ -437,6 +448,12 @@ function getEffectiveFxState() {
   };
 }
 
+function getEffectiveChromaKeyState() {
+  return {
+    ...state.chromaKey
+  };
+}
+
 function getEffectiveTitleState(showBadge = false) {
   return {
     ...state.titleOverlay,
@@ -579,7 +596,8 @@ function redrawActiveCanvases() {
       getEffectiveFxState(),
       getEffectiveTitleState(false),
       getEffectiveFramingState(),
-      getEffectiveSubtitleState(false)
+      getEffectiveSubtitleState(false),
+      getEffectiveChromaKeyState()
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -1443,9 +1461,137 @@ function redrawFxKeyframeCanvases() {
   }
 }
 
+const CHROMA_KEY_PRESETS_FALLBACK = {
+  studio_green: {
+    id: "studio_green",
+    name: "Studio Green",
+    key_color: "#00b140",
+    similarity: 0.18,
+    blend: 0.08,
+    despill: true,
+    despill_type: "green"
+  },
+  chroma_blue: {
+    id: "chroma_blue",
+    name: "Chroma Blue",
+    key_color: "#0047bb",
+    similarity: 0.2,
+    blend: 0.08,
+    despill: true,
+    despill_type: "blue"
+  },
+  custom: {
+    id: "custom",
+    name: "Custom Hex",
+    key_color: "#00b140",
+    similarity: 0.18,
+    blend: 0.08,
+    despill: true,
+    despill_type: "green"
+  }
+};
+
+function serializeChromaKeyForApi(forceDisabled = false) {
+  const ck = state.chromaKey;
+  return {
+    preset: ck.preset || "studio_green",
+    key_color: ck.key_color || "#00b140",
+    similarity: Number(ck.similarity ?? 0.18),
+    blend: Number(ck.blend ?? 0.08),
+    despill: Boolean(ck.despill),
+    despill_type: ck.despill_type === "blue" ? "blue" : "green",
+    enabled: forceDisabled ? false : Boolean(ck.enabled)
+  };
+}
+
+function syncChromaKeyControlsFromState() {
+  const ck = state.chromaKey;
+  const badge = byId("fx-keyer-badge");
+  const toggleBtn = byId("btn-fx-keyer-toggle");
+  const picker = byId("fx-keyer-color-picker");
+  const hexInput = byId("fx-keyer-hex-input");
+  const customSwatch = byId("fx-keyer-custom-swatch");
+  const despillEl = byId("fx-keyer-despill");
+  const despillTypeEl = byId("fx-keyer-despill-type");
+  const simRange = byId("fx-keyer-similarity-range");
+  const simNum = byId("fx-keyer-similarity-num");
+  const blendRange = byId("fx-keyer-blend-range");
+  const blendNum = byId("fx-keyer-blend-num");
+
+  if (badge) {
+    if (state.fxBypassAll && ck.enabled) {
+      badge.textContent = "BYPASSED (A/B)";
+      badge.className = "nle-tag is-warn mono";
+    } else if (ck.enabled) {
+      badge.textContent = `${String(ck.key_color).toUpperCase()} | ${ck.despill ? "DESPILL" : "RAW"}`;
+      badge.className = "nle-tag is-pass mono";
+    } else {
+      badge.textContent = "OFF";
+      badge.className = "nle-tag mono";
+    }
+  }
+  if (toggleBtn) {
+    toggleBtn.setAttribute("aria-pressed", ck.enabled ? "true" : "false");
+    toggleBtn.classList.toggle("is-on", ck.enabled);
+  }
+  for (const btn of document.querySelectorAll("[data-keyer-preset]")) {
+    const pid = btn.getAttribute("data-keyer-preset");
+    const match = pid === ck.preset;
+    btn.classList.toggle("is-active", match);
+    btn.setAttribute("aria-pressed", match ? "true" : "false");
+  }
+  for (const btn of document.querySelectorAll("[data-fx-matte]")) {
+    const mode = btn.getAttribute("data-fx-matte");
+    const match = mode === ck.matteView;
+    btn.classList.toggle("is-active", match);
+    btn.setAttribute("aria-pressed", match ? "true" : "false");
+  }
+  if (picker) picker.value = ck.key_color;
+  if (hexInput && document.activeElement !== hexInput) {
+    hexInput.value = String(ck.key_color).toUpperCase();
+    hexInput.removeAttribute("aria-invalid");
+  }
+  if (customSwatch) {
+    customSwatch.style.backgroundColor = ck.key_color;
+  }
+  if (despillEl) despillEl.checked = Boolean(ck.despill);
+  if (despillTypeEl) despillTypeEl.value = ck.despill_type === "blue" ? "blue" : "green";
+  if (simRange) simRange.value = String(ck.similarity);
+  if (simNum && document.activeElement !== simNum) simNum.value = String(ck.similarity);
+  if (blendRange) blendRange.value = String(ck.blend);
+  if (blendNum && document.activeElement !== blendNum) blendNum.value = String(ck.blend);
+}
+
+function applyChromaKeyPreset(presetId) {
+  let preset = null;
+  if (Array.isArray(state.chromaKeyPresetsCatalog)) {
+    preset = state.chromaKeyPresetsCatalog.find((p) => p.id === presetId) || null;
+  }
+  if (!preset) {
+    preset = CHROMA_KEY_PRESETS_FALLBACK[presetId] || null;
+  }
+  if (!preset) return;
+  state.chromaKey.preset = preset.id;
+  state.chromaKey.enabled = true;
+  if (preset.id !== "custom") {
+    state.chromaKey.key_color = String(preset.key_color || "#00b140").toLowerCase();
+    state.chromaKey.similarity = Number(preset.similarity ?? 0.18);
+    state.chromaKey.blend = Number(preset.blend ?? 0.08);
+    state.chromaKey.despill = Boolean(preset.despill !== undefined ? preset.despill : true);
+    state.chromaKey.despill_type = preset.despill_type === "blue" ? "blue" : "green";
+  }
+  state.fxBypassAll = false;
+  syncChromaKeyControlsFromState();
+  updateFxBadges();
+  redrawActiveCanvases();
+  compileFxNow();
+}
+
 function updateFxBadges() {
   const total = state.fxStack.length;
-  const activeCount = state.fxBypassAll ? 0 : state.fxStack.filter((n) => n.enabled).length;
+  const fxActiveCount = state.fxStack.filter((n) => n.enabled).length;
+  const ckActiveCount = state.chromaKey.enabled ? 1 : 0;
+  const activeCount = state.fxBypassAll ? 0 : fxActiveCount + ckActiveCount;
   const activeBadge = byId("fx-active-badge");
   const stackBadge = byId("fx-stack-count");
   const bypassBtn = byId("btn-fx-bypass-all");
@@ -1497,8 +1643,12 @@ function renderFxCompileResult(res) {
   const kfList = Array.isArray(res.keyframed_effects) && res.keyframed_effects.length > 0
     ? ` | KF: ${res.keyframed_effects.join(", ")}`
     : "";
+  const activeLabels = [
+    ...(res.chroma_key_active ? ["chroma_key"] : []),
+    ...(Array.isArray(res.active_effects) ? res.active_effects : [])
+  ];
   renderKv(kv, [
-    ["Active FX", (res.active_effects.join(", ") || t("common.none")) + kfList],
+    ["Active FX", (activeLabels.join(", ") || t("common.none")) + kfList],
     ["Est. Render", `${res.estimated_render_seconds.toFixed(2)}s`],
     ["Realtime", `${res.realtime_factor.toFixed(2)}x`],
     ["Complexity", `${res.complexity_tier.toUpperCase()} (${res.bypassed_count} bypassed)`]
@@ -1517,9 +1667,11 @@ async function compileFxNow() {
     const fps = getTimelineFps();
 
     const nodesPayload = serializeFxStackForApi(state.fxBypassAll);
+    const ckPayload = state.chromaKey.enabled ? serializeChromaKeyForApi(state.fxBypassAll) : null;
 
     const compiled = await api.compileFx({
       nodes: nodesPayload,
+      chroma_key: ckPayload,
       duration_seconds,
       width,
       height,
@@ -2808,6 +2960,10 @@ async function buildOrExecuteRender(execute) {
       useStudioFx && !state.fxBypassAll && state.fxStack.length > 0
         ? serializeFxStackForApi(false)
         : null;
+    const chromaKeyPayload =
+      useStudioFx && !state.fxBypassAll && state.chromaKey.enabled
+        ? serializeChromaKeyForApi(false)
+        : null;
     const titlePayload =
       useStudioTitle &&
       state.titleOverlay.enabled &&
@@ -2854,6 +3010,7 @@ async function buildOrExecuteRender(execute) {
         fps,
         lut_path: lutPath,
         color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
+        chroma_key: chromaKeyPayload,
         fx_stack: fxPayload,
         title_overlay: titlePayload,
         subtitle_track: subtitlePayload,
@@ -2900,6 +3057,7 @@ async function buildOrExecuteRender(execute) {
       fps,
       lut_path: lutPath,
       color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
+      chroma_key: chromaKeyPayload,
       fx_stack: fxPayload,
       title_overlay: titlePayload,
       subtitle_track: subtitlePayload,
@@ -5135,18 +5293,137 @@ function wireEvents() {
   }
   byId("btn-fx-bypass-all").addEventListener("click", () => {
     state.fxBypassAll = !state.fxBypassAll;
+    syncChromaKeyControlsFromState();
     renderFxStack();
     redrawActiveCanvases();
     compileFxNow();
   });
   byId("btn-fx-reset-all").addEventListener("click", () => {
     state.fxStack = [];
+    state.chromaKey.enabled = false;
+    state.chromaKey.matteView = "final";
     state.fxBypassAll = false;
     state.fxActivePresetId = "";
+    syncChromaKeyControlsFromState();
     renderFxStack();
     redrawActiveCanvases();
     compileFxNow();
   });
+  for (const btn of document.querySelectorAll("[data-fx-matte]")) {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-fx-matte");
+      state.chromaKey.matteView = mode === "alpha_matte" ? "alpha_matte" : "final";
+      syncChromaKeyControlsFromState();
+      redrawActiveCanvases();
+    });
+  }
+  byId("btn-fx-keyer-toggle").addEventListener("click", () => {
+    state.chromaKey.enabled = !state.chromaKey.enabled;
+    state.fxBypassAll = false;
+    syncChromaKeyControlsFromState();
+    updateFxBadges();
+    redrawActiveCanvases();
+    compileFxNow();
+  });
+  for (const btn of document.querySelectorAll("[data-keyer-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-keyer-preset");
+      if (pid) applyChromaKeyPreset(pid);
+    });
+  }
+  byId("fx-keyer-color-picker").addEventListener("input", () => {
+    const val = byId("fx-keyer-color-picker").value;
+    if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+      state.chromaKey.key_color = val.toLowerCase();
+      state.chromaKey.preset = "custom";
+      state.chromaKey.enabled = true;
+      state.fxBypassAll = false;
+      syncChromaKeyControlsFromState();
+      updateFxBadges();
+      redrawActiveCanvases();
+      scheduleFxCompile();
+    }
+  });
+  const ckHexInput = byId("fx-keyer-hex-input");
+  ckHexInput.addEventListener("input", () => {
+    const raw = ckHexInput.value.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(raw)) {
+      ckHexInput.removeAttribute("aria-invalid");
+      state.chromaKey.key_color = raw.toLowerCase();
+      state.chromaKey.preset = "custom";
+      state.chromaKey.enabled = true;
+      state.fxBypassAll = false;
+      syncChromaKeyControlsFromState();
+      updateFxBadges();
+      redrawActiveCanvases();
+      scheduleFxCompile();
+    } else {
+      ckHexInput.setAttribute("aria-invalid", "true");
+    }
+  });
+  ckHexInput.addEventListener("change", () => {
+    const raw = ckHexInput.value.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(raw)) {
+      state.chromaKey.key_color = raw.toLowerCase();
+      state.chromaKey.preset = "custom";
+      ckHexInput.removeAttribute("aria-invalid");
+    } else {
+      ckHexInput.value = String(state.chromaKey.key_color).toUpperCase();
+      ckHexInput.removeAttribute("aria-invalid");
+    }
+    syncChromaKeyControlsFromState();
+    updateFxBadges();
+    redrawActiveCanvases();
+    compileFxNow();
+  });
+  byId("fx-keyer-despill").addEventListener("change", () => {
+    state.chromaKey.despill = byId("fx-keyer-despill").checked;
+    syncChromaKeyControlsFromState();
+    redrawActiveCanvases();
+    compileFxNow();
+  });
+  byId("fx-keyer-despill-type").addEventListener("change", () => {
+    state.chromaKey.despill_type = byId("fx-keyer-despill-type").value === "blue" ? "blue" : "green";
+    syncChromaKeyControlsFromState();
+    redrawActiveCanvases();
+    compileFxNow();
+  });
+  const bindKeyerNumericPair = (rangeId, numId, field, minVal, maxVal) => {
+    const rEl = byId(rangeId);
+    const nEl = byId(numId);
+    rEl.addEventListener("input", () => {
+      const val = Number.parseFloat(rEl.value);
+      if (Number.isFinite(val)) {
+        state.chromaKey[field] = val;
+        nEl.value = String(val);
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      }
+    });
+    nEl.addEventListener("input", () => {
+      const val = Number.parseFloat(nEl.value);
+      if (Number.isFinite(val) && val >= minVal && val <= maxVal) {
+        state.chromaKey[field] = val;
+        rEl.value = String(val);
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      }
+    });
+    nEl.addEventListener("change", () => {
+      const parsed = Number.parseFloat(nEl.value);
+      const clamped = Number.isFinite(parsed)
+        ? Math.min(maxVal, Math.max(minVal, parsed))
+        : state.chromaKey[field];
+      const rounded = Number(clamped.toFixed(2));
+      state.chromaKey[field] = rounded;
+      rEl.value = String(rounded);
+      nEl.value = String(rounded);
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  };
+  bindKeyerNumericPair("fx-keyer-similarity-range", "fx-keyer-similarity-num", "similarity", 0.01, 0.8);
+  bindKeyerNumericPair("fx-keyer-blend-range", "fx-keyer-blend-num", "blend", 0.0, 0.5);
   byId("btn-fx-play").addEventListener("click", togglePlayPause);
   byId("btn-fx-step").addEventListener("click", () => {
     stopPlayback();
@@ -5648,6 +5925,9 @@ async function loadFxCatalog() {
     if (data && data.specs && Object.keys(data.specs).length > 0) {
       state.fxSpecs = data.specs;
     }
+    if (data && Array.isArray(data.chroma_key_presets) && data.chroma_key_presets.length > 0) {
+      state.chromaKeyPresetsCatalog = data.chroma_key_presets;
+    }
   } catch {
     // Fallback to built-in catalog constants
   }
@@ -5695,6 +5975,7 @@ async function bootstrap() {
   compileTitleNow();
   syncSubtitleControlsFromState();
   compileSubtitlesNow();
+  syncChromaKeyControlsFromState();
   renderFxStack();
   renderFxCompileResult(null);
 
