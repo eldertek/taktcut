@@ -1,4 +1,6 @@
 import {
+  MARKER_COLOR_HEX,
+  computeBpmBeatFrames,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
   getTransitionPresetName,
@@ -1092,11 +1094,50 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   const niceSteps = [1, 5, 10, 25, 50, 100, 125, 250, 500, 1000, 2500, 5000];
   const stepFrames = niceSteps.find((s) => s >= rawStep) || rawStep;
 
+  // BPM Beat-Sync Grid (precomputed when enabled)
+  const bpmGrid = opts && opts.bpmGrid && opts.bpmGrid.enabled ? opts.bpmGrid : null;
+  const beatTicks = bpmGrid
+    ? computeBpmBeatFrames(doc, bpmGrid, startFrame, Math.ceil(startFrame + visibleSpan))
+    : [];
+  const beatSpacingPx =
+    beatTicks.length >= 2
+      ? Math.abs(frameToX(beatTicks[1].frame) - frameToX(beatTicks[0].frame))
+      : beatTicks.length === 1
+        ? 40
+        : 0;
+
   ctx.font = "10px ui-monospace, monospace";
   ctx.save();
   ctx.beginPath();
   ctx.rect(timelineX, 0, timelineW, rulerHeight);
   ctx.clip();
+
+  if (beatTicks.length > 0) {
+    let lastBarLabelX = -100;
+    for (const bt of beatTicks) {
+      const bxRaw = frameToX(bt.frame);
+      if (bxRaw < timelineX || bxRaw > timelineX + timelineW) continue;
+      if (!bt.isDownbeat && beatSpacingPx < 10) continue;
+      const bx = Math.round(bxRaw) + 0.5;
+      ctx.strokeStyle = bt.isDownbeat
+        ? "rgba(230, 184, 66, 0.78)"
+        : "rgba(57, 197, 207, 0.44)";
+      ctx.lineWidth = bt.isDownbeat ? 1.25 : 1;
+      ctx.beginPath();
+      ctx.moveTo(bx, bt.isDownbeat ? 19 : 26);
+      ctx.lineTo(bx, rulerHeight);
+      ctx.stroke();
+
+      if (bt.isDownbeat && bxRaw - lastBarLabelX >= 32) {
+        ctx.fillStyle = "rgba(230, 184, 66, 0.88)";
+        ctx.font = "700 8.5px ui-monospace, monospace";
+        ctx.fillText(`B${bt.bar}`, bxRaw + 3, 28);
+        lastBarLabelX = bxRaw;
+      }
+    }
+    ctx.font = "10px ui-monospace, monospace";
+  }
+
   for (let f = startFrame; f <= startFrame + visibleSpan; f += stepFrames) {
     const x = frameToX(f);
     if (x < timelineX || x > timelineX + timelineW - 4) continue;
@@ -1140,6 +1181,29 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.moveTo(0, rowY + trackHeight);
     ctx.lineTo(width, rowY + trackHeight);
     ctx.stroke();
+
+    // Subtle BPM beat lines across track lane behind clips
+    if (beatTicks.length > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(timelineX, rowY, timelineW, trackHeight);
+      ctx.clip();
+      for (const bt of beatTicks) {
+        const bxRaw = frameToX(bt.frame);
+        if (bxRaw < timelineX || bxRaw > timelineX + timelineW) continue;
+        if (!bt.isDownbeat && beatSpacingPx < 12) continue;
+        const bx = Math.round(bxRaw) + 0.5;
+        ctx.strokeStyle = bt.isDownbeat
+          ? "rgba(230, 184, 66, 0.18)"
+          : "rgba(57, 197, 207, 0.09)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(bx, rowY);
+        ctx.lineTo(bx, rowY + trackHeight);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     // Track tag
     const tagX = width < 480 ? 4 : 6;
@@ -1602,37 +1666,53 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   });
 
   // Markers
-  const markerPalette = {
-    Blue: "#528bff",
-    Yellow: "#d29922",
-    Green: "#3fb950",
-    Red: "#e5534b",
-    Purple: "#a371f7",
-    Cyan: "#39c5cf"
-  };
-
-  for (const mk of doc.markers || []) {
+  (doc.markers || []).forEach((mk, mkIdx) => {
     const mx = frameToX(mk.frame);
-    if (mx < timelineX || mx > timelineX + timelineW) continue;
-    const col = markerPalette[mk.color] || "#528bff";
+    if (mx < timelineX || mx > timelineX + timelineW) return;
+    const col = MARKER_COLOR_HEX[mk.color] || "#39c5cf";
+    const isMkSelected =
+      selected &&
+      selected.kind === "marker" &&
+      (selected.markerIndex === mkIdx || selected.data === mk);
+
+    if (isMkSelected) {
+      ctx.save();
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = 0.45;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(Math.round(mx) + 0.5, rulerHeight);
+      ctx.lineTo(Math.round(mx) + 0.5, height);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     ctx.fillStyle = col;
     ctx.beginPath();
-    ctx.moveTo(mx - 5, rulerHeight - 13);
-    ctx.lineTo(mx + 5, rulerHeight - 13);
-    ctx.lineTo(mx, rulerHeight - 4);
+    ctx.moveTo(mx - 5.5, rulerHeight - 14);
+    ctx.lineTo(mx + 5.5, rulerHeight - 14);
+    ctx.lineTo(mx + 5.5, rulerHeight - 9);
+    ctx.lineTo(mx, rulerHeight - 3);
+    ctx.lineTo(mx - 5.5, rulerHeight - 9);
     ctx.closePath();
     ctx.fill();
+    if (isMkSelected) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.25;
+      ctx.stroke();
+    }
 
     hitboxes.push({
       kind: "marker",
+      markerIndex: mkIdx,
       x: mx - 7,
       y: rulerHeight - 16,
       w: 14,
       h: 16,
       data: mk
     });
-  }
+  });
 
   // DaVinci Playhead Needle (lower ruler band so tick labels remain unobstructed)
   const playheadFrame = opts && typeof opts.playheadFrame === "number" ? opts.playheadFrame : startFrame;
@@ -1661,8 +1741,12 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     const gxRaw = frameToX(opts.snapGuideFrame);
     if (gxRaw >= timelineX && gxRaw <= timelineX + timelineW) {
       const gx = Math.round(gxRaw) + 0.5;
+      const isBeatSnap = opts.snapGuideKind === "beat";
+      const isMarkerSnap = opts.snapGuideKind === "marker";
+      const guideCol = isBeatSnap ? "#e6b842" : "#39c5cf";
+      const textCol = isBeatSnap ? "#ffe394" : "#8de8ef";
       ctx.save();
-      ctx.strokeStyle = "#39c5cf";
+      ctx.strokeStyle = guideCol;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(gx, 0);
@@ -1670,7 +1754,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.stroke();
 
       // Snap diamond marker on ruler seam
-      ctx.fillStyle = "#39c5cf";
+      ctx.fillStyle = guideCol;
       ctx.beginPath();
       ctx.moveTo(gx, rulerHeight - 5);
       ctx.lineTo(gx + 4, rulerHeight);
@@ -1679,17 +1763,18 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.closePath();
       ctx.fill();
 
-      // Compact SNAP frame pill
-      const snapLabel = `SNAP ${opts.snapGuideFrame}f`;
+      // Compact SNAP / BEAT / MKR frame pill
+      const snapPrefix = isBeatSnap ? "BEAT" : isMarkerSnap ? "MKR" : "SNAP";
+      const snapLabel = `${snapPrefix} ${opts.snapGuideFrame}f`;
       ctx.font = "700 9px ui-monospace, monospace";
       const tw = ctx.measureText(snapLabel).width + 8;
       const pillX = Math.min(timelineX + timelineW - tw - 2, Math.max(timelineX + 2, gx + 5));
       ctx.fillStyle = "rgba(17, 17, 20, 0.9)";
       ctx.fillRect(pillX, 2, tw, 13);
-      ctx.strokeStyle = "#39c5cf";
+      ctx.strokeStyle = guideCol;
       ctx.lineWidth = 1;
       ctx.strokeRect(pillX, 2, tw, 13);
-      ctx.fillStyle = "#8de8ef";
+      ctx.fillStyle = textCol;
       ctx.fillText(snapLabel, pillX + 4, 11.5);
       ctx.restore();
     }

@@ -8,6 +8,23 @@ export const RETIME_SPEED_MAX = 4.0;
 export const TRANSITION_DURATION_MIN_S = 0.1;
 export const TRANSITION_DURATION_MAX_S = 2.0;
 export const TRANSITION_DURATION_DEFAULT_S = 0.5;
+export const BPM_MIN = 60;
+export const BPM_MAX = 200;
+export const BPM_DEFAULT = 128;
+export const BPM_OFFSET_MIN_S = -10.0;
+export const BPM_OFFSET_MAX_S = 10.0;
+export const BPM_OFFSET_DEFAULT_S = 0.0;
+
+export const MARKER_COLORS = ["Cyan", "Gold", "Red", "Green"];
+export const MARKER_COLOR_HEX = {
+  Cyan: "#39c5cf",
+  Gold: "#e6b842",
+  Red: "#e5534b",
+  Green: "#3fb950",
+  Blue: "#528bff",
+  Yellow: "#d29922",
+  Purple: "#a371f7"
+};
 
 export const TRANSITION_PRESETS = [
   { id: "fade", name: "Cross Dissolve", shortTag: "FADE" },
@@ -277,14 +294,170 @@ export function validateTimelineClient(doc) {
   };
 }
 
+export function normalizeMarkerColor(color) {
+  if (typeof color !== "string") return "Cyan";
+  const cleaned = color.trim().toLowerCase();
+  const match = Object.keys(MARKER_COLOR_HEX).find((k) => k.toLowerCase() === cleaned);
+  return match || "Cyan";
+}
+
+export function normalizeBpmConfig(cfg) {
+  const c = cfg && typeof cfg === "object" ? cfg : {};
+  const enabled = Boolean(c.enabled);
+  const rawBpm = Number(c.bpm);
+  const bpm = Number.isFinite(rawBpm)
+    ? Math.round(clampNum(rawBpm, BPM_MIN, BPM_MAX) * 10) / 10
+    : BPM_DEFAULT;
+  const rawOff = c.offset_s !== undefined ? Number(c.offset_s) : Number(c.offsetS);
+  const offset_s = Number.isFinite(rawOff)
+    ? Math.round(clampNum(rawOff, BPM_OFFSET_MIN_S, BPM_OFFSET_MAX_S) * 1000) / 1000
+    : BPM_OFFSET_DEFAULT_S;
+  return { enabled, bpm, offset_s };
+}
+
+export function computeBpmBeatFrames(docOrFps, bpmConfig, minFrame = 0, maxFrame = null) {
+  const norm = normalizeBpmConfig(bpmConfig);
+  const fpsObj =
+    docOrFps && docOrFps.fps
+      ? docOrFps.fps
+      : docOrFps && docOrFps.num
+        ? docOrFps
+        : { num: 25, den: 1 };
+  const fpsRate = Math.max(1, Number(fpsObj.num || 25) / Math.max(1, Number(fpsObj.den || 1)));
+  const startF = Math.max(
+    0,
+    Math.floor(
+      Number.isFinite(Number(minFrame))
+        ? Number(minFrame)
+        : docOrFps && Number.isFinite(Number(docOrFps.start_frame))
+          ? Number(docOrFps.start_frame)
+          : 0
+    )
+  );
+  const fallbackEnd =
+    docOrFps && docOrFps.tracks ? computeTimelineMaxFrame(docOrFps) : startF + Math.round(fpsRate * 20);
+  const endF = Math.max(
+    startF,
+    Math.ceil(maxFrame !== null && Number.isFinite(Number(maxFrame)) ? Number(maxFrame) : fallbackEnd)
+  );
+
+  const beatDurationS = 60.0 / norm.bpm;
+  const minBeatIdx = Math.floor((startF / fpsRate - norm.offset_s) / beatDurationS) - 1;
+  const maxBeatIdx = Math.ceil((endF / fpsRate - norm.offset_s) / beatDurationS) + 1;
+  const upperIdx = Math.min(maxBeatIdx, minBeatIdx + 50000);
+
+  const beats = [];
+  const seenFrames = new Set();
+  for (let beatIdx = minBeatIdx; beatIdx <= upperIdx; beatIdx++) {
+    const timeS = norm.offset_s + beatIdx * beatDurationS;
+    const frame = Math.floor(timeS * fpsRate + 0.5);
+    if (frame < startF || frame > endF || frame < 0) continue;
+    if (seenFrames.has(frame)) continue;
+    seenFrames.add(frame);
+    const beatMod = ((beatIdx % 4) + 4) % 4;
+    beats.push({
+      frame,
+      beatIndex: beatIdx,
+      isDownbeat: beatMod === 0,
+      bar: Math.floor(beatIdx / 4) + 1,
+      beatInBar: beatMod + 1
+    });
+  }
+  return beats;
+}
+
+export function addMarkerInDocument(doc, markerInput = {}) {
+  if (!doc) return { doc, marker: null, markerIndex: -1, changed: false };
+  const nextDoc = cloneTimelineDoc(doc);
+  if (!Array.isArray(nextDoc.markers)) nextDoc.markers = [];
+
+  const docStart = nextDoc.start_frame || 0;
+  const rawFrame = Number(markerInput.frame);
+  const frame = Math.max(docStart, Math.round(Number.isFinite(rawFrame) ? rawFrame : docStart));
+  const color = normalizeMarkerColor(markerInput.color);
+  const rawName = typeof markerInput.name === "string" ? markerInput.name.trim() : "";
+  const name = rawName || `Marker ${nextDoc.markers.length + 1}`;
+  const note = typeof markerInput.note === "string" ? markerInput.note.trim() : "";
+  const rawDur = Number(markerInput.duration_frames);
+  const duration_frames = Math.max(1, Math.round(Number.isFinite(rawDur) && rawDur > 0 ? rawDur : 1));
+
+  const newMarker = { name, frame, duration_frames, color, note };
+  const tagged = nextDoc.markers.map((m, idx) => ({ m, idx, isNew: false }));
+  tagged.push({ m: newMarker, idx: tagged.length, isNew: true });
+  tagged.sort((a, b) => a.m.frame - b.m.frame || a.idx - b.idx);
+  nextDoc.markers = tagged.map((item) => item.m);
+  const markerIndex = tagged.findIndex((item) => item.isNew);
+  return { doc: nextDoc, marker: newMarker, markerIndex, changed: true };
+}
+
+export function updateMarkerInDocument(doc, markerIndex, patch = {}) {
+  if (!doc || !Array.isArray(doc.markers)) {
+    return { doc, marker: null, markerIndex: -1, changed: false };
+  }
+  if (!Number.isInteger(markerIndex) || markerIndex < 0 || markerIndex >= doc.markers.length) {
+    return { doc, marker: null, markerIndex: -1, changed: false };
+  }
+  const orig = doc.markers[markerIndex];
+  const docStart = doc.start_frame || 0;
+  const nextName =
+    patch.name !== undefined ? String(patch.name).slice(0, 120) : String(orig.name || "");
+  const nextNote =
+    patch.note !== undefined ? String(patch.note).slice(0, 240) : String(orig.note || "");
+  const nextColor =
+    patch.color !== undefined ? normalizeMarkerColor(patch.color) : normalizeMarkerColor(orig.color);
+  const rawFrame = patch.frame !== undefined ? Number(patch.frame) : orig.frame;
+  const nextFrame = Number.isFinite(rawFrame) ? Math.max(docStart, Math.round(rawFrame)) : orig.frame;
+
+  const unchanged =
+    nextName === String(orig.name || "") &&
+    nextNote === String(orig.note || "") &&
+    nextColor === normalizeMarkerColor(orig.color) &&
+    nextFrame === orig.frame;
+  if (unchanged) {
+    return { doc, marker: orig, markerIndex, changed: false };
+  }
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const updated = {
+    ...orig,
+    name: nextName,
+    note: nextNote,
+    color: nextColor,
+    frame: nextFrame
+  };
+  nextDoc.markers[markerIndex] = updated;
+
+  let finalIndex = markerIndex;
+  if (nextFrame !== orig.frame) {
+    const tagged = nextDoc.markers.map((m, idx) => ({ m, idx, isEdited: idx === markerIndex }));
+    tagged.sort((a, b) => a.m.frame - b.m.frame || a.idx - b.idx);
+    nextDoc.markers = tagged.map((item) => item.m);
+    finalIndex = tagged.findIndex((item) => item.isEdited);
+  }
+  return { doc: nextDoc, marker: nextDoc.markers[finalIndex], markerIndex: finalIndex, changed: true };
+}
+
+export function deleteMarkerInDocument(doc, markerIndex) {
+  if (!doc || !Array.isArray(doc.markers)) {
+    return { doc, removed: null, changed: false };
+  }
+  if (!Number.isInteger(markerIndex) || markerIndex < 0 || markerIndex >= doc.markers.length) {
+    return { doc, removed: null, changed: false };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const [removed] = nextDoc.markers.splice(markerIndex, 1);
+  return { doc: nextDoc, removed, changed: true };
+}
+
 export function collectSnapTargets(doc, opts = {}) {
   if (!doc) return [];
   const excludeClip = opts.excludeClip || null;
   const includePlayhead = Boolean(opts.includePlayhead);
   const playheadFrame = opts.playheadFrame;
+  const bpmGrid = opts.bpmGrid || opts.beatGrid || null;
 
   const byFrame = new Map();
-  const priority = { playhead: 4, marker: 3, clip_edge: 2, timeline_start: 1 };
+  const priority = { playhead: 5, marker: 4, clip_edge: 3, beat: 2, timeline_start: 1 };
 
   const addTarget = (frame, kind) => {
     if (!Number.isFinite(frame)) return;
@@ -318,6 +491,17 @@ export function collectSnapTargets(doc, opts = {}) {
     addTarget(mk.frame, "marker");
     if ((mk.duration_frames || 0) > 1) {
       addTarget(mk.frame + mk.duration_frames, "marker");
+    }
+  }
+
+  if (bpmGrid && bpmGrid.enabled) {
+    const minFrame = doc.start_frame || 0;
+    const maxFrame = Number.isFinite(Number(opts.maxFrame))
+      ? Math.max(computeTimelineMaxFrame(doc), Number(opts.maxFrame))
+      : computeTimelineMaxFrame(doc);
+    const beats = computeBpmBeatFrames(doc, bpmGrid, minFrame, maxFrame);
+    for (const b of beats) {
+      addTarget(b.frame, "beat");
     }
   }
 

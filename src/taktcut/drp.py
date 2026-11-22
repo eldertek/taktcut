@@ -423,6 +423,7 @@ def parse_otio_file(path: Path) -> TimelineDocument:
 
     fps = RationalFrameRate.from_float(rate_val)
     tracks: list[TimelineTrack] = []
+    markers: list[TimelineMarker] = []
     v_idx = 0
     a_idx = 0
     for trk in tl.tracks:
@@ -435,6 +436,20 @@ def parse_otio_file(path: Path) -> TimelineDocument:
             v_idx += 1
             t_idx = v_idx
             kind = "video"
+
+        for mk in getattr(trk, "markers", []) or []:
+            mr = mk.marked_range
+            mk_start = round(mr.start_time.rescaled_to(fps.as_float).value)
+            mk_dur = round(mr.duration.rescaled_to(fps.as_float).value)
+            markers.append(
+                TimelineMarker(
+                    name=mk.name or "Marker",
+                    frame=max(0, mk_start),
+                    duration_frames=max(1, mk_dur),
+                    color=str(mk.color or "Cyan"),
+                    note=str(getattr(mk, "comment", "") or ""),
+                )
+            )
 
         clips: list[TimelineClip] = []
         cursor = 0
@@ -474,6 +489,7 @@ def parse_otio_file(path: Path) -> TimelineDocument:
         source_format=fmt,
         fps=fps,
         tracks=tracks,
+        markers=markers,
     )
 
 

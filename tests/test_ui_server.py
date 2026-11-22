@@ -710,20 +710,29 @@ def test_timeline_ops_js_unit_suite() -> None:
     script = f"""
 import assert from "node:assert/strict";
 import {{
+  BPM_DEFAULT,
+  BPM_MAX,
+  BPM_MIN,
+  MARKER_COLORS,
+  addMarkerInDocument,
   buildAtempoStagesClient,
   collectSnapTargets,
   compileAudioFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
+  computeBpmBeatFrames,
+  deleteMarkerInDocument,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
   findAllCutJunctions,
   findMagneticSnap,
   formatRetimeBadgeText,
   isTrackAudiblyMuted,
+  normalizeBpmConfig,
   normalizeClipAudio,
   normalizeClipRetime,
   normalizeClipTransition,
+  normalizeMarkerColor,
   splitClipInDocument,
   splitClipsAtPlayhead,
   toggleTrackMuteInDocument,
@@ -732,6 +741,7 @@ import {{
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
   updateClipTransitionInDocument,
+  updateMarkerInDocument,
   validateTimelineClient
 }} from {json.dumps(ops_path)};
 
@@ -902,6 +912,76 @@ assert.equal(
   compiledTr.audio_filtergraph,
   "[0:a][1:a]acrossfade=d=0.500:c1=tri:c2=tri[aout]"
 );
+
+// BPM Beat Grid & Timeline Marker CRUD + Snap Math
+assert.equal(BPM_MIN, 60);
+assert.equal(BPM_MAX, 200);
+assert.equal(BPM_DEFAULT, 128);
+assert.deepEqual(MARKER_COLORS, ["Cyan", "Gold", "Red", "Green"]);
+assert.equal(normalizeMarkerColor("gold"), "Gold");
+assert.equal(normalizeMarkerColor("unknown"), "Cyan");
+
+const clampedBpm = normalizeBpmConfig({{ enabled: true, bpm: 240, offset_s: 0.25 }});
+assert.equal(clampedBpm.enabled, true);
+assert.equal(clampedBpm.bpm, 200);
+assert.equal(clampedBpm.offset_s, 0.25);
+
+const beats125 = computeBpmBeatFrames(doc, {{ enabled: true, bpm: 125, offset_s: 0.0 }}, 0, 60);
+assert.deepEqual(
+  beats125.map((b) => b.frame),
+  [0, 12, 24, 36, 48, 60]
+);
+assert.equal(beats125[0].isDownbeat, true);
+assert.equal(beats125[1].isDownbeat, false);
+assert.equal(beats125[4].isDownbeat, true);
+assert.equal(beats125[4].bar, 2);
+
+const beatsOffset = computeBpmBeatFrames(doc, {{ enabled: true, bpm: 125, offset_s: 0.2 }}, 0, 60);
+assert.deepEqual(
+  beatsOffset.map((b) => b.frame),
+  [5, 17, 29, 41, 53]
+);
+
+const beatTargets = collectSnapTargets(doc, {{
+  bpmGrid: {{ enabled: true, bpm: 125, offset_s: 0.0 }},
+  maxFrame: 200
+}});
+const beatSnap = findMagneticSnap(25.2, beatTargets, 2.0, 10, 0, 200);
+assert.equal(beatSnap.snapped, true);
+assert.equal(beatSnap.frame, 24);
+assert.equal(beatSnap.kind, "beat");
+
+const addedMk = addMarkerInDocument(doc, {{
+  frame: 72,
+  color: "Gold",
+  name: "Chorus Drop"
+}});
+assert.equal(addedMk.changed, true);
+assert.equal(addedMk.doc.markers.length, 2);
+assert.equal(addedMk.markerIndex, 1);
+assert.equal(addedMk.marker.color, "Gold");
+assert.equal(addedMk.marker.name, "Chorus Drop");
+
+const updatedMk = updateMarkerInDocument(addedMk.doc, 1, {{
+  name: "Verse Hit",
+  color: "Red"
+}});
+assert.equal(updatedMk.changed, true);
+assert.equal(updatedMk.marker.name, "Verse Hit");
+assert.equal(updatedMk.marker.color, "Red");
+
+const targetsWithMk = collectSnapTargets(updatedMk.doc, {{
+  bpmGrid: {{ enabled: true, bpm: 125, offset_s: 0.0 }},
+  maxFrame: 200
+}});
+const mkSnap = findMagneticSnap(73.1, targetsWithMk, 2.0, 10, 0, 200);
+assert.equal(mkSnap.snapped, true);
+assert.equal(mkSnap.frame, 72);
+assert.equal(mkSnap.kind, "marker");
+
+const deletedMk = deleteMarkerInDocument(updatedMk.doc, 1);
+assert.equal(deletedMk.changed, true);
+assert.equal(deletedMk.doc.markers.length, 1);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -911,6 +991,86 @@ assert.equal(
         check=False,
     )
     assert proc.returncode == 0, f"Node timeline_ops tests failed:\n{proc.stderr}\n{proc.stdout}"
+
+
+def test_bpm_beat_grid_and_marker_otio_roundtrip(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    from taktcut.drp import export_otio, load_timeline
+    from taktcut.models import (
+        MARKER_COLOR_PRESETS,
+        BpmGridConfig,
+        RationalFrameRate,
+        TimelineClip,
+        TimelineDocument,
+        TimelineMarker,
+        TimelineTrack,
+        compute_bpm_beat_frames,
+    )
+
+    assert MARKER_COLOR_PRESETS == ("Cyan", "Gold", "Red", "Green")
+    default_cfg = BpmGridConfig()
+    assert default_cfg.enabled is False
+    assert default_cfg.bpm == 128.0
+    assert default_cfg.offset_s == 0.0
+
+    with pytest.raises(ValidationError):
+        BpmGridConfig(bpm=55.0)
+    with pytest.raises(ValidationError):
+        BpmGridConfig(bpm=210.0)
+    with pytest.raises(ValidationError):
+        BpmGridConfig(bpm=float("nan"))
+
+    fps25 = RationalFrameRate(num=25, den=1)
+    ticks_125 = compute_bpm_beat_frames(fps25, 0, 60, bpm=125.0, offset_s=0.0)
+    assert [t.frame for t in ticks_125] == [0, 12, 24, 36, 48, 60]
+    assert ticks_125[0].is_downbeat is True
+    assert ticks_125[1].is_downbeat is False
+    assert ticks_125[4].is_downbeat is True
+    assert ticks_125[4].bar == 2
+
+    ticks_128 = compute_bpm_beat_frames(fps25, 0, 50, bpm=128.0, offset_s=0.0)
+    assert [t.frame for t in ticks_128] == [0, 12, 23, 35, 47]
+    ticks_off = compute_bpm_beat_frames(fps25, 0, 50, bpm=125.0, offset_s=0.2)
+    assert [t.frame for t in ticks_off] == [5, 17, 29, 41]
+    assert compute_bpm_beat_frames(fps25, 20, 10, bpm=128.0) == []
+
+    doc = TimelineDocument(
+        name="Beat_Sync_Markers_Test",
+        source_format="otio",
+        fps=fps25,
+        tracks=[
+            TimelineTrack(
+                index=1,
+                kind="video",
+                name="V1",
+                clips=[
+                    TimelineClip(
+                        name="Clip_A",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=0,
+                        duration_frames=100,
+                    )
+                ],
+            )
+        ],
+        markers=[
+            TimelineMarker(name="Intro Beat", frame=0, color="Cyan"),
+            TimelineMarker(name="Chorus Cue", frame=24, color="Gold"),
+            TimelineMarker(name="Flash Hit", frame=48, color="Red"),
+            TimelineMarker(name="Outro Tag", frame=72, color="Green"),
+        ],
+    )
+    otio_path = tmp_path / "markers_export.otio"
+    export_otio(doc, otio_path)
+    reloaded = load_timeline(otio_path)
+    assert [(m.name, m.frame, m.color.upper()) for m in reloaded.markers] == [
+        ("Intro Beat", 0, "CYAN"),
+        ("Chorus Cue", 24, "GOLD"),
+        ("Flash Hit", 48, "RED"),
+        ("Outro Tag", 72, "GREEN"),
+    ]
 
 
 def test_ui_transitions_endpoints(ui_server: tuple[str, Path]) -> None:
@@ -1158,6 +1318,50 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert "acrossfade=d=0.900" in tr_fg
                     page.locator("#btn-clip-transition-preview").click()
                     assert page.locator("#program-frame-counter").text_content() == "125f / 500f"
+
+                    # Verify Timeline Markers (M / + Marker, edit label, jump, delete)
+                    assert page.locator("#timeline-marker-count").text_content() == "3 MKR"
+                    page.keyboard.press("m")
+                    assert page.locator("#timeline-marker-count").text_content() == "4 MKR"
+                    page.wait_for_selector("#timeline-marker-inspector:not(.is-hidden)")
+                    page.locator("#marker-label-input").fill("Chorus Hit")
+                    page.locator("#marker-label-input").press("Enter")
+                    page.locator('[data-marker-edit-color="Gold"]').click()
+                    sel_text = page.locator("#timeline-selection-detail").text_content() or ""
+                    assert "Chorus Hit" in sel_text
+                    assert "Gold" in sel_text
+
+                    page.locator("#btn-tc-start").click()
+                    assert page.locator("#program-frame-counter").text_content() == "0f / 500f"
+                    page.locator('[data-marker-new-color="Red"]').click()
+                    page.locator("#btn-timeline-add-marker").click()
+                    assert page.locator("#timeline-marker-count").text_content() == "5 MKR"
+                    # Jump to marker at frame 125 (Chorus Hit)
+                    page.locator('[data-marker-jump]').nth(2).click()
+                    assert page.locator("#program-frame-counter").text_content() == "125f / 500f"
+                    # Delete dropped marker at index 0
+                    page.locator('[data-marker-delete]').first.click()
+                    assert page.locator("#timeline-marker-count").text_content() == "4 MKR"
+
+                    # Verify BPM Beat Grid toggle and BPM/offset controls
+                    page.locator("#btn-bpm-grid").click()
+                    assert page.locator("#btn-bpm-grid").get_attribute("aria-pressed") == "true"
+                    assert "128 BPM" in (page.locator("#timeline-tool-badge").text_content() or "")
+                    page.locator("#bpm-grid-bpm").fill("140")
+                    page.locator("#bpm-grid-bpm").press("Enter")
+                    assert "140 BPM" in (page.locator("#timeline-tool-badge").text_content() or "")
+                    page.locator("#bpm-grid-offset").fill("0.25")
+                    page.locator("#bpm-grid-offset").press("Enter")
+
+                if width == 375:
+                    page.locator("#btn-bpm-grid").click()
+                    page.locator("#btn-timeline-add-marker").click()
+                    mobile_overflow = page.evaluate(
+                        "() => document.documentElement.scrollWidth - window.innerWidth"
+                    )
+                    assert mobile_overflow <= 0, (
+                        f"Mobile overflow with BPM grid at {width}x{height}: {mobile_overflow}px"
+                    )
 
                 # Verify Color Grading Panel responsiveness and 4 presets at all viewports
                 page.locator("#tab-color").click()

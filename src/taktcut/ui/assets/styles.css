@@ -1125,6 +1125,8 @@ input[type="file"]::file-selector-button:hover {
 .tl-tool-btn,
 .tl-action-btn,
 .tl-snap-btn,
+.tl-marker-btn,
+.tl-bpm-btn,
 .tl-history-btn {
   display: inline-flex;
   align-items: center;
@@ -1152,6 +1154,40 @@ input[type="file"]::file-selector-button:hover {
   background: rgba(57, 197, 207, 0.16);
   border-color: #39c5cf;
   color: #8de8ef;
+}
+
+.tl-bpm-btn.is-active {
+  background: rgba(230, 184, 66, 0.18);
+  border-color: #e6b842;
+  color: #ffe394;
+}
+
+.tl-marker-btn:hover {
+  border-color: #39c5cf;
+  color: #8de8ef;
+}
+
+.tl-bpm-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 5px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.input-control.tl-bpm-input {
+  width: 54px;
+  flex: 0 0 auto;
+}
+
+.input-control.tl-offset-input {
+  width: 60px;
+  flex: 0 0 auto;
 }
 
 .tl-tool-btn:disabled,
@@ -1611,6 +1647,187 @@ input[type="range"] {
   min-width: 0;
 }
 
+/* TIMELINE MARKERS INSPECTOR & LIST */
+.marker-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.marker-inspector-dock .pane-subheader {
+  flex-wrap: wrap;
+}
+
+.marker-editor-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.marker-field-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.marker-field-row label,
+.marker-color-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.marker-color-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.marker-color-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  border: 1px solid var(--border-inner);
+}
+
+.marker-color-chip.is-active {
+  background: var(--bg-hover);
+  border-color: var(--accent-amber);
+  color: var(--text-primary);
+}
+
+.marker-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.marker-dot.is-cyan {
+  background: #39c5cf;
+}
+
+.marker-dot.is-gold {
+  background: #e6b842;
+}
+
+.marker-dot.is-red {
+  background: #e5534b;
+}
+
+.marker-dot.is-green {
+  background: #3fb950;
+}
+
+.marker-dot.is-blue {
+  background: #528bff;
+}
+
+.marker-dot.is-yellow {
+  background: #d29922;
+}
+
+.marker-dot.is-purple {
+  background: #a371f7;
+}
+
+.marker-quickbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.marker-card {
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-left: 3px solid #39c5cf;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.marker-card.is-selected {
+  border-color: var(--accent-amber);
+  background: rgba(230, 132, 66, 0.08);
+}
+
+.marker-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.marker-jump-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  font-size: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.marker-jump-btn:hover {
+  border-color: #39c5cf;
+  color: #8de8ef;
+}
+
+.marker-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.marker-inline-label {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+.btn-danger-mini {
+  color: #ff8e88;
+  border-color: rgba(229, 83, 75, 0.45);
+}
+
+.btn-danger-mini:hover {
+  background: var(--status-fail-soft);
+  border-color: var(--status-fail);
+  color: #ffd0cd;
+}
+
 .issue-list {
   display: flex;
   flex-direction: column;
@@ -1838,6 +2055,7 @@ input[type="range"] {
   .title-preset-btn,
   .title-color-picker,
   .mixer-btn,
+  .marker-jump-btn,
   .lang-btn,
   .input-control,
   .input-select,
@@ -1915,6 +2133,13 @@ input[type="range"] {
     grid-column: 1 / -1;
   }
   .title-param-row input[type="range"] {
+    min-height: 44px;
+  }
+  .marker-field-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .marker-jump-btn {
     min-height: 44px;
   }
   .kv-grid {

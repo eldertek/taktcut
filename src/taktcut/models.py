@@ -89,6 +89,15 @@ def conform_source_frames(
     return round(Fraction(timeline_frames) * ratio)
 
 
+MARKER_COLOR_PRESETS: tuple[str, ...] = ("Cyan", "Gold", "Red", "Green")
+
+BPM_MIN: float = 60.0
+BPM_MAX: float = 200.0
+BPM_DEFAULT: float = 128.0
+BPM_OFFSET_MIN_S: float = -10.0
+BPM_OFFSET_MAX_S: float = 10.0
+
+
 class TimelineMarker(BaseModel):
     """A marker anchored in exact integer timeline frames."""
 
@@ -97,6 +106,80 @@ class TimelineMarker(BaseModel):
     duration_frames: int = Field(default=1, ge=0)
     color: str = "Blue"
     note: str = ""
+
+
+class BpmBeatTick(BaseModel):
+    """A single rhythmic beat tick on the timeline frame grid."""
+
+    frame: int = Field(ge=0)
+    beat_index: int
+    is_downbeat: bool
+    bar: int
+    beat_in_bar: int
+
+
+class BpmGridConfig(BaseModel):
+    """Music-video BPM beat-sync grid overlay configuration."""
+
+    enabled: bool = False
+    bpm: float = Field(default=BPM_DEFAULT, ge=BPM_MIN, le=BPM_MAX)
+    offset_s: float = Field(default=0.0, ge=BPM_OFFSET_MIN_S, le=BPM_OFFSET_MAX_S)
+
+    @field_validator("bpm", "offset_s", mode="before")
+    @classmethod
+    def _validate_finite_bpm_float(cls, raw: Any, info: Any) -> float:
+        return _check_finite_number(raw, str(info.field_name))
+
+
+def compute_bpm_beat_frames(
+    fps: RationalFrameRate,
+    start_frame: int,
+    end_frame: int,
+    *,
+    bpm: float = BPM_DEFAULT,
+    offset_s: float = 0.0,
+) -> list[BpmBeatTick]:
+    """Compute deterministic beat-grid frame ticks within [start_frame, end_frame]."""
+    bpm_val = _check_finite_number(bpm, "bpm")
+    offset_val = _check_finite_number(offset_s, "offset_s")
+    if bpm_val < BPM_MIN or bpm_val > BPM_MAX:
+        raise ValueError(f"bpm must be within [{BPM_MIN}, {BPM_MAX}], got {bpm_val}")
+    if offset_val < BPM_OFFSET_MIN_S or offset_val > BPM_OFFSET_MAX_S:
+        raise ValueError(
+            f"offset_s must be within [{BPM_OFFSET_MIN_S}, {BPM_OFFSET_MAX_S}], got {offset_val}"
+        )
+    if end_frame < start_frame:
+        return []
+
+    fps_rate = fps.as_float
+    beat_duration_s = 60.0 / bpm_val
+    min_beat_idx = math.floor((start_frame / fps_rate - offset_val) / beat_duration_s) - 1
+    max_beat_idx = math.ceil((end_frame / fps_rate - offset_val) / beat_duration_s) + 1
+
+    ticks: list[BpmBeatTick] = []
+    seen_frames: set[int] = set()
+    max_iterations = 50000
+    upper_idx = min(max_beat_idx, min_beat_idx + max_iterations)
+
+    for beat_idx in range(min_beat_idx, upper_idx + 1):
+        time_s = offset_val + beat_idx * beat_duration_s
+        frame = int(math.floor(time_s * fps_rate + 0.5))
+        if frame < start_frame or frame > end_frame or frame < 0:
+            continue
+        if frame in seen_frames:
+            continue
+        seen_frames.add(frame)
+        beat_mod = ((beat_idx % 4) + 4) % 4
+        ticks.append(
+            BpmBeatTick(
+                frame=frame,
+                beat_index=beat_idx,
+                is_downbeat=beat_mod == 0,
+                bar=(beat_idx // 4) + 1,
+                beat_in_bar=beat_mod + 1,
+            )
+        )
+    return ticks
 
 
 TransitionPresetId = Literal["fade", "fadeblack", "wipeleft", "slideright", "zoomin"]

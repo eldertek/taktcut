@@ -1,7 +1,10 @@
 """taktcut: Clean-room timeline interchange, color science, FFmpeg/NVENC render, and QA toolkit."""
 
 from taktcut.models import (
+    MARKER_COLOR_PRESETS,
     AscCdlParams,
+    BpmBeatTick,
+    BpmGridConfig,
     ClipTransition,
     CubeLutInfo,
     GapIssue,
@@ -18,6 +21,7 @@ from taktcut.models import (
     TimelineMarker,
     TimelineTrack,
     TimelineValidationResult,
+    compute_bpm_beat_frames,
 )
 from taktcut.render import (
     ClipAudioParams,
@@ -46,6 +50,8 @@ __all__ = [
     "__version__",
     "apply_transition_preset",
     "AscCdlParams",
+    "BpmBeatTick",
+    "BpmGridConfig",
     "ClipAudioParams",
     "ClipRetimeParams",
     "ClipTransition",
@@ -54,6 +60,7 @@ __all__ = [
     "compile_retime_filter_result",
     "compile_transition_filter",
     "compile_transition_filter_result",
+    "compute_bpm_beat_frames",
     "CubeLutInfo",
     "CutJunction",
     "find_adjacent_cut_junctions",
@@ -62,6 +69,7 @@ __all__ = [
     "HardwareCapabilities",
     "list_transition_presets",
     "LoudnessReport",
+    "MARKER_COLOR_PRESETS",
     "QaReport",
     "RationalFrameRate",
     "RenderPlan",

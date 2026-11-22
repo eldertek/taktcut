@@ -16,18 +16,26 @@ import {
   AUDIO_FADE_S_MIN,
   AUDIO_GAIN_DB_MAX,
   AUDIO_GAIN_DB_MIN,
+  BPM_DEFAULT,
+  BPM_MAX,
+  BPM_MIN,
+  BPM_OFFSET_MAX_S,
+  BPM_OFFSET_MIN_S,
+  MARKER_COLOR_HEX,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
   TRANSITION_DURATION_DEFAULT_S,
   TRANSITION_DURATION_MAX_S,
   TRANSITION_DURATION_MIN_S,
+  addMarkerInDocument,
   cloneTimelineDoc,
   collectSnapTargets,
   compileAudioFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   computeTimelineMaxFrame,
+  deleteMarkerInDocument,
   findAdjacentCutForClip,
   findClipIndex,
   findMagneticSnap,
@@ -40,6 +48,7 @@ import {
   normalizeClipAudio,
   normalizeClipRetime,
   normalizeClipTransition,
+  normalizeMarkerColor,
   splitClipInDocument,
   splitClipsAtPlayhead,
   toggleTrackMuteInDocument,
@@ -48,6 +57,7 @@ import {
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
   updateClipTransitionInDocument,
+  updateMarkerInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -199,6 +209,13 @@ const state = {
   timelineTool: "select",
   timelineSnapEnabled: true,
   timelineActiveSnapFrame: null,
+  timelineActiveSnapKind: null,
+  markerNewColor: "Cyan",
+  bpmGrid: {
+    enabled: false,
+    bpm: BPM_DEFAULT,
+    offset_s: 0.0
+  },
   timelineBladePreview: null,
   timelineHoverTrim: null,
   timelineActiveTrim: null,
@@ -452,6 +469,8 @@ function redrawActiveCanvases() {
         playheadFrame: state.playheadFrame,
         tool: state.timelineTool,
         snapGuideFrame: state.timelineActiveSnapFrame,
+        snapGuideKind: state.timelineActiveSnapKind,
+        bpmGrid: state.bpmGrid,
         bladePreview: state.timelineBladePreview,
         hoverTrim: state.timelineHoverTrim,
         activeTrim: state.timelineActiveTrim,
@@ -509,6 +528,7 @@ function setTimelineData(payload) {
   state.timelineUndoStack = [];
   state.timelineRedoStack = [];
   state.timelineActiveSnapFrame = null;
+  state.timelineActiveSnapKind = null;
   state.timelineBladePreview = null;
   state.timelineHoverTrim = null;
   state.timelineActiveTrim = null;
@@ -980,11 +1000,57 @@ function renderTimelineTransitionInspector() {
   }
 }
 
+function getSelectedMarkerInfo() {
+  const doc = state.timelineDoc;
+  const sel = state.timelineSelected;
+  if (!doc || !Array.isArray(doc.markers) || !sel || sel.kind !== "marker") return null;
+  let idx = Number.isInteger(sel.markerIndex) ? sel.markerIndex : -1;
+  if (idx < 0 || idx >= doc.markers.length) {
+    idx = doc.markers.indexOf(sel.data);
+  }
+  if (idx < 0 || idx >= doc.markers.length) return null;
+  return { markerIndex: idx, marker: doc.markers[idx] };
+}
+
+function renderTimelineMarkerInspector() {
+  const dock = byId("timeline-marker-inspector");
+  if (!dock) return;
+  const info = getSelectedMarkerInfo();
+  if (!info) {
+    dock.classList.add("is-hidden");
+    return;
+  }
+  dock.classList.remove("is-hidden");
+  const { marker } = info;
+  const doc = state.timelineDoc;
+  const fps = doc && doc.fps ? doc.fps : { num: 25, den: 1 };
+  const frameBadge = byId("marker-frame-badge");
+  if (frameBadge) {
+    frameBadge.textContent = `${marker.frame}f | ${framesToSmpte(marker.frame, fps.num, fps.den)}`;
+  }
+  const labelInput = byId("marker-label-input");
+  if (labelInput && document.activeElement !== labelInput) {
+    labelInput.value = marker.name || "";
+  }
+  const noteInput = byId("marker-note-input");
+  if (noteInput && document.activeElement !== noteInput) {
+    noteInput.value = marker.note || "";
+  }
+  const activeColor = normalizeMarkerColor(marker.color);
+  for (const btn of document.querySelectorAll("[data-marker-edit-color]")) {
+    const col = btn.getAttribute("data-marker-edit-color");
+    const isSel = col === activeColor;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+}
+
 function renderTimelineSelection() {
   const box = byId("timeline-selection-detail");
   const sel = state.timelineSelected;
   if (!sel) {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
+    renderTimelineMarkerInspector();
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
     renderTimelineTransitionInspector();
@@ -1017,12 +1083,14 @@ function renderTimelineSelection() {
       ["Source In", `${c.source_in_frame}f (${srcFps})`],
       ["Source Path", c.source_path || t("common.none")]
     ]);
+    renderTimelineMarkerInspector();
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
     renderTimelineTransitionInspector();
     return;
   }
-  const mk = sel.data;
+  const mkInfo = getSelectedMarkerInfo();
+  const mk = mkInfo ? mkInfo.marker : sel.data;
   renderKv(box, [
     ["Type", "Marker"],
     ["Name", mk.name],
@@ -1030,6 +1098,7 @@ function renderTimelineSelection() {
     ["Color", mk.color],
     ["Note", mk.note || t("common.none")]
   ]);
+  renderTimelineMarkerInspector();
   renderTimelineAudioInspector();
   renderTimelineRetimeInspector();
   renderTimelineTransitionInspector();
@@ -1040,6 +1109,11 @@ function renderTimelineIssues() {
   const doc = state.timelineDoc;
   const val = state.timelineValidation;
   const items = [];
+  const markers = doc && Array.isArray(doc.markers) ? doc.markers : [];
+  const countEl = byId("timeline-marker-count");
+  if (countEl) {
+    countEl.textContent = `${markers.length} MKR`;
+  }
 
   if (val && val.issues && val.issues.length > 0) {
     for (const issue of val.issues) {
@@ -1055,17 +1129,87 @@ function renderTimelineIssues() {
     items.push(dom("div", "issue-item", t("timeline.empty.issues")));
   }
 
-  if (doc && doc.markers && doc.markers.length > 0) {
-    for (const mk of doc.markers) {
-      const li = dom("div", "issue-item");
-      const head = dom("div", "issue-head");
-      head.replaceChildren(
-        dom("span", "nle-tag is-blue mono", `MARKER @ ${mk.frame}f`),
-        dom("span", "mono", mk.color)
-      );
-      li.replaceChildren(head, dom("span", "", `${mk.name}${mk.note ? " - " + mk.note : ""}`));
-      items.push(li);
-    }
+  if (markers.length > 0) {
+    const fps = doc && doc.fps ? doc.fps : { num: 25, den: 1 };
+    const selMarker = getSelectedMarkerInfo();
+    markers.forEach((mk, mkIdx) => {
+      const isSelected = Boolean(selMarker && selMarker.markerIndex === mkIdx);
+      const card = dom("div", `marker-card${isSelected ? " is-selected" : ""}`);
+      card.style.borderLeftColor = MARKER_COLOR_HEX[mk.color] || "#39c5cf";
+
+      const head = dom("div", "marker-card-head");
+      const jumpBtn = dom("button", "marker-jump-btn mono");
+      jumpBtn.type = "button";
+      jumpBtn.setAttribute("data-marker-jump", String(mkIdx));
+      jumpBtn.title = `Jump to ${mk.frame}f`;
+      const dot = dom("span", `marker-dot is-${String(mk.color || "Cyan").toLowerCase()}`);
+      dot.setAttribute("aria-hidden", "true");
+      const jumpLabel = dom("span", "", `${mk.frame}f | ${framesToSmpte(mk.frame, fps.num, fps.den)} | ${mk.color}`);
+      jumpBtn.replaceChildren(dot, jumpLabel);
+      jumpBtn.addEventListener("click", () => jumpToMarkerAction(mkIdx));
+
+      const actions = dom("div", "marker-card-actions");
+      const delBtn = dom("button", "btn btn-mini btn-danger-mini", t("timeline.marker.delete"));
+      delBtn.type = "button";
+      delBtn.setAttribute("data-marker-delete", String(mkIdx));
+      delBtn.setAttribute("aria-label", `Delete marker ${mk.name || mk.frame}`);
+      delBtn.addEventListener("click", () => deleteMarkerAction(mkIdx));
+      actions.replaceChildren(delBtn);
+
+      head.replaceChildren(jumpBtn, actions);
+
+      const inlineInput = dom("input", "input-control marker-inline-label mono");
+      inlineInput.type = "text";
+      inlineInput.maxLength = 120;
+      inlineInput.value = mk.name || "";
+      inlineInput.setAttribute("data-marker-inline-label", String(mkIdx));
+      inlineInput.setAttribute("aria-label", `Marker label at ${mk.frame}f`);
+
+      let rowDragSnap = null;
+      inlineInput.addEventListener("focus", () => {
+        rowDragSnap = captureTimelineSnapshot();
+      });
+      inlineInput.addEventListener("input", () => {
+        if (!rowDragSnap) rowDragSnap = captureTimelineSnapshot();
+        const res = updateMarkerInDocument(state.timelineDoc, mkIdx, { name: inlineInput.value });
+        if (!res.changed) return;
+        state.timelineDoc = res.doc;
+        if (state.timelineSelected && state.timelineSelected.kind === "marker" && state.timelineSelected.markerIndex === mkIdx) {
+          state.timelineSelected = { kind: "marker", markerIndex: mkIdx, data: res.marker };
+        }
+        renderTimelineSelection();
+        if (state.activeTab === "timeline") redrawActiveCanvases();
+      });
+      inlineInput.addEventListener("change", () => {
+        const trimmed = inlineInput.value.trim() || `Marker ${mkIdx + 1}`;
+        inlineInput.value = trimmed;
+        const baseDoc = rowDragSnap && rowDragSnap.doc ? rowDragSnap.doc : state.timelineDoc;
+        const res = updateMarkerInDocument(baseDoc, mkIdx, { name: trimmed });
+        if (res.changed) {
+          commitTimelineMutation(
+            res.doc,
+            { kind: "marker", markerIndex: res.markerIndex, data: res.marker },
+            rowDragSnap
+          );
+        } else {
+          renderTimelineUI();
+        }
+        rowDragSnap = null;
+      });
+      inlineInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          inlineInput.blur();
+        }
+      });
+
+      const children = [head, inlineInput];
+      if (mk.note) {
+        children.push(dom("span", "telemetry-note mono", mk.note));
+      }
+      card.replaceChildren(...children);
+      items.push(card);
+    });
   }
 
   if (doc && doc.lut_refs && doc.lut_refs.length > 0) {
@@ -2541,6 +2685,11 @@ function updateTimelineToolbarUI() {
   const selectBtn = byId("btn-tool-select");
   const bladeBtn = byId("btn-tool-blade");
   const snapBtn = byId("btn-timeline-snap");
+  const addMarkerBtn = byId("btn-timeline-add-marker");
+  const inspAddMarkerBtn = byId("btn-inspector-add-marker");
+  const bpmBtn = byId("btn-bpm-grid");
+  const bpmInput = byId("bpm-grid-bpm");
+  const offsetInput = byId("bpm-grid-offset");
   const splitBtn = byId("btn-timeline-split");
   const undoBtn = byId("btn-timeline-undo");
   const redoBtn = byId("btn-timeline-redo");
@@ -2560,6 +2709,22 @@ function updateTimelineToolbarUI() {
     snapBtn.classList.toggle("is-active", state.timelineSnapEnabled);
     snapBtn.setAttribute("aria-pressed", state.timelineSnapEnabled ? "true" : "false");
   }
+  if (addMarkerBtn) {
+    addMarkerBtn.disabled = !state.timelineDoc;
+  }
+  if (inspAddMarkerBtn) {
+    inspAddMarkerBtn.disabled = !state.timelineDoc;
+  }
+  if (bpmBtn) {
+    bpmBtn.classList.toggle("is-active", state.bpmGrid.enabled);
+    bpmBtn.setAttribute("aria-pressed", state.bpmGrid.enabled ? "true" : "false");
+  }
+  if (bpmInput && document.activeElement !== bpmInput) {
+    bpmInput.value = String(state.bpmGrid.bpm);
+  }
+  if (offsetInput && document.activeElement !== offsetInput) {
+    offsetInput.value = Number(state.bpmGrid.offset_s).toFixed(1);
+  }
   if (splitBtn) {
     const selClip =
       state.timelineSelected && state.timelineSelected.kind === "clip"
@@ -2576,7 +2741,8 @@ function updateTimelineToolbarUI() {
   if (toolBadge) {
     const modeLabel = isBlade ? "BLADE (B)" : "SELECT (A)";
     const snapLabel = state.timelineSnapEnabled ? " | SNAP (N)" : "";
-    toolBadge.textContent = `${modeLabel}${snapLabel}`;
+    const bpmLabel = state.bpmGrid.enabled ? ` | ${state.bpmGrid.bpm} BPM` : "";
+    toolBadge.textContent = `${modeLabel}${snapLabel}${bpmLabel}`;
     toolBadge.className = `nle-tag mono ${
       isBlade ? "is-blade" : state.timelineSnapEnabled ? "is-snap" : ""
     }`;
@@ -2592,6 +2758,7 @@ function setTimelineTool(tool) {
   if (next !== "blade") {
     state.timelineBladePreview = null;
     state.timelineActiveSnapFrame = null;
+    state.timelineActiveSnapKind = null;
   }
   updateTimelineToolbarUI();
   if (state.activeTab === "timeline") {
@@ -2603,11 +2770,66 @@ function toggleTimelineSnap() {
   state.timelineSnapEnabled = !state.timelineSnapEnabled;
   if (!state.timelineSnapEnabled) {
     state.timelineActiveSnapFrame = null;
+    state.timelineActiveSnapKind = null;
   }
   updateTimelineToolbarUI();
   if (state.activeTab === "timeline") {
     redrawActiveCanvases();
   }
+}
+
+function toggleBpmGrid() {
+  state.bpmGrid.enabled = !state.bpmGrid.enabled;
+  updateTimelineToolbarUI();
+  if (state.activeTab === "timeline") {
+    redrawActiveCanvases();
+  }
+}
+
+function setNewMarkerColor(color) {
+  state.markerNewColor = normalizeMarkerColor(color);
+  for (const btn of document.querySelectorAll("[data-marker-new-color]")) {
+    const col = btn.getAttribute("data-marker-new-color");
+    const active = col === state.markerNewColor;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function addMarkerAtPlayheadAction() {
+  if (!state.timelineDoc) return false;
+  const res = addMarkerInDocument(state.timelineDoc, {
+    frame: state.playheadFrame,
+    color: state.markerNewColor
+  });
+  if (!res.changed) return false;
+  commitTimelineMutation(res.doc, {
+    kind: "marker",
+    markerIndex: res.markerIndex,
+    data: res.marker
+  });
+  return true;
+}
+
+function jumpToMarkerAction(markerIndex) {
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.markers)) return false;
+  const mk = doc.markers[markerIndex];
+  if (!mk) return false;
+  stopPlayback();
+  state.timelineSelected = { kind: "marker", markerIndex, data: mk };
+  setPlayhead(mk.frame);
+  renderTimelineSelection();
+  renderTimelineIssues();
+  return true;
+}
+
+function deleteMarkerAction(markerIndex) {
+  if (!state.timelineDoc) return false;
+  const res = deleteMarkerInDocument(state.timelineDoc, markerIndex);
+  if (!res.changed) return false;
+  commitTimelineMutation(res.doc, null);
+  return true;
 }
 
 function captureTimelineSnapshot() {
@@ -2887,6 +3109,11 @@ function handleTransportKeydown(ev) {
   }
 
   if (state.activeTab === "timeline") {
+    if (lower === "m") {
+      ev.preventDefault();
+      addMarkerAtPlayheadAction();
+      return;
+    }
     if (lower === "n") {
       ev.preventDefault();
       toggleTimelineSnap();
@@ -2985,7 +3212,9 @@ function resolvePointerFrame(x, opts = {}) {
     const targets = collectSnapTargets(state.timelineDoc, {
       excludeClip: opts.excludeClip || null,
       includePlayhead: Boolean(opts.includePlayhead),
-      playheadFrame: state.playheadFrame
+      playheadFrame: state.playheadFrame,
+      bpmGrid: state.bpmGrid,
+      maxFrame
     });
     const snap = findMagneticSnap(
       clampedRaw,
@@ -2997,13 +3226,15 @@ function resolvePointerFrame(x, opts = {}) {
     );
     return {
       frame: snap.frame,
-      snapFrame: snap.snapped ? snap.frame : null
+      snapFrame: snap.snapped ? snap.frame : null,
+      snapKind: snap.snapped ? snap.kind : null
     };
   }
 
   return {
     frame: Math.max(minFrame, Math.min(maxFrame, Math.round(clampedRaw))),
-    snapFrame: null
+    snapFrame: null,
+    snapKind: null
   };
 }
 
@@ -3108,6 +3339,7 @@ function bindTimelineCanvasScrub(canvas) {
       canvas.classList.add("is-scrubbing");
       const res = resolvePointerFrame(x, { includePlayhead: false });
       state.timelineActiveSnapFrame = res.snapFrame;
+      state.timelineActiveSnapKind = res.snapKind;
       setPlayhead(res.frame);
       return;
     }
@@ -3175,6 +3407,7 @@ function bindTimelineCanvasScrub(canvas) {
       canvas.classList.add("is-scrubbing");
       const res = resolvePointerFrame(x, { includePlayhead: false });
       state.timelineActiveSnapFrame = res.snapFrame;
+      state.timelineActiveSnapKind = res.snapKind;
       setPlayhead(res.frame);
       return;
     }
@@ -3206,6 +3439,7 @@ function bindTimelineCanvasScrub(canvas) {
           const prevSnap = state.timelineActiveSnapFrame;
           state.timelineBladePreview = nextPreview;
           state.timelineActiveSnapFrame = res.snapFrame;
+          state.timelineActiveSnapKind = res.snapKind;
           state.timelineHoverTrim = null;
           canvas.style.cursor = valid ? "cell" : "crosshair";
           if (
@@ -3223,6 +3457,7 @@ function bindTimelineCanvasScrub(canvas) {
         if (state.timelineBladePreview || state.timelineActiveSnapFrame !== null) {
           state.timelineBladePreview = null;
           state.timelineActiveSnapFrame = null;
+          state.timelineActiveSnapKind = null;
           needRedraw = true;
         }
 
@@ -3379,6 +3614,7 @@ function bindTimelineCanvasScrub(canvas) {
         maxFrame: maxBound
       });
       state.timelineActiveSnapFrame = res.snapFrame;
+      state.timelineActiveSnapKind = res.snapKind;
       const trimmed = trimClipInDocument(
         ptr.origDoc,
         ptr.trimTarget.trackKind,
@@ -3411,6 +3647,7 @@ function bindTimelineCanvasScrub(canvas) {
       const res = resolvePointerFrame(x, { includePlayhead: false });
       const prevSnap = state.timelineActiveSnapFrame;
       state.timelineActiveSnapFrame = res.snapFrame;
+      state.timelineActiveSnapKind = res.snapKind;
       if (res.frame !== state.playheadFrame) {
         setPlayhead(res.frame);
       } else if (prevSnap !== state.timelineActiveSnapFrame) {
@@ -3504,6 +3741,7 @@ function bindTimelineCanvasScrub(canvas) {
     if (wasTrim) {
       state.timelineActiveTrim = null;
       state.timelineActiveSnapFrame = null;
+      state.timelineActiveSnapKind = null;
       state.timelineDragFixedMaxFrame = null;
       if (cancelled && preSnap) {
         state.timelineDoc = preSnap.doc;
@@ -3563,6 +3801,7 @@ function bindTimelineCanvasScrub(canvas) {
     if (cancelled || !state.timelineXToFrame) {
       if (state.timelineActiveSnapFrame !== null) {
         state.timelineActiveSnapFrame = null;
+        state.timelineActiveSnapKind = null;
         redrawActiveCanvases();
       }
       return;
@@ -3571,6 +3810,7 @@ function bindTimelineCanvasScrub(canvas) {
     if (wasScrub) {
       const res = resolvePointerFrame(x, { includePlayhead: false });
       state.timelineActiveSnapFrame = null;
+      state.timelineActiveSnapKind = null;
       if (res.frame !== state.playheadFrame) {
         setPlayhead(res.frame);
       } else {
@@ -3579,9 +3819,14 @@ function bindTimelineCanvasScrub(canvas) {
       if (!wasMoved) {
         const match = hitTestTimeline(x, y);
         if (match && match.kind === "marker") {
-          state.timelineSelected = match;
+          state.timelineSelected = {
+            kind: "marker",
+            markerIndex: match.box ? match.box.markerIndex : undefined,
+            data: match.data
+          };
           setPlayhead(match.data.frame);
           renderTimelineSelection();
+          renderTimelineIssues();
           redrawActiveCanvases();
         }
       }
@@ -3590,7 +3835,13 @@ function bindTimelineCanvasScrub(canvas) {
 
     if (!wasMoved) {
       const match = hitTestTimeline(x, y, { includeTrim: false });
-      state.timelineSelected = match ? { kind: match.kind, data: match.data } : null;
+      state.timelineSelected = match
+        ? {
+            kind: match.kind,
+            markerIndex: match.kind === "marker" && match.box ? match.box.markerIndex : undefined,
+            data: match.data
+          }
+        : null;
       if (match && match.kind === "transition" && match.box) {
         state.playheadFrame = match.box.cutFrame;
         updatePlayheadReadout();
@@ -3607,6 +3858,7 @@ function bindTimelineCanvasScrub(canvas) {
       }
       updateTimelineToolbarUI();
       renderTimelineSelection();
+      renderTimelineIssues();
       redrawActiveCanvases();
     }
   };
@@ -3628,6 +3880,7 @@ function bindTimelineCanvasScrub(canvas) {
         state.timelineHoverFade = null;
         state.timelineHoverTransition = null;
         state.timelineActiveSnapFrame = null;
+        state.timelineActiveSnapKind = null;
         redrawActiveCanvases();
       }
     }
@@ -4121,6 +4374,203 @@ function wireClipTransitionInspector() {
   }
 }
 
+function wireTimelineMarkerAndBpmControls() {
+  for (const btn of document.querySelectorAll("[data-marker-new-color]")) {
+    btn.addEventListener("click", () => {
+      const col = btn.getAttribute("data-marker-new-color");
+      if (col) setNewMarkerColor(col);
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-marker-edit-color]")) {
+    btn.addEventListener("click", () => {
+      const info = getSelectedMarkerInfo();
+      const col = btn.getAttribute("data-marker-edit-color");
+      if (!info || !col) return;
+      const res = updateMarkerInDocument(state.timelineDoc, info.markerIndex, { color: col });
+      if (res.changed) {
+        commitTimelineMutation(res.doc, {
+          kind: "marker",
+          markerIndex: res.markerIndex,
+          data: res.marker
+        });
+      }
+    });
+  }
+
+  const jumpBtn = byId("btn-marker-jump");
+  if (jumpBtn) {
+    jumpBtn.addEventListener("click", () => {
+      const info = getSelectedMarkerInfo();
+      if (info) jumpToMarkerAction(info.markerIndex);
+    });
+  }
+
+  const delBtn = byId("btn-marker-delete");
+  if (delBtn) {
+    delBtn.addEventListener("click", () => {
+      const info = getSelectedMarkerInfo();
+      if (info) deleteMarkerAction(info.markerIndex);
+    });
+  }
+
+  const labelInput = byId("marker-label-input");
+  if (labelInput) {
+    let dragSnap = null;
+    labelInput.addEventListener("focus", () => {
+      dragSnap = captureTimelineSnapshot();
+    });
+    labelInput.addEventListener("input", () => {
+      const info = getSelectedMarkerInfo();
+      if (!info) return;
+      if (!dragSnap) dragSnap = captureTimelineSnapshot();
+      const res = updateMarkerInDocument(state.timelineDoc, info.markerIndex, {
+        name: labelInput.value
+      });
+      if (!res.changed) return;
+      state.timelineDoc = res.doc;
+      state.timelineSelected = {
+        kind: "marker",
+        markerIndex: res.markerIndex,
+        data: res.marker
+      };
+      const inlineEl = document.querySelector(
+        `[data-marker-inline-label="${res.markerIndex}"]`
+      );
+      if (inlineEl && document.activeElement !== inlineEl) {
+        inlineEl.value = res.marker.name;
+      }
+      renderTimelineSelection();
+      if (state.activeTab === "timeline") redrawActiveCanvases();
+    });
+    labelInput.addEventListener("change", () => {
+      const info = getSelectedMarkerInfo();
+      if (!info) {
+        dragSnap = null;
+        return;
+      }
+      const trimmed = labelInput.value.trim() || `Marker ${info.markerIndex + 1}`;
+      labelInput.value = trimmed;
+      const baseDoc = dragSnap && dragSnap.doc ? dragSnap.doc : state.timelineDoc;
+      const res = updateMarkerInDocument(baseDoc, info.markerIndex, { name: trimmed });
+      if (res.changed) {
+        commitTimelineMutation(
+          res.doc,
+          { kind: "marker", markerIndex: res.markerIndex, data: res.marker },
+          dragSnap
+        );
+      } else {
+        renderTimelineUI();
+      }
+      dragSnap = null;
+    });
+    labelInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        labelInput.blur();
+      }
+    });
+  }
+
+  const noteInput = byId("marker-note-input");
+  if (noteInput) {
+    let dragSnap = null;
+    noteInput.addEventListener("focus", () => {
+      dragSnap = captureTimelineSnapshot();
+    });
+    noteInput.addEventListener("input", () => {
+      const info = getSelectedMarkerInfo();
+      if (!info) return;
+      if (!dragSnap) dragSnap = captureTimelineSnapshot();
+      const res = updateMarkerInDocument(state.timelineDoc, info.markerIndex, {
+        note: noteInput.value
+      });
+      if (!res.changed) return;
+      state.timelineDoc = res.doc;
+      state.timelineSelected = {
+        kind: "marker",
+        markerIndex: res.markerIndex,
+        data: res.marker
+      };
+      renderTimelineSelection();
+    });
+    noteInput.addEventListener("change", () => {
+      const info = getSelectedMarkerInfo();
+      if (!info) {
+        dragSnap = null;
+        return;
+      }
+      const trimmed = noteInput.value.trim();
+      noteInput.value = trimmed;
+      const baseDoc = dragSnap && dragSnap.doc ? dragSnap.doc : state.timelineDoc;
+      const res = updateMarkerInDocument(baseDoc, info.markerIndex, { note: trimmed });
+      if (res.changed) {
+        commitTimelineMutation(
+          res.doc,
+          { kind: "marker", markerIndex: res.markerIndex, data: res.marker },
+          dragSnap
+        );
+      } else {
+        renderTimelineUI();
+      }
+      dragSnap = null;
+    });
+    noteInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        noteInput.blur();
+      }
+    });
+  }
+
+  const bpmBtn = byId("btn-bpm-grid");
+  if (bpmBtn) {
+    bpmBtn.addEventListener("click", toggleBpmGrid);
+  }
+
+  const bpmInput = byId("bpm-grid-bpm");
+  if (bpmInput) {
+    bpmInput.addEventListener("input", () => {
+      const val = Number.parseFloat(bpmInput.value);
+      if (Number.isFinite(val) && val >= BPM_MIN && val <= BPM_MAX) {
+        state.bpmGrid.bpm = Math.round(val * 10) / 10;
+        updateTimelineToolbarUI();
+        if (state.activeTab === "timeline") redrawActiveCanvases();
+      }
+    });
+    bpmInput.addEventListener("change", () => {
+      const raw = Number.parseFloat(bpmInput.value);
+      const next = Number.isFinite(raw)
+        ? Math.round(Math.min(BPM_MAX, Math.max(BPM_MIN, raw)) * 10) / 10
+        : state.bpmGrid.bpm;
+      state.bpmGrid.bpm = next;
+      bpmInput.value = String(next);
+      updateTimelineToolbarUI();
+      if (state.activeTab === "timeline") redrawActiveCanvases();
+    });
+  }
+
+  const offsetInput = byId("bpm-grid-offset");
+  if (offsetInput) {
+    offsetInput.addEventListener("input", () => {
+      const val = Number.parseFloat(offsetInput.value);
+      if (Number.isFinite(val) && val >= BPM_OFFSET_MIN_S && val <= BPM_OFFSET_MAX_S) {
+        state.bpmGrid.offset_s = Math.round(val * 1000) / 1000;
+        if (state.activeTab === "timeline") redrawActiveCanvases();
+      }
+    });
+    offsetInput.addEventListener("change", () => {
+      const raw = Number.parseFloat(offsetInput.value);
+      const next = Number.isFinite(raw)
+        ? Math.round(Math.min(BPM_OFFSET_MAX_S, Math.max(BPM_OFFSET_MIN_S, raw)) * 1000) / 1000
+        : state.bpmGrid.offset_s;
+      state.bpmGrid.offset_s = next;
+      offsetInput.value = Number(next).toFixed(1);
+      if (state.activeTab === "timeline") redrawActiveCanvases();
+    });
+  }
+}
+
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   const updateBtn = byId("update-banner-btn");
@@ -4228,6 +4678,8 @@ function wireEvents() {
   );
   byId("btn-timeline-split").addEventListener("click", splitAtPlayheadAction);
   byId("btn-timeline-snap").addEventListener("click", toggleTimelineSnap);
+  byId("btn-timeline-add-marker").addEventListener("click", addMarkerAtPlayheadAction);
+  byId("btn-inspector-add-marker").addEventListener("click", addMarkerAtPlayheadAction);
   byId("btn-timeline-undo").addEventListener("click", undoTimeline);
   byId("btn-timeline-redo").addEventListener("click", redoTimeline);
 
@@ -4263,6 +4715,7 @@ function wireEvents() {
   wireClipAudioInspector();
   wireClipRetimeInspector();
   wireClipTransitionInspector();
+  wireTimelineMarkerAndBpmControls();
 
   // FX page events
   for (const btn of document.querySelectorAll("[data-fx-preset]")) {

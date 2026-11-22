@@ -137,6 +137,44 @@
               </div>
               <div id="timeline-selection-detail" class="kv-grid mono"></div>
 
+              <div id="timeline-marker-inspector" class="marker-inspector-dock is-hidden">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.marker.editorTitle">Selected Marker</span>
+                  <div class="viewer-controls">
+                    <span id="marker-frame-badge" class="nle-tag mono">0f</span>
+                    <button type="button" id="btn-marker-jump" class="btn btn-mini" data-i18n="timeline.marker.jump">Jump</button>
+                    <button type="button" id="btn-marker-delete" class="btn btn-mini btn-danger-mini" data-i18n="timeline.marker.delete">Delete</button>
+                  </div>
+                </div>
+                <div class="marker-editor-box mono">
+                  <div class="marker-field-row">
+                    <label for="marker-label-input" data-i18n="timeline.marker.label">Label</label>
+                    <input type="text" id="marker-label-input" class="input-control mono" maxlength="120" placeholder="Marker label">
+                  </div>
+                  <div class="marker-field-row">
+                    <label for="marker-note-input" data-i18n="timeline.marker.note">Note</label>
+                    <input type="text" id="marker-note-input" class="input-control mono" maxlength="240" placeholder="Optional note">
+                  </div>
+                  <div class="marker-field-row">
+                    <span class="marker-color-label" data-i18n="timeline.marker.color">Color</span>
+                    <div id="marker-edit-color-strip" class="marker-color-strip" role="group" aria-label="Selected marker color">
+                      <button type="button" class="btn btn-mini marker-color-chip" data-marker-edit-color="Cyan" aria-pressed="false">
+                        <span class="marker-dot is-cyan" aria-hidden="true"></span><span>Cyan</span>
+                      </button>
+                      <button type="button" class="btn btn-mini marker-color-chip" data-marker-edit-color="Gold" aria-pressed="false">
+                        <span class="marker-dot is-gold" aria-hidden="true"></span><span>Gold</span>
+                      </button>
+                      <button type="button" class="btn btn-mini marker-color-chip" data-marker-edit-color="Red" aria-pressed="false">
+                        <span class="marker-dot is-red" aria-hidden="true"></span><span>Red</span>
+                      </button>
+                      <button type="button" class="btn btn-mini marker-color-chip" data-marker-edit-color="Green" aria-pressed="false">
+                        <span class="marker-dot is-green" aria-hidden="true"></span><span>Green</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div id="timeline-audio-inspector" class="audio-inspector-dock">
                 <div class="pane-subheader">
                   <span data-i18n="timeline.audio.title">Clip Audio &amp; Track Mixer</span>
@@ -246,8 +284,29 @@
           <aside class="nle-pane">
             <div class="pane-header">
               <h2 data-i18n="timeline.issues.title">Continuity &amp; Markers</h2>
+              <span id="timeline-marker-count" class="nle-tag mono">0 MKR</span>
             </div>
             <div class="pane-body pane-scroll">
+              <div class="marker-quickbar" role="group" aria-label="Drop marker controls">
+                <div class="marker-color-strip" role="group" aria-label="Default marker color">
+                  <button type="button" class="btn btn-mini marker-color-chip is-active" data-marker-new-color="Cyan" aria-pressed="true" title="Cyan">
+                    <span class="marker-dot is-cyan" aria-hidden="true"></span><span>Cyan</span>
+                  </button>
+                  <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Gold" aria-pressed="false" title="Gold">
+                    <span class="marker-dot is-gold" aria-hidden="true"></span><span>Gold</span>
+                  </button>
+                  <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Red" aria-pressed="false" title="Red">
+                    <span class="marker-dot is-red" aria-hidden="true"></span><span>Red</span>
+                  </button>
+                  <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Green" aria-pressed="false" title="Green">
+                    <span class="marker-dot is-green" aria-hidden="true"></span><span>Green</span>
+                  </button>
+                </div>
+                <button type="button" id="btn-inspector-add-marker" class="btn btn-mini tl-marker-btn" title="Drop Marker at Playhead (M)">
+                  <span data-i18n="timeline.tool.addMarker">+ Marker</span>
+                  <span class="kbd-chip mono">M</span>
+                </button>
+              </div>
               <div id="timeline-issues-list" class="issue-list"></div>
             </div>
           </aside>
@@ -292,6 +351,28 @@
                 <span data-i18n="timeline.tool.snap">Snap</span>
                 <span class="kbd-chip mono">N</span>
               </button>
+
+              <button type="button" id="btn-timeline-add-marker" class="btn btn-mini tl-marker-btn" title="Drop Marker at Playhead (M)">
+                <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                  <path d="M3 2h10v6.5L8 14 3 8.5V2z" fill="currentColor"/>
+                </svg>
+                <span data-i18n="timeline.tool.addMarker">+ Marker</span>
+                <span class="kbd-chip mono">M</span>
+              </button>
+
+              <div class="tl-bpm-group" role="group" aria-label="BPM Beat Grid">
+                <button type="button" id="btn-bpm-grid" class="btn btn-mini tl-bpm-btn" aria-pressed="false" title="Toggle BPM Beat Grid Overlay">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M2 3v10M6 3v10M10 3v10M14 3v10M2 8h12" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.beatGrid">Beat Grid</span>
+                </button>
+                <label class="inline-label mono" for="bpm-grid-bpm">BPM</label>
+                <input type="number" id="bpm-grid-bpm" class="input-control input-num tl-bpm-input mono" min="60" max="200" step="1" value="128" aria-label="Tempo in BPM">
+                <label class="inline-label mono" for="bpm-grid-offset" data-i18n="timeline.tool.bpmOffset">Off</label>
+                <input type="number" id="bpm-grid-offset" class="input-control input-num tl-offset-input mono" min="-10" max="10" step="0.05" value="0.0" aria-label="Beat grid offset in seconds">
+                <span class="inline-label mono">s</span>
+              </div>
 
               <div class="tl-tool-group" role="group" aria-label="Edit history">
                 <button type="button" id="btn-timeline-undo" class="btn btn-mini tl-history-btn" disabled title="Undo (Ctrl+Z)">
@@ -1056,7 +1137,7 @@
       <span id="runtime-mode-pill">LOCAL STUDIO</span>
       <span id="transport-shortcut-hint" class="statusbar-hint">
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
-        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | Ctrl+Z/Y: Undo/Redo</span>
+        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | M: Marker | Ctrl+Z/Y: Undo/Redo</span>
       </span>
       <span id="version-badge">v0.1.3</span>
     </footer>
