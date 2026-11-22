@@ -168,7 +168,140 @@
         </section>
       </section>
 
-      <!-- PAGE 2: COLOR (DAVINCI COLOR WHEELS + SCOPES + .CUBE) -->
+      <!-- PAGE 2: FX (SAPPHIRE-INSPIRED EFFECTS LIBRARY + EFFECT CONTROLS + PROGRAM MONITOR) -->
+      <section id="panel-fx" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-fx">
+        <div class="nle-fx-top">
+          <!-- LEFT DOCK: 1-CLICK PRESETS & SAPPHIRE NODE LIBRARY -->
+          <aside class="nle-pane">
+            <div class="pane-header">
+              <h2 data-i18n="fx.library.title">Sapphire FX Library &amp; 1-Click Presets</h2>
+              <span class="nle-tag mono">6 FX</span>
+            </div>
+            <div class="pane-body">
+              <div class="pane-subheader">
+                <span data-i18n="fx.library.presets">1-Click Presets (iMovie Simplicity)</span>
+              </div>
+              <div id="fx-preset-grid" class="fx-preset-grid">
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="dreamy_glow">
+                  <span class="fx-preset-name">Dreamy Glow</span>
+                  <span class="fx-preset-meta mono">S_Glow</span>
+                </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="music_video_shake">
+                  <span class="fx-preset-name">Music Video Shake</span>
+                  <span class="fx-preset-meta mono">S_Shake + RGB</span>
+                </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="vintage_35mm_film">
+                  <span class="fx-preset-name">Vintage 35mm Film</span>
+                  <span class="fx-preset-meta mono">S_FilmDamage</span>
+                </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="anamorphic_flare">
+                  <span class="fx-preset-name">Anamorphic Flare</span>
+                  <span class="fx-preset-meta mono">S_LensFlare</span>
+                </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="rgb_glitch_split">
+                  <span class="fx-preset-name">RGB Glitch Split</span>
+                  <span class="fx-preset-meta mono">Chroma + Shake</span>
+                </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="strobe_flicker">
+                  <span class="fx-preset-name">Strobe Flicker</span>
+                  <span class="fx-preset-meta mono">S_Flicker + Glow</span>
+                </button>
+              </div>
+
+              <div class="pane-divider"></div>
+
+              <div class="pane-subheader">
+                <span data-i18n="fx.library.addEffect">Add Sapphire Effect Node</span>
+              </div>
+              <div class="fx-add-strip">
+                <button type="button" class="btn btn-chip mono" data-fx-add="glow">+ Glow</button>
+                <button type="button" class="btn btn-chip mono" data-fx-add="shake">+ Shake</button>
+                <button type="button" class="btn btn-chip mono" data-fx-add="flicker">+ Flicker</button>
+                <button type="button" class="btn btn-chip mono" data-fx-add="lens_flare">+ Lens Flare</button>
+                <button type="button" class="btn btn-chip mono" data-fx-add="film_damage">+ Film Damage</button>
+                <button type="button" class="btn btn-chip mono" data-fx-add="chroma_aberration">+ Chroma Split</button>
+              </div>
+            </div>
+          </aside>
+
+          <!-- RIGHT DOCK: LIVE FX PROGRAM MONITOR -->
+          <section class="nle-pane">
+            <div class="pane-header">
+              <h2 data-i18n="fx.monitor.title">FX Program Monitor (Live Simulation)</h2>
+              <div class="viewer-controls">
+                <span id="fx-active-badge" class="nle-tag mono">0 FX</span>
+                <button type="button" id="btn-fx-bypass-all" class="btn btn-secondary" aria-pressed="false" data-i18n="fx.btn.bypassAll">Bypass FX (A/B)</button>
+                <button type="button" id="btn-fx-reset-all" class="btn btn-secondary" data-i18n="fx.btn.resetAll">Clear FX</button>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div class="viewer-well">
+                <canvas id="fx-program-canvas" class="studio-canvas" aria-label="FX Program Monitor preview"></canvas>
+              </div>
+              <div class="transport-bar">
+                <div class="btn-row">
+                  <button type="button" id="btn-fx-play" class="btn btn-mini mono" aria-pressed="false" data-i18n="timeline.transport.play">Play</button>
+                  <button type="button" id="btn-fx-step" class="btn btn-mini mono" title="+1 frame">+1f</button>
+                </div>
+                <input type="range" id="fx-playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="25" aria-label="FX preview frame">
+                <span id="fx-program-tc" class="tc-readout mono">00:00:01:00</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="nle-fx-bottom">
+          <!-- LEFT: EFFECT CONTROLS STACK (PREMIERE / AE STYLE) -->
+          <section class="nle-pane">
+            <div class="pane-header">
+              <h2 data-i18n="fx.controls.title">Effect Controls (Premiere / AE Stack)</h2>
+              <span id="fx-stack-count" class="nle-tag mono">0 nodes</span>
+            </div>
+            <div class="pane-body">
+              <div id="fx-controls-stack" class="fx-stack"></div>
+            </div>
+          </section>
+
+          <!-- RIGHT: FFMPEG FILTERGRAPH COMPILER & RENDER TIME ESTIMATOR -->
+          <aside class="nle-pane">
+            <div class="pane-header">
+              <h2 data-i18n="fx.compiler.title">FFmpeg Filtergraph Compiler</h2>
+              <span id="fx-compile-badge" class="nle-tag mono">IDLE</span>
+            </div>
+            <div class="pane-body">
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="fx-duration-input" data-i18n="fx.compiler.duration">Clip Dur. (s)</label>
+                  <input type="number" id="fx-duration-input" class="input-control mono" min="0.5" max="3600" step="0.5" value="10">
+                </div>
+                <div class="form-row">
+                  <label for="fx-resolution-select" data-i18n="fx.compiler.resolution">Raster</label>
+                  <select id="fx-resolution-select" class="input-control mono">
+                    <option value="1280x720">1280x720 (HD)</option>
+                    <option value="1920x1080" selected>1920x1080 (FHD)</option>
+                    <option value="3840x2160">3840x2160 (4K UHD)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="checkbox-row">
+                <label class="check-label">
+                  <input type="checkbox" id="fx-use-gpu">
+                  <span data-i18n="fx.compiler.gpu">Estimate with NVENC GPU</span>
+                </label>
+              </div>
+              <div class="btn-row">
+                <button type="button" id="btn-fx-compile" class="btn btn-primary" data-i18n="fx.compiler.btnCompile">Compile Filtergraph</button>
+                <button type="button" id="btn-fx-copy-fg" class="btn btn-secondary" data-i18n="fx.compiler.btnCopy">Copy Filtergraph</button>
+                <button type="button" id="btn-fx-send-render" class="btn btn-secondary" data-i18n="fx.compiler.btnDeliver">Use in Deliver</button>
+              </div>
+              <div id="fx-compile-kv" class="kv-grid mono"></div>
+              <pre id="fx-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- PAGE 3: COLOR (DAVINCI COLOR WHEELS + SCOPES + .CUBE) -->
       <section id="panel-color" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-color">
         <div class="nle-color-top">
           <section class="nle-pane">
@@ -407,6 +540,10 @@
                   <span data-i18n="render.check.studioCdl">Bake &amp; apply active Color Page CDL grade when LUT path is empty</span>
                 </label>
                 <label class="check-label">
+                  <input type="checkbox" id="render-use-studio-fx">
+                  <span data-i18n="render.check.studioFx">Apply active FX Studio filtergraph stack</span>
+                </label>
+                <label class="check-label">
                   <input type="checkbox" id="render-prefer-hw" checked>
                   <span data-i18n="render.check.preferHw">Prefer GPU NVENC encoder (fallback to CPU libx264/libx265)</span>
                 </label>
@@ -539,16 +676,20 @@
         <span class="page-idx mono">01</span>
         <span data-i18n="tabs.timeline">Timeline</span>
       </button>
-      <button type="button" role="tab" id="tab-color" class="page-tab" data-tab="color" aria-selected="false" aria-controls="panel-color">
+      <button type="button" role="tab" id="tab-fx" class="page-tab" data-tab="fx" aria-selected="false" aria-controls="panel-fx">
         <span class="page-idx mono">02</span>
+        <span data-i18n="tabs.fx">FX</span>
+      </button>
+      <button type="button" role="tab" id="tab-color" class="page-tab" data-tab="color" aria-selected="false" aria-controls="panel-color">
+        <span class="page-idx mono">03</span>
         <span data-i18n="tabs.color">Color</span>
       </button>
       <button type="button" role="tab" id="tab-render" class="page-tab" data-tab="render" aria-selected="false" aria-controls="panel-render">
-        <span class="page-idx mono">03</span>
+        <span class="page-idx mono">04</span>
         <span data-i18n="tabs.render">Deliver</span>
       </button>
       <button type="button" role="tab" id="tab-qa" class="page-tab" data-tab="qa" aria-selected="false" aria-controls="panel-qa">
-        <span class="page-idx mono">04</span>
+        <span class="page-idx mono">05</span>
         <span data-i18n="tabs.qa">Broadcast QA</span>
       </button>
     </nav>

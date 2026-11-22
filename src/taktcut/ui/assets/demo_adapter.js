@@ -223,6 +223,69 @@ function bakeCubeTextClient(cdl, size, title) {
   return lines.join("\n") + "\n";
 }
 
+function compileFxClient(nodes, opts = {}) {
+  const active = (nodes || []).filter((n) => n && n.enabled !== false);
+  if (active.length === 0) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      active_effects: [],
+      bypassed_count: (nodes || []).length,
+      normalized_nodes: nodes || [],
+      estimated_render_seconds: 0,
+      realtime_factor: 0,
+      complexity_tier: "idle",
+      warnings: []
+    };
+  }
+  const pixFmt = opts.pix_fmt || "yuv420p";
+  const dur = Math.max(0.1, Number(opts.duration_seconds || 10));
+  const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration"].includes(n.effect));
+  const segs = [];
+  if (needsRgb) segs.push("format=rgb24");
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65 };
+  let totalWeight = 0;
+  active.forEach((n, idx) => {
+    const p = n.params || {};
+    totalWeight += weights[n.effect] || 0.8;
+    if (n.effect === "glow") {
+      const thr = Math.round(Number(p.threshold ?? 0.45) * 255);
+      const op = Math.min(1, Math.max(0, Number(p.brightness ?? 0.85) / 1.5)).toFixed(4);
+      segs.push(`split[glow${idx}_base][glow${idx}_src];[glow${idx}_src]lutrgb=r='if(gte(val,${thr}),min(255,val-${thr}),0)',gblur=sigma=${Number(p.width ?? 18).toFixed(2)}:steps=2[glow${idx}_blur];[glow${idx}_base][glow${idx}_blur]blend=all_mode=screen:all_opacity=${op}`);
+    } else if (n.effect === "shake") {
+      const amp = Math.round(Number(p.amplitude ?? 14));
+      segs.push(amp > 0 ? `pad=iw+${2 * amp}:ih+${2 * amp}:${amp}:${amp}:color=black,crop=iw-${2 * amp}:ih-${2 * amp}:x='${amp}+${amp}*sin(t*${(2 * Math.PI * Number(p.frequency ?? 6)).toFixed(2)})':y='${amp}+${amp}*cos(t*${(2.74 * Math.PI * Number(p.frequency ?? 6)).toFixed(2)})'` : "null");
+    } else if (n.effect === "flicker") {
+      segs.push(`eq=brightness='${Number(p.amplitude ?? 0.18).toFixed(4)}*sin(t*${(2 * Math.PI * Number(p.frequency ?? 8)).toFixed(2)})':eval=frame`);
+    } else if (n.effect === "lens_flare") {
+      const op = Math.min(1, Number(p.brightness ?? 0.95) * 0.65).toFixed(4);
+      segs.push(`split[lf${idx}_base][lf${idx}_tmp];[lf${idx}_tmp]drawbox=x=0:y=0:w=iw:h=ih:color=black@1:t=fill,gblur=sigma=16:steps=2[lf${idx}_flare];[lf${idx}_base][lf${idx}_flare]blend=all_mode=screen:all_opacity=${op}`);
+    } else if (n.effect === "film_damage") {
+      const mix = Number(p.mix ?? 0.75);
+      segs.push(`noise=alls=${(Number(p.grain ?? 28) * mix * 0.65).toFixed(2)}:allf=t+u,vignette=angle=${(0.15 + Number(p.vignette ?? 0.55) * mix * 0.72).toFixed(3)},eq=brightness='${(0.035 * mix).toFixed(4)}*sin(t*19.3)':eval=frame`);
+    } else if (n.effect === "chroma_aberration") {
+      const rad = (Number(p.angle ?? 15) * Math.PI) / 180;
+      const rh = Math.round(Number(p.spread ?? 8) * Math.cos(rad));
+      const rv = Math.round(Number(p.spread ?? 8) * Math.sin(rad));
+      segs.push(`rgbashift=rh=${rh}:rv=${rv}:bh=${-rh}:bv=${-rv}:edge=smear`);
+    }
+  });
+  if (needsRgb) segs.push(`format=${pixFmt}`);
+  const fg = segs.join(",");
+  const est = Number(Math.max(0.05, dur * (0.12 + totalWeight * 0.14) * (opts.use_gpu ? 0.38 : 1)).toFixed(2));
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: ["-vf", fg],
+    active_effects: active.map((n) => n.effect),
+    bypassed_count: (nodes || []).length - active.length,
+    normalized_nodes: nodes || [],
+    estimated_render_seconds: est,
+    realtime_factor: Number((dur / est).toFixed(2)),
+    complexity_tier: totalWeight <= 1.2 ? "light" : totalWeight <= 2.5 ? "medium" : "heavy",
+    warnings: []
+  };
+}
+
 export function createApiClient() {
   const cfg = typeof window !== "undefined" && window.__TAKTCUT_CONFIG__ ? window.__TAKTCUT_CONFIG__ : {};
   const apiBase = typeof cfg.apiBase === "string" ? cfg.apiBase.replace(/\/+$/, "") : "";
@@ -475,7 +538,15 @@ export function createApiClient() {
         const encoder = isProres ? "prores_ks" : body.profile === "master_hevc" ? "libx265" : "libx264";
         const pixFmt = isProres ? "yuv422p10le" : "yuv420p";
         const gop = Math.max(2, Math.round((2 * fpsNum) / fpsDen));
-        const vf = body.lut_path || body.cdl ? `lut3d=file='${body.lut_path || "studio_grade.cube"}':interp=tetrahedral,format=${pixFmt}` : null;
+        const vfParts = [];
+        if (Array.isArray(body.fx_stack) && body.fx_stack.length > 0) {
+          const compiledFx = compileFxClient(body.fx_stack, { pix_fmt: pixFmt, use_gpu: Boolean(body.prefer_hw) });
+          if (compiledFx.filtergraph) vfParts.push(compiledFx.filtergraph);
+        }
+        if (body.lut_path || body.cdl) {
+          vfParts.push(`lut3d=file='${body.lut_path || "studio_grade.cube"}':interp=tetrahedral,format=${pixFmt}`);
+        }
+        const vf = vfParts.length > 0 ? vfParts.join(",") : null;
         const af = body.target_lufs !== null && body.target_lufs !== undefined ? `loudnorm=I=${Number(body.target_lufs).toFixed(1)}:TP=-1.0:LRA=11.0` : null;
         const argv = ["ffmpeg", "-hide_banner", "-y", "-i", body.input_path, "-fps_mode", "cfr", "-r", body.fps || "25", "-c:v", encoder, "-pix_fmt", pixFmt, "-g", String(gop)];
         if (vf) argv.push("-vf", vf);
@@ -569,6 +640,18 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/update/check");
+    },
+    async getFxPresets() {
+      if (resolvedMode === "static-demo") {
+        return { presets: [], specs: {} };
+      }
+      return requestJson("/api/fx/presets");
+    },
+    async compileFx(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileFxClient(payload.nodes || [], payload);
+      }
+      return requestJson("/api/fx/compile", { method: "POST", body: payload });
     },
     async applyUpdate() {
       if (resolvedMode === "static-demo") {

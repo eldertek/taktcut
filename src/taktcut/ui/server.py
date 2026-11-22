@@ -26,6 +26,12 @@ from pydantic import ValidationError
 from taktcut import __version__
 from taktcut.color import bake_cdl_to_cube, parse_cdl_xml, parse_cube_lut
 from taktcut.drp import export_otio, load_timeline, validate_timeline
+from taktcut.fx import (
+    FX_PARAM_SPECS,
+    compile_fx_filtergraph,
+    get_fx_preset,
+    list_fx_presets,
+)
 from taktcut.models import (
     AscCdlParams,
     HardwareCapabilities,
@@ -346,6 +352,19 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/fx/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_fx_presets()],
+                    "specs": {
+                        fx: [s.model_dump(mode="json") for s in specs]
+                        for fx, specs in FX_PARAM_SPECS.items()
+                    },
+                },
+            )
+            return
+
         self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {route}"})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -600,12 +619,26 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             if caps is None:
                 raise RuntimeError(err or "ffmpeg unavailable")
 
+            fx_filtergraph: str | None = None
+            raw_fx = payload.get("fx_stack")
+            if isinstance(raw_fx, list) and len(raw_fx) > 0:
+                is_prores = profile == RenderProfile.PRORES_HQ
+                fx_pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
+                compiled_fx = compile_fx_filtergraph(
+                    raw_fx,
+                    pix_fmt=fx_pix_fmt,
+                    use_gpu=prefer_hw,
+                )
+                if compiled_fx.filtergraph:
+                    fx_filtergraph = compiled_fx.filtergraph
+
             plan = build_render_plan(
                 input_path=in_file,
                 output_path=out_file,
                 profile=profile,
                 fps=fps,
                 lut_path=lut_file,
+                fx_filtergraph=fx_filtergraph,
                 target_lufs=target_lufs,
                 prefer_hw=prefer_hw,
                 caps=caps,
@@ -619,6 +652,41 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 result = execute_render_plan(plan)
                 response["result"] = result.model_dump(mode="json")
             self._send_json(HTTPStatus.OK, response)
+            return
+
+        if route == "/api/fx/compile":
+            preset_id = payload.get("preset") or payload.get("preset_id")
+            if preset_id is not None:
+                if not isinstance(preset_id, str) or not preset_id.strip():
+                    raise ValueError("preset must be a non-empty string")
+                nodes: list[Any] = list(get_fx_preset(preset_id).nodes)
+            else:
+                raw_nodes = payload.get("nodes")
+                if raw_nodes is None:
+                    raw_nodes = payload.get("stack")
+                if raw_nodes is None:
+                    raw_nodes = payload.get("effects", [])
+                if not isinstance(raw_nodes, list):
+                    raise ValueError("'nodes' must be a list of FX node objects")
+                nodes = raw_nodes
+
+            duration_s = float(payload.get("duration_seconds", 10.0))
+            width_px = int(payload.get("width", 1920))
+            height_px = int(payload.get("height", 1080))
+            fps_val = float(payload.get("fps", 25.0))
+            pix_fmt = str(payload.get("pix_fmt", "yuv420p"))
+            use_gpu = bool(payload.get("use_gpu", False))
+
+            compiled = compile_fx_filtergraph(
+                nodes,
+                duration_seconds=duration_s,
+                width=width_px,
+                height=height_px,
+                fps=fps_val,
+                pix_fmt=pix_fmt,
+                use_gpu=use_gpu,
+            )
+            self._send_json(HTTPStatus.OK, compiled.model_dump(mode="json"))
             return
 
         if route == "/api/qa/verify":

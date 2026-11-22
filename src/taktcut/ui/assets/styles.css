@@ -340,6 +340,192 @@ body {
   min-width: 0;
 }
 
+/* FX WORKBENCH (SAPPHIRE LIBRARY + EFFECT CONTROLS + PROGRAM MONITOR) */
+.nle-fx-top {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 1px;
+  background: var(--bg-hairline);
+  min-width: 0;
+}
+
+.nle-fx-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.95fr);
+  gap: 1px;
+  background: var(--bg-hairline);
+  min-width: 0;
+}
+
+.fx-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.fx-preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 9px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  color: var(--text-primary);
+  text-align: left;
+  min-width: 0;
+}
+
+.fx-preset-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-amber);
+}
+
+.fx-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+}
+
+.fx-preset-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fx-preset-btn.is-active .fx-preset-name {
+  color: #f4a46b;
+}
+
+.fx-preset-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.fx-add-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.fx-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fx-empty-note {
+  padding: 12px;
+  background: var(--bg-workbench);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.fx-node-card {
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fx-node-card.is-bypassed {
+  opacity: 0.68;
+}
+
+.fx-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-inner);
+  flex-wrap: wrap;
+}
+
+.fx-node-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fx-node-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.fx-bypass-btn {
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.fx-bypass-btn.is-on {
+  border-color: var(--accent-amber);
+  background: var(--accent-amber);
+  color: #111114;
+}
+
+.btn-bypass-global.is-bypassed {
+  border-color: var(--status-warn);
+  background: var(--status-warn-soft);
+  color: #f0c056;
+}
+
+.fx-param-grid {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fx-param-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 70px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fx-param-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fx-color-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fx-color-input {
+  width: 38px;
+  height: 24px;
+  padding: 1px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
 .nle-pane {
   background: var(--bg-pane);
   display: flex;
@@ -987,6 +1173,8 @@ input[type="range"] {
   }
   .nle-color-top,
   .nle-color-bottom,
+  .nle-fx-top,
+  .nle-fx-bottom,
   .nle-qa-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1000,6 +1188,10 @@ input[type="range"] {
   .form-row-three,
   .nle-telemetry-bar {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .fx-param-row {
+    grid-template-columns: 92px minmax(0, 1fr) 62px;
+    gap: 6px;
   }
   .workspace-pill {
     max-width: 100%;
@@ -1022,6 +1214,8 @@ input[type="range"] {
   .btn,
   .btn-mini,
   .btn-chip,
+  .fx-bypass-btn,
+  .fx-color-input,
   .lang-btn,
   .input-control,
   .input-select,
@@ -1032,15 +1226,24 @@ input[type="range"] {
 
 @media (max-width: 480px) {
   .nle-pagedock {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: stretch;
     padding: 0;
     gap: 1px;
   }
   .page-tab {
+    flex: 1 1 70px;
     justify-content: center;
     padding: 8px 4px;
     font-size: 11px;
+    gap: 4px;
+  }
+  .fx-preset-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fx-param-row {
+    grid-template-columns: minmax(0, 1fr);
     gap: 4px;
   }
   .page-idx {

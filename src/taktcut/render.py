@@ -101,6 +101,7 @@ def build_render_plan(
     profile: RenderProfile = RenderProfile.WEB_H264,
     fps: RationalFrameRate | None = None,
     lut_path: Path | None = None,
+    fx_filtergraph: str | None = None,
     target_lufs: float | None = None,
     prefer_hw: bool = True,
     caps: HardwareCapabilities | None = None,
@@ -117,6 +118,8 @@ def build_render_plan(
     faststart = not is_prores
 
     vf_parts: list[str] = []
+    if fx_filtergraph:
+        vf_parts.append(fx_filtergraph)
     if lut_path is not None:
         vf_parts.append(build_rec709_lut_filter(lut_path, target_pix_fmt=pix_fmt))
     video_filter = ",".join(vf_parts) if vf_parts else None
