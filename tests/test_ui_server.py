@@ -964,6 +964,7 @@ import {{
   escapeFfmetadataValue,
   escapeXmlAttr,
   estimateRenderFileSize,
+  filterTimelineClips,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
   findAllCutJunctions,
@@ -2140,6 +2141,162 @@ assert.equal(lblProtoColor.doc, labelDocBase);
 const lblBadClip = setClipLabelColor(labelDocBase, "missing-clip", "amber");
 assert.equal(lblBadClip.changed, false);
 assert.equal(lblBadClip.doc, labelDocBase);
+
+// Timeline Index: filterTimelineClips(doc, {{ query, labelColor }})
+assert.deepEqual(filterTimelineClips(null), []);
+assert.deepEqual(filterTimelineClips({{ tracks: [] }}), []);
+
+const indexDoc = {{
+  name: "Index_Test_25p",
+  source_format: "drt",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [
+        {{
+          id: "v1-open",
+          name: "A001_Opening_Wide",
+          track_index: 1,
+          media_type: "video",
+          start_frame: 0,
+          duration_frames: 125,
+          label_color: "blue"
+        }},
+        {{
+          name: "A002_Studio_Broll",
+          track_index: 1,
+          media_type: "video",
+          start_frame: 125,
+          duration_frames: 100,
+          label_color: "teal"
+        }}
+      ]
+    }},
+    {{
+      index: 2,
+      kind: "video",
+      name: "V2",
+      clips: [
+        {{
+          id: "v2-gfx",
+          name: "GFX_LowerThird",
+          track_index: 2,
+          media_type: "video",
+          start_frame: 25,
+          duration_frames: 75,
+          label_color: "amber"
+        }}
+      ]
+    }},
+    {{
+      index: 1,
+      kind: "audio",
+      name: "A1",
+      clips: [
+        {{
+          id: "a1-vo",
+          name: "VO_Main_Intro",
+          track_index: 1,
+          media_type: "audio",
+          start_frame: 0,
+          duration_frames: 225,
+          label_color: "emerald"
+        }},
+        {{
+          id: "a1-rev",
+          name: "SFX_Review_Hit",
+          track_index: 1,
+          media_type: "audio",
+          start_frame: 150,
+          duration_frames: 50,
+          label_color: "rose"
+        }},
+        {{
+          id: "a1-plain",
+          name: "Room_Tone_Bed",
+          track_index: 1,
+          media_type: "audio",
+          start_frame: 225,
+          duration_frames: 100
+        }}
+      ]
+    }}
+  ],
+  markers: []
+}};
+
+const indexSnapBefore = JSON.stringify(indexDoc);
+const allIdx = filterTimelineClips(indexDoc);
+assert.equal(allIdx.length, 6);
+assert.deepEqual(
+  allIdx.map((c) => c.id),
+  ["v1-open", "a1-vo", "v2-gfx", "video:1:1", "a1-rev", "a1-plain"]
+);
+assert.deepEqual(allIdx[2], {{
+  id: "v2-gfx",
+  trackId: "V2",
+  trackKind: "video",
+  trackIndex: 2,
+  clipIndex: 0,
+  label: "GFX_LowerThird",
+  labelColor: "amber",
+  startFrames: 25,
+  durationFrames: 75,
+  startTimecode: "00:00:01:00"
+}});
+assert.equal(allIdx[3].trackId, "V1");
+assert.equal(allIdx[3].startTimecode, "00:00:05:00");
+assert.equal(allIdx[5].labelColor, "default");
+
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ query: "  broll " }}).map((c) => c.id),
+  ["video:1:1"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ labelColor: "blue" }}).map((c) => c.label),
+  ["A001_Opening_Wide"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ labelColor: "B-Roll" }}).map((c) => c.id),
+  ["video:1:1"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ labelColor: "VFX/GFX" }}).map((c) => c.id),
+  ["v2-gfx"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ labelColor: "Review" }}).map((c) => c.id),
+  ["a1-rev"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ labelColor: "Audio" }}).map((c) => c.id),
+  ["a1-vo"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ labelColor: "default" }}).map((c) => c.id),
+  ["a1-plain"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ labelColor: "all" }}).length,
+  6
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ query: "VO", labelColor: "emerald" }}).map((c) => c.id),
+  ["a1-vo"]
+);
+assert.deepEqual(
+  filterTimelineClips(indexDoc, {{ query: "VO", labelColor: "blue" }}),
+  []
+);
+assert.deepEqual(filterTimelineClips(indexDoc, {{ labelColor: "purple" }}), []);
+assert.deepEqual(filterTimelineClips(indexDoc, {{ labelColor: "__proto__" }}), []);
+assert.equal(JSON.stringify(indexDoc), indexSnapBefore);
 """
     proc = subprocess.run(
         [node, "--input-type=module"],
@@ -2685,6 +2842,41 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator("#bpm-grid-offset").fill("0.25")
                     page.locator("#bpm-grid-offset").press("Enter")
 
+                    # Verify Timeline Index search, color filter, selection, and i18n
+                    assert page.locator("#timeline-index-count").text_content() == "9 / 9"
+                    page.locator(
+                        '#timeline-index-color-filter [data-index-color="teal"]'
+                    ).click()
+                    assert page.locator("#timeline-index-count").text_content() == "1 / 9"
+                    page.locator("#btn-timeline-index-clear").click()
+                    assert page.locator("#timeline-index-count").text_content() == "9 / 9"
+
+                    page.locator("#timeline-index-search").fill("GFX")
+                    assert page.locator("#timeline-index-count").text_content() == "1 / 9"
+                    idx_row = page.locator("#timeline-index-list .timeline-index-row").first
+                    assert "GFX_LowerThird_Main" in (idx_row.text_content() or "")
+                    idx_row.click()
+                    assert page.locator("#program-frame-counter").text_content() == "25f / 500f"
+                    assert page.locator("#program-tc").text_content() == "00:00:01:00"
+                    assert "GFX_LowerThird_Main" in (
+                        page.locator("#timeline-selection-detail").text_content() or ""
+                    )
+
+                    page.locator("#timeline-index-search").fill("NO_MATCH_CLIP")
+                    assert page.locator("#timeline-index-count").text_content() == "0 / 9"
+                    page.locator("#lang-fr").click()
+                    assert (
+                        page.locator("#timeline-index-heading").text_content()
+                        == "Index Timeline"
+                    )
+                    assert (
+                        page.locator("#timeline-index-list .timeline-index-empty").text_content()
+                        == "Aucun plan correspondant"
+                    )
+                    page.locator("#lang-en").click()
+                    page.locator("#btn-timeline-index-clear").click()
+                    assert page.locator("#timeline-index-count").text_content() == "9 / 9"
+
                 if width == 375:
                     pill_box = page.locator(
                         '#clip-label-color-group [data-clip-label-color="blue"]'
@@ -2692,6 +2884,16 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert pill_box is not None and pill_box["height"] >= 44, (
                         f"Expected clip label pill >= 44px on mobile, got {pill_box}"
                     )
+                    for idx_selector in (
+                        "#timeline-index-search",
+                        "#btn-timeline-index-clear",
+                        '#timeline-index-color-filter [data-index-color="blue"]',
+                        "#timeline-index-list .timeline-index-row",
+                    ):
+                        box = page.locator(idx_selector).first.bounding_box()
+                        assert box is not None and box["height"] >= 44, (
+                            f"Expected {idx_selector} >= 44px on mobile, got {box}"
+                        )
                     page.locator("#btn-bpm-grid").click()
                     page.locator("#btn-timeline-add-marker").click()
                     mobile_overflow = page.evaluate(

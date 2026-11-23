@@ -1764,6 +1764,99 @@ export function setClipLabelColor(doc, clipId, colorId) {
   return { doc: nextDoc, clip: found.clip, changed: true };
 }
 
+function _resolveClipLabelColorFilter(rawColor) {
+  if (typeof rawColor !== "string") {
+    return { active: false, colorId: null };
+  }
+  const clean = rawColor.trim().toLowerCase();
+  if (!clean || clean === "all") {
+    return { active: false, colorId: null };
+  }
+  if (isValidClipLabelColor(clean)) {
+    return { active: true, colorId: clean };
+  }
+  for (const id of CLIP_LABEL_COLOR_IDS) {
+    const meta = CLIP_LABEL_COLORS[id];
+    if (
+      meta &&
+      (meta.label.toLowerCase() === clean || meta.label_fr.toLowerCase() === clean)
+    ) {
+      return { active: true, colorId: id };
+    }
+  }
+  return { active: true, colorId: null };
+}
+
+export function filterTimelineClips(doc, options = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) return [];
+  const opts = options && typeof options === "object" ? options : {};
+  const queryNeedle =
+    typeof opts.query === "string" ? opts.query.trim().toLowerCase() : "";
+  const colorFilter = _resolveClipLabelColorFilter(opts.labelColor);
+  if (colorFilter.active && colorFilter.colorId === null) {
+    return [];
+  }
+
+  const fps = doc.fps !== undefined ? doc.fps : 25;
+  const results = [];
+
+  for (const trk of doc.tracks) {
+    if (!trk || !Array.isArray(trk.clips)) continue;
+    const trackKind = trk.kind === "audio" ? "audio" : "video";
+    const trackIndex = Number.isFinite(Number(trk.index)) ? Number(trk.index) : 1;
+    const trackId = `${trackKind === "audio" ? "A" : "V"}${trackIndex}`;
+
+    for (let clipIndex = 0; clipIndex < trk.clips.length; clipIndex++) {
+      const clip = trk.clips[clipIndex];
+      if (!clip || typeof clip !== "object") continue;
+
+      const label = typeof clip.name === "string" ? clip.name : String(clip.name ?? "");
+      const labelColor = normalizeClipLabelColor(clip.label_color);
+
+      if (colorFilter.active && labelColor !== colorFilter.colorId) {
+        continue;
+      }
+      if (queryNeedle && !label.toLowerCase().includes(queryNeedle)) {
+        continue;
+      }
+
+      const rawStart = Number(clip.start_frame);
+      const startFrames = Number.isFinite(rawStart) ? Math.max(0, Math.round(rawStart)) : 0;
+      const rawDur = Number(clip.duration_frames);
+      const durationFrames = Number.isFinite(rawDur) ? Math.max(0, Math.round(rawDur)) : 0;
+      const id =
+        clip.id != null && String(clip.id) !== ""
+          ? String(clip.id)
+          : `${trackKind}:${trackIndex}:${clipIndex}`;
+      const startTimecode = framesToSmpteTimecode(startFrames, fps);
+
+      results.push({
+        id,
+        trackId,
+        trackKind,
+        trackIndex,
+        clipIndex,
+        label,
+        labelColor,
+        startFrames,
+        durationFrames,
+        startTimecode
+      });
+    }
+  }
+
+  results.sort((a, b) => {
+    if (a.startFrames !== b.startFrames) return a.startFrames - b.startFrames;
+    const kindOrderA = a.trackKind === "audio" ? 1 : 0;
+    const kindOrderB = b.trackKind === "audio" ? 1 : 0;
+    if (kindOrderA !== kindOrderB) return kindOrderA - kindOrderB;
+    if (a.trackIndex !== b.trackIndex) return a.trackIndex - b.trackIndex;
+    return a.clipIndex - b.clipIndex;
+  });
+
+  return results;
+}
+
 export function toggleTrackMuteInDocument(doc, trackKind, trackIndex) {
   if (!doc || !Array.isArray(doc.tracks)) return { doc, track: null, changed: false };
   const nextDoc = cloneTimelineDoc(doc);

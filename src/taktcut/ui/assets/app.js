@@ -79,6 +79,7 @@ import {
   deleteMarkerInDocument,
   estimateRenderFileSize,
   evaluateTimelineAudioLevels,
+  filterTimelineClips,
   findAdjacentCutForClip,
   findClipIndex,
   findMagneticSnap,
@@ -272,6 +273,8 @@ const state = {
   timelineRulerHeight: 36,
   timelineLabelColW: 118,
   timelineSelected: null,
+  timelineIndexQuery: "",
+  timelineIndexColor: "all",
   timelineZoom: 1,
   timelineTool: "select",
   timelineSnapEnabled: true,
@@ -500,6 +503,19 @@ function setLanguage(lang) {
   const clipLabelGroup = byId("clip-label-color-group");
   if (clipLabelGroup) {
     clipLabelGroup.setAttribute("aria-label", t("timeline.clipLabel.ariaGroup"));
+  }
+  const indexSearch = byId("timeline-index-search");
+  if (indexSearch) {
+    indexSearch.placeholder = t("timeline.index.searchPlaceholder");
+    indexSearch.setAttribute("aria-label", t("timeline.index.searchAria"));
+  }
+  const indexFilterGroup = byId("timeline-index-color-filter");
+  if (indexFilterGroup) {
+    indexFilterGroup.setAttribute("aria-label", t("timeline.index.filterAria"));
+  }
+  const indexClearBtn = byId("btn-timeline-index-clear");
+  if (indexClearBtn) {
+    indexClearBtn.setAttribute("aria-label", t("timeline.index.clearAria"));
   }
   updateTransportStatusUI();
   updateIoRangeUI();
@@ -801,6 +817,8 @@ function setTimelineData(payload) {
   state.timelineDoc = payload.document;
   state.timelineValidation = payload.validation;
   state.timelineSelected = null;
+  state.timelineIndexQuery = "";
+  state.timelineIndexColor = "all";
   state.timelineUndoStack = [];
   state.timelineRedoStack = [];
   state.timelineActiveSnapFrame = null;
@@ -870,6 +888,7 @@ function renderTimelineUI() {
     const rippleBtn = byId("btn-clip-ripple-delete");
     if (rippleBtn) rippleBtn.disabled = true;
     byId("timeline-issues-list").replaceChildren();
+    renderTimelineIndex();
     renderDeliverChaptersPreview();
     updateDeliverSizeEstimate();
     return;
@@ -911,6 +930,7 @@ function renderTimelineUI() {
   updateTimelineToolbarUI();
   renderTimelineSelection();
   renderTimelineIssues();
+  renderTimelineIndex();
   renderDeliverChaptersPreview();
   updateDeliverSizeEstimate();
   if (state.activeTab === "timeline") {
@@ -1758,6 +1778,7 @@ function renderTimelineSelection() {
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
     renderTimelineTransitionInspector();
+    syncTimelineIndexSelection();
     return;
   }
   if (sel.kind === "clip" || sel.kind === "transition") {
@@ -1798,6 +1819,7 @@ function renderTimelineSelection() {
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
     renderTimelineTransitionInspector();
+    syncTimelineIndexSelection();
     return;
   }
   const mkInfo = getSelectedMarkerInfo();
@@ -1815,6 +1837,125 @@ function renderTimelineSelection() {
   renderTimelineAudioInspector();
   renderTimelineRetimeInspector();
   renderTimelineTransitionInspector();
+  syncTimelineIndexSelection();
+}
+
+function getSelectedTimelineClipId() {
+  const info = getSelectedClipTrack();
+  if (!info || !info.clip) return null;
+  return info.clip.id != null && String(info.clip.id) !== ""
+    ? String(info.clip.id)
+    : `${info.ref.trackKind}:${info.ref.trackIndex}:${info.ref.clipIndex}`;
+}
+
+function syncTimelineIndexSelection() {
+  const list = byId("timeline-index-list");
+  if (!list) return;
+  const selectedId = getSelectedTimelineClipId();
+  for (const row of list.querySelectorAll("[data-index-clip-id]")) {
+    const isSel = Boolean(selectedId && row.getAttribute("data-index-clip-id") === selectedId);
+    row.classList.toggle("is-selected", isSel);
+    if (isSel) {
+      row.setAttribute("aria-current", "true");
+    } else {
+      row.removeAttribute("aria-current");
+    }
+  }
+}
+
+function selectClipFromTimelineIndex(entry) {
+  const doc = state.timelineDoc;
+  if (!doc || !entry) return false;
+  const found = findTrackAndClip(doc, entry.trackKind, entry.trackIndex, entry.clipIndex);
+  if (!found) return false;
+  stopPlayback();
+  state.timelineSelected = { kind: "clip", data: found.clip };
+  setPlayhead(entry.startFrames);
+  renderTimelineSelection();
+  return true;
+}
+
+function renderTimelineIndex() {
+  const list = byId("timeline-index-list");
+  if (!list) return;
+  const countEl = byId("timeline-index-count");
+  const clearBtn = byId("btn-timeline-index-clear");
+  const filterGroup = byId("timeline-index-color-filter");
+  const searchInput = byId("timeline-index-search");
+
+  if (searchInput && document.activeElement !== searchInput && searchInput.value !== state.timelineIndexQuery) {
+    searchInput.value = state.timelineIndexQuery;
+  }
+
+  if (filterGroup) {
+    for (const pill of filterGroup.querySelectorAll("[data-index-color]")) {
+      const colorId = pill.getAttribute("data-index-color") || "all";
+      const isAct = colorId === state.timelineIndexColor;
+      pill.classList.toggle("is-active", isAct);
+      pill.setAttribute("aria-pressed", isAct ? "true" : "false");
+    }
+  }
+
+  const hasActiveFilter =
+    Boolean(state.timelineIndexQuery.trim()) || state.timelineIndexColor !== "all";
+  if (clearBtn) {
+    clearBtn.disabled = !hasActiveFilter;
+  }
+
+  const doc = state.timelineDoc;
+  if (!doc) {
+    if (countEl) countEl.textContent = "0 / 0";
+    list.replaceChildren(dom("div", "timeline-index-empty mono", t("timeline.index.noTimeline")));
+    return;
+  }
+
+  const allClips = filterTimelineClips(doc);
+  const filtered = filterTimelineClips(doc, {
+    query: state.timelineIndexQuery,
+    labelColor: state.timelineIndexColor
+  });
+  if (countEl) {
+    countEl.textContent = `${filtered.length} / ${allClips.length}`;
+  }
+
+  if (filtered.length === 0) {
+    list.replaceChildren(dom("div", "timeline-index-empty mono", t("timeline.index.empty")));
+    return;
+  }
+
+  const selectedId = getSelectedTimelineClipId();
+  const rows = filtered.map((entry) => {
+    const isSel = Boolean(selectedId && entry.id === selectedId);
+    const btn = dom("button", `timeline-index-row${isSel ? " is-selected" : ""}`);
+    btn.type = "button";
+    btn.setAttribute("role", "listitem");
+    btn.setAttribute("data-index-clip-id", entry.id);
+    if (isSel) {
+      btn.setAttribute("aria-current", "true");
+    }
+    const colorLabel = t(`timeline.clipLabel.${entry.labelColor}`);
+    btn.title = `${entry.label} (${entry.trackId} | ${entry.startTimecode} | ${entry.durationFrames}f | ${colorLabel})`;
+    btn.setAttribute(
+      "aria-label",
+      `${entry.label}, ${entry.trackId}, ${entry.startTimecode}, ${entry.durationFrames}f, ${colorLabel}`
+    );
+
+    const swatch = dom("span", `clip-label-swatch is-${entry.labelColor}`);
+    swatch.setAttribute("aria-hidden", "true");
+    const trackBadge = dom("span", "nle-tag mono timeline-index-track", entry.trackId);
+    const nameEl = dom("span", "timeline-index-name mono", entry.label);
+    const metaEl = dom("span", "timeline-index-meta mono");
+    metaEl.replaceChildren(
+      dom("span", "timeline-index-tc", entry.startTimecode),
+      dom("span", "timeline-index-dur", `${entry.durationFrames}f`)
+    );
+
+    btn.replaceChildren(swatch, trackBadge, nameEl, metaEl);
+    btn.addEventListener("click", () => selectClipFromTimelineIndex(entry));
+    return btn;
+  });
+
+  list.replaceChildren(...rows);
 }
 
 function renderTimelineIssues() {
@@ -7964,6 +8105,48 @@ function wireTimelineClipLabelControls() {
   }
 }
 
+function wireTimelineIndexControls() {
+  const searchInput = byId("timeline-index-search");
+  const clearBtn = byId("btn-timeline-index-clear");
+  const filterGroup = byId("timeline-index-color-filter");
+
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      state.timelineIndexQuery = searchInput.value;
+      renderTimelineIndex();
+    });
+    searchInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && (state.timelineIndexQuery || searchInput.value)) {
+        ev.preventDefault();
+        state.timelineIndexQuery = "";
+        searchInput.value = "";
+        renderTimelineIndex();
+      }
+    });
+  }
+
+  if (filterGroup) {
+    for (const pill of filterGroup.querySelectorAll("[data-index-color]")) {
+      pill.addEventListener("click", () => {
+        const nextColor = pill.getAttribute("data-index-color") || "all";
+        state.timelineIndexColor = nextColor;
+        renderTimelineIndex();
+      });
+    }
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      state.timelineIndexQuery = "";
+      state.timelineIndexColor = "all";
+      if (searchInput) {
+        searchInput.value = "";
+      }
+      renderTimelineIndex();
+    });
+  }
+}
+
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   const updateBtn = byId("update-banner-btn");
@@ -8149,6 +8332,7 @@ function wireEvents() {
   wireClipTransformInspector();
   wireClipTransitionInspector();
   wireTimelineClipLabelControls();
+  wireTimelineIndexControls();
   wireTimelineMarkerAndBpmControls();
 
   // FX page events
