@@ -960,12 +960,14 @@ import {{
   createStillRecord,
   deleteMarkerInDocument,
   escapeFfmetadataValue,
+  escapeXmlAttr,
   estimateRenderFileSize,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
   findAllCutJunctions,
   findMagneticSnap,
   formatCmx3600Edl,
+  formatFcpxmlTimeline,
   formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
@@ -1881,9 +1883,155 @@ assert.equal(
     ""
   ].join("\\n")
 );
+
+// escapeXmlAttr & formatFcpxmlTimeline unit tests
+assert.equal(escapeXmlAttr(null), "");
+assert.equal(escapeXmlAttr(undefined), "");
+assert.equal(
+  escapeXmlAttr('A & B <"tag"> \\'ok\\''),
+  "A &amp; B &lt;&quot;tag&quot;&gt; &apos;ok&apos;"
+);
+
+const emptyFcpxml = formatFcpxmlTimeline(null);
+assert.ok(
+  emptyFcpxml.startsWith(
+    '<?xml version="1.0" encoding="UTF-8"?>\\n<!DOCTYPE fcpxml>\\n<fcpxml version="1.10">'
+  )
+);
+assert.ok(
+  emptyFcpxml.includes(
+    '<format id="r1" frameDuration="1/25s" width="1920" height="1080" />'
+  )
+);
+assert.ok(emptyFcpxml.includes('<project name="TaktCut_Timeline">'));
+assert.ok(
+  emptyFcpxml.includes('<sequence format="r1" duration="0s" tcStart="0s" tcFormat="NDF">')
+);
+assert.ok(emptyFcpxml.includes("<spine />"));
+
+const fcpxmlDoc = {{
+  name: 'Master & "Final" Cut',
+  fps: {{ num: 24000, den: 1001 }},
+  width: 3840,
+  height: 2160,
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [
+        {{
+          name: "Shot A & 1",
+          start_frame: 0,
+          duration_frames: 24,
+          source_in_frame: 0,
+          source_path: "/Volumes/Media/Reel A/Shot_A.mov",
+          enabled: true
+        }},
+        {{
+          name: "Disabled_Shot",
+          start_frame: 24,
+          duration_frames: 24,
+          source_in_frame: 0,
+          source_path: "/Volumes/Media/Disabled.mov",
+          enabled: false
+        }},
+        {{
+          name: "Shot A Reused",
+          start_frame: 48,
+          duration_frames: 48,
+          source_in_frame: 24,
+          source_path: "/Volumes/Media/Reel A/Shot_A.mov",
+          enabled: true
+        }},
+        {{
+          name: "Zero_Dur",
+          start_frame: 96,
+          duration_frames: 0,
+          source_in_frame: 0,
+          source_path: "/Volumes/Media/Zero.mov"
+        }}
+      ]
+    }},
+    {{
+      index: 1,
+      kind: "audio",
+      name: "A1",
+      clips: [
+        {{
+          name: "Narration",
+          start_frame: 0,
+          duration_frames: 96,
+          source_in_frame: 0,
+          source_path: "audio/vo_master.wav"
+        }}
+      ]
+    }}
+  ],
+  markers: [
+    {{
+      name: "Chapter <1>",
+      frame: 12,
+      duration_frames: 1,
+      note: 'Check "quote"'
+    }}
+  ]
+}};
+
+const fcpxmlOut = formatFcpxmlTimeline(fcpxmlDoc, 'Reel & <Show>');
+assert.ok(
+  fcpxmlOut.includes(
+    '<format id="r1" frameDuration="1001/24000s" width="3840" height="2160" />'
+  )
+);
+assert.ok(fcpxmlOut.includes('<event name="Reel &amp; &lt;Show&gt;">'));
+assert.ok(fcpxmlOut.includes('<project name="Reel &amp; &lt;Show&gt;">'));
+assert.ok(
+  fcpxmlOut.includes(
+    '<sequence format="r1" duration="96096/24000s" tcStart="0s" tcFormat="NDF">'
+  )
+);
+// Deduplicated assets: Shot_A.mov (r2) + vo_master.wav (r3), Disabled/Zero skipped
+assert.equal((fcpxmlOut.match(/<asset id="/g) || []).length, 2);
+assert.ok(fcpxmlOut.includes('src="file:///Volumes/Media/Reel%20A/Shot_A.mov"'));
+assert.ok(fcpxmlOut.includes('src="file:///audio/vo_master.wav"'));
+assert.ok(!fcpxmlOut.includes("Disabled.mov"));
+assert.ok(!fcpxmlOut.includes("Zero.mov"));
+// Gap between frame 24 and frame 48
+assert.ok(
+  fcpxmlOut.includes(
+    '<gap name="Gap" offset="24024/24000s" duration="24024/24000s" start="0s" />'
+  )
+);
+// Primary clips & connected audio & escaped marker
+assert.ok(
+  fcpxmlOut.includes(
+    '<asset-clip ref="r2" offset="0s" name="Shot A &amp; 1" start="0s" duration="24024/24000s">'
+  )
+);
+assert.ok(
+  fcpxmlOut.includes(
+    '<asset-clip ref="r3" lane="-1" offset="0s" name="Narration" ' +
+      'start="0s" duration="96096/24000s" />'
+  )
+);
+assert.ok(
+  fcpxmlOut.includes(
+    '<marker start="12012/24000s" duration="1001/24000s" ' +
+      'value="Chapter &lt;1&gt;" note="Check &quot;quote&quot;" />'
+  )
+);
+assert.ok(
+  fcpxmlOut.includes(
+    '<asset-clip ref="r2" offset="48048/24000s" name="Shot A Reused" ' +
+      'start="24024/24000s" duration="48048/24000s" />'
+  )
+);
 """
     proc = subprocess.run(
-        [node, "--input-type=module", "-e", script],
+        [node, "--input-type=module"],
+        input=script,
         capture_output=True,
         text=True,
         timeout=15,
@@ -2835,15 +2983,17 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     f"{deint_render_overflow}px"
                 )
 
-                # Verify Deliver Timeline Chapters preview & 1-click YouTube/FFMETADATA/EDL exports
+                # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
                 btn_ff = page.locator("#btn-export-ffmetadata")
                 btn_edl = page.locator("#btn-export-cmx-edl")
+                btn_fcpxml = page.locator("#btn-export-fcpxml")
                 assert chapters_preview.is_visible() is True
                 assert btn_yt.is_visible() is True
                 assert btn_ff.is_visible() is True
                 assert btn_edl.is_visible() is True
+                assert btn_fcpxml.is_visible() is True
                 chapters_text = chapters_preview.text_content() or ""
                 assert "00:00 Intro" in chapters_text
                 assert "00:01 Intro Title Cue" in chapters_text
@@ -2853,7 +3003,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator("#deliver-chapters-count").text_content() or ""
                 ) == expected_chp
                 if width <= 820:
-                    for chp_btn in (btn_yt, btn_ff, btn_edl):
+                    for chp_btn in (btn_yt, btn_ff, btn_edl, btn_fcpxml):
                         chp_box = chp_btn.bounding_box()
                         assert chp_box is not None and chp_box["height"] >= 44
 
@@ -2891,6 +3041,32 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert "* FROM CLIP NAME: " in edl_dl_content
                 edl_feedback = page.locator("#deliver-chapters-feedback").text_content() or ""
                 assert ".edl" in edl_feedback
+
+                with page.expect_download() as fcpxml_dl_info:
+                    btn_fcpxml.click()
+                fcpxml_dl = fcpxml_dl_info.value
+                assert fcpxml_dl.suggested_filename.endswith(".fcpxml")
+                fcpxml_dl_path = fcpxml_dl.path()
+                assert fcpxml_dl_path is not None
+                fcpxml_dl_content = Path(fcpxml_dl_path).read_text(encoding="utf-8")
+                expected_hdr = (
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    "<!DOCTYPE fcpxml>\n"
+                    '<fcpxml version="1.10">'
+                )
+                assert fcpxml_dl_content.startswith(expected_hdr)
+                assert "<resources>" in fcpxml_dl_content
+                assert '<format id="r1"' in fcpxml_dl_content
+                assert "<asset id=" in fcpxml_dl_content
+                assert "<library>" in fcpxml_dl_content
+                assert "<spine>" in fcpxml_dl_content
+                assert "<asset-clip " in fcpxml_dl_content
+                from taktcut.drp import parse_fcpxml
+                parsed_fcpxml = parse_fcpxml(Path(fcpxml_dl_path))
+                assert len(parsed_fcpxml.tracks) >= 1
+                assert len(parsed_fcpxml.tracks[0].clips) >= 1
+                fcpxml_feedback = page.locator("#deliver-chapters-feedback").text_content() or ""
+                assert ".fcpxml" in fcpxml_feedback
 
                 chapters_overflow = page.evaluate(
                     "() => document.documentElement.scrollWidth - window.innerWidth"
@@ -4085,6 +4261,7 @@ def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
         "btn-export-yt-chapters",
         "btn-export-ffmetadata",
         "btn-export-cmx-edl",
+        "btn-export-fcpxml",
     ):
         assert f'id="{elem_id}"' in html_text
 
@@ -4095,11 +4272,14 @@ def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
         "render.chapters.exportYt",
         "render.chapters.exportFfmeta",
         "render.chapters.exportEdl",
+        "render.chapters.exportFcpxml",
         "render.chapters.empty",
         "render.chapters.emptyEdl",
+        "render.chapters.emptyFcpxml",
         "render.chapters.exportedYt",
         "render.chapters.exportedFfmeta",
         "render.chapters.exportedEdl",
+        "render.chapters.exportedFcpxml",
     ):
         assert i18n_text.count(f'"{key}"') == 2
 

@@ -84,6 +84,7 @@ import {
   findMagneticSnap,
   findTrackAndClip,
   formatCmx3600Edl,
+  formatFcpxmlTimeline,
   formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
@@ -4691,6 +4692,7 @@ function renderDeliverChaptersPreview() {
   const ytBtn = byId("btn-export-yt-chapters");
   const ffBtn = byId("btn-export-ffmetadata");
   const edlBtn = byId("btn-export-cmx-edl");
+  const fcpxmlBtn = byId("btn-export-fcpxml");
   if (!previewEl) return;
 
   const { markers } = timelineDocToChapterInputs(state.timelineDoc);
@@ -4706,7 +4708,9 @@ function renderDeliverChaptersPreview() {
   }
   if (ytBtn) ytBtn.disabled = !hasChapters;
   if (ffBtn) ffBtn.disabled = !hasChapters;
-  if (edlBtn) edlBtn.disabled = countTimelineVideoClips(state.timelineDoc) === 0;
+  const hasVideoClips = countTimelineVideoClips(state.timelineDoc) > 0;
+  if (edlBtn) edlBtn.disabled = !hasVideoClips;
+  if (fcpxmlBtn) fcpxmlBtn.disabled = !hasVideoClips;
 }
 
 function getSafeTimelineStem() {
@@ -4761,6 +4765,25 @@ function exportCmx3600Edl() {
   const filename = `${getSafeTimelineStem()}.edl`;
   triggerBlobDownload(new Blob([content], { type: "text/plain; charset=utf-8" }), filename);
   const msg = t("render.chapters.exportedEdl")
+    .replace("{filename}", filename)
+    .replace("{count}", String(clipCount));
+  const feedbackEl = byId("deliver-chapters-feedback");
+  if (feedbackEl) feedbackEl.textContent = msg;
+  showBanner(msg, "success");
+}
+
+function exportFcpxmlTimeline() {
+  const clipCount = countTimelineVideoClips(state.timelineDoc);
+  if (clipCount === 0) {
+    showBanner(t("render.chapters.emptyFcpxml"), "error");
+    return;
+  }
+  const projectName =
+    state.timelineDoc && state.timelineDoc.name ? state.timelineDoc.name : "TaktCut_Timeline";
+  const content = formatFcpxmlTimeline(state.timelineDoc, projectName);
+  const filename = `${getSafeTimelineStem()}.fcpxml`;
+  triggerBlobDownload(new Blob([content], { type: "application/xml; charset=utf-8" }), filename);
+  const msg = t("render.chapters.exportedFcpxml")
     .replace("{filename}", filename)
     .replace("{count}", String(clipCount));
   const feedbackEl = byId("deliver-chapters-feedback");
@@ -8730,6 +8753,8 @@ function wireEvents() {
   if (exportFfmetaBtn) exportFfmetaBtn.addEventListener("click", exportFfmetadataChapters);
   const exportEdlBtn = byId("btn-export-cmx-edl");
   if (exportEdlBtn) exportEdlBtn.addEventListener("click", exportCmx3600Edl);
+  const exportFcpxmlBtn = byId("btn-export-fcpxml");
+  if (exportFcpxmlBtn) exportFcpxmlBtn.addEventListener("click", exportFcpxmlTimeline);
 
   // QA page events
   byId("qa-media-select").addEventListener("change", () => {

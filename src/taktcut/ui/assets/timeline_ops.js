@@ -2521,3 +2521,377 @@ export function formatCmx3600Edl(timelineDoc, title = "TAKTCUT_TIMELINE") {
 
   return lines.join("\n");
 }
+
+export function escapeXmlAttr(raw) {
+  if (raw === null || raw === undefined) return "";
+  return String(raw)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function gcdInt(a, b) {
+  let x = Math.abs(Math.round(a));
+  let y = Math.abs(Math.round(b));
+  while (y !== 0) {
+    const t = x % y;
+    x = y;
+    y = t;
+  }
+  return x || 1;
+}
+
+function resolveFcpxmlRationalFps(rawFps) {
+  if (rawFps && typeof rawFps === "object") {
+    const num = Math.round(Number(rawFps.num));
+    const den = Math.round(Number(rawFps.den || 1));
+    if (Number.isFinite(num) && num > 0 && Number.isFinite(den) && den > 0) {
+      return { num, den };
+    }
+    return { num: 25, den: 1 };
+  }
+  if (typeof rawFps === "string") {
+    const trimmed = rawFps.trim();
+    if (trimmed.includes("/")) {
+      const [nStr, dStr] = trimmed.split("/");
+      const num = Math.round(Number(nStr));
+      const den = Math.round(Number(dStr));
+      if (Number.isFinite(num) && num > 0 && Number.isFinite(den) && den > 0) {
+        return { num, den };
+      }
+      return { num: 25, den: 1 };
+    }
+  }
+  const val = Number(rawFps);
+  if (!Number.isFinite(val) || val <= 0) {
+    return { num: 25, den: 1 };
+  }
+  if (Math.abs(val - 24000 / 1001) < 0.01) return { num: 24000, den: 1001 };
+  if (Math.abs(val - 30000 / 1001) < 0.01) return { num: 30000, den: 1001 };
+  if (Math.abs(val - 60000 / 1001) < 0.01) return { num: 60000, den: 1001 };
+  if (Number.isInteger(val)) return { num: val, den: 1 };
+  const scaledNum = Math.round(val * 1000);
+  const g = gcdInt(scaledNum, 1000);
+  return { num: scaledNum / g, den: 1000 / g };
+}
+
+function formatFcpxmlRationalTime(frames, fpsRat) {
+  const safeFrames = Number.isFinite(Number(frames)) ? Math.max(0, Math.round(Number(frames))) : 0;
+  if (safeFrames === 0) return "0s";
+  return `${safeFrames * fpsRat.den}/${fpsRat.num}s`;
+}
+
+function toFcpxmlFileUri(rawPath, fallbackName) {
+  const trimmed = typeof rawPath === "string" ? rawPath.replace(/[\r\n]+/g, " ").trim() : "";
+  if (!trimmed) {
+    const safeName = String(fallbackName || "clip").replace(/[^A-Za-z0-9._-]/g, "_") || "clip";
+    return `file:///media/${safeName}`;
+  }
+  if (/^file:\/\//i.test(trimmed)) {
+    return trimmed.replace(/ /g, "%20");
+  }
+  const normalized = trimmed.replace(/\\/g, "/");
+  const encoded = normalized
+    .split("/")
+    .map((seg, idx) => (idx === 0 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
+    .join("/");
+  if (/^[A-Za-z]:\//.test(encoded)) return `file:///${encoded}`;
+  if (encoded.startsWith("/")) return `file://${encoded}`;
+  return `file:///${encoded}`;
+}
+
+export function formatFcpxmlTimeline(timelineDoc, projectName = "TaktCut_Timeline") {
+  const rawProj = typeof projectName === "string" ? projectName.replace(/[\r\n]+/g, " ").trim() : "";
+  const safeProjectName = rawProj || "TaktCut_Timeline";
+  const fpsRat = resolveFcpxmlRationalFps(timelineDoc && timelineDoc.fps !== undefined ? timelineDoc.fps : 25);
+  const frameDuration = `${fpsRat.den}/${fpsRat.num}s`;
+  const width =
+    timelineDoc && Number.isFinite(Number(timelineDoc.width)) && Number(timelineDoc.width) > 0
+      ? Math.round(Number(timelineDoc.width))
+      : 1920;
+  const height =
+    timelineDoc && Number.isFinite(Number(timelineDoc.height)) && Number(timelineDoc.height) > 0
+      ? Math.round(Number(timelineDoc.height))
+      : 1080;
+
+  const videoClips = [];
+  const audioClips = [];
+  if (timelineDoc && Array.isArray(timelineDoc.tracks)) {
+    for (const trk of timelineDoc.tracks) {
+      if (!trk || !Array.isArray(trk.clips)) continue;
+      const kind = trk.kind === "audio" ? "audio" : trk.kind === "video" ? "video" : "";
+      if (!kind) continue;
+      const trackIndex = Number.isFinite(Number(trk.index)) ? Number(trk.index) : 1;
+      trk.clips.forEach((clip, clipIdx) => {
+        if (!clip || clip.enabled === false) return;
+        const durFrames = Math.round(Number(clip.duration_frames) || 0);
+        if (!Number.isFinite(durFrames) || durFrames <= 0) return;
+        const recInFrame = Math.max(0, Math.round(Number(clip.start_frame) || 0));
+        const rawSrcIn =
+          clip.source_in_frame !== undefined
+            ? clip.source_in_frame
+            : clip.source_start_frame !== undefined
+              ? clip.source_start_frame
+              : 0;
+        const srcInFrame = Math.max(0, Math.round(Number(rawSrcIn) || 0));
+        const entry = {
+          clip,
+          kind,
+          trackIndex,
+          clipIdx,
+          recInFrame,
+          durFrames,
+          recOutFrame: recInFrame + durFrames,
+          srcInFrame,
+          srcOutFrame: srcInFrame + durFrames
+        };
+        if (kind === "video") {
+          videoClips.push(entry);
+        } else {
+          audioClips.push(entry);
+        }
+      });
+    }
+  }
+
+  const assetMap = new Map();
+  const assetList = [];
+  let nextAssetNum = 2;
+
+  const registerAsset = (item, fallbackIndex) => {
+    const { clip } = item;
+    const rawSource =
+      typeof clip.source_path === "string" && clip.source_path.trim()
+        ? clip.source_path.trim()
+        : typeof clip.media_ref === "string" && clip.media_ref.trim()
+          ? clip.media_ref.trim()
+          : "";
+    const leafName = rawSource ? rawSource.split(/[\\/]/).pop() : "";
+    const rawClipName =
+      typeof clip.name === "string" && clip.name.trim() ? clip.name : leafName;
+    const clipName =
+      String(rawClipName || "").replace(/[\r\n]+/g, " ").trim() || `CLIP_${String(fallbackIndex).padStart(3, "0")}`;
+    const srcUri = toFcpxmlFileUri(rawSource, clipName);
+    let asset = assetMap.get(srcUri);
+    const minDurationFrames = Math.max(
+      item.srcOutFrame,
+      Number.isFinite(Number(clip.source_duration_frames)) ? Math.round(Number(clip.source_duration_frames)) : 0
+    );
+    if (!asset) {
+      asset = {
+        id: `r${nextAssetNum}`,
+        name: leafName || clipName,
+        srcUri,
+        durationFrames: minDurationFrames,
+        hasVideo: item.kind === "video",
+        hasAudio: item.kind === "audio"
+      };
+      nextAssetNum += 1;
+      assetMap.set(srcUri, asset);
+      assetList.push(asset);
+    } else {
+      asset.durationFrames = Math.max(asset.durationFrames, minDurationFrames);
+      if (item.kind === "video") asset.hasVideo = true;
+      if (item.kind === "audio") asset.hasAudio = true;
+    }
+    return { asset, clipName };
+  };
+
+  videoClips.sort(
+    (a, b) => a.recInFrame - b.recInFrame || a.trackIndex - b.trackIndex || a.clipIdx - b.clipIdx
+  );
+  audioClips.sort(
+    (a, b) => a.recInFrame - b.recInFrame || a.trackIndex - b.trackIndex || a.clipIdx - b.clipIdx
+  );
+
+  const minVideoTrack =
+    videoClips.length > 0 ? Math.min(...videoClips.map((item) => item.trackIndex)) : 1;
+  const primaryClips = [];
+  const connectedClips = [];
+  let primaryCursor = 0;
+
+  videoClips.forEach((item, idx) => {
+    const resolved = registerAsset(item, idx + 1);
+    const enriched = { ...item, ...resolved };
+    if (item.trackIndex === minVideoTrack && item.recInFrame >= primaryCursor) {
+      primaryClips.push(enriched);
+      primaryCursor = item.recOutFrame;
+    } else {
+      const lane = item.trackIndex > minVideoTrack ? item.trackIndex - minVideoTrack : 1;
+      connectedClips.push({ ...enriched, lane });
+    }
+  });
+
+  audioClips.forEach((item, idx) => {
+    const resolved = registerAsset(item, videoClips.length + idx + 1);
+    const lane = -Math.max(1, item.trackIndex);
+    connectedClips.push({ ...item, ...resolved, lane });
+  });
+
+  const allTimelineClips = [...primaryClips, ...connectedClips];
+  const totalFrames = allTimelineClips.reduce(
+    (acc, item) => Math.max(acc, item.recOutFrame),
+    0
+  );
+
+  const spineItems = [];
+  let cursor = 0;
+  for (const item of primaryClips) {
+    if (item.recInFrame > cursor) {
+      spineItems.push({
+        type: "gap",
+        recInFrame: cursor,
+        durFrames: item.recInFrame - cursor,
+        recOutFrame: item.recInFrame,
+        srcInFrame: 0,
+        children: []
+      });
+    }
+    spineItems.push({
+      type: "clip",
+      ...item,
+      children: []
+    });
+    cursor = item.recOutFrame;
+  }
+
+  if (spineItems.length === 0 && totalFrames > 0) {
+    spineItems.push({
+      type: "gap",
+      recInFrame: 0,
+      durFrames: totalFrames,
+      recOutFrame: totalFrames,
+      srcInFrame: 0,
+      children: []
+    });
+  } else if (totalFrames > cursor && spineItems.length > 0) {
+    spineItems.push({
+      type: "gap",
+      recInFrame: cursor,
+      durFrames: totalFrames - cursor,
+      recOutFrame: totalFrames,
+      srcInFrame: 0,
+      children: []
+    });
+  }
+
+  for (const conn of connectedClips) {
+    const host =
+      spineItems.find((s) => conn.recInFrame >= s.recInFrame && conn.recInFrame < s.recOutFrame) ||
+      spineItems[spineItems.length - 1];
+    if (host) {
+      const localOffsetFrames = host.srcInFrame + (conn.recInFrame - host.recInFrame);
+      host.children.push({
+        kind: "connected",
+        conn,
+        localOffsetFrames: Math.max(0, localOffsetFrames)
+      });
+    }
+  }
+
+  if (timelineDoc && Array.isArray(timelineDoc.markers) && spineItems.length > 0) {
+    const startFrame = Number.isFinite(Number(timelineDoc.start_frame)) ? Number(timelineDoc.start_frame) : 0;
+    for (const mk of timelineDoc.markers) {
+      if (!mk) continue;
+      const mkFrame = Math.max(0, Math.round(Number(mk.frame || 0) - startFrame));
+      const mkDur = Math.max(1, Math.round(Number(mk.duration_frames || 1)));
+      const mkValue = String(mk.name || mk.label || "Marker").replace(/[\r\n]+/g, " ").trim() || "Marker";
+      const mkNote = typeof mk.note === "string" ? mk.note.replace(/[\r\n]+/g, " ").trim() : "";
+      const host =
+        spineItems.find((s) => mkFrame >= s.recInFrame && mkFrame < s.recOutFrame) ||
+        spineItems[spineItems.length - 1];
+      if (host) {
+        const localStart = host.srcInFrame + Math.max(0, mkFrame - host.recInFrame);
+        host.children.push({
+          kind: "marker",
+          localStart,
+          durFrames: mkDur,
+          value: mkValue,
+          note: mkNote
+        });
+      }
+    }
+  }
+
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<!DOCTYPE fcpxml>",
+    '<fcpxml version="1.10">',
+    "  <resources>",
+    `    <format id="r1" frameDuration="${frameDuration}" width="${width}" height="${height}" />`
+  ];
+
+  for (const asset of assetList) {
+    const mediaFlags = [
+      asset.hasVideo ? 'hasVideo="1"' : "",
+      asset.hasAudio ? 'hasAudio="1"' : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const formatAttr = asset.hasVideo ? ' format="r1"' : "";
+    const flagAttr = mediaFlags ? ` ${mediaFlags}` : "";
+    lines.push(
+      `    <asset id="${asset.id}" name="${escapeXmlAttr(asset.name)}" start="0s" duration="${formatFcpxmlRationalTime(asset.durationFrames, fpsRat)}"${flagAttr}${formatAttr}>`
+    );
+    lines.push(`      <media-rep kind="original-media" src="${escapeXmlAttr(asset.srcUri)}" />`);
+    lines.push("    </asset>");
+  }
+
+  lines.push("  </resources>");
+  lines.push("  <library>");
+  lines.push(`    <event name="${escapeXmlAttr(safeProjectName)}">`);
+  lines.push(`      <project name="${escapeXmlAttr(safeProjectName)}">`);
+  lines.push(
+    `        <sequence format="r1" duration="${formatFcpxmlRationalTime(totalFrames, fpsRat)}" tcStart="0s" tcFormat="NDF">`
+  );
+
+  if (spineItems.length === 0) {
+    lines.push("          <spine />");
+  } else {
+    lines.push("          <spine>");
+    for (const item of spineItems) {
+      const offsetStr = formatFcpxmlRationalTime(item.recInFrame, fpsRat);
+      const durStr = formatFcpxmlRationalTime(item.durFrames, fpsRat);
+      const startStr = formatFcpxmlRationalTime(item.srcInFrame, fpsRat);
+      const openTag =
+        item.type === "gap"
+          ? `<gap name="Gap" offset="${offsetStr}" duration="${durStr}" start="0s"`
+          : `<asset-clip ref="${item.asset.id}" offset="${offsetStr}" name="${escapeXmlAttr(item.clipName)}" start="${startStr}" duration="${durStr}"`;
+      if (item.children.length === 0) {
+        lines.push(`            ${openTag} />`);
+      } else {
+        lines.push(`            ${openTag}>`);
+        for (const ch of item.children) {
+          if (ch.kind === "connected") {
+            const c = ch.conn;
+            const cOff = formatFcpxmlRationalTime(ch.localOffsetFrames, fpsRat);
+            const cStart = formatFcpxmlRationalTime(c.srcInFrame, fpsRat);
+            const cDur = formatFcpxmlRationalTime(c.durFrames, fpsRat);
+            lines.push(
+              `              <asset-clip ref="${c.asset.id}" lane="${c.lane}" offset="${cOff}" name="${escapeXmlAttr(c.clipName)}" start="${cStart}" duration="${cDur}" />`
+            );
+          } else if (ch.kind === "marker") {
+            const mStart = formatFcpxmlRationalTime(ch.localStart, fpsRat);
+            const mDur = formatFcpxmlRationalTime(ch.durFrames, fpsRat);
+            const noteAttr = ch.note ? ` note="${escapeXmlAttr(ch.note)}"` : "";
+            lines.push(
+              `              <marker start="${mStart}" duration="${mDur}" value="${escapeXmlAttr(ch.value)}"${noteAttr} />`
+            );
+          }
+        }
+        lines.push(item.type === "gap" ? "            </gap>" : "            </asset-clip>");
+      }
+    }
+    lines.push("          </spine>");
+  }
+
+  lines.push("        </sequence>");
+  lines.push("      </project>");
+  lines.push("    </event>");
+  lines.push("  </library>");
+  lines.push("</fcpxml>");
+
+  return `${lines.join("\n")}\n`;
+}

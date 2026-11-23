@@ -3271,11 +3271,16 @@ input[type="range"] {
   }
   #panel-render .input-control,
   #panel-render .btn,
+  #panel-render .deliver-chapters-actions .btn,
   #panel-render .engine-btn,
   #panel-render .check-label,
   #panel-render .watermark-preset-btn,
   #panel-render .watermark-opacity-slider {
     min-height: 45px;
+  }
+  .deliver-chapters-actions .btn {
+    white-space: normal;
+    text-align: center;
   }
   #panel-render .check-label input[type="checkbox"] {
     width: 18px;
