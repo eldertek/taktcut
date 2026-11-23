@@ -2995,6 +2995,27 @@ export function rippleDeleteClipInDocument(doc, trackKind, trackIndex, clipIndex
   }
 
   trk.clips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+
+  if (Boolean(trk.sync_locked) && delDur > 0 && Array.isArray(nextDoc.tracks)) {
+    for (const otherTrk of nextDoc.tracks) {
+      if (otherTrk === trk || !Boolean(otherTrk.sync_locked)) continue;
+      otherTrk.clips = (otherTrk.clips || []).slice().sort(
+        (a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames
+      );
+      let prevEnd = docStart;
+      for (const otherClip of otherTrk.clips) {
+        if (otherClip.start_frame >= delEnd) {
+          const targetStart = Math.max(docStart, prevEnd, otherClip.start_frame - delDur);
+          if (targetStart !== otherClip.start_frame) {
+            otherClip.start_frame = targetStart;
+            shiftedCount += 1;
+          }
+        }
+        prevEnd = Math.max(prevEnd, otherClip.start_frame + (otherClip.duration_frames || 0));
+      }
+    }
+  }
+
   const focusClip = nextFocusClip || prevFocusClip || trk.clips[0] || null;
   return {
     doc: nextDoc,
@@ -6599,5 +6620,479 @@ export function compilePlanarTrackerFilterClient(raw, opts = {}) {
     uses_per_frame_eval: hasDynamic,
     keyframe_count: params.track_keyframes.length,
     params
+  };
+}
+
+export const ALLOWED_TIMELINE_TOOLS = ["select", "trim", "roll", "slip", "slide", "blade"];
+
+export function normalizeTimelineTool(raw) {
+  const cleaned = String(raw || "").trim().toLowerCase();
+  return ALLOWED_TIMELINE_TOOLS.includes(cleaned) ? cleaned : "select";
+}
+
+export function countSyncLockedTracks(doc) {
+  if (!doc || !Array.isArray(doc.tracks)) return 0;
+  return doc.tracks.reduce((acc, trk) => acc + (Boolean(trk && trk.sync_locked) ? 1 : 0), 0);
+}
+
+export function toggleTrackSyncLockInDocument(doc, trackKind, trackIndex) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return { doc, track: null, changed: false, syncLockedTracks: 0 };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = nextDoc.tracks.find((t) => t.kind === trackKind && t.index === trackIndex);
+  if (!trk) {
+    return { doc, track: null, changed: false, syncLockedTracks: countSyncLockedTracks(doc) };
+  }
+  trk.sync_locked = !Boolean(trk.sync_locked);
+  return {
+    doc: nextDoc,
+    track: trk,
+    changed: true,
+    syncLockedTracks: countSyncLockedTracks(nextDoc)
+  };
+}
+
+export function setAllTracksSyncLockInDocument(doc, enabled) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return { doc, changed: false, syncLockedTracks: 0 };
+  }
+  const targetFlag = Boolean(enabled);
+  const nextDoc = cloneTimelineDoc(doc);
+  let changed = false;
+  for (const trk of nextDoc.tracks) {
+    if (Boolean(trk.sync_locked) !== targetFlag) {
+      trk.sync_locked = targetFlag;
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return { doc, changed: false, syncLockedTracks: countSyncLockedTracks(doc) };
+  }
+  return {
+    doc: nextDoc,
+    changed: true,
+    syncLockedTracks: countSyncLockedTracks(nextDoc)
+  };
+}
+
+function _minTlDeltaForSourceIn(currentSourceIn, sourceFps, timelineFps, candidateMinTlDelta) {
+  const minCand = Math.round(candidateMinTlDelta);
+  if (minCand >= 0) return minCand;
+  const srcRate = sourceFps ? sourceFps.num / Math.max(1, sourceFps.den) : 1;
+  const tlRate = timelineFps ? timelineFps.num / Math.max(1, timelineFps.den) : 1;
+  if (!sourceFps || Math.abs(srcRate - tlRate) < 1e-6) {
+    return Math.max(minCand, -Math.max(0, currentSourceIn || 0));
+  }
+  let lo = minCand;
+  let hi = 0;
+  let best = 0;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const srcDelta = computeSourceFrameDelta(mid, sourceFps, timelineFps);
+    if ((currentSourceIn || 0) + srcDelta >= 0) {
+      best = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return best;
+}
+
+function _syncLockNegativeFloor(doc, sourceTrack, anchorFrame, proposedShift) {
+  if (proposedShift >= 0 || !Boolean(sourceTrack && sourceTrack.sync_locked)) {
+    return proposedShift;
+  }
+  let clamped = proposedShift;
+  const docStart = doc.start_frame || 0;
+  for (const trk of doc.tracks || []) {
+    if (trk === sourceTrack || !Boolean(trk.sync_locked)) continue;
+    let upstreamEnd = docStart;
+    let earliestDown = null;
+    for (const c of trk.clips || []) {
+      if (c.start_frame >= anchorFrame) {
+        if (earliestDown === null || c.start_frame < earliestDown) {
+          earliestDown = c.start_frame;
+        }
+      } else {
+        upstreamEnd = Math.max(upstreamEnd, c.start_frame + (c.duration_frames || 0));
+      }
+    }
+    if (earliestDown !== null) {
+      const maxNeg = upstreamEnd - earliestDown;
+      if (maxNeg > clamped) clamped = maxNeg;
+    }
+  }
+  return Math.min(0, clamped);
+}
+
+function _applySyncLockedRipple(doc, sourceTrack, anchorFrame, shiftFrames, excludeClip = null) {
+  if (shiftFrames === 0) return 0;
+  let shifted = 0;
+  const docStart = doc.start_frame || 0;
+  const srcLocked = Boolean(sourceTrack && sourceTrack.sync_locked);
+  for (const trk of doc.tracks || []) {
+    if (trk !== sourceTrack && !(srcLocked && Boolean(trk.sync_locked))) continue;
+    for (const c of trk.clips || []) {
+      if (excludeClip && c === excludeClip) continue;
+      if (c.start_frame >= anchorFrame) {
+        c.start_frame = Math.max(docStart, c.start_frame + shiftFrames);
+        shifted += 1;
+      }
+    }
+    if (Array.isArray(trk.clips)) {
+      trk.clips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+    }
+  }
+  return shifted;
+}
+
+export function rippleTrimClipInDocument(doc, trackKind, trackIndex, clipIndex, edge, deltaFrames) {
+  const delta = Math.round(Number(deltaFrames) || 0);
+  if (delta === 0) {
+    return {
+      doc,
+      clip: null,
+      changed: false,
+      deltaApplied: 0,
+      shiftedCount: 0,
+      syncLockedTracks: countSyncLockedTracks(doc),
+      detail: "Zero delta."
+    };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) {
+    return {
+      doc,
+      clip: null,
+      changed: false,
+      deltaApplied: 0,
+      shiftedCount: 0,
+      syncLockedTracks: countSyncLockedTracks(doc),
+      detail: "Target clip not found."
+    };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return {
+      doc,
+      clip: null,
+      changed: false,
+      deltaApplied: 0,
+      shiftedCount: 0,
+      syncLockedTracks: countSyncLockedTracks(doc),
+      detail: "Target clip not found."
+    };
+  }
+  const { trk, clip } = found;
+  const origDur = clip.duration_frames;
+  const origEnd = clip.start_frame + origDur;
+
+  if (edge === "right") {
+    const minDelta = 1 - origDur;
+    let effDelta = Math.max(minDelta, delta);
+    if (effDelta < 0) {
+      effDelta = _syncLockNegativeFloor(nextDoc, trk, origEnd, effDelta);
+    }
+    if (effDelta === 0) {
+      return {
+        doc,
+        clip: foundOrig.clip,
+        changed: false,
+        deltaApplied: 0,
+        shiftedCount: 0,
+        syncLockedTracks: countSyncLockedTracks(doc),
+        detail: "Ripple trim clamped at boundary."
+      };
+    }
+    clip.duration_frames = origDur + effDelta;
+    const shiftedCount = _applySyncLockedRipple(nextDoc, trk, origEnd, effDelta, clip);
+    return {
+      doc: nextDoc,
+      clip,
+      changed: true,
+      deltaApplied: effDelta,
+      shiftedCount,
+      syncLockedTracks: countSyncLockedTracks(nextDoc),
+      detail: `Ripple Out ${effDelta > 0 ? `+${effDelta}` : effDelta}f (dur=${clip.duration_frames}f)`
+    };
+  }
+
+  if (edge === "left") {
+    const maxPosDelta = origDur - 1;
+    const minNegDelta = _minTlDeltaForSourceIn(
+      clip.source_in_frame || 0,
+      clip.source_fps,
+      nextDoc.fps,
+      delta
+    );
+    let effDelta = Math.max(minNegDelta, Math.min(maxPosDelta, delta));
+    let rippleShift = -effDelta;
+    if (rippleShift < 0) {
+      rippleShift = _syncLockNegativeFloor(nextDoc, trk, origEnd, rippleShift);
+      effDelta = -rippleShift;
+    }
+    if (effDelta === 0) {
+      return {
+        doc,
+        clip: foundOrig.clip,
+        changed: false,
+        deltaApplied: 0,
+        shiftedCount: 0,
+        syncLockedTracks: countSyncLockedTracks(doc),
+        detail: "Ripple trim left clamped at source start or sync boundary."
+      };
+    }
+    const srcDelta = computeSourceFrameDelta(effDelta, clip.source_fps, nextDoc.fps);
+    clip.source_in_frame = Math.max(0, (clip.source_in_frame || 0) + srcDelta);
+    clip.duration_frames = origDur - effDelta;
+    const shiftedCount = _applySyncLockedRipple(nextDoc, trk, origEnd, rippleShift, clip);
+    return {
+      doc: nextDoc,
+      clip,
+      changed: true,
+      deltaApplied: effDelta,
+      shiftedCount,
+      syncLockedTracks: countSyncLockedTracks(nextDoc),
+      detail: `Ripple In ${effDelta > 0 ? `+${effDelta}` : effDelta}f (srcIn=${clip.source_in_frame}f, dur=${clip.duration_frames}f)`
+    };
+  }
+
+  return {
+    doc,
+    clip: null,
+    changed: false,
+    deltaApplied: 0,
+    shiftedCount: 0,
+    syncLockedTracks: countSyncLockedTracks(doc),
+    detail: "Invalid trim edge."
+  };
+}
+
+export function rollEditCutInDocument(doc, trackKind, trackIndex, leftClipIndex, deltaFrames) {
+  const delta = Math.round(Number(deltaFrames) || 0);
+  if (delta === 0) {
+    return { doc, leftClip: null, rightClip: null, changed: false, deltaApplied: 0, detail: "Zero delta." };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, leftClipIndex);
+  if (!foundOrig) {
+    return { doc, leftClip: null, rightClip: null, changed: false, deltaApplied: 0, detail: "Left clip not found." };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, leftClipIndex);
+  if (!found) {
+    return { doc, leftClip: null, rightClip: null, changed: false, deltaApplied: 0, detail: "Left clip not found." };
+  }
+  const { trk, clip: leftClip } = found;
+  if (leftClipIndex + 1 >= trk.clips.length) {
+    return { doc, leftClip: null, rightClip: null, changed: false, deltaApplied: 0, detail: "No adjacent incoming clip for roll edit." };
+  }
+  const rightClip = trk.clips[leftClipIndex + 1];
+  if (leftClip.start_frame + leftClip.duration_frames !== rightClip.start_frame) {
+    return { doc, leftClip: null, rightClip: null, changed: false, deltaApplied: 0, detail: "Clips are not adjacent." };
+  }
+
+  let minDelta = 1 - leftClip.duration_frames;
+  if (delta < 0) {
+    minDelta = _minTlDeltaForSourceIn(
+      rightClip.source_in_frame || 0,
+      rightClip.source_fps,
+      nextDoc.fps,
+      minDelta
+    );
+  }
+  const maxDelta = rightClip.duration_frames - 1;
+  const effDelta = Math.max(minDelta, Math.min(maxDelta, delta));
+  if (effDelta === 0) {
+    return { doc, leftClip: foundOrig.clip, rightClip: null, changed: false, deltaApplied: 0, detail: "Roll edit clamped at bounds." };
+  }
+  const srcDelta = computeSourceFrameDelta(effDelta, rightClip.source_fps, nextDoc.fps);
+  leftClip.duration_frames += effDelta;
+  rightClip.start_frame += effDelta;
+  rightClip.duration_frames -= effDelta;
+  rightClip.source_in_frame = Math.max(0, (rightClip.source_in_frame || 0) + srcDelta);
+  return {
+    doc: nextDoc,
+    leftClip,
+    rightClip,
+    changed: true,
+    deltaApplied: effDelta,
+    detail: `Roll ${effDelta > 0 ? `+${effDelta}` : effDelta}f (out=${leftClip.duration_frames}f | in=${rightClip.duration_frames}f)`
+  };
+}
+
+export function slipClipInDocument(doc, trackKind, trackIndex, clipIndex, deltaSourceFrames) {
+  const delta = Math.round(Number(deltaSourceFrames) || 0);
+  if (delta === 0) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Zero delta." };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Target clip not found." };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Target clip not found." };
+  }
+  const { clip } = found;
+  const curSrcIn = clip.source_in_frame || 0;
+  const newSrcIn = Math.max(0, curSrcIn + delta);
+  const effDelta = newSrcIn - curSrcIn;
+  if (effDelta === 0) {
+    return { doc, clip: foundOrig.clip, changed: false, deltaApplied: 0, detail: "Slip clamped at source frame 0." };
+  }
+  clip.source_in_frame = newSrcIn;
+  return {
+    doc: nextDoc,
+    clip,
+    changed: true,
+    deltaApplied: effDelta,
+    detail: `Slip ${effDelta > 0 ? `+${effDelta}` : effDelta}f (srcIn=${clip.source_in_frame}f)`
+  };
+}
+
+export function slideClipInDocument(doc, trackKind, trackIndex, clipIndex, deltaFrames) {
+  const delta = Math.round(Number(deltaFrames) || 0);
+  if (delta === 0) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Zero delta." };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Target clip not found." };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Target clip not found." };
+  }
+  const { trk, clip } = found;
+  const prevClip = clipIndex > 0 ? trk.clips[clipIndex - 1] : null;
+  const nextClip = clipIndex + 1 < trk.clips.length ? trk.clips[clipIndex + 1] : null;
+  const clipEnd = clip.start_frame + clip.duration_frames;
+  const leftAdj = Boolean(prevClip && prevClip.start_frame + prevClip.duration_frames === clip.start_frame);
+  const rightAdj = Boolean(nextClip && clipEnd === nextClip.start_frame);
+
+  let minDelta = (nextDoc.start_frame || 0) - clip.start_frame;
+  if (prevClip) {
+    if (leftAdj) {
+      minDelta = Math.max(minDelta, 1 - prevClip.duration_frames);
+    } else {
+      minDelta = Math.max(minDelta, prevClip.start_frame + prevClip.duration_frames - clip.start_frame);
+    }
+  }
+  if (nextClip && rightAdj && delta < 0) {
+    minDelta = _minTlDeltaForSourceIn(
+      nextClip.source_in_frame || 0,
+      nextClip.source_fps,
+      nextDoc.fps,
+      minDelta
+    );
+  }
+
+  let maxDelta = delta > 0 ? delta : 0;
+  if (nextClip) {
+    maxDelta = rightAdj ? nextClip.duration_frames - 1 : nextClip.start_frame - clipEnd;
+  }
+
+  const effDelta = Math.max(minDelta, Math.min(maxDelta, delta));
+  if (effDelta === 0) {
+    return { doc, clip: foundOrig.clip, changed: false, deltaApplied: 0, detail: "Slide clamped at neighbor or start boundary." };
+  }
+
+  if (prevClip && leftAdj) {
+    prevClip.duration_frames += effDelta;
+  }
+  clip.start_frame += effDelta;
+  if (nextClip && rightAdj) {
+    const srcDelta = computeSourceFrameDelta(effDelta, nextClip.source_fps, nextDoc.fps);
+    nextClip.start_frame += effDelta;
+    nextClip.duration_frames -= effDelta;
+    nextClip.source_in_frame = Math.max(0, (nextClip.source_in_frame || 0) + srcDelta);
+  }
+
+  return {
+    doc: nextDoc,
+    clip,
+    changed: true,
+    deltaApplied: effDelta,
+    detail: `Slide ${effDelta > 0 ? `+${effDelta}` : effDelta}f (start=${clip.start_frame}f)`
+  };
+}
+
+export function moveClipInDocument(doc, trackKind, trackIndex, clipIndex, deltaFrames) {
+  const delta = Math.round(Number(deltaFrames) || 0);
+  if (delta === 0) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Zero delta." };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Target clip not found." };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Target clip not found." };
+  }
+  const { trk, clip } = found;
+  const docStart = nextDoc.start_frame || 0;
+  const clipEnd = clip.start_frame + clip.duration_frames;
+  let prevEnd = docStart;
+  let nextStart = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < trk.clips.length; i++) {
+    if (i === clipIndex) continue;
+    const other = trk.clips[i];
+    const otherEnd = other.start_frame + other.duration_frames;
+    if (otherEnd <= clip.start_frame && otherEnd > prevEnd) prevEnd = otherEnd;
+    if (other.start_frame >= clipEnd && other.start_frame < nextStart) nextStart = other.start_frame;
+  }
+  const minDelta = prevEnd - clip.start_frame;
+  const maxDelta = Number.isFinite(nextStart) ? nextStart - clipEnd : delta;
+  const effDelta = Math.max(minDelta, Math.min(maxDelta, delta));
+  if (effDelta === 0) {
+    return { doc, clip: foundOrig.clip, changed: false, deltaApplied: 0, detail: "Move clamped at neighbor or start boundary." };
+  }
+  clip.start_frame += effDelta;
+  return {
+    doc: nextDoc,
+    clip,
+    changed: true,
+    deltaApplied: effDelta,
+    detail: `Move ${effDelta > 0 ? `+${effDelta}` : effDelta}f (start=${clip.start_frame}f)`
+  };
+}
+
+export function findAdjacentRollTarget(doc, trackKind, trackIndex, clipIndex, edge = "right") {
+  const found = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!found) return null;
+  const { trk, clip } = found;
+  if (edge === "left") {
+    if (clipIndex <= 0) return null;
+    const prevClip = trk.clips[clipIndex - 1];
+    if (prevClip.start_frame + prevClip.duration_frames !== clip.start_frame) return null;
+    return {
+      trackKind,
+      trackIndex,
+      leftClipIndex: clipIndex - 1,
+      rightClipIndex: clipIndex,
+      cutFrame: clip.start_frame,
+      leftClip: prevClip,
+      rightClip: clip
+    };
+  }
+  if (clipIndex + 1 >= trk.clips.length) return null;
+  const nextClip = trk.clips[clipIndex + 1];
+  const cutFrame = clip.start_frame + clip.duration_frames;
+  if (cutFrame !== nextClip.start_frame) return null;
+  return {
+    trackKind,
+    trackIndex,
+    leftClipIndex: clipIndex,
+    rightClipIndex: clipIndex + 1,
+    cutFrame,
+    leftClip: clip,
+    rightClip: nextClip
   };
 }

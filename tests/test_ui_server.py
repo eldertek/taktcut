@@ -873,12 +873,22 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert "\u2013" not in html_text and "\u2014" not in html_text
     for elem_id in (
         "btn-tool-select",
+        "btn-tool-trim",
+        "btn-tool-roll",
+        "btn-tool-slip",
+        "btn-tool-slide",
         "btn-tool-blade",
         "btn-timeline-split",
         "btn-timeline-snap",
+        "btn-timeline-sync-lock",
         "btn-timeline-undo",
         "btn-timeline-redo",
         "timeline-tool-badge",
+        "timeline-edit-nudge-dock",
+        "btn-nudge-edge-in",
+        "btn-nudge-edge-out",
+        "btn-nudge-m5",
+        "btn-nudge-p5",
         "wheel-lift",
         "wheel-gamma",
         "wheel-gain",
@@ -8084,6 +8094,209 @@ assert.ok(normClamp.crop_left_pct + normClamp.crop_right_pct <= 85.0);
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_timeline_slip_slide_roll_ripple_sync_lock_parity_and_playwright(tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    from taktcut.ui.samples import build_sample_timeline
+    from taktcut.ui.server import ASSETS_DIR
+
+    sample_doc = build_sample_timeline("clean").model_dump(mode="json")
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        # 1. Server API parity for /api/timeline/edit
+        status, _, body = _http_call(
+            f"{base_url}/api/timeline/edit",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "op": "ripple_trim",
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 0,
+                "edge": "right",
+                "delta_frames": 25,
+            },
+        )
+        assert status == 200
+        rip_res = json.loads(body.decode("utf-8"))
+        assert rip_res["changed"] is True
+        assert rip_res["delta_applied"] == 25
+        assert rip_res["document"]["tracks"][0]["clips"][0]["duration_frames"] == 150
+        assert rip_res["document"]["tracks"][0]["clips"][1]["start_frame"] == 150
+        # A1 is sync_locked -> VO_Feature_Main (start 125) and VO_Tagline_End (start 375) shift +25
+        assert rip_res["document"]["tracks"][2]["clips"][1]["start_frame"] == 150
+        assert rip_res["document"]["tracks"][2]["clips"][2]["start_frame"] == 400
+        # A2 is unlocked -> stays at 0
+        assert rip_res["document"]["tracks"][3]["clips"][0]["start_frame"] == 0
+
+        # Invalid op -> 400
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/timeline/edit",
+            method="POST",
+            payload={"document": sample_doc, "op": "bogus_op"},
+        )
+        assert bad_status == 400
+
+        # 2. Node.js parity: timeline_ops.js + demo_adapter.js offline mode
+        if shutil.which("node"):
+            ops_url = (ASSETS_DIR / "timeline_ops.js").as_uri()
+            demo_url = (ASSETS_DIR / "demo_adapter.js").as_uri()
+            node_script = (
+                "import assert from 'node:assert/strict';\n"
+                f"import {{ createApiClient }} from '{demo_url}';\n"
+                "import {\n"
+                "  rippleTrimClipInDocument,\n"
+                "  rollEditCutInDocument,\n"
+                "  slipClipInDocument,\n"
+                "  slideClipInDocument,\n"
+                "  toggleTrackSyncLockInDocument\n"
+                f"}} from '{ops_url}';\n"
+                f"const doc = {json.dumps(sample_doc)};\n"
+                "const r1 = rippleTrimClipInDocument(doc, 'video', 1, 0, 'right', 25);\n"
+                "assert.equal(r1.changed, true);\n"
+                "assert.equal(r1.doc.tracks[0].clips[1].start_frame, 150);\n"
+                "assert.equal(r1.doc.tracks[2].clips[1].start_frame, 150);\n"
+                "const roll1 = rollEditCutInDocument(doc, 'video', 1, 0, -15);\n"
+                "assert.equal(roll1.changed, true);\n"
+                "assert.equal(roll1.deltaApplied, -10);\n"
+                "assert.equal(roll1.doc.tracks[0].clips[0].duration_frames, 115);\n"
+                "assert.equal(roll1.doc.tracks[0].clips[1].start_frame, 115);\n"
+                "assert.equal(roll1.doc.tracks[0].clips[1].duration_frames, 110);\n"
+                "assert.equal(roll1.doc.tracks[0].clips[1].source_in_frame, 0);\n"
+                "const slip1 = slipClipInDocument(doc, 'video', 1, 0, -10);\n"
+                "assert.equal(slip1.changed, true);\n"
+                "assert.equal(slip1.doc.tracks[0].clips[0].source_in_frame, 14);\n"
+                "assert.equal(slip1.doc.tracks[0].clips[0].start_frame, 0);\n"
+                "const slide1 = slideClipInDocument(doc, 'video', 1, 1, 20);\n"
+                "assert.equal(slide1.changed, true);\n"
+                "assert.equal(slide1.doc.tracks[0].clips[0].duration_frames, 145);\n"
+                "assert.equal(slide1.doc.tracks[0].clips[1].start_frame, 145);\n"
+                "assert.equal(slide1.doc.tracks[0].clips[2].start_frame, 245);\n"
+                "const tog = toggleTrackSyncLockInDocument(doc, 'video', 2);\n"
+                "assert.equal(tog.syncLockedTracks, 3);\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const offlineApi = createApiClient();\n"
+                "const apiRes = await offlineApi.editTimeline({\n"
+                "  document: doc, op: 'ripple_trim', track_kind: 'video', track_index: 1,\n"
+                "  clip_index: 0, edge: 'right', delta_frames: 25\n"
+                "});\n"
+                "assert.equal(apiRes.changed, true);\n"
+                "assert.equal(apiRes.document.tracks[2].clips[1].start_frame, 150);\n"
+            )
+            proc = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed:\n{proc.stderr}\n{proc.stdout}"
+
+        # 3. Playwright E2E at 1440x900 and 375x812 + EN/FR
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                console_errors: list[str] = []
+                page.on(
+                    "console",
+                    lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+                )
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#timeline-index-list .timeline-index-row")
+
+                # Select first video clip A001_Opening_Wide (0..125f, srcIn 24f)
+                page.locator("#timeline-index-list .timeline-index-row").first.click()
+                page.wait_for_function(
+                    "() => !document.getElementById('btn-nudge-p5')?.disabled"
+                )
+
+                # Switch to Slip (Y) via keyboard and nudge +5f -> srcIn 29f
+                page.keyboard.press("y")
+                assert page.locator("#btn-tool-slip").get_attribute("aria-pressed") == "true"
+                page.click("#btn-nudge-p5")
+                page.wait_for_function(
+                    "() => document.getElementById('timeline-edit-nudge-readout')"
+                    "?.textContent?.includes('SrcIn 29f')"
+                )
+
+                # Switch to Roll (R) and nudge Out +5f -> 130f
+                page.keyboard.press("r")
+                assert page.locator("#btn-tool-roll").get_attribute("aria-pressed") == "true"
+                page.click("#btn-nudge-p5")
+                page.wait_for_function(
+                    "() => document.getElementById('timeline-edit-nudge-readout')"
+                    "?.textContent?.includes('Dur 130f')"
+                )
+
+                # Switch to Ripple (T) and nudge +5f -> timeline duration extends 500f -> 505f
+                page.keyboard.press("t")
+                assert page.locator("#btn-tool-trim").get_attribute("aria-pressed") == "true"
+                page.click("#btn-nudge-p5")
+                page.wait_for_function(
+                    "() => document.getElementById('program-frame-counter')"
+                    "?.textContent?.includes('/ 505f')"
+                )
+
+                # Toggle Sync Lock all on/off via toolbar button and undo back
+                page.click("#btn-timeline-sync-lock")
+                page.wait_for_function(
+                    "() => document.getElementById('timeline-sync-lock-pill')"
+                    "?.textContent === '4/4 SYNC'"
+                )
+
+                # Switch to FR and check clean French labels
+                page.click("#lang-fr")
+                assert "Propagation" in (page.locator("#btn-tool-trim").text_content() or "")
+                assert "Glissé" in (page.locator("#btn-tool-slip").text_content() or "")
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 touch target & zero horizontal overflow check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in (
+                    "btn-tool-select",
+                    "btn-tool-trim",
+                    "btn-tool-roll",
+                    "btn-tool-slip",
+                    "btn-tool-slide",
+                    "btn-timeline-sync-lock",
+                    "btn-nudge-m5",
+                    "btn-nudge-p5",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
 
 
 

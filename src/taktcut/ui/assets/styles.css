@@ -1065,6 +1065,8 @@ body {
 
 .nle-timeline-dock .pane-body-tight {
   flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   background: #1a1a1d;
@@ -2173,6 +2175,7 @@ body {
 }
 
 .pane-header {
+  flex: 0 0 auto;
   min-height: 30px;
   padding: 4px 10px;
   background: var(--bg-header);
@@ -3034,6 +3037,7 @@ input[type="file"]::file-selector-button:hover {
 .tl-tool-btn,
 .tl-action-btn,
 .tl-snap-btn,
+.tl-sync-btn,
 .tl-marker-btn,
 .tl-bpm-btn,
 .tl-history-btn {
@@ -3053,16 +3057,66 @@ input[type="file"]::file-selector-button:hover {
   color: #ffd8a8;
 }
 
+#btn-tool-roll.is-active {
+  background: rgba(57, 197, 207, 0.16);
+  border-color: #39c5cf;
+  color: #8de8ef;
+}
+
+#btn-tool-slip.is-active {
+  background: rgba(255, 209, 102, 0.16);
+  border-color: #ffd166;
+  color: #ffe69c;
+}
+
+#btn-tool-slide.is-active {
+  background: rgba(94, 234, 212, 0.16);
+  border-color: #5eead4;
+  color: #99f6e4;
+}
+
 #btn-tool-blade.is-active {
   background: var(--status-fail-soft);
   border-color: var(--status-fail);
   color: #ffb3af;
 }
 
-.tl-snap-btn.is-active {
+.tl-snap-btn.is-active,
+.tl-sync-btn.is-active {
   background: rgba(57, 197, 207, 0.16);
   border-color: #39c5cf;
   color: #8de8ef;
+}
+
+.edit-nudge-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+}
+
+.edit-nudge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.edit-nudge-edge-group,
+.edit-nudge-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.edit-nudge-edge-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #ffd8a8;
 }
 
 .tl-bpm-btn.is-active {
@@ -6210,6 +6264,18 @@ input[type="range"] {
     justify-content: flex-start;
     padding: 6px 10px;
     font-size: 11px;
+  }
+  .tl-tool-btn,
+  .tl-action-btn,
+  .tl-snap-btn,
+  .tl-sync-btn,
+  .tl-marker-btn,
+  .tl-bpm-btn,
+  .tl-history-btn,
+  .edit-nudge-edge-btn,
+  .edit-nudge-step-btn {
+    min-width: 44px;
+    min-height: 44px;
   }
   #timeline-index-panel .timeline-index-search-row .input-control,
   #timeline-index-panel .timeline-index-clear-btn {

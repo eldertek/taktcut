@@ -3621,6 +3621,28 @@ export function drawProgramMonitorCanvas(
     drawSplitWipeOverlay(ctx, fx, fy, frameW, frameH, wipeGeom, splitWipeState);
   }
 
+  if (renderOpts && renderOpts.trimHud && renderOpts.trimHud.label) {
+    const hud = renderOpts.trimHud;
+    const hudText = hud.detail ? `${hud.label}  |  ${hud.detail}` : hud.label;
+    ctx.save();
+    ctx.font = "700 10.5px ui-monospace, monospace";
+    const textW = ctx.measureText(hudText).width;
+    const boxW = Math.min(frameW - 16, Math.max(110, textW + 20));
+    const boxH = 22;
+    const boxX = fx + (frameW - boxW) * 0.5;
+    const boxY = fy + frameH - boxH - 10;
+    ctx.fillStyle = "rgba(14, 15, 19, 0.92)";
+    roundRectPath(ctx, boxX, boxY, boxW, boxH, 3);
+    ctx.fill();
+    ctx.strokeStyle = hud.color || "#f59e0b";
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+    ctx.fillStyle = hud.color || "#ffd8a8";
+    ctx.textAlign = "center";
+    ctx.fillText(hudText, fx + frameW * 0.5, boxY + 14.5, boxW - 12);
+    ctx.restore();
+  }
+
   ctx.restore();
 
   // Frame border
@@ -3825,7 +3847,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     };
   }
 
-  const labelColW = width < 480 ? 58 : 118;
+  const labelColW = width < 480 ? 74 : 136;
   const timelineX = labelColW;
   const timelineW = Math.max(120, width - labelColW - 10);
   const zoom = opts && opts.zoom ? opts.zoom : 1;
@@ -4038,12 +4060,14 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.fillText(tName, 33, rowY + 25);
     }
 
-    // Track Mute (M) and Solo (S) buttons on label rail
+    // Track Mute (M), Solo (S), and Sync Lock (L) buttons on label rail
     const msBtnW = width < 480 ? 13 : 16;
     const msBtnH = 18;
     const msBtnY = rowY + 13;
-    const muteX = width < 480 ? 28 : 79;
-    const soloX = width < 480 ? 43 : 97;
+    const muteX = width < 480 ? 27 : 79;
+    const soloX = width < 480 ? 42 : 97;
+    const syncX = width < 480 ? 57 : 115;
+    const isSyncLocked = Boolean(trk.sync_locked);
 
     ctx.fillStyle = isDirectMuted ? "#e5534b" : "#19191c";
     roundRectPath(ctx, muteX, msBtnY, msBtnW, msBtnH, 2);
@@ -4063,6 +4087,14 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.fillStyle = isSolo ? "#111114" : "#8e8e98";
     ctx.fillText("S", soloX + (width < 480 ? 3.5 : 4.5), msBtnY + 12);
 
+    ctx.fillStyle = isSyncLocked ? "rgba(57, 197, 207, 0.24)" : "#19191c";
+    roundRectPath(ctx, syncX, msBtnY, msBtnW, msBtnH, 2);
+    ctx.fill();
+    ctx.strokeStyle = isSyncLocked ? "#39c5cf" : "#34343c";
+    ctx.stroke();
+    ctx.fillStyle = isSyncLocked ? "#8de8ef" : "#6e6e78";
+    ctx.fillText("L", syncX + (width < 480 ? 3.8 : 4.8), msBtnY + 12);
+
     hitboxes.push({
       kind: "track_mute",
       x: muteX,
@@ -4076,6 +4108,16 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     hitboxes.push({
       kind: "track_solo",
       x: soloX,
+      y: msBtnY,
+      w: msBtnW,
+      h: msBtnH,
+      trackKind: trk.kind,
+      trackIndex: trk.index,
+      data: trk
+    });
+    hitboxes.push({
+      kind: "track_sync_lock",
+      x: syncX,
       y: msBtnY,
       w: msBtnW,
       h: msBtnH,
@@ -4267,19 +4309,37 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         ctx.stroke();
       }
 
-      // Trim handle brackets on selected or hovered trim edge
+      // Trim / Roll / Slip / Slide handle brackets on selected or hovered clip
+      const activeTool = (opts && opts.tool) || "select";
       const trimHandleW = drawW >= 12 ? Math.min(8, Math.max(4, drawW * 0.22)) : 0;
       if (trimHandleW > 0 && (isSelected || isTrimClip)) {
         const leftActive = isTrimClip && trimTarget.edge === "left";
         const rightActive = isTrimClip && trimTarget.edge === "right";
+        const isRippleTool = activeTool === "trim";
+        const isRollTool = activeTool === "roll";
+        const bracketCol = isRollTool
+          ? "#39c5cf"
+          : isRippleTool
+            ? "#f59e0b"
+            : "#ffd166";
         if (isSelected || leftActive) {
-          ctx.fillStyle = leftActive ? "#ffd166" : "rgba(255, 216, 168, 0.72)";
+          ctx.fillStyle = leftActive ? bracketCol : "rgba(255, 216, 168, 0.72)";
           ctx.fillRect(drawX + 1, clipY + 2, leftActive ? 3 : 2, clipH - 4);
         }
         if (isSelected || rightActive) {
-          ctx.fillStyle = rightActive ? "#ffd166" : "rgba(255, 216, 168, 0.72)";
+          ctx.fillStyle = rightActive ? bracketCol : "rgba(255, 216, 168, 0.72)";
           ctx.fillRect(drawX + drawW - (rightActive ? 4 : 3), clipY + 2, rightActive ? 3 : 2, clipH - 4);
         }
+      }
+      if (isSelected && (activeTool === "slip" || activeTool === "slide") && drawW >= 24) {
+        ctx.save();
+        ctx.strokeStyle = activeTool === "slip" ? "#ffd166" : "#5eead4";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash(activeTool === "slip" ? [4, 3] : [2, 2]);
+        roundRectPath(ctx, drawX + 1, clipY + 1, drawW - 2, clipH - 2, 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
       }
 
       const retimeNorm = normalizeClipRetime(clip);
@@ -4928,6 +4988,28 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.restore();
   }
 
+  // Active Ripple / Roll / Slip / Slide Drag Readout Pill
+  if (opts && opts.activeEditHud && opts.activeEditHud.label) {
+    const hud = opts.activeEditHud;
+    const text = hud.detail ? `${hud.label} | ${hud.detail}` : hud.label;
+    ctx.save();
+    ctx.font = "700 9px ui-monospace, monospace";
+    const tw = Math.min(timelineW - 8, ctx.measureText(text).width + 12);
+    const pillX = Math.max(
+      timelineX + 4,
+      Math.min(timelineX + timelineW - tw - 4, (hud.x || timelineX + 40) - tw / 2)
+    );
+    const pillY = Math.max(rulerHeight + 2, (hud.y || rulerHeight + 18) - 16);
+    ctx.fillStyle = "rgba(14, 15, 19, 0.94)";
+    ctx.fillRect(pillX, pillY, tw, 15);
+    ctx.strokeStyle = hud.color || "#f59e0b";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pillX, pillY, tw, 15);
+    ctx.fillStyle = hud.color || "#ffd8a8";
+    ctx.fillText(text, pillX + 6, pillY + 10.5, tw - 10);
+    ctx.restore();
+  }
+
   return {
     hitboxes,
     frameToX,
@@ -4962,7 +5044,7 @@ export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
     };
   }
 
-  const labelColW = width < 480 ? 58 : 118;
+  const labelColW = width < 480 ? 74 : 136;
   const timelineX = labelColW;
   const timelineW = Math.max(120, width - labelColW - 10);
   const tracks = Array.isArray(doc.tracks) ? doc.tracks : [];

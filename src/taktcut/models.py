@@ -1294,6 +1294,7 @@ class TimelineTrack(BaseModel):
     muted: bool = False
     solo: bool = False
     rec_armed: bool = False
+    sync_locked: bool = False
     volume_db: float = Field(default=0.0, ge=TRACK_VOLUME_DB_MIN, le=TRACK_VOLUME_DB_MAX)
     pan: float = Field(default=0.0, ge=TRACK_PAN_MIN, le=TRACK_PAN_MAX)
     clips: list[TimelineClip] = Field(default_factory=list)
@@ -1303,11 +1304,11 @@ class TimelineTrack(BaseModel):
     def _validate_track_mixer_float(cls, raw: Any, info: Any) -> float:
         return _check_finite_number(raw, str(info.field_name))
 
-    @field_validator("rec_armed", mode="before")
+    @field_validator("rec_armed", "sync_locked", mode="before")
     @classmethod
-    def _validate_rec_armed(cls, raw: Any) -> bool:
+    def _validate_track_bool_flags(cls, raw: Any, info: Any) -> bool:
         if not isinstance(raw, bool):
-            raise ValueError(f"rec_armed must be a boolean, got {raw!r}")
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
         return raw
 
 

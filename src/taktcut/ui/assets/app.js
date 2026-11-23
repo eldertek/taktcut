@@ -126,6 +126,7 @@ import {
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
+  countSyncLockedTracks,
   createDefaultColorCurves,
   createDefaultColorNodeTree,
   createDefaultPowerWindow,
@@ -145,6 +146,7 @@ import {
   filterMediaPoolEntries,
   filterTimelineClips,
   findAdjacentCutForClip,
+  findAdjacentRollTarget,
   findClipIndex,
   findMagneticSnap,
   findTrackAndClip,
@@ -176,6 +178,7 @@ import {
   isPointerOnSplitWipeDivider,
   isPowerWindowActive,
   isTrackAudiblyMuted,
+  moveClipInDocument,
   moveColorNodeInTree,
   normalizeAutoDuckParams,
   normalizeClipAudio,
@@ -195,6 +198,7 @@ import {
   normalizeMasterBusState,
   normalizePowerWindow,
   normalizeTransformHexColor,
+  normalizeTimelineTool,
   normalizeRetimeProcess,
   normalizeRetimeRampPoints,
   normalizeRetimeRampPreset,
@@ -208,11 +212,16 @@ import {
   resolveSourceTapeFrame,
   resolveTransformKeyframeBezier,
   rippleDeleteClipInDocument,
+  rippleTrimClipInDocument,
+  rollEditCutInDocument,
   sanitizeStillDataUrl,
   selectColorNodeInTree,
   serializeColorNodeForApi,
+  setAllTracksSyncLockInDocument,
   setClipLabelColor,
   setInOutRange,
+  slideClipInDocument,
+  slipClipInDocument,
   smartInsertClipInDocument,
   splitClipInDocument,
   splitClipsAtPlayhead,
@@ -223,6 +232,7 @@ import {
   toggleTrackArmInDocument,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
+  toggleTrackSyncLockInDocument,
   trimClipInDocument,
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
@@ -399,6 +409,9 @@ const state = {
   timelineHoverFade: null,
   timelineActiveFade: null,
   timelineHoverTransition: null,
+  timelineActiveEditHud: null,
+  timelineNudgeEdge: "right",
+  timelineLastEditReadout: "",
   timelineDragFixedMaxFrame: null,
   timelineUndoStack: [],
   timelineRedoStack: [],
@@ -1067,7 +1080,8 @@ function redrawActiveCanvases() {
         showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay),
         dveOverlay: Boolean(state.dveOverlay),
         dveSplitGrid: Boolean(state.dveSplitGrid),
-        selectedDveClip: selVideoCtx ? selVideoCtx.clip : null
+        selectedDveClip: selVideoCtx ? selVideoCtx.clip : null,
+        trimHud: state.timelineActiveEditHud
       }
     );
     const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
@@ -1108,6 +1122,7 @@ function redrawActiveCanvases() {
         hoverFade: state.timelineHoverFade,
         activeFade: state.timelineActiveFade,
         hoverTransition: state.timelineHoverTransition,
+        activeEditHud: state.timelineActiveEditHud,
         fixedMaxFrame: state.timelineDragFixedMaxFrame,
         ioRange: state.ioRange
       }
@@ -1472,6 +1487,27 @@ function toggleTrackArmAction(trackKind, trackIndex) {
   if (!state.timelineDoc) return;
   const res = toggleTrackArmInDocument(state.timelineDoc, trackKind, trackIndex);
   if (!res.changed) return;
+  commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
+}
+
+function toggleTrackSyncLockAction(trackKind, trackIndex) {
+  if (!state.timelineDoc) return;
+  const res = toggleTrackSyncLockInDocument(state.timelineDoc, trackKind, trackIndex);
+  if (!res.changed) return;
+  state.timelineLastEditReadout = `${trackKind === "audio" ? "A" : "V"}${trackIndex} Sync Lock ${
+    res.track && res.track.sync_locked ? "ON" : "OFF"
+  }`;
+  commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
+}
+
+function toggleAllTracksSyncLockAction() {
+  if (!state.timelineDoc || !Array.isArray(state.timelineDoc.tracks)) return;
+  const total = state.timelineDoc.tracks.length;
+  const locked = countSyncLockedTracks(state.timelineDoc);
+  const enable = locked < total;
+  const res = setAllTracksSyncLockInDocument(state.timelineDoc, enable);
+  if (!res.changed) return;
+  state.timelineLastEditReadout = `Sync Lock ${enable ? "ALL ON" : "ALL OFF"} (${res.syncLockedTracks}/${total})`;
   commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
 }
 
@@ -3125,6 +3161,7 @@ function renderTimelineSelection() {
   if (!sel) {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
     renderTimelineClipLabelInspector();
+    renderTimelineEditNudgeInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
     renderTimelineAudioInspector();
@@ -3166,6 +3203,7 @@ function renderTimelineSelection() {
       ["Source Path", c.source_path || t("common.none")]
     ]);
     renderTimelineClipLabelInspector();
+    renderTimelineEditNudgeInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
     renderTimelineAudioInspector();
@@ -9349,10 +9387,189 @@ async function refreshWorkspaceFiles() {
   populateSelectOptions(byId("qa-media-select"), files.media || [], "-- select media --");
 }
 
+function getTimelineToolLabel(tool) {
+  switch (tool) {
+    case "trim":
+      return "RIPPLE (T)";
+    case "roll":
+      return "ROLL (R)";
+    case "slip":
+      return "SLIP (Y)";
+    case "slide":
+      return "SLIDE (U)";
+    case "blade":
+      return "BLADE (B)";
+    default:
+      return "SELECT (A)";
+  }
+}
+
+function renderTimelineEditNudgeInspector() {
+  const modePill = byId("timeline-edit-mode-pill");
+  const syncPill = byId("timeline-sync-lock-pill");
+  const edgeInBtn = byId("btn-nudge-edge-in");
+  const edgeOutBtn = byId("btn-nudge-edge-out");
+  const readoutEl = byId("timeline-edit-nudge-readout");
+  const stepBtns = document.querySelectorAll("[data-nudge-delta]");
+
+  const tool = normalizeTimelineTool(state.timelineTool);
+  if (modePill) {
+    modePill.textContent = getTimelineToolLabel(tool);
+  }
+  const totalTracks = state.timelineDoc && Array.isArray(state.timelineDoc.tracks)
+    ? state.timelineDoc.tracks.length
+    : 0;
+  const lockedTracks = countSyncLockedTracks(state.timelineDoc);
+  if (syncPill) {
+    syncPill.textContent = `${lockedTracks}/${totalTracks} SYNC`;
+    syncPill.className = `nle-tag mono ${lockedTracks > 0 ? "is-snap" : ""}`;
+  }
+
+  const showEdge = tool === "trim" || tool === "roll";
+  if (edgeInBtn) {
+    edgeInBtn.classList.toggle("is-active", state.timelineNudgeEdge === "left");
+    edgeInBtn.setAttribute("aria-pressed", state.timelineNudgeEdge === "left" ? "true" : "false");
+    edgeInBtn.disabled = !showEdge;
+  }
+  if (edgeOutBtn) {
+    edgeOutBtn.classList.toggle("is-active", state.timelineNudgeEdge === "right");
+    edgeOutBtn.setAttribute("aria-pressed", state.timelineNudgeEdge === "right" ? "true" : "false");
+    edgeOutBtn.disabled = !showEdge;
+  }
+
+  const ref = getSelectedClipRef();
+  const canNudge = Boolean(ref && tool !== "blade");
+  for (const btn of stepBtns) {
+    btn.disabled = !canNudge;
+  }
+  if (readoutEl) {
+    if (!ref) {
+      readoutEl.textContent = t("timeline.editNudge.idle");
+    } else {
+      const found = findTrackAndClip(state.timelineDoc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+      const clip = found ? found.clip : null;
+      const base = clip
+        ? `Start ${clip.start_frame}f | Dur ${clip.duration_frames}f | SrcIn ${clip.source_in_frame || 0}f`
+        : "";
+      readoutEl.textContent = state.timelineLastEditReadout
+        ? `${state.timelineLastEditReadout} (${base})`
+        : base;
+    }
+  }
+}
+
+function setNudgeEdge(edge) {
+  state.timelineNudgeEdge = edge === "left" ? "left" : "right";
+  renderTimelineEditNudgeInspector();
+}
+
+function nudgeSelectedClipAction(deltaFrames) {
+  const ref = getSelectedClipRef();
+  if (!ref || !state.timelineDoc) return false;
+  const tool = normalizeTimelineTool(state.timelineTool);
+  if (tool === "blade") return false;
+  const delta = Math.round(Number(deltaFrames) || 0);
+  if (delta === 0) return false;
+
+  let nextDoc = state.timelineDoc;
+  let focusClip = null;
+  let changed = false;
+  let detail = "";
+
+  if (tool === "trim") {
+    const res = rippleTrimClipInDocument(
+      state.timelineDoc,
+      ref.trackKind,
+      ref.trackIndex,
+      ref.clipIndex,
+      state.timelineNudgeEdge,
+      delta
+    );
+    changed = res.changed;
+    nextDoc = res.doc;
+    focusClip = res.clip;
+    detail = res.detail;
+  } else if (tool === "roll") {
+    const target = findAdjacentRollTarget(
+      state.timelineDoc,
+      ref.trackKind,
+      ref.trackIndex,
+      ref.clipIndex,
+      state.timelineNudgeEdge
+    );
+    if (!target) {
+      state.timelineLastEditReadout = "Roll requires adjacent clip at cut edge.";
+      renderTimelineEditNudgeInspector();
+      return false;
+    }
+    const res = rollEditCutInDocument(
+      state.timelineDoc,
+      target.trackKind,
+      target.trackIndex,
+      target.leftClipIndex,
+      delta
+    );
+    changed = res.changed;
+    nextDoc = res.doc;
+    focusClip = state.timelineNudgeEdge === "left" ? res.rightClip : res.leftClip;
+    detail = res.detail;
+  } else if (tool === "slip") {
+    const res = slipClipInDocument(
+      state.timelineDoc,
+      ref.trackKind,
+      ref.trackIndex,
+      ref.clipIndex,
+      delta
+    );
+    changed = res.changed;
+    nextDoc = res.doc;
+    focusClip = res.clip;
+    detail = res.detail;
+  } else if (tool === "slide") {
+    const res = slideClipInDocument(
+      state.timelineDoc,
+      ref.trackKind,
+      ref.trackIndex,
+      ref.clipIndex,
+      delta
+    );
+    changed = res.changed;
+    nextDoc = res.doc;
+    focusClip = res.clip;
+    detail = res.detail;
+  } else {
+    const res = moveClipInDocument(
+      state.timelineDoc,
+      ref.trackKind,
+      ref.trackIndex,
+      ref.clipIndex,
+      delta
+    );
+    changed = res.changed;
+    nextDoc = res.doc;
+    focusClip = res.clip;
+    detail = res.detail;
+  }
+
+  state.timelineLastEditReadout = detail || "";
+  if (!changed) {
+    renderTimelineEditNudgeInspector();
+    return false;
+  }
+  const nextSel = focusClip ? { kind: "clip", data: focusClip } : preserveSelectionAcrossDoc(nextDoc);
+  commitTimelineMutation(nextDoc, nextSel);
+  return true;
+}
+
 function updateTimelineToolbarUI() {
   const selectBtn = byId("btn-tool-select");
+  const trimBtn = byId("btn-tool-trim");
+  const rollBtn = byId("btn-tool-roll");
+  const slipBtn = byId("btn-tool-slip");
+  const slideBtn = byId("btn-tool-slide");
   const bladeBtn = byId("btn-tool-blade");
   const snapBtn = byId("btn-timeline-snap");
+  const syncLockBtn = byId("btn-timeline-sync-lock");
   const addMarkerBtn = byId("btn-timeline-add-marker");
   const inspAddMarkerBtn = byId("btn-inspector-add-marker");
   const bpmBtn = byId("btn-bpm-grid");
@@ -9364,18 +9581,35 @@ function updateTimelineToolbarUI() {
   const toolBadge = byId("timeline-tool-badge");
   const tlCanvas = byId("timeline-canvas");
 
-  const isBlade = state.timelineTool === "blade";
-  if (selectBtn) {
-    selectBtn.classList.toggle("is-active", !isBlade);
-    selectBtn.setAttribute("aria-pressed", !isBlade ? "true" : "false");
-  }
-  if (bladeBtn) {
-    bladeBtn.classList.toggle("is-active", isBlade);
-    bladeBtn.setAttribute("aria-pressed", isBlade ? "true" : "false");
+  const tool = normalizeTimelineTool(state.timelineTool);
+  const isBlade = tool === "blade";
+  const toolBtns = [
+    [selectBtn, "select"],
+    [trimBtn, "trim"],
+    [rollBtn, "roll"],
+    [slipBtn, "slip"],
+    [slideBtn, "slide"],
+    [bladeBtn, "blade"]
+  ];
+  for (const [btn, key] of toolBtns) {
+    if (!btn) continue;
+    const active = tool === key;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
   }
   if (snapBtn) {
     snapBtn.classList.toggle("is-active", state.timelineSnapEnabled);
     snapBtn.setAttribute("aria-pressed", state.timelineSnapEnabled ? "true" : "false");
+  }
+  const totalTracks = state.timelineDoc && Array.isArray(state.timelineDoc.tracks)
+    ? state.timelineDoc.tracks.length
+    : 0;
+  const lockedTracks = countSyncLockedTracks(state.timelineDoc);
+  if (syncLockBtn) {
+    const anyLocked = lockedTracks > 0;
+    syncLockBtn.classList.toggle("is-active", anyLocked);
+    syncLockBtn.setAttribute("aria-pressed", anyLocked ? "true" : "false");
+    syncLockBtn.disabled = !state.timelineDoc;
   }
   if (addMarkerBtn) {
     addMarkerBtn.disabled = !state.timelineDoc;
@@ -9408,10 +9642,11 @@ function updateTimelineToolbarUI() {
     redoBtn.disabled = state.timelineRedoStack.length === 0;
   }
   if (toolBadge) {
-    const modeLabel = isBlade ? "BLADE (B)" : "SELECT (A)";
+    const modeLabel = getTimelineToolLabel(tool);
     const snapLabel = state.timelineSnapEnabled ? " | SNAP (N)" : "";
+    const syncLabel = totalTracks > 0 ? ` | SYNC ${lockedTracks}/${totalTracks}` : "";
     const bpmLabel = state.bpmGrid.enabled ? ` | ${state.bpmGrid.bpm} BPM` : "";
-    toolBadge.textContent = `${modeLabel}${snapLabel}${bpmLabel}`;
+    toolBadge.textContent = `${modeLabel}${snapLabel}${syncLabel}${bpmLabel}`;
     toolBadge.className = `nle-tag mono ${
       isBlade ? "is-blade" : state.timelineSnapEnabled ? "is-snap" : ""
     }`;
@@ -9419,16 +9654,20 @@ function updateTimelineToolbarUI() {
   if (tlCanvas) {
     tlCanvas.classList.toggle("is-blade-mode", isBlade);
   }
+  renderTimelineEditNudgeInspector();
 }
 
 function setTimelineTool(tool) {
-  const next = tool === "blade" ? "blade" : "select";
+  const next = normalizeTimelineTool(tool);
   state.timelineTool = next;
   if (next !== "blade") {
     state.timelineBladePreview = null;
+  }
+  if (next === "blade") {
     state.timelineActiveSnapFrame = null;
     state.timelineActiveSnapKind = null;
   }
+  state.timelineActiveEditHud = null;
   updateTimelineToolbarUI();
   if (state.activeTab === "timeline") {
     redrawActiveCanvases();
@@ -10208,6 +10447,26 @@ function handleTransportKeydown(ev) {
       setTimelineTool(state.timelineTool === "blade" ? "select" : "blade");
       return;
     }
+    if (lower === "t") {
+      ev.preventDefault();
+      setTimelineTool(state.timelineTool === "trim" ? "select" : "trim");
+      return;
+    }
+    if (lower === "r") {
+      ev.preventDefault();
+      setTimelineTool(state.timelineTool === "roll" ? "select" : "roll");
+      return;
+    }
+    if (lower === "y") {
+      ev.preventDefault();
+      setTimelineTool(state.timelineTool === "slip" ? "select" : "slip");
+      return;
+    }
+    if (lower === "u") {
+      ev.preventDefault();
+      setTimelineTool(state.timelineTool === "slide" ? "select" : "slide");
+      return;
+    }
     if (lower === "a") {
       ev.preventDefault();
       setTimelineTool("select");
@@ -10218,7 +10477,7 @@ function handleTransportKeydown(ev) {
       rippleDeleteSelectedClipAction();
       return;
     }
-    if (ev.key === "Escape" && state.timelineTool === "blade") {
+    if (ev.key === "Escape" && state.timelineTool !== "select") {
       ev.preventDefault();
       setTimelineTool("select");
       return;
@@ -10434,6 +10693,10 @@ function bindTimelineCanvasScrub(canvas) {
       toggleTrackSoloAction(railHit.box.trackKind, railHit.box.trackIndex);
       return;
     }
+    if (railHit && railHit.kind === "track_sync_lock" && railHit.box) {
+      toggleTrackSyncLockAction(railHit.box.trackKind, railHit.box.trackIndex);
+      return;
+    }
 
     const rulerH = state.timelineRulerHeight || 36;
     const labelW = state.timelineLabelColW || 0;
@@ -10539,6 +10802,116 @@ function bindTimelineCanvasScrub(canvas) {
           canvas.classList.add("is-trimming");
           redrawActiveCanvases();
           return;
+        }
+      }
+    }
+
+    if (
+      (state.timelineTool === "trim" ||
+        state.timelineTool === "roll" ||
+        state.timelineTool === "slip" ||
+        state.timelineTool === "slide") &&
+      inTrackArea
+    ) {
+      const hit = hitTestTimeline(x, y, { includeTrim: true, includeFade: false });
+      if (hit && (hit.kind === "trim" || hit.kind === "clip") && hit.box) {
+        const edge =
+          hit.kind === "trim"
+            ? hit.edge
+            : x - hit.box.x < hit.box.w * 0.5
+              ? "left"
+              : "right";
+        const origDoc = cloneTimelineDoc(state.timelineDoc);
+        const foundOrig = findTrackAndClip(
+          origDoc,
+          hit.box.trackKind,
+          hit.box.trackIndex,
+          hit.box.clipIndex
+        );
+        if (foundOrig) {
+          const rawStartFrame = state.timelineXToRawFrame
+            ? Math.round(state.timelineXToRawFrame(x))
+            : state.timelineXToFrame(x);
+          if (state.timelineTool === "roll") {
+            const rollTarget =
+              findAdjacentRollTarget(origDoc, hit.box.trackKind, hit.box.trackIndex, hit.box.clipIndex, edge) ||
+              findAdjacentRollTarget(
+                origDoc,
+                hit.box.trackKind,
+                hit.box.trackIndex,
+                hit.box.clipIndex,
+                edge === "left" ? "right" : "left"
+              );
+            if (rollTarget) {
+              ptr.mode = "roll";
+              ptr.editTarget = { ...rollTarget, x, y: hit.box.y };
+              ptr.startFrame = rawStartFrame;
+              ptr.preSnapshot = captureTimelineSnapshot();
+              ptr.origDoc = origDoc;
+              state.timelineDragFixedMaxFrame = Math.max(
+                state.timelineMaxFrame,
+                computeTimelineMaxFrame(origDoc)
+              );
+              state.timelineActiveTrim = {
+                trackKind: rollTarget.trackKind,
+                trackIndex: rollTarget.trackIndex,
+                clipIndex: rollTarget.leftClipIndex,
+                edge: "right"
+              };
+              state.timelineActiveEditHud = {
+                op: "roll",
+                label: "ROLL 0f",
+                detail: `OUT ${rollTarget.leftClip.duration_frames}f | IN ${rollTarget.rightClip.duration_frames}f`,
+                color: "#39c5cf",
+                x,
+                y: hit.box.y
+              };
+              canvas.classList.add("is-trimming");
+              redrawActiveCanvases();
+              return;
+            }
+          } else {
+            const mode = state.timelineTool === "trim" ? "ripple_trim" : state.timelineTool;
+            ptr.mode = mode;
+            ptr.editTarget = {
+              trackKind: hit.box.trackKind,
+              trackIndex: hit.box.trackIndex,
+              clipIndex: hit.box.clipIndex,
+              edge,
+              origEdgeFrame:
+                edge === "left"
+                  ? foundOrig.clip.start_frame
+                  : foundOrig.clip.start_frame + foundOrig.clip.duration_frames,
+              x,
+              y: hit.box.y
+            };
+            ptr.startFrame = rawStartFrame;
+            ptr.preSnapshot = captureTimelineSnapshot();
+            ptr.origDoc = origDoc;
+            state.timelineDragFixedMaxFrame = Math.max(
+              state.timelineMaxFrame,
+              computeTimelineMaxFrame(origDoc)
+            );
+            state.timelineActiveTrim = {
+              trackKind: hit.box.trackKind,
+              trackIndex: hit.box.trackIndex,
+              clipIndex: hit.box.clipIndex,
+              edge
+            };
+            const hudCol =
+              mode === "ripple_trim" ? "#f59e0b" : mode === "slip" ? "#ffd166" : "#5eead4";
+            state.timelineActiveEditHud = {
+              op: mode,
+              label: mode === "ripple_trim" ? "RIPPLE 0f" : mode === "slip" ? "SLIP 0f" : "SLIDE 0f",
+              detail: `DUR ${foundOrig.clip.duration_frames}f | SRC IN ${foundOrig.clip.source_in_frame || 0}f`,
+              color: hudCol,
+              x,
+              y: hit.box.y
+            };
+            canvas.classList.add("is-trimming");
+            redrawActiveCanvases();
+            return;
+          }
         }
       }
     }
@@ -10669,8 +11042,29 @@ function bindTimelineCanvasScrub(canvas) {
           }
         } else {
           const railHover = hitTestTimeline(x, y, { includeTrim: false, includeFade: false });
-          const isMsBtn = railHover && (railHover.kind === "track_mute" || railHover.kind === "track_solo");
-          canvas.style.cursor = isMsBtn ? "pointer" : nearPh ? "ew-resize" : "crosshair";
+          const isMsBtn =
+            railHover &&
+            (railHover.kind === "track_mute" ||
+              railHover.kind === "track_solo" ||
+              railHover.kind === "track_sync_lock");
+          const isEditTool =
+            state.timelineTool === "trim" ||
+            state.timelineTool === "roll" ||
+            state.timelineTool === "slip" ||
+            state.timelineTool === "slide";
+          const toolCursor =
+            state.timelineTool === "trim" || state.timelineTool === "roll"
+              ? "ew-resize"
+              : state.timelineTool === "slip" || state.timelineTool === "slide"
+                ? "grab"
+                : "crosshair";
+          canvas.style.cursor = isMsBtn
+            ? "pointer"
+            : nearPh
+              ? "ew-resize"
+              : isEditTool && inTrackArea
+                ? toolCursor
+                : "crosshair";
           if (state.timelineHoverTrim || state.timelineHoverFade || state.timelineHoverTransition) {
             state.timelineHoverTrim = null;
             state.timelineHoverFade = null;
@@ -10780,6 +11174,117 @@ function bindTimelineCanvasScrub(canvas) {
       return;
     }
 
+    if (
+      (ptr.mode === "ripple_trim" ||
+        ptr.mode === "roll" ||
+        ptr.mode === "slip" ||
+        ptr.mode === "slide") &&
+      ptr.editTarget &&
+      ptr.origDoc
+    ) {
+      const tgt = ptr.editTarget;
+      const rawNow = state.timelineXToRawFrame
+        ? Math.round(state.timelineXToRawFrame(x))
+        : state.timelineXToFrame(x);
+      const rawDelta = rawNow - (ptr.startFrame || 0);
+      let nextDoc = cloneTimelineDoc(ptr.origDoc);
+      let focusClip = null;
+      let hud = null;
+
+      if (ptr.mode === "ripple_trim") {
+        const res = rippleTrimClipInDocument(
+          ptr.origDoc,
+          tgt.trackKind,
+          tgt.trackIndex,
+          tgt.clipIndex,
+          tgt.edge,
+          rawDelta
+        );
+        if (res.changed) nextDoc = res.doc;
+        focusClip =
+          findTrackAndClip(nextDoc, tgt.trackKind, tgt.trackIndex, tgt.clipIndex)?.clip || null;
+        const syncTag = res.syncLockedTracks > 0 ? ` | SYNC ${res.syncLockedTracks}` : "";
+        hud = {
+          op: "ripple_trim",
+          label: `RIPPLE ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
+          detail: focusClip
+            ? `DUR ${focusClip.duration_frames}f | SRC IN ${focusClip.source_in_frame || 0}f${syncTag}`
+            : res.detail,
+          color: "#f59e0b",
+          x,
+          y: tgt.y
+        };
+      } else if (ptr.mode === "roll") {
+        const res = rollEditCutInDocument(
+          ptr.origDoc,
+          tgt.trackKind,
+          tgt.trackIndex,
+          tgt.leftClipIndex,
+          rawDelta
+        );
+        if (res.changed) nextDoc = res.doc;
+        const leftC = findTrackAndClip(nextDoc, tgt.trackKind, tgt.trackIndex, tgt.leftClipIndex)?.clip;
+        const rightC = findTrackAndClip(nextDoc, tgt.trackKind, tgt.trackIndex, tgt.rightClipIndex)?.clip;
+        focusClip = leftC || rightC || null;
+        hud = {
+          op: "roll",
+          label: `ROLL ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
+          detail: leftC && rightC ? `OUT ${leftC.duration_frames}f | IN ${rightC.duration_frames}f` : res.detail,
+          color: "#39c5cf",
+          x,
+          y: tgt.y
+        };
+      } else if (ptr.mode === "slip") {
+        const res = slipClipInDocument(
+          ptr.origDoc,
+          tgt.trackKind,
+          tgt.trackIndex,
+          tgt.clipIndex,
+          rawDelta
+        );
+        if (res.changed) nextDoc = res.doc;
+        focusClip =
+          findTrackAndClip(nextDoc, tgt.trackKind, tgt.trackIndex, tgt.clipIndex)?.clip || null;
+        hud = {
+          op: "slip",
+          label: `SLIP ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
+          detail: focusClip ? `SRC IN ${focusClip.source_in_frame || 0}f | DUR ${focusClip.duration_frames}f` : res.detail,
+          color: "#ffd166",
+          x,
+          y: tgt.y
+        };
+      } else if (ptr.mode === "slide") {
+        const res = slideClipInDocument(
+          ptr.origDoc,
+          tgt.trackKind,
+          tgt.trackIndex,
+          tgt.clipIndex,
+          rawDelta
+        );
+        if (res.changed) nextDoc = res.doc;
+        focusClip =
+          findTrackAndClip(nextDoc, tgt.trackKind, tgt.trackIndex, tgt.clipIndex)?.clip || null;
+        hud = {
+          op: "slide",
+          label: `SLIDE ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
+          detail: focusClip ? `START ${focusClip.start_frame}f | DUR ${focusClip.duration_frames}f` : res.detail,
+          color: "#5eead4",
+          x,
+          y: tgt.y
+        };
+      }
+
+      state.timelineDoc = nextDoc;
+      state.timelineValidation = validateTimelineClient(nextDoc);
+      state.timelineActiveEditHud = hud;
+      state.timelineLastEditReadout = hud ? `${hud.label} (${hud.detail})` : "";
+      if (focusClip) {
+        state.timelineSelected = { kind: "clip", data: focusClip };
+      }
+      renderTimelineUI();
+      return;
+    }
+
     if (ptr.mode === "pending" && ptr.moved) {
       ptr.mode = "scrub";
       canvas.classList.add("is-scrubbing");
@@ -10803,16 +11308,24 @@ function bindTimelineCanvasScrub(canvas) {
     const wasScrub = ptr.mode === "scrub";
     const wasTrim = ptr.mode === "trim";
     const wasFade = ptr.mode === "fade";
+    const wasAdvancedEdit =
+      ptr.mode === "ripple_trim" ||
+      ptr.mode === "roll" ||
+      ptr.mode === "slip" ||
+      ptr.mode === "slide";
     const wasMoved = ptr.moved;
     const preSnap = ptr.preSnapshot;
     const trimTarget = ptr.trimTarget;
     const fadeTarget = ptr.fadeTarget;
+    const editTarget = ptr.editTarget;
 
     ptr.active = false;
     ptr.pointerId = null;
     ptr.mode = null;
     ptr.trimTarget = null;
     ptr.fadeTarget = null;
+    ptr.editTarget = null;
+    ptr.startFrame = 0;
     ptr.preSnapshot = null;
     ptr.origDoc = null;
     ptr.origBounds = null;
@@ -10828,6 +11341,52 @@ function bindTimelineCanvasScrub(canvas) {
       } catch {
         // Ignore pointer capture release errors
       }
+    }
+
+    if (wasAdvancedEdit) {
+      state.timelineActiveTrim = null;
+      state.timelineActiveEditHud = null;
+      state.timelineActiveSnapFrame = null;
+      state.timelineActiveSnapKind = null;
+      state.timelineDragFixedMaxFrame = null;
+      if (cancelled && preSnap) {
+        state.timelineDoc = preSnap.doc;
+        state.timelineSelected = preSnap.selected;
+        state.timelineValidation = validateTimelineClient(preSnap.doc);
+        state.timelineMaxFrame = computeTimelineMaxFrame(preSnap.doc);
+        renderTimelineUI();
+        return;
+      }
+      if (!wasMoved && preSnap && editTarget) {
+        const idx = editTarget.leftClipIndex !== undefined ? editTarget.leftClipIndex : editTarget.clipIndex;
+        const origFound = findTrackAndClip(
+          preSnap.doc,
+          editTarget.trackKind,
+          editTarget.trackIndex,
+          idx
+        );
+        state.timelineDoc = preSnap.doc;
+        state.timelineValidation = validateTimelineClient(preSnap.doc);
+        if (origFound) {
+          state.timelineSelected = { kind: "clip", data: origFound.clip };
+        }
+        renderTimelineUI();
+        return;
+      }
+      if (preSnap && editTarget) {
+        const changed = JSON.stringify(preSnap.doc) !== JSON.stringify(state.timelineDoc);
+        if (changed) {
+          pushUndoSnapshot(preSnap);
+          state.timelineMaxFrame = computeTimelineMaxFrame(state.timelineDoc);
+          state.playheadFrame = Math.min(state.playheadFrame, state.timelineMaxFrame);
+        } else {
+          state.timelineDoc = preSnap.doc;
+          state.timelineSelected = preSnap.selected;
+          state.timelineValidation = validateTimelineClient(preSnap.doc);
+        }
+      }
+      renderTimelineUI();
+      return;
     }
 
     if (wasFade) {
@@ -13373,9 +13932,51 @@ function wireEvents() {
   });
 
   byId("btn-tool-select").addEventListener("click", () => setTimelineTool("select"));
+  const toolTrimBtn = byId("btn-tool-trim");
+  if (toolTrimBtn) {
+    toolTrimBtn.addEventListener("click", () =>
+      setTimelineTool(state.timelineTool === "trim" ? "select" : "trim")
+    );
+  }
+  const toolRollBtn = byId("btn-tool-roll");
+  if (toolRollBtn) {
+    toolRollBtn.addEventListener("click", () =>
+      setTimelineTool(state.timelineTool === "roll" ? "select" : "roll")
+    );
+  }
+  const toolSlipBtn = byId("btn-tool-slip");
+  if (toolSlipBtn) {
+    toolSlipBtn.addEventListener("click", () =>
+      setTimelineTool(state.timelineTool === "slip" ? "select" : "slip")
+    );
+  }
+  const toolSlideBtn = byId("btn-tool-slide");
+  if (toolSlideBtn) {
+    toolSlideBtn.addEventListener("click", () =>
+      setTimelineTool(state.timelineTool === "slide" ? "select" : "slide")
+    );
+  }
   byId("btn-tool-blade").addEventListener("click", () =>
     setTimelineTool(state.timelineTool === "blade" ? "select" : "blade")
   );
+  const syncLockBtn = byId("btn-timeline-sync-lock");
+  if (syncLockBtn) {
+    syncLockBtn.addEventListener("click", toggleAllTracksSyncLockAction);
+  }
+  const nudgeEdgeInBtn = byId("btn-nudge-edge-in");
+  if (nudgeEdgeInBtn) {
+    nudgeEdgeInBtn.addEventListener("click", () => setNudgeEdge("left"));
+  }
+  const nudgeEdgeOutBtn = byId("btn-nudge-edge-out");
+  if (nudgeEdgeOutBtn) {
+    nudgeEdgeOutBtn.addEventListener("click", () => setNudgeEdge("right"));
+  }
+  for (const nudgeBtn of document.querySelectorAll("[data-nudge-delta]")) {
+    nudgeBtn.addEventListener("click", () => {
+      const delta = Number.parseInt(nudgeBtn.getAttribute("data-nudge-delta") || "0", 10);
+      nudgeSelectedClipAction(delta);
+    });
+  }
   byId("btn-timeline-split").addEventListener("click", splitAtPlayheadAction);
   const rippleDeleteBtn = byId("btn-clip-ripple-delete");
   if (rippleDeleteBtn) {

@@ -350,6 +350,29 @@
               <div class="inspector-scroll">
                 <div id="timeline-selection-detail" class="kv-grid mono"></div>
 
+                <div id="timeline-edit-nudge-dock" class="edit-nudge-dock" role="region" aria-label="Precision Trim and Sync Lock Controls">
+                  <div class="pane-subheader">
+                    <span data-i18n="timeline.editNudge.title">Trim &amp; Sync Nudge</span>
+                    <div class="viewer-controls">
+                      <span id="timeline-edit-mode-pill" class="nle-tag mono">SELECT</span>
+                      <span id="timeline-sync-lock-pill" class="nle-tag mono">0/0 SYNC</span>
+                    </div>
+                  </div>
+                  <div class="edit-nudge-row">
+                    <div class="edit-nudge-edge-group" role="group" aria-label="Trim edge target">
+                      <button type="button" id="btn-nudge-edge-in" class="btn btn-mini edit-nudge-edge-btn" aria-pressed="false" data-i18n="timeline.editNudge.in">In</button>
+                      <button type="button" id="btn-nudge-edge-out" class="btn btn-mini edit-nudge-edge-btn is-active" aria-pressed="true" data-i18n="timeline.editNudge.out">Out</button>
+                    </div>
+                    <div class="edit-nudge-btns" role="group" aria-label="Frame nudge steps">
+                      <button type="button" id="btn-nudge-m5" class="btn btn-mini mono edit-nudge-step-btn" data-nudge-delta="-5" disabled title="Nudge -5 frames">-5f</button>
+                      <button type="button" id="btn-nudge-m1" class="btn btn-mini mono edit-nudge-step-btn" data-nudge-delta="-1" disabled title="Nudge -1 frame">-1f</button>
+                      <button type="button" id="btn-nudge-p1" class="btn btn-mini mono edit-nudge-step-btn" data-nudge-delta="1" disabled title="Nudge +1 frame">+1f</button>
+                      <button type="button" id="btn-nudge-p5" class="btn btn-mini mono edit-nudge-step-btn" data-nudge-delta="5" disabled title="Nudge +5 frames">+5f</button>
+                    </div>
+                  </div>
+                  <div id="timeline-edit-nudge-readout" class="telemetry-note mono" data-i18n="timeline.editNudge.idle">Select a clip for precision Ripple, Roll, Slip, or Slide nudge.</div>
+                </div>
+
               <div id="timeline-clip-label-inspector" class="clip-label-inspector-dock">
                 <div class="pane-subheader">
                   <span data-i18n="timeline.clipLabel.title">Clip Color Label</span>
@@ -906,6 +929,34 @@
                   <span data-i18n="timeline.tool.select">Select</span>
                   <span class="kbd-chip mono">A</span>
                 </button>
+                <button type="button" id="btn-tool-trim" class="btn btn-mini tl-tool-btn" aria-pressed="false" title="Ripple Trim Tool (T)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M8 2v12M4.5 5L1.5 8l3 3M11.5 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.trim">Ripple</span>
+                  <span class="kbd-chip mono">T</span>
+                </button>
+                <button type="button" id="btn-tool-roll" class="btn btn-mini tl-tool-btn" aria-pressed="false" title="Roll Cut Junction Tool (R)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M6.5 2v12M9.5 2v12M2 8h2.5M11.5 8H14" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.roll">Roll</span>
+                  <span class="kbd-chip mono">R</span>
+                </button>
+                <button type="button" id="btn-tool-slip" class="btn btn-mini tl-tool-btn" aria-pressed="false" title="Slip Source Media Tool (Y)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M3 4h10v8H3zM5.5 8l-2 0M12.5 8l-2 0" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.slip">Slip</span>
+                  <span class="kbd-chip mono">Y</span>
+                </button>
+                <button type="button" id="btn-tool-slide" class="btn btn-mini tl-tool-btn" aria-pressed="false" title="Slide Clip Between Neighbors (U)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M5 4h6v8H5zM1.5 8h2.5M12 8h2.5" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.slide">Slide</span>
+                  <span class="kbd-chip mono">U</span>
+                </button>
                 <button type="button" id="btn-tool-blade" class="btn btn-mini tl-tool-btn" aria-pressed="false" title="Blade / Razor Split Tool (B)">
                   <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
                     <path d="M11.5 2L14 4.5 5.5 13 2 14l1-3.5L11.5 2zm-1 2.4L4.4 10.5l-.4 1.5 1.5-.4 6.1-6.1-1.1-1.1z" fill="currentColor"/>
@@ -928,6 +979,13 @@
                 </svg>
                 <span data-i18n="timeline.tool.snap">Snap</span>
                 <span class="kbd-chip mono">N</span>
+              </button>
+
+              <button type="button" id="btn-timeline-sync-lock" class="btn btn-mini tl-sync-btn is-active" aria-pressed="true" title="Toggle Multi-Track Sync Lock">
+                <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                  <path d="M6.5 10.5L4.8 12.2a2.2 2.2 0 01-3.1-3.1l2-2a2.2 2.2 0 013.1 0M9.5 5.5l1.7-1.7a2.2 2.2 0 013.1 3.1l-2 2a2.2 2.2 0 01-3.1 0M6 10l4-4" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+                </svg>
+                <span data-i18n="timeline.tool.syncLock">Sync Lock</span>
               </button>
 
               <button type="button" id="btn-timeline-add-marker" class="btn btn-mini tl-marker-btn" title="Drop Marker at Playhead (M)">
@@ -2868,7 +2926,7 @@
       <span id="runtime-mode-pill">LOCAL STUDIO</span>
       <span id="transport-shortcut-hint" class="statusbar-hint">
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
-        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | I/O: In/Out | Alt+X: Clear I/O | A/B: Select/Blade | N: Snap | M: Marker | ?: Shortcuts</span>
+        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | I/O: In/Out | A/T/R/Y/U/B: Edit Tools | N: Snap | M: Marker | ?: Shortcuts</span>
       </span>
       <span id="version-badge">v0.1.27</span>
     </footer>

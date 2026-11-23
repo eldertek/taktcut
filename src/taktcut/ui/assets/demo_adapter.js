@@ -38,6 +38,7 @@ import {
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
   computeRetimeRampSummary,
+  countSyncLockedTracks,
   createColorNode,
   deserializeColorNodeFromApi,
   getDeliveryPresetClient,
@@ -46,6 +47,13 @@ import {
   normalizeRetimeRampPreset,
   parseCubeLutTextClient,
   resolveRetimeRampPointsForPreset,
+  rippleDeleteClipInDocument,
+  rippleTrimClipInDocument,
+  rollEditCutInDocument,
+  setAllTracksSyncLockInDocument,
+  slideClipInDocument,
+  slipClipInDocument,
+  toggleTrackSyncLockInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -103,6 +111,7 @@ function buildDemoTimeline(preset) {
         index: 1,
         kind: "video",
         name: "V1 Main Picture",
+        sync_locked: true,
         clips: [
           { name: "A001_Opening_Wide", track_index: 1, media_type: "video", start_frame: 0, duration_frames: 125, source_in_frame: 24, source_path: "media/A001_Opening_Wide.mov", source_fps: fps25, enabled: true, transition_out: { preset: "fade", duration_s: 0.5, include_audio: true, audio_curve: "tri" } },
           { name: "A002_Studio_Detail", track_index: 1, media_type: "video", start_frame: 125, duration_frames: 100, source_in_frame: 10, source_path: "media/A002_Studio_Detail.mov", source_fps: fps25, enabled: true, speed_rate: 0.5 },
@@ -122,6 +131,7 @@ function buildDemoTimeline(preset) {
         index: 1,
         kind: "audio",
         name: "A1 Dialogue / VO",
+        sync_locked: true,
         clips: [
           { name: "VO_Intro_Clean", track_index: 1, media_type: "audio", start_frame: 0, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_intro.wav", enabled: true, audio_gain_db: 1.5, fade_in_s: 0.4, fade_out_s: 0.0 },
           { name: "VO_Feature_Main", track_index: 1, media_type: "audio", start_frame: 125, duration_frames: 250, source_in_frame: 0, source_path: "audio/vo_feature.wav", enabled: true },
@@ -2715,6 +2725,48 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/update/apply", { method: "POST", body: {} });
+    },
+    async editTimeline(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const op = String((payload && payload.op) || "").trim().toLowerCase();
+        const tkKind = payload && payload.track_kind === "audio" ? "audio" : "video";
+        const tkIdx = Number.isInteger(payload && payload.track_index) ? payload.track_index : 1;
+        const cIdx = Number.isInteger(payload && payload.clip_index) ? payload.clip_index : 0;
+        const edge = payload && payload.edge === "left" ? "left" : "right";
+        const delta = Math.round(Number((payload && payload.delta_frames) || 0));
+        let res;
+        if (op === "ripple_trim") {
+          res = rippleTrimClipInDocument(doc, tkKind, tkIdx, cIdx, edge, delta);
+        } else if (op === "roll") {
+          res = rollEditCutInDocument(doc, tkKind, tkIdx, cIdx, delta);
+        } else if (op === "slip") {
+          res = slipClipInDocument(doc, tkKind, tkIdx, cIdx, delta);
+        } else if (op === "slide") {
+          res = slideClipInDocument(doc, tkKind, tkIdx, cIdx, delta);
+        } else if (op === "ripple_delete") {
+          res = rippleDeleteClipInDocument(doc, tkKind, tkIdx, cIdx);
+        } else if (op === "toggle_sync_lock") {
+          res = toggleTrackSyncLockInDocument(doc, tkKind, tkIdx);
+        } else if (op === "set_all_sync_lock") {
+          res = setAllTracksSyncLockInDocument(doc, Boolean(payload && payload.enabled));
+        } else {
+          throw new Error(`Unsupported timeline edit op: ${op}`);
+        }
+        const nextDoc = res.doc || doc;
+        return {
+          changed: Boolean(res.changed),
+          op,
+          delta_applied: res.deltaApplied !== undefined ? res.deltaApplied : 0,
+          shifted_count: res.shiftedCount !== undefined ? res.shiftedCount : 0,
+          sync_locked_tracks: countSyncLockedTracks(nextDoc),
+          detail: res.detail || "",
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc)
+        };
+      }
+      return requestJson("/api/timeline/edit", { method: "POST", body: payload });
     }
   };
 }

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 from defusedxml.common import DefusedXmlException
@@ -192,6 +192,10 @@ from taktcut.subtitles import (
     parse_ass,
     parse_srt,
     parse_vtt,
+)
+from taktcut.timeline_edit import (
+    ALLOWED_TIMELINE_EDIT_OPS,
+    apply_timeline_edit,
 )
 from taktcut.titles import (
     TITLE_FONT_SIZE_MAX,
@@ -1581,6 +1585,64 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "document": doc.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/edit":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_op = payload.get("op")
+            op_clean = raw_op.strip().lower() if isinstance(raw_op, str) else ""
+            if op_clean not in ALLOWED_TIMELINE_EDIT_OPS:
+                allowed_ops = ", ".join(ALLOWED_TIMELINE_EDIT_OPS)
+                raise ValueError(
+                    f"Unsupported timeline edit op {raw_op!r}; expected one of: {allowed_ops}"
+                )
+            op_val = op_clean
+            raw_kind = str(payload.get("track_kind", "video")).strip().lower()
+            if raw_kind not in ("video", "audio"):
+                raise ValueError("track_kind must be 'video' or 'audio'")
+            track_kind: Literal["video", "audio"] = "video" if raw_kind == "video" else "audio"
+
+            raw_tidx = payload.get("track_index", 1)
+            if isinstance(raw_tidx, bool) or not isinstance(raw_tidx, int) or raw_tidx < 1:
+                raise ValueError("track_index must be a positive integer")
+            raw_cidx = payload.get("clip_index", 0)
+            if isinstance(raw_cidx, bool) or not isinstance(raw_cidx, int) or raw_cidx < 0:
+                raise ValueError("clip_index must be a non-negative integer")
+            raw_edge = str(payload.get("edge", "right")).strip().lower()
+            if raw_edge not in ("left", "right"):
+                raise ValueError("edge must be 'left' or 'right'")
+            edge_val: Literal["left", "right"] = "left" if raw_edge == "left" else "right"
+            raw_delta = payload.get("delta_frames", 0)
+            if isinstance(raw_delta, bool) or not isinstance(raw_delta, int):
+                raise ValueError("delta_frames must be an integer")
+            raw_enabled = payload.get("enabled", True)
+            if not isinstance(raw_enabled, bool):
+                raise ValueError("enabled must be a boolean")
+
+            edit_res = apply_timeline_edit(
+                doc,
+                op=op_val,
+                track_kind=track_kind,
+                track_index=raw_tidx,
+                clip_index=raw_cidx,
+                edge=edge_val,
+                delta_frames=raw_delta,
+                enabled=raw_enabled,
+            )
+            val = validate_timeline(edit_res.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": edit_res.changed,
+                    "op": edit_res.op,
+                    "delta_applied": edit_res.delta_applied,
+                    "shifted_count": edit_res.shifted_count,
+                    "sync_locked_tracks": edit_res.sync_locked_tracks,
+                    "detail": edit_res.detail,
+                    "document": edit_res.document.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                 },
             )

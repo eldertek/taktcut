@@ -135,6 +135,7 @@ def build_sample_timeline(preset: str = "clean") -> TimelineDocument:
                 index=1,
                 kind="video",
                 name="V1 Main Picture",
+                sync_locked=True,
                 clips=[
                     TimelineClip(
                         name="A001_Opening_Wide",
@@ -209,6 +210,7 @@ def build_sample_timeline(preset: str = "clean") -> TimelineDocument:
                 index=1,
                 kind="audio",
                 name="A1 Dialogue / VO",
+                sync_locked=True,
                 clips=[
                     TimelineClip(
                         name="VO_Intro_Clean",
