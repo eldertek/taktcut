@@ -2166,7 +2166,8 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator('[data-grade-preset="teal_orange"]').click()
                     page.wait_for_function(
                         "() => document.getElementById('color-compile-badge').textContent"
-                        " === 'GRADED'"
+                        " === 'GRADED' && (document.getElementById('color-filtergraph-output')"
+                        ".textContent || '').includes('eq=contrast=1.1400:saturation=1.1800')"
                     )
                     fg_text = page.locator("#color-filtergraph-output").text_content() or ""
                     assert "colorbalance=" in fg_text
@@ -2272,6 +2273,8 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator('[data-title-preset="center_title_card"]').click()
                     page.wait_for_function(
                         "() => document.getElementById('title-position-select').value === 'center'"
+                        " && (document.getElementById('title-filtergraph-output')"
+                        ".textContent || '').includes('ECLIPSE SHOWREEL 2026')"
                     )
                     assert (
                         page.locator("#title-text-input").input_value() == "ECLIPSE SHOWREEL 2026"

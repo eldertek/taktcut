@@ -320,6 +320,7 @@ const state = {
   colorPresetsCatalog: null,
   colorLastCompile: null,
   colorCompileTimer: null,
+  colorCompileSeq: 0,
   wipeRatio: 0.5,
   colorSplitWipe: {
     enabled: true,
@@ -362,6 +363,7 @@ const state = {
   titlePresetsCatalog: null,
   titleLastCompile: null,
   titleCompileTimer: null,
+  titleCompileSeq: 0,
   subtitleTrack: {
     enabled: true,
     style: "clean_white",
@@ -3196,10 +3198,13 @@ function scheduleTitleCompile() {
 }
 
 async function compileTitleNow() {
+  const seq = ++state.titleCompileSeq;
   try {
     const res = await api.compileTitle({ title_overlay: state.titleOverlay });
+    if (seq !== state.titleCompileSeq) return;
     renderTitleCompileResult(res);
   } catch (err) {
+    if (seq !== state.titleCompileSeq) return;
     const badge = byId("title-compile-badge");
     const out = byId("title-filtergraph-output");
     if (badge) {
@@ -3559,10 +3564,13 @@ function renderColorCompileResult(res) {
 }
 
 async function compileColorNow() {
+  const seq = ++state.colorCompileSeq;
   try {
     const compiled = await api.compileColorGrade({ grade: state.colorGrade });
+    if (seq !== state.colorCompileSeq) return;
     renderColorCompileResult(compiled);
   } catch (err) {
+    if (seq !== state.colorCompileSeq) return;
     showBanner(err.message, "error");
   }
 }
