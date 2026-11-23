@@ -1098,6 +1098,61 @@ export function splitClipsAtPlayhead(doc, playheadFrame, selectedClip = null) {
   };
 }
 
+export function rippleDeleteClipInDocument(doc, trackKind, trackIndex, clipIndex) {
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) {
+    return { doc, deletedClip: null, shiftedCount: 0, focusClip: null, changed: false };
+  }
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return { doc, deletedClip: null, shiftedCount: 0, focusClip: null, changed: false };
+  }
+
+  const { trk, clip: deletedClip } = found;
+  const docStart = nextDoc.start_frame || 0;
+  const delStart = deletedClip.start_frame;
+  const delDur = Math.max(0, deletedClip.duration_frames || 0);
+  const delEnd = delStart + delDur;
+
+  trk.clips.splice(clipIndex, 1);
+
+  let shiftedCount = 0;
+  let nextFocusClip = null;
+  let nextFocusStart = Number.POSITIVE_INFINITY;
+  let prevFocusClip = null;
+  let prevFocusEnd = Number.NEGATIVE_INFINITY;
+
+  for (const other of trk.clips) {
+    const otherEnd = other.start_frame + (other.duration_frames || 0);
+    if (other.start_frame <= delStart && otherEnd === delStart && other.transition_out) {
+      other.transition_out = null;
+    }
+    if (other.start_frame >= delEnd || (delDur === 0 && other.start_frame > delStart)) {
+      other.start_frame = Math.max(docStart, other.start_frame - delDur);
+      shiftedCount += 1;
+      if (other.start_frame < nextFocusStart) {
+        nextFocusStart = other.start_frame;
+        nextFocusClip = other;
+      }
+    } else if (other.start_frame <= delStart && otherEnd > prevFocusEnd) {
+      prevFocusEnd = otherEnd;
+      prevFocusClip = other;
+    }
+  }
+
+  trk.clips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+  const focusClip = nextFocusClip || prevFocusClip || trk.clips[0] || null;
+  return {
+    doc: nextDoc,
+    deletedClip,
+    shiftedCount,
+    focusClip,
+    changed: true
+  };
+}
+
 export function updateClipAudioInDocument(doc, trackKind, trackIndex, clipIndex, patch) {
   const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
   if (!foundOrig) return { doc, clip: null, changed: false };

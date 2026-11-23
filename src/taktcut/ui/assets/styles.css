@@ -1053,6 +1053,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   padding-top: 2px;
   font-size: 10px;
@@ -1078,6 +1079,16 @@ body {
 .pane-scroll {
   max-height: 410px;
   overflow-y: auto;
+}
+
+.inspector-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 175px;
+  overflow-y: auto;
+  padding-right: 4px;
+  min-width: 0;
 }
 
 .pane-divider {
@@ -2413,14 +2424,24 @@ input[type="range"] {
 }
 
 .btn-danger-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: #ff8e88;
   border-color: rgba(229, 83, 75, 0.45);
 }
 
-.btn-danger-mini:hover {
+.btn-danger-mini:hover:not(:disabled) {
   background: var(--status-fail-soft);
   border-color: var(--status-fail);
   color: #ffd0cd;
+}
+
+.btn-danger-mini:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  border-color: var(--border-inner);
+  color: var(--text-dim);
 }
 
 .issue-list {
@@ -2684,6 +2705,11 @@ input[type="range"] {
   }
   .nle-edit-top > aside:last-child {
     grid-column: 1 / -1;
+  }
+  .inspector-scroll {
+    max-height: none;
+    overflow-y: visible;
+    padding-right: 0;
   }
   .nle-color-top,
   .nle-color-bottom,

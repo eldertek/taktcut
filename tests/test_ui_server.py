@@ -943,6 +943,7 @@ import {{
   normalizeClipTransition,
   normalizeInOutRange,
   normalizeMarkerColor,
+  rippleDeleteClipInDocument,
   setInOutRange,
   splitClipInDocument,
   splitClipsAtPlayhead,
@@ -1297,6 +1298,94 @@ assert.deepEqual(stepPlayheadInRange(124, 2, 0, 200, io, true), {{ frame: 25, st
 assert.deepEqual(stepPlayheadInRange(25, -1, 0, 200, io, true), {{ frame: 125, stop: false }});
 assert.deepEqual(stepPlayheadInRange(198, 5, 0, 200, io, false), {{ frame: 200, stop: true }});
 assert.deepEqual(stepPlayheadInRange(2, -5, 0, 200, io, false), {{ frame: 0, stop: true }});
+
+// Ripple Delete (Shift+Backspace / Inspector action)
+const rippleMultiTrack = {{
+  name: "Ripple_Test",
+  source_format: "drt",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [
+        {{
+          name: "V_A", track_index: 1, media_type: "video",
+          start_frame: 0, duration_frames: 50, source_in_frame: 0,
+          transition_out: {{ preset: "fade", duration_s: 0.4, include_audio: true }}
+        }},
+        {{
+          name: "V_B", track_index: 1, media_type: "video",
+          start_frame: 50, duration_frames: 75, source_in_frame: 10
+        }},
+        {{
+          name: "V_C", track_index: 1, media_type: "video",
+          start_frame: 125, duration_frames: 100, source_in_frame: 0
+        }}
+      ]
+    }},
+    {{
+      index: 1,
+      kind: "audio",
+      name: "A1",
+      clips: [
+        {{
+          name: "A_BG", track_index: 1, media_type: "audio",
+          start_frame: 0, duration_frames: 225, source_in_frame: 0
+        }}
+      ]
+    }}
+  ],
+  markers: []
+}};
+
+// Delete middle V_B: V_C shifts left by 75f, V_A clears transition, A1 untouched
+const rippleMid = rippleDeleteClipInDocument(rippleMultiTrack, "video", 1, 1);
+assert.equal(rippleMid.changed, true);
+assert.equal(rippleMid.deletedClip.name, "V_B");
+assert.equal(rippleMid.shiftedCount, 1);
+assert.equal(rippleMid.focusClip.name, "V_C");
+assert.equal(rippleMid.doc.tracks[0].clips.length, 2);
+assert.equal(rippleMid.doc.tracks[0].clips[0].start_frame, 0);
+assert.equal(rippleMid.doc.tracks[0].clips[0].transition_out, null);
+assert.equal(rippleMid.doc.tracks[0].clips[1].name, "V_C");
+assert.equal(rippleMid.doc.tracks[0].clips[1].start_frame, 50);
+assert.equal(rippleMid.doc.tracks[0].clips[1].duration_frames, 100);
+assert.equal(rippleMid.doc.tracks[1].clips[0].duration_frames, 225);
+assert.equal(validateTimelineClient(rippleMid.doc).valid, true);
+// Original document remains immutable for Undo/Redo
+assert.equal(rippleMultiTrack.tracks[0].clips.length, 3);
+assert.equal(rippleMultiTrack.tracks[0].clips[2].start_frame, 125);
+
+// Delete first clip V_A from rippleMid result: V_C shifts to start_frame 0
+const rippleFirst = rippleDeleteClipInDocument(rippleMid.doc, "video", 1, 0);
+assert.equal(rippleFirst.changed, true);
+assert.equal(rippleFirst.shiftedCount, 1);
+assert.equal(rippleFirst.focusClip.name, "V_C");
+assert.equal(rippleFirst.doc.tracks[0].clips.length, 1);
+assert.equal(rippleFirst.doc.tracks[0].clips[0].start_frame, 0);
+
+// Delete last remaining clip on V1: empty track, focusClip null
+const rippleOnly = rippleDeleteClipInDocument(rippleFirst.doc, "video", 1, 0);
+assert.equal(rippleOnly.changed, true);
+assert.equal(rippleOnly.shiftedCount, 0);
+assert.equal(rippleOnly.focusClip, null);
+assert.equal(rippleOnly.doc.tracks[0].clips.length, 0);
+
+// Delete trailing clip on multi-clip track: focuses previous clip
+const rippleLast = rippleDeleteClipInDocument(rippleMid.doc, "video", 1, 1);
+assert.equal(rippleLast.changed, true);
+assert.equal(rippleLast.shiftedCount, 0);
+assert.equal(rippleLast.focusClip.name, "V_A");
+
+// Invalid track/index is a clean no-op
+const rippleBad = rippleDeleteClipInDocument(rippleMultiTrack, "video", 9, 0);
+assert.equal(rippleBad.changed, false);
+assert.equal(rippleBad.doc, rippleMultiTrack);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],

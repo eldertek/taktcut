@@ -188,10 +188,17 @@
                 <div class="nle-kv-chip"><span class="k" data-i18n="timeline.metric.counts">T/C</span><span id="tl-meta-counts" class="v mono">--</span></div>
               </div>
 
-              <div class="pane-subheader">
-                <span data-i18n="timeline.inspector.title">Selected Clip / Marker Inspector</span>
-              </div>
-              <div id="timeline-selection-detail" class="kv-grid mono"></div>
+              <div class="inspector-scroll">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.inspector.title">Selected Clip / Marker Inspector</span>
+                  <div class="viewer-controls">
+                    <button type="button" id="btn-clip-ripple-delete" class="btn btn-mini btn-danger-mini" disabled title="Ripple Delete Selected Clip (Shift+Backspace)">
+                      <span data-i18n="timeline.inspector.rippleDelete">Ripple Delete</span>
+                      <span class="kbd-chip mono">Shift+Bksp</span>
+                    </button>
+                  </div>
+                </div>
+                <div id="timeline-selection-detail" class="kv-grid mono"></div>
 
               <div id="timeline-marker-inspector" class="marker-inspector-dock is-hidden">
                 <div class="pane-subheader">
@@ -380,6 +387,7 @@
                     <span id="clip-transition-fg-preview" class="telemetry-note mono">--</span>
                   </div>
                 </div>
+              </div>
               </div>
             </div>
           </section>

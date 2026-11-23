@@ -71,6 +71,7 @@ import {
   normalizeClipTransition,
   normalizeInOutRange,
   normalizeMarkerColor,
+  rippleDeleteClipInDocument,
   setInOutRange,
   splitClipInDocument,
   splitClipsAtPlayhead,
@@ -745,6 +746,8 @@ function renderTimelineUI() {
     byId("timeline-selection-detail").replaceChildren(
       dom("span", "kv-val", t("timeline.empty.selection"))
     );
+    const rippleBtn = byId("btn-clip-ripple-delete");
+    if (rippleBtn) rippleBtn.disabled = true;
     byId("timeline-issues-list").replaceChildren();
     return;
   }
@@ -1323,7 +1326,11 @@ function renderTimelineMarkerInspector() {
 
 function renderTimelineSelection() {
   const box = byId("timeline-selection-detail");
+  const rippleBtn = byId("btn-clip-ripple-delete");
   const sel = state.timelineSelected;
+  if (rippleBtn) {
+    rippleBtn.disabled = !getSelectedClipRef();
+  }
   if (!sel) {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
     renderTimelineMarkerInspector();
@@ -4199,6 +4206,29 @@ function splitAtPlayheadAction() {
   return true;
 }
 
+function getSelectedClipRef() {
+  if (!state.timelineDoc || !state.timelineSelected) return null;
+  if (state.timelineSelected.kind !== "clip" && state.timelineSelected.kind !== "transition") {
+    return null;
+  }
+  return findClipIndex(state.timelineDoc, state.timelineSelected.data);
+}
+
+function rippleDeleteSelectedClipAction() {
+  const ref = getSelectedClipRef();
+  if (!ref) return false;
+  const res = rippleDeleteClipInDocument(
+    state.timelineDoc,
+    ref.trackKind,
+    ref.trackIndex,
+    ref.clipIndex
+  );
+  if (!res.changed) return false;
+  const nextSel = res.focusClip ? { kind: "clip", data: res.focusClip } : null;
+  commitTimelineMutation(res.doc, nextSel);
+  return true;
+}
+
 function setPlayhead(frame) {
   state.playheadFrame = Math.max(0, Math.min(state.timelineMaxFrame, Math.round(frame)));
   updatePlayheadReadout();
@@ -4518,6 +4548,7 @@ const NLE_SHORTCUT_GROUPS = [
     items: [
       { kbd: "A", descKey: "shortcuts.key.select" },
       { kbd: "B", descKey: "shortcuts.key.blade" },
+      { kbd: "Shift+Backspace", descKey: "shortcuts.key.rippleDelete" },
       { kbd: "N", descKey: "shortcuts.key.snap" },
       { kbd: "Ctrl+Z", descKey: "shortcuts.key.undo" },
       { kbd: "Ctrl+Shift+Z / Y", descKey: "shortcuts.key.redo" }
@@ -4727,6 +4758,11 @@ function handleTransportKeydown(ev) {
     if (lower === "a") {
       ev.preventDefault();
       setTimelineTool("select");
+      return;
+    }
+    if (ev.key === "Backspace" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      rippleDeleteSelectedClipAction();
       return;
     }
     if (ev.key === "Escape" && state.timelineTool === "blade") {
@@ -6521,6 +6557,10 @@ function wireEvents() {
     setTimelineTool(state.timelineTool === "blade" ? "select" : "blade")
   );
   byId("btn-timeline-split").addEventListener("click", splitAtPlayheadAction);
+  const rippleDeleteBtn = byId("btn-clip-ripple-delete");
+  if (rippleDeleteBtn) {
+    rippleDeleteBtn.addEventListener("click", rippleDeleteSelectedClipAction);
+  }
   byId("btn-timeline-snap").addEventListener("click", toggleTimelineSnap);
   byId("btn-timeline-add-marker").addEventListener("click", addMarkerAtPlayheadAction);
   byId("btn-inspector-add-marker").addEventListener("click", addMarkerAtPlayheadAction);
