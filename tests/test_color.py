@@ -13,10 +13,12 @@ from taktcut.color import (
     COLOR_GRADE_PRESETS,
     CURVE_CHANNELS,
     POWER_WINDOW_SHAPES,
+    QUALIFIER_PRESET_IDS,
     ColorCurvesParams,
     ColorGradeParams,
     ColorNodeParams,
     PowerWindowParams,
+    QualifierParams,
     apply_color_preset,
     apply_cube_lut_rgb,
     bake_cdl_to_cube,
@@ -29,15 +31,19 @@ from taktcut.color import (
     compile_color_grade_filter,
     compile_color_node_chain,
     compile_power_window_mask_expr,
+    compile_qualifier_mask_expr,
     evaluate_curve_pchip,
     get_color_curves_preset,
     get_color_preset,
+    get_qualifier_preset,
     list_color_curves_presets,
     list_color_presets,
+    list_qualifier_presets,
     normalize_curve_points,
     parse_cdl_xml,
     parse_cube_lut,
     parse_cube_lut_text,
+    rgb_to_hsl,
 )
 from taktcut.models import AscCdlParams, HardwareCapabilities, RenderProfile
 from taktcut.render import build_render_plan
@@ -658,3 +664,151 @@ def test_color_curves_ffmpeg_execution_runtime() -> None:
     # Center inside Power Window gets lifted & red-boosted; corner outside stays neutral gray
     assert center_px[0] > center_px[2] + 20
     assert abs(corner_px[0] - corner_px[2]) < 5
+
+
+def test_hsl_qualifier_validation_mask_math_and_ffmpeg_compile(tmp_path: Path) -> None:
+    assert "skin_tones" in QUALIFIER_PRESET_IDS
+    presets = list_qualifier_presets()
+    assert len(presets) >= 6
+    skin_preset = get_qualifier_preset("skin_tones")
+    assert skin_preset.qualifier.enabled is True
+
+    with pytest.raises((ValueError, ValidationError)):
+        QualifierParams.model_validate({"preset": "neon_purple"})
+    with pytest.raises((ValueError, ValidationError)):
+        QualifierParams.model_validate({"hue_center": 400.0})
+    with pytest.raises((ValueError, ValidationError)):
+        QualifierParams.model_validate({"sat_low": 0.8, "sat_high": 0.2})
+    with pytest.raises((ValueError, ValidationError)):
+        QualifierParams.model_validate({"lum_low": 0.9, "lum_high": 0.4})
+    with pytest.raises((ValueError, ValidationError)):
+        QualifierParams.model_validate({"blur_radius": 12.0})
+
+    h_skin, s_skin, l_skin = rgb_to_hsl(216 / 255.0, 144 / 255.0, 96 / 255.0)
+    assert abs(h_skin - 24.0) < 1.0
+    assert 0.45 < s_skin < 0.70
+    assert 0.55 < l_skin < 0.70
+
+    h_sky, _s_sky, _l_sky = rgb_to_hsl(48 / 255.0, 128 / 255.0, 208 / 255.0)
+    assert abs(h_sky - 210.0) < 1.0
+
+    skin_q = skin_preset.qualifier
+    assert skin_q.evaluate_mask(216 / 255.0, 144 / 255.0, 96 / 255.0) > 0.95
+    assert skin_q.evaluate_mask(48 / 255.0, 128 / 255.0, 208 / 255.0) < 0.05
+
+    inv_q = skin_q.model_copy(update={"invert": True})
+    assert inv_q.evaluate_mask(216 / 255.0, 144 / 255.0, 96 / 255.0) < 0.05
+    assert inv_q.evaluate_mask(48 / 255.0, 128 / 255.0, 208 / 255.0) > 0.95
+
+    hi_q = get_qualifier_preset("highlights").qualifier
+    assert hi_q.evaluate_mask(0.95, 0.95, 0.95) > 0.95
+    assert hi_q.evaluate_mask(0.15, 0.15, 0.15) < 0.05
+
+    expr = compile_qualifier_mask_expr(skin_q)
+    assert "st(0,r(X,Y)/255)" in expr
+    assert "255*ld(8)" in expr
+
+    qual_node = ColorNodeParams(
+        id="node-1",
+        label="Skin Isolate",
+        enabled=True,
+        grade=ColorGradeParams(saturation=0.0),
+        qualifier=skin_q,
+    )
+    compiled = compile_color_node_chain([qual_node], pix_fmt="yuv420p")
+    assert compiled.has_qualifiers is True
+    assert compiled.has_power_windows is False
+    assert "extractplanes=r" in compiled.filtergraph
+    assert "gblur=sigma=1.00" in compiled.filtergraph
+    assert "maskedmerge" in compiled.filtergraph
+
+    combo_node = qual_node.model_copy(
+        update={
+            "power_window": PowerWindowParams(
+                shape="circle", center_x=0.25, center_y=0.5, width=0.3, height=0.6
+            )
+        }
+    )
+    combo_compiled = compile_color_node_chain([combo_node], pix_fmt="yuv420p")
+    assert combo_compiled.has_qualifiers is True
+    assert combo_compiled.has_power_windows is True
+    assert "blend=all_mode=multiply" in combo_compiled.filtergraph
+
+    # Baking into 3D .cube LUT preserves skin tone isolation while leaving blue saturated
+    cube_path = tmp_path / "qualifier_skin_desat.cube"
+    info = bake_color_node_chain_to_cube([qual_node], cube_path, size=17, title="qual_skin")
+    assert info.entry_count == 17**3
+    _lut_info, table = parse_cube_lut_text(cube_path.read_text(encoding="utf-8"))
+    # Skin-like sample (r=14/16, g=9/16, b=6/16) -> desaturated (r-b shrinks)
+    skin_idx = 6 * 17 * 17 + 9 * 17 + 14
+    sr, _sg, sb = table[skin_idx]
+    assert abs(sr - sb) < 0.12
+    # Blue sample (r=3/16, g=8/16, b=13/16) -> stays blue
+    blue_idx = 13 * 17 * 17 + 8 * 17 + 3
+    br, _bg, bb = table[blue_idx]
+    assert bb - br > 0.45
+
+
+def test_hsl_qualifier_ffmpeg_execution_runtime() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    assert ffmpeg_bin is not None
+    skin_q = get_qualifier_preset("skin_tones").qualifier
+    node = ColorNodeParams(
+        id="node-1",
+        label="Skin Key + PW",
+        enabled=True,
+        grade=ColorGradeParams(saturation=0.0),
+        qualifier=skin_q,
+        power_window=PowerWindowParams(
+            shape="linear",
+            center_x=0.16,
+            center_y=0.5,
+            width=0.32,
+            height=1.0,
+            softness=0.0,
+        ),
+    )
+    fg = compile_color_node_chain([node], pix_fmt="rgb24").filtergraph
+    # Left half (X < 16) is skin tone inside PW; middle (16 <= X < 32) is skin tone outside PW;
+    # right (32 <= X < 48) is blue outside qualifier & PW
+    lavfi_src = (
+        "color=c=0xd89060:s=16x16:d=0.1,format=rgb24[a];"
+        "color=c=0xd89060:s=16x16:d=0.1,format=rgb24[b];"
+        "color=c=0x3080d0:s=16x16:d=0.1,format=rgb24[c];"
+        "[a][b][c]hstack=inputs=3"
+    )
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        lavfi_src,
+        "-vf",
+        fg,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    assert proc.returncode == 0, f"FFmpeg rejected qualifier graph: {proc.stderr.decode()}"
+    raw = proc.stdout
+    assert len(raw) == 48 * 16 * 3
+    row_offset = 8 * 48 * 3
+    px_left = (raw[row_offset + 4 * 3], raw[row_offset + 4 * 3 + 1], raw[row_offset + 4 * 3 + 2])
+    px_mid = (raw[row_offset + 24 * 3], raw[row_offset + 24 * 3 + 1], raw[row_offset + 24 * 3 + 2])
+    px_right = (
+        raw[row_offset + 40 * 3],
+        raw[row_offset + 40 * 3 + 1],
+        raw[row_offset + 40 * 3 + 2],
+    )
+    # Left (skin + inside PW): desaturated
+    assert abs(px_left[0] - px_left[2]) < 15
+    # Middle (skin + outside PW): stays warm skin tone
+    assert px_mid[0] - px_mid[2] > 90
+    # Right (blue + outside qualifier): stays blue
+    assert px_right[2] - px_right[0] > 120

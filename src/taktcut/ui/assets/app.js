@@ -9,6 +9,7 @@ import {
   drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
   drawProgramMonitorCanvas,
+  drawQualifierSpectrumCanvas,
   drawRetimeRampEditorCanvas,
   drawStereoVuMeterCanvas,
   drawTimelineCanvas,
@@ -16,6 +17,7 @@ import {
   drawTransformGraphCanvas,
   findActiveSubtitleCue,
   framesToSmpte,
+  sampleColorViewerInputRgb,
   trackPointSequenceCanvas
 } from "./canvas.js";
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
@@ -52,6 +54,7 @@ import {
   MAX_COLOR_NODES,
   MAX_CURVE_POINTS,
   PLANAR_TRACKER_PRESETS_CLIENT,
+  QUALIFIER_PRESETS,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
@@ -130,6 +133,7 @@ import {
   createDefaultColorCurves,
   createDefaultColorNodeTree,
   createDefaultPowerWindow,
+  createDefaultQualifier,
   createEmptyTransformKeyframes,
   createStillRecord,
   deleteMarkerInDocument,
@@ -177,6 +181,7 @@ import {
   isCurveChannelIdentity,
   isPointerOnSplitWipeDivider,
   isPowerWindowActive,
+  isQualifierActive,
   isTrackAudiblyMuted,
   moveClipInDocument,
   moveColorNodeInTree,
@@ -197,6 +202,7 @@ import {
   normalizeMarkerColor,
   normalizeMasterBusState,
   normalizePowerWindow,
+  normalizeQualifier,
   normalizeTransformHexColor,
   normalizeTimelineTool,
   normalizeRetimeProcess,
@@ -204,6 +210,7 @@ import {
   normalizeRetimeRampPreset,
   normalizeTrackMixerState,
   parseCubeLutTextClient,
+  pickQualifierFromRgb,
   removeColorNodeFromTree,
   removeStillById,
   removeTransformKeyframeInDocument,
@@ -211,6 +218,7 @@ import {
   resolveRetimeRampPointsForPreset,
   resolveSourceTapeFrame,
   resolveTransformKeyframeBezier,
+  rgbToHslClient,
   rippleDeleteClipInDocument,
   rippleTrimClipInDocument,
   rollEditCutInDocument,
@@ -474,6 +482,10 @@ const state = {
   colorCompileSeq: 0,
   powerWindowOverlay: true,
   powerWindowDrag: null,
+  qualifierHighlight: false,
+  qualifierPickMode: false,
+  qualifierPickDrag: false,
+  qualifierLastSample: null,
   colorCurvesChannel: "master",
   colorCurvesSelectedPt: -1,
   colorCurvesDrag: null,
@@ -1202,6 +1214,8 @@ function redrawActiveCanvases() {
       isDragging: Boolean(state.colorSplitWipe.isDragging),
       beforeLabel: t("wipe.pill.before"),
       afterLabel: t("wipe.pill.after"),
+      qualifierHighlight: Boolean(state.qualifierHighlight),
+      activeNodeId: activeNode ? activeNode.id : null,
       powerWindow: {
         window: activeNode ? activeNode.power_window : null,
         showOverlay: Boolean(state.powerWindowOverlay)
@@ -1212,6 +1226,10 @@ function redrawActiveCanvases() {
       activeColorChain,
       state.colorScopeMode,
       previewCanvas
+    );
+    drawQualifierSpectrumCanvas(
+      byId("qual-spectrum-canvas"),
+      activeNode ? activeNode.qualifier : createDefaultQualifier()
     );
     drawColorCurvesCanvas(
       byId("color-curves-canvas"),
@@ -6291,6 +6309,7 @@ function renderColorCompileResult(res) {
   } else {
     const tags = ["GRADED"];
     if (res.has_power_windows) tags.push("PW");
+    if (res.has_qualifiers) tags.push("QUAL");
     if (res.has_curves) tags.push("CRV");
     badge.textContent = tags.join(" | ");
   }
@@ -6333,7 +6352,8 @@ function renderColorNodeTreeUI() {
   const outsideBtn = byId("btn-color-node-outside");
   if (outsideBtn) {
     outsideBtn.disabled =
-      nodes.length >= MAX_COLOR_NODES || !isPowerWindowActive(activeNode.power_window);
+      nodes.length >= MAX_COLOR_NODES ||
+      (!isPowerWindowActive(activeNode.power_window) && !isQualifierActive(activeNode.qualifier));
   }
 
   const delBtn = byId("btn-color-node-delete");
@@ -6447,6 +6467,16 @@ function renderColorNodeTreeUI() {
     if (!isColorCurvesIdentity(node.curves)) {
       metaRow.appendChild(dom("span", "color-node-crv-tag", "CRV"));
     }
+    if (isQualifierActive(node.qualifier)) {
+      const qualLabel = node.qualifier.invert ? "INV QUAL" : "QUAL";
+      metaRow.appendChild(
+        dom(
+          "span",
+          `color-node-qual-tag${node.qualifier.invert ? " is-invert" : ""}`,
+          qualLabel
+        )
+      );
+    }
     selBtn.replaceChildren(topRow, metaRow);
     selBtn.addEventListener("click", () => selectColorNodeAction(node.id));
 
@@ -6469,7 +6499,190 @@ function renderColorNodeTreeUI() {
   flowChildren.push(dom("span", "color-node-pin mono", "OUT"));
   graph.replaceChildren(...flowChildren);
   renderPowerWindowControlsUI(activeNode);
+  renderQualifierControlsUI(activeNode);
   renderColorCurvesControlsUI(activeNode);
+}
+
+const QUALIFIER_CONTROL_DEFS = [
+  { key: "hue_center", rangeId: "qual-hue-center-range", numId: "qual-hue-center-num", scale: 1, min: 0, max: 360, decimals: 0 },
+  { key: "hue_width", rangeId: "qual-hue-width-range", numId: "qual-hue-width-num", scale: 1, min: 2, max: 360, decimals: 0 },
+  { key: "hue_softness", rangeId: "qual-hue-soft-range", numId: "qual-hue-soft-num", scale: 1, min: 0, max: 60, decimals: 0 },
+  { key: "sat_low", rangeId: "qual-sat-low-range", numId: "qual-sat-low-num", scale: 100, min: 0, max: 100, decimals: 0 },
+  { key: "sat_high", rangeId: "qual-sat-high-range", numId: "qual-sat-high-num", scale: 100, min: 0, max: 100, decimals: 0 },
+  { key: "sat_softness", rangeId: "qual-sat-soft-range", numId: "qual-sat-soft-num", scale: 100, min: 0, max: 40, decimals: 0 },
+  { key: "lum_low", rangeId: "qual-lum-low-range", numId: "qual-lum-low-num", scale: 100, min: 0, max: 100, decimals: 0 },
+  { key: "lum_high", rangeId: "qual-lum-high-range", numId: "qual-lum-high-num", scale: 100, min: 0, max: 100, decimals: 0 },
+  { key: "lum_softness", rangeId: "qual-lum-soft-range", numId: "qual-lum-soft-num", scale: 100, min: 0, max: 40, decimals: 0 },
+  { key: "blur_radius", rangeId: "qual-blur-range", numId: "qual-blur-num", scale: 1, min: 0, max: 8, decimals: 1 }
+];
+
+function renderQualifierControlsUI(activeNode) {
+  const q = normalizeQualifier(activeNode ? activeNode.qualifier : null);
+  const active = isQualifierActive(q);
+
+  const badge = byId("qual-status-badge");
+  if (badge) {
+    if (!active) {
+      badge.textContent = "OFF";
+      badge.className = "nle-tag mono";
+    } else {
+      const presetTag = (q.preset || "custom").toUpperCase();
+      badge.textContent = q.invert ? `${presetTag} | INV` : presetTag;
+      badge.className = `nle-tag ${q.invert ? "is-blue" : "is-active"} mono`;
+    }
+  }
+
+  const activePreset = active ? q.preset || "custom" : "off";
+  for (const btn of document.querySelectorAll("[data-qual-preset]")) {
+    const isSel = btn.getAttribute("data-qual-preset") === activePreset;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  const pickBtn = byId("btn-qual-pick");
+  const previewCanvas = byId("color-preview-canvas");
+  if (pickBtn) {
+    const picking = Boolean(state.qualifierPickMode);
+    pickBtn.classList.toggle("is-active", picking);
+    pickBtn.setAttribute("aria-pressed", picking ? "true" : "false");
+  }
+  if (previewCanvas) {
+    previewCanvas.classList.toggle("is-eyedropper", Boolean(state.qualifierPickMode));
+  }
+
+  const hlOn = Boolean(state.qualifierHighlight);
+  for (const hlId of ["btn-qual-highlight", "btn-color-qual-highlight"]) {
+    const hlBtn = byId(hlId);
+    if (hlBtn) {
+      hlBtn.classList.toggle("is-active", hlOn);
+      hlBtn.setAttribute("aria-pressed", hlOn ? "true" : "false");
+    }
+  }
+
+  const invBtn = byId("btn-qual-invert");
+  if (invBtn) {
+    invBtn.disabled = !active;
+    invBtn.classList.toggle("is-active", active && q.invert);
+    invBtn.setAttribute("aria-pressed", active && q.invert ? "true" : "false");
+  }
+
+  const rstBtn = byId("btn-qual-reset");
+  if (rstBtn) rstBtn.disabled = !active;
+
+  const readout = byId("qual-pick-readout");
+  if (readout) {
+    if (state.qualifierLastSample) {
+      const s = state.qualifierLastSample;
+      readout.textContent = `H ${Math.round(s.h)}deg | S ${Math.round(s.s * 100)}% | L ${Math.round(s.l * 100)}%`;
+    } else if (active) {
+      readout.textContent = `H ${Math.round(q.hue_center)}deg +/-${Math.round(q.hue_width * 0.5)}`;
+    } else {
+      readout.textContent = "H -- | S -- | L --";
+    }
+  }
+
+  const ctrlGrid = byId("color-qual-controls");
+  if (ctrlGrid) ctrlGrid.classList.toggle("is-dimmed", !active);
+
+  for (const def of QUALIFIER_CONTROL_DEFS) {
+    const rawVal = Number(q[def.key]) * def.scale;
+    const valStr = def.decimals > 0 ? rawVal.toFixed(def.decimals) : String(Math.round(rawVal));
+    const rEl = byId(def.rangeId);
+    const nEl = byId(def.numId);
+    if (rEl) {
+      rEl.disabled = !active;
+      rEl.value = valStr;
+    }
+    if (nEl) {
+      nEl.disabled = !active;
+      if (document.activeElement !== nEl) {
+        nEl.value = valStr;
+      }
+    }
+  }
+}
+
+function updateActiveQualifier(patch, shouldCompile = true) {
+  const active = syncActiveColorGradeFromTree();
+  const merged = { ...active.qualifier, ...patch };
+  if (merged.sat_low > merged.sat_high) {
+    if (patch.sat_low !== undefined && patch.sat_high === undefined) {
+      merged.sat_high = merged.sat_low;
+    } else {
+      merged.sat_low = merged.sat_high;
+    }
+  }
+  if (merged.lum_low > merged.lum_high) {
+    if (patch.lum_low !== undefined && patch.lum_high === undefined) {
+      merged.lum_high = merged.lum_low;
+    } else {
+      merged.lum_low = merged.lum_high;
+    }
+  }
+  const nextQual = normalizeQualifier(merged);
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    qualifier: nextQual
+  });
+  syncActiveColorGradeFromTree();
+  renderColorNodeTreeUI();
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+  if (shouldCompile) {
+    scheduleColorCompile();
+  }
+}
+
+function applyQualifierPresetAction(presetId) {
+  const preset = QUALIFIER_PRESETS[presetId] || QUALIFIER_PRESETS.off;
+  const active = syncActiveColorGradeFromTree();
+  state.qualifierLastSample = null;
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    qualifier: normalizeQualifier(preset.qualifier)
+  });
+  syncActiveColorGradeFromTree();
+  renderColorNodeTreeUI();
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+  compileColorNow();
+}
+
+function toggleQualifierHighlight() {
+  state.qualifierHighlight = !state.qualifierHighlight;
+  renderColorNodeTreeUI();
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+}
+
+function toggleQualifierPickMode() {
+  state.qualifierPickMode = !state.qualifierPickMode;
+  renderColorNodeTreeUI();
+}
+
+function applyQualifierEyedropperAt(u, v, shouldCompile = true) {
+  const previewCanvas = byId("color-preview-canvas");
+  if (!previewCanvas) return;
+  const active = syncActiveColorGradeFromTree();
+  const sample = sampleColorViewerInputRgb(previewCanvas, state.colorNodeTree, u, v, active.id);
+  if (!sample) return;
+  const [h, s, l] = rgbToHslClient(sample[0], sample[1], sample[2]);
+  state.qualifierLastSample = { h, s, l };
+  const picked = pickQualifierFromRgb(sample[0], sample[1], sample[2], {
+    invert: Boolean(active.qualifier && active.qualifier.invert)
+  });
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    qualifier: picked
+  });
+  syncActiveColorGradeFromTree();
+  renderColorNodeTreeUI();
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+  if (shouldCompile) {
+    compileColorNow();
+  }
 }
 
 const POWER_WINDOW_CONTROL_DEFS = [
@@ -6686,7 +6899,7 @@ function addColorNodeAction() {
 function addOutsideColorNodeAction() {
   if (state.colorNodeTree.nodes.length >= MAX_COLOR_NODES) return;
   const active = syncActiveColorGradeFromTree();
-  if (!isPowerWindowActive(active.power_window)) return;
+  if (!isPowerWindowActive(active.power_window) && !isQualifierActive(active.qualifier)) return;
   state.colorNodeTree = addOutsideColorNodeInTree(state.colorNodeTree, active.id);
   syncActiveColorGradeFromTree();
   state.colorActivePresetId = "";
@@ -6726,10 +6939,12 @@ function moveColorNodeAction(direction) {
 function resetSelectedColorNodeAction() {
   const active = syncActiveColorGradeFromTree();
   state.colorCurvesSelectedPt = -1;
+  state.qualifierLastSample = null;
   state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
     grade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
     curves: createDefaultColorCurves(),
     power_window: createDefaultPowerWindow(),
+    qualifier: createDefaultQualifier(),
     lut: null
   });
   syncActiveColorGradeFromTree();
@@ -6745,11 +6960,14 @@ async function compileColorNow() {
     const hasPw = serializedNodes.some(
       (n) => n.power_window && n.power_window.shape && n.power_window.shape !== "off"
     );
+    const hasQual = serializedNodes.some(
+      (n) => n.qualifier && n.qualifier.enabled === true
+    );
     const hasCurves = serializedNodes.some(
       (n) => n.curves && !isColorCurvesIdentity(n.curves)
     );
     const payload =
-      serializedNodes.length === 1 && !serializedNodes[0].lut_table && !hasPw && !hasCurves
+      serializedNodes.length === 1 && !serializedNodes[0].lut_table && !hasPw && !hasQual && !hasCurves
         ? { grade: state.colorGrade }
         : { nodes: serializedNodes };
     const compiled = await api.compileColorGrade(payload);
@@ -7185,7 +7403,7 @@ function wireColorInputs() {
 
       canvas.addEventListener("pointerdown", (ev) => {
         const wipe = desc.stateObj();
-        if (!wipe.enabled) return;
+        if (!wipe.enabled || (target === "color" && state.qualifierPickMode)) return;
         const pt = toCanvasPoint(ev);
         if (!pt || !isPointerOnSplitWipeDivider(pt.x, pt.y, pt.geom, SPLIT_WIPE_HIT_RADIUS_PX)) {
           return;
@@ -7214,7 +7432,7 @@ function wireColorInputs() {
 
       canvas.addEventListener("pointermove", (ev) => {
         const wipe = desc.stateObj();
-        if (!wipe.enabled) {
+        if (!wipe.enabled || (target === "color" && state.qualifierPickMode)) {
           if (wipe.isHovered || wipe.isDragging) {
             wipe.isHovered = false;
             wipe.isDragging = false;
@@ -7296,7 +7514,26 @@ function wireColorInputs() {
     };
 
     colorPreviewCanvas.addEventListener("pointerdown", (ev) => {
-      if (state.colorSplitWipe.isDragging || !state.powerWindowOverlay) return;
+      if (state.colorSplitWipe.isDragging) return;
+      if (state.qualifierPickMode) {
+        const rect = colorPreviewCanvas.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const u = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+          const v = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
+          ev.preventDefault();
+          state.qualifierPickDrag = true;
+          applyQualifierEyedropperAt(u, v, false);
+          if (typeof colorPreviewCanvas.setPointerCapture === "function") {
+            try {
+              colorPreviewCanvas.setPointerCapture(ev.pointerId);
+            } catch {
+              // Ignore synthetic pointer capture errors
+            }
+          }
+          return;
+        }
+      }
+      if (!state.powerWindowOverlay) return;
       const activeNode = syncActiveColorGradeFromTree();
       if (!isPowerWindowActive(activeNode.power_window)) return;
       const pt = toPwCanvasPoint(ev);
@@ -7346,6 +7583,16 @@ function wireColorInputs() {
     });
 
     colorPreviewCanvas.addEventListener("pointermove", (ev) => {
+      if (state.qualifierPickDrag && state.qualifierPickMode) {
+        const rect = colorPreviewCanvas.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const u = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+          const v = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
+          ev.preventDefault();
+          applyQualifierEyedropperAt(u, v, false);
+        }
+        return;
+      }
       if (!state.powerWindowDrag) return;
       const pt = toPwCanvasPoint(ev);
       if (!pt) return;
@@ -7389,6 +7636,19 @@ function wireColorInputs() {
     });
 
     const endPwDrag = (ev) => {
+      if (state.qualifierPickDrag) {
+        state.qualifierPickDrag = false;
+        if (ev && typeof colorPreviewCanvas.releasePointerCapture === "function") {
+          try {
+            if (colorPreviewCanvas.hasPointerCapture && colorPreviewCanvas.hasPointerCapture(ev.pointerId)) {
+              colorPreviewCanvas.releasePointerCapture(ev.pointerId);
+            }
+          } catch {
+            // Ignore pointer release errors
+          }
+        }
+        compileColorNow();
+      }
       if (!state.powerWindowDrag) return;
       state.powerWindowDrag = null;
       if (ev && typeof colorPreviewCanvas.releasePointerCapture === "function") {
@@ -7532,6 +7792,9 @@ function wireColorInputs() {
   byId("btn-cdl-reset").addEventListener("click", () => {
     state.colorNodeTree = createDefaultColorNodeTree();
     state.colorCurvesSelectedPt = -1;
+    state.qualifierHighlight = false;
+    state.qualifierPickMode = false;
+    state.qualifierLastSample = null;
     syncActiveColorGradeFromTree();
     state.colorActivePresetId = "rec709_clean";
     syncColorInputsFromState();
@@ -10214,6 +10477,7 @@ const NLE_SHORTCUT_GROUPS = [
     titleKey: "shortcuts.group.studio",
     items: [
       { kbd: "W / Ctrl+W", descKey: "shortcuts.key.splitWipe" },
+      { kbd: "Shift+H", descKey: "shortcuts.key.qualHighlight" },
       { kbd: "Shift+S", descKey: "shortcuts.key.grabStill" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
@@ -10361,6 +10625,19 @@ function handleTransportKeydown(ev) {
   ) {
     ev.preventDefault();
     grabActiveMonitorStill();
+    return;
+  }
+
+  if (
+    !ev.ctrlKey &&
+    !ev.metaKey &&
+    !ev.altKey &&
+    ev.shiftKey &&
+    lower === "h" &&
+    state.activeTab === "color"
+  ) {
+    ev.preventDefault();
+    toggleQualifierHighlight();
     return;
   }
 
@@ -15045,6 +15322,43 @@ function wireEvents() {
       }
       const clamped = Math.min(def.max, Math.max(def.min, raw));
       updateActivePowerWindow({ [def.key]: clamped / def.scale }, true);
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-qual-preset]")) {
+    btn.addEventListener("click", () => {
+      const presetId = btn.getAttribute("data-qual-preset") || "off";
+      applyQualifierPresetAction(presetId);
+    });
+  }
+  byId("btn-qual-pick")?.addEventListener("click", toggleQualifierPickMode);
+  byId("btn-qual-highlight")?.addEventListener("click", toggleQualifierHighlight);
+  byId("btn-color-qual-highlight")?.addEventListener("click", toggleQualifierHighlight);
+  byId("btn-qual-invert")?.addEventListener("click", () => {
+    const active = syncActiveColorGradeFromTree();
+    if (!isQualifierActive(active.qualifier)) return;
+    updateActiveQualifier({ invert: !active.qualifier.invert }, true);
+  });
+  byId("btn-qual-reset")?.addEventListener("click", () => {
+    applyQualifierPresetAction("off");
+  });
+  for (const def of QUALIFIER_CONTROL_DEFS) {
+    const rEl = byId(def.rangeId);
+    const nEl = byId(def.numId);
+    rEl?.addEventListener("input", () => {
+      const raw = Number.parseFloat(rEl.value);
+      if (!Number.isFinite(raw)) return;
+      const clamped = Math.min(def.max, Math.max(def.min, raw));
+      updateActiveQualifier({ [def.key]: clamped / def.scale, preset: "custom" }, true);
+    });
+    nEl?.addEventListener("change", () => {
+      const raw = Number.parseFloat(nEl.value);
+      if (!Number.isFinite(raw)) {
+        renderColorNodeTreeUI();
+        return;
+      }
+      const clamped = Math.min(def.max, Math.max(def.min, raw));
+      updateActiveQualifier({ [def.key]: clamped / def.scale, preset: "custom" }, true);
     });
   }
 

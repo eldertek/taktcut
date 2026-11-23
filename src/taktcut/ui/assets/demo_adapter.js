@@ -5,6 +5,7 @@ import {
   DELIVERY_PRESETS,
   LOUDNESS_PRESET_LUFS,
   PLANAR_TRACKER_PRESETS_CLIENT,
+  QUALIFIER_PRESETS,
   STABILIZER_PRESETS_CLIENT,
   TRANSFORM_BORDER_FEATHER_MAX,
   TRANSFORM_BORDER_FEATHER_MIN,
@@ -192,10 +193,15 @@ function compileColorClient(payload, opts = {}) {
     const clientNodes = payload.nodes.map((n, idx) => deserializeColorNodeFromApi(n, idx));
     return compileColorNodeChainClient(clientNodes, opts.pix_fmt || null);
   }
-  if (payload && payload.curves && typeof payload.curves === "object") {
+  if (
+    payload &&
+    ((payload.curves && typeof payload.curves === "object") ||
+      (payload.qualifier && typeof payload.qualifier === "object"))
+  ) {
     const singleNode = createColorNode(1, {
       grade: payload.grade || payload,
-      curves: payload.curves
+      curves: payload.curves,
+      qualifier: payload.qualifier
     });
     return compileColorNodeChainClient([singleNode], opts.pix_fmt || null);
   }
@@ -2472,6 +2478,7 @@ export function createApiClient() {
         return {
           presets: [],
           curve_presets: Object.values(COLOR_CURVE_PRESETS),
+          qualifier_presets: Object.values(QUALIFIER_PRESETS),
           bounds: {}
         };
       }

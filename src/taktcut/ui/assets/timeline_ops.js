@@ -5680,6 +5680,350 @@ export function compilePowerWindowMaskExprClient(pwRaw) {
   return pw.invert ? `${setup}255*(${tExpr})` : `${setup}255*(1-(${tExpr}))`;
 }
 
+export const QUALIFIER_PRESET_IDS = [
+  "off",
+  "skin_tones",
+  "sky_blue",
+  "foliage_green",
+  "teal_accents",
+  "highlights",
+  "shadows",
+  "custom"
+];
+
+const QUALIFIER_DEFAULTS = {
+  enabled: false,
+  preset: "off",
+  hue_center: 22.0,
+  hue_width: 44.0,
+  hue_softness: 18.0,
+  sat_low: 0.12,
+  sat_high: 0.75,
+  sat_softness: 0.08,
+  lum_low: 0.18,
+  lum_high: 0.88,
+  lum_softness: 0.10,
+  blur_radius: 0.0,
+  invert: false
+};
+
+export const QUALIFIER_PRESETS = {
+  off: {
+    id: "off",
+    label: "Off",
+    qualifier: { ...QUALIFIER_DEFAULTS }
+  },
+  skin_tones: {
+    id: "skin_tones",
+    label: "Skin Tones",
+    qualifier: {
+      ...QUALIFIER_DEFAULTS,
+      enabled: true,
+      preset: "skin_tones",
+      hue_center: 22.0,
+      hue_width: 44.0,
+      hue_softness: 18.0,
+      sat_low: 0.12,
+      sat_high: 0.75,
+      sat_softness: 0.08,
+      lum_low: 0.18,
+      lum_high: 0.88,
+      lum_softness: 0.10,
+      blur_radius: 1.0
+    }
+  },
+  sky_blue: {
+    id: "sky_blue",
+    label: "Sky Blue",
+    qualifier: {
+      ...QUALIFIER_DEFAULTS,
+      enabled: true,
+      preset: "sky_blue",
+      hue_center: 210.0,
+      hue_width: 52.0,
+      hue_softness: 18.0,
+      sat_low: 0.20,
+      sat_high: 1.00,
+      sat_softness: 0.10,
+      lum_low: 0.25,
+      lum_high: 0.95,
+      lum_softness: 0.10,
+      blur_radius: 1.0
+    }
+  },
+  foliage_green: {
+    id: "foliage_green",
+    label: "Foliage Green",
+    qualifier: {
+      ...QUALIFIER_DEFAULTS,
+      enabled: true,
+      preset: "foliage_green",
+      hue_center: 115.0,
+      hue_width: 64.0,
+      hue_softness: 20.0,
+      sat_low: 0.18,
+      sat_high: 0.95,
+      sat_softness: 0.10,
+      lum_low: 0.12,
+      lum_high: 0.82,
+      lum_softness: 0.10,
+      blur_radius: 1.0
+    }
+  },
+  teal_accents: {
+    id: "teal_accents",
+    label: "Teal Accents",
+    qualifier: {
+      ...QUALIFIER_DEFAULTS,
+      enabled: true,
+      preset: "teal_accents",
+      hue_center: 180.0,
+      hue_width: 46.0,
+      hue_softness: 16.0,
+      sat_low: 0.20,
+      sat_high: 1.00,
+      sat_softness: 0.10,
+      lum_low: 0.15,
+      lum_high: 0.85,
+      lum_softness: 0.10,
+      blur_radius: 0.5
+    }
+  },
+  highlights: {
+    id: "highlights",
+    label: "Highlights",
+    qualifier: {
+      ...QUALIFIER_DEFAULTS,
+      enabled: true,
+      preset: "highlights",
+      hue_center: 0.0,
+      hue_width: 360.0,
+      hue_softness: 0.0,
+      sat_low: 0.0,
+      sat_high: 1.0,
+      sat_softness: 0.0,
+      lum_low: 0.65,
+      lum_high: 1.0,
+      lum_softness: 0.15,
+      blur_radius: 1.0
+    }
+  },
+  shadows: {
+    id: "shadows",
+    label: "Shadows",
+    qualifier: {
+      ...QUALIFIER_DEFAULTS,
+      enabled: true,
+      preset: "shadows",
+      hue_center: 0.0,
+      hue_width: 360.0,
+      hue_softness: 0.0,
+      sat_low: 0.0,
+      sat_high: 1.0,
+      sat_softness: 0.0,
+      lum_low: 0.0,
+      lum_high: 0.32,
+      lum_softness: 0.15,
+      blur_radius: 1.0
+    }
+  }
+};
+
+export function rgbToHslClient(r, g, b) {
+  const rc = clampUnitColor(r);
+  const gc = clampUnitColor(g);
+  const bc = clampUnitColor(b);
+  const cmax = Math.max(rc, gc, bc);
+  const cmin = Math.min(rc, gc, bc);
+  const delta = cmax - cmin;
+  const lum = 0.5 * (cmax + cmin);
+  if (delta <= 1e-6) {
+    return [0.0, 0.0, lum];
+  }
+  const denom = Math.max(1e-6, 1.0 - Math.abs(2.0 * lum - 1.0));
+  const sat = clampUnitColor(delta / denom);
+  let hue = 0.0;
+  if (cmax === rc) {
+    hue = 60.0 * (((gc - bc) / delta + 6.0) % 6.0);
+  } else if (cmax === gc) {
+    hue = 60.0 * ((bc - rc) / delta + 2.0);
+  } else {
+    hue = 60.0 * ((rc - gc) / delta + 4.0);
+  }
+  hue = ((hue % 360.0) + 360.0) % 360.0;
+  return [hue, sat, lum];
+}
+
+export function createDefaultQualifier(overrides = {}) {
+  return normalizeQualifier({ ...QUALIFIER_DEFAULTS, ...overrides });
+}
+
+export function normalizeQualifier(raw) {
+  const q = raw && typeof raw === "object" ? raw : {};
+  const presetRaw = typeof q.preset === "string" ? q.preset.trim().toLowerCase() : "off";
+  const preset = QUALIFIER_PRESET_IDS.includes(presetRaw) ? presetRaw : "off";
+  const satLow = clampPwNum(q.sat_low, 0.0, 1.0, QUALIFIER_DEFAULTS.sat_low);
+  const satHigh = Math.max(satLow, clampPwNum(q.sat_high, 0.0, 1.0, QUALIFIER_DEFAULTS.sat_high));
+  const lumLow = clampPwNum(q.lum_low, 0.0, 1.0, QUALIFIER_DEFAULTS.lum_low);
+  const lumHigh = Math.max(lumLow, clampPwNum(q.lum_high, 0.0, 1.0, QUALIFIER_DEFAULTS.lum_high));
+  return {
+    enabled: Boolean(q.enabled),
+    preset,
+    hue_center: clampPwNum(q.hue_center, 0.0, 360.0, QUALIFIER_DEFAULTS.hue_center),
+    hue_width: clampPwNum(q.hue_width, 2.0, 360.0, QUALIFIER_DEFAULTS.hue_width),
+    hue_softness: clampPwNum(q.hue_softness, 0.0, 60.0, QUALIFIER_DEFAULTS.hue_softness),
+    sat_low: satLow,
+    sat_high: satHigh,
+    sat_softness: clampPwNum(q.sat_softness, 0.0, 0.4, QUALIFIER_DEFAULTS.sat_softness),
+    lum_low: lumLow,
+    lum_high: lumHigh,
+    lum_softness: clampPwNum(q.lum_softness, 0.0, 0.4, QUALIFIER_DEFAULTS.lum_softness),
+    blur_radius: clampPwNum(q.blur_radius, 0.0, 8.0, QUALIFIER_DEFAULTS.blur_radius),
+    invert: Boolean(q.invert)
+  };
+}
+
+export function isQualifierActive(q) {
+  return Boolean(q && q.enabled);
+}
+
+function evalQualifierBandWeight(val, lo, hi, soft) {
+  let w = 1.0;
+  if (lo > 0.0) {
+    if (soft <= 1e-6) {
+      w *= val >= lo ? 1.0 : 0.0;
+    } else {
+      w *= smoothstepUnit(lo - soft, lo, val);
+    }
+  }
+  if (hi < 1.0) {
+    if (soft <= 1e-6) {
+      w *= val <= hi ? 1.0 : 0.0;
+    } else {
+      w *= 1.0 - smoothstepUnit(hi, hi + soft, val);
+    }
+  }
+  return w;
+}
+
+export function evaluateQualifierMask(qRaw, r, g, b) {
+  const q = normalizeQualifier(qRaw);
+  if (!q.enabled) return 1.0;
+  const [hue, sat, lum] = rgbToHslClient(r, g, b);
+  let hWeight = 1.0;
+  if (q.hue_width < 359.9) {
+    const diff = Math.abs(hue - (q.hue_center % 360.0));
+    const dh = Math.min(diff, 360.0 - diff);
+    const hw = q.hue_width * 0.5;
+    if (dh <= hw) {
+      hWeight = 1.0;
+    } else if (q.hue_softness <= 1e-6) {
+      hWeight = 0.0;
+    } else {
+      hWeight = 1.0 - smoothstepUnit(hw, hw + q.hue_softness, dh);
+    }
+  }
+  const sWeight = evalQualifierBandWeight(sat, q.sat_low, q.sat_high, q.sat_softness);
+  const lWeight = evalQualifierBandWeight(lum, q.lum_low, q.lum_high, q.lum_softness);
+  const weight = clampUnitColor(hWeight * sWeight * lWeight);
+  return q.invert ? 1.0 - weight : weight;
+}
+
+export function pickQualifierFromRgb(r, g, b, baseOverrides = {}) {
+  const [hue, sat, lum] = rgbToHslClient(r, g, b);
+  if (sat < 0.08) {
+    return normalizeQualifier({
+      ...QUALIFIER_DEFAULTS,
+      ...baseOverrides,
+      enabled: true,
+      preset: "custom",
+      hue_center: 0.0,
+      hue_width: 360.0,
+      hue_softness: 0.0,
+      sat_low: 0.0,
+      sat_high: 0.35,
+      sat_softness: 0.1,
+      lum_low: Math.max(0.0, Number((lum - 0.18).toFixed(2))),
+      lum_high: Math.min(1.0, Number((lum + 0.18).toFixed(2))),
+      lum_softness: 0.1,
+      blur_radius: 1.0
+    });
+  }
+  return normalizeQualifier({
+    ...QUALIFIER_DEFAULTS,
+    ...baseOverrides,
+    enabled: true,
+    preset: "custom",
+    hue_center: Math.round(hue),
+    hue_width: 38.0,
+    hue_softness: 16.0,
+    sat_low: Math.max(0.05, Number((sat - 0.22).toFixed(2))),
+    sat_high: Math.min(1.0, Number((sat + 0.25).toFixed(2))),
+    sat_softness: 0.1,
+    lum_low: Math.max(0.05, Number((lum - 0.25).toFixed(2))),
+    lum_high: Math.min(1.0, Number((lum + 0.25).toFixed(2))),
+    lum_softness: 0.1,
+    blur_radius: 1.0
+  });
+}
+
+function compileGeqBandClient(regIdx, lo, hi, soft) {
+  let expr = "";
+  if (lo > 0.0) {
+    if (soft <= 1e-4) {
+      expr += `st(8,ld(8)*gte(ld(${regIdx}),${lo.toFixed(4)}));`;
+    } else {
+      const e0 = lo - soft;
+      expr +=
+        `st(9,clip((ld(${regIdx})-(${e0.toFixed(4)}))/${soft.toFixed(4)},0,1));` +
+        "st(8,ld(8)*(ld(9)*ld(9)*(3-2*ld(9))));";
+    }
+  }
+  if (hi < 1.0) {
+    if (soft <= 1e-4) {
+      expr += `st(8,ld(8)*lte(ld(${regIdx}),${hi.toFixed(4)}));`;
+    } else {
+      expr +=
+        `st(9,clip((ld(${regIdx})-${hi.toFixed(4)})/${soft.toFixed(4)},0,1));` +
+        "st(8,ld(8)*(1-ld(9)*ld(9)*(3-2*ld(9))));";
+    }
+  }
+  return expr;
+}
+
+export function compileQualifierMaskExprClient(qRaw) {
+  const q = normalizeQualifier(qRaw);
+  if (!q.enabled) return "255";
+  const base =
+    "st(0,r(X,Y)/255);st(1,g(X,Y)/255);st(2,b(X,Y)/255);" +
+    "st(3,max(max(ld(0),ld(1)),ld(2)));" +
+    "st(4,min(min(ld(0),ld(1)),ld(2)));" +
+    "st(5,ld(3)-ld(4));" +
+    "st(6,0.5*(ld(3)+ld(4)));" +
+    "st(7,if(gt(ld(5),1e-5),clip(ld(5)/max(1e-5,1-abs(2*ld(6)-1)),0,1),0));" +
+    "st(8,if(lte(ld(5),1e-5),0,60*if(eq(ld(3),ld(0)),mod((ld(1)-ld(2))/max(1e-5,ld(5))+6,6),if(eq(ld(3),ld(1)),(ld(2)-ld(0))/max(1e-5,ld(5))+2,(ld(0)-ld(1))/max(1e-5,ld(5))+4))));";
+  let hPart = "";
+  if (q.hue_width >= 359.9) {
+    hPart = "st(8,1);";
+  } else {
+    const hc = (q.hue_center % 360.0).toFixed(4);
+    const hw = (q.hue_width * 0.5).toFixed(4);
+    if (q.hue_softness <= 1e-4) {
+      hPart = `st(9,min(abs(ld(8)-${hc}),360-abs(ld(8)-${hc})));st(8,lte(ld(9),${hw}));`;
+    } else {
+      const hs = q.hue_softness.toFixed(4);
+      hPart =
+        `st(9,min(abs(ld(8)-${hc}),360-abs(ld(8)-${hc})));` +
+        `st(9,clip((ld(9)-${hw})/${hs},0,1));` +
+        "st(8,1-ld(9)*ld(9)*(3-2*ld(9)));";
+    }
+  }
+  const sPart = compileGeqBandClient(7, q.sat_low, q.sat_high, q.sat_softness);
+  const lPart = compileGeqBandClient(6, q.lum_low, q.lum_high, q.lum_softness);
+  const outExpr = q.invert ? "255*(1-ld(8))" : "255*ld(8)";
+  return `${base}${hPart}${sPart}${lPart}${outExpr}`;
+}
+
 export const CURVE_CHANNELS = ["master", "red", "green", "blue"];
 export const MAX_CURVE_POINTS = 16;
 
@@ -5931,6 +6275,7 @@ export function createColorNode(index = 1, overrides = {}) {
     grade: normalizeColorGrade(overrides.grade),
     curves: normalizeColorCurves(overrides.curves),
     power_window: normalizePowerWindow(overrides.power_window),
+    qualifier: normalizeQualifier(overrides.qualifier),
     lut: normalizeNodeLut(overrides.lut)
   };
 }
@@ -5944,6 +6289,7 @@ export function normalizeColorNode(raw, index = 0) {
     grade: n.grade,
     curves: n.curves,
     power_window: n.power_window,
+    qualifier: n.qualifier,
     lut: n.lut
   });
 }
@@ -6011,6 +6357,7 @@ export function addColorNodeToTree(tree, opts = {}) {
     grade: opts.grade,
     curves: opts.curves,
     power_window: opts.power_window,
+    qualifier: opts.qualifier,
     lut: opts.lut
   });
   const selIdx = norm.nodes.findIndex((n) => n.id === norm.selectedNodeId);
@@ -6030,18 +6377,36 @@ export function addOutsideColorNodeInTree(tree, sourceNodeId = null) {
   }
   const targetId = sourceNodeId || norm.selectedNodeId;
   const parent = norm.nodes.find((n) => n.id === targetId);
-  if (!parent || !isPowerWindowActive(parent.power_window)) {
+  if (!parent) {
     return norm;
   }
-  const invertedPw = {
-    ...normalizePowerWindow(parent.power_window),
-    invert: !parent.power_window.invert
-  };
+  const hasPw = isPowerWindowActive(parent.power_window);
+  const hasQual = isQualifierActive(parent.qualifier);
+  if (!hasPw && !hasQual) {
+    return norm;
+  }
+  const nextPw = hasPw
+    ? {
+        ...normalizePowerWindow(parent.power_window),
+        invert: !parent.power_window.invert
+      }
+    : createDefaultPowerWindow();
+  const nextQual =
+    !hasPw && hasQual
+      ? {
+          ...normalizeQualifier(parent.qualifier),
+          invert: !parent.qualifier.invert
+        }
+      : hasQual
+        ? normalizeQualifier(parent.qualifier)
+        : createDefaultQualifier();
+  const isOutside = hasPw ? nextPw.invert : nextQual.invert;
   return addColorNodeToTree(
     { ...norm, selectedNodeId: parent.id },
     {
-      label: invertedPw.invert ? "Outside" : "Inside",
-      power_window: invertedPw
+      label: isOutside ? "Outside" : "Inside",
+      power_window: nextPw,
+      qualifier: nextQual
     }
   );
 }
@@ -6109,6 +6474,10 @@ export function updateColorNodeInTree(tree, nodeId, patch = {}) {
           patch.power_window !== undefined
             ? normalizePowerWindow(patch.power_window)
             : normalizePowerWindow(n.power_window),
+        qualifier:
+          patch.qualifier !== undefined
+            ? normalizeQualifier(patch.qualifier)
+            : normalizeQualifier(n.qualifier),
         lut: patch.lut !== undefined ? normalizeNodeLut(patch.lut) : n.lut
       };
     })
@@ -6126,12 +6495,22 @@ export function applyColorNodeChainRgbClient(r, g, b, treeOrNodes) {
   let curB = clampUnitColor(b);
   for (const node of nodes) {
     if (!node || node.enabled === false) continue;
-    [curR, curG, curB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
     if (!isColorCurvesIdentity(node.curves)) {
-      [curR, curG, curB] = applyColorCurvesRgbClient(curR, curG, curB, node.curves);
+      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
     }
     if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
-      [curR, curG, curB] = applyCubeLutRgbClient(curR, curG, curB, node.lut, node.lut.mix);
+      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
+    }
+    if (isQualifierActive(node.qualifier)) {
+      const qMask = evaluateQualifierMask(node.qualifier, curR, curG, curB);
+      curR = clampUnitColor(curR + (outR - curR) * qMask);
+      curG = clampUnitColor(curG + (outG - curG) * qMask);
+      curB = clampUnitColor(curB + (outB - curB) * qMask);
+    } else {
+      curR = outR;
+      curG = outG;
+      curB = outB;
     }
   }
   return [curR, curG, curB];
@@ -6155,8 +6534,102 @@ export function applyColorNodeChainRgbAtClient(r, g, b, u, v, treeOrNodes) {
     if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
       [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
     }
-    if (isPowerWindowActive(node.power_window)) {
-      const m = evaluatePowerWindowMask(node.power_window, u, v);
+    const hasPw = isPowerWindowActive(node.power_window);
+    const hasQual = isQualifierActive(node.qualifier);
+    if (hasPw || hasQual) {
+      let m = 1.0;
+      if (hasPw) m *= evaluatePowerWindowMask(node.power_window, u, v);
+      if (hasQual) m *= evaluateQualifierMask(node.qualifier, curR, curG, curB);
+      curR = clampUnitColor(curR + (outR - curR) * m);
+      curG = clampUnitColor(curG + (outG - curG) * m);
+      curB = clampUnitColor(curB + (outB - curB) * m);
+    } else {
+      curR = outR;
+      curG = outG;
+      curB = outB;
+    }
+  }
+  return [curR, curG, curB];
+}
+
+export function evaluateActiveNodeMaskAtClient(r, g, b, u, v, treeOrNodes, activeNodeId = null) {
+  const nodes = Array.isArray(treeOrNodes)
+    ? treeOrNodes
+    : treeOrNodes && Array.isArray(treeOrNodes.nodes)
+      ? treeOrNodes.nodes
+      : [];
+  const targetId =
+    activeNodeId ||
+    (treeOrNodes && !Array.isArray(treeOrNodes) ? treeOrNodes.selectedNodeId : null);
+  let curR = clampUnitColor(r);
+  let curG = clampUnitColor(g);
+  let curB = clampUnitColor(b);
+  for (const node of nodes) {
+    if (!node) continue;
+    if (node.id === targetId || (!targetId && node === nodes[nodes.length - 1])) {
+      const hasPw = isPowerWindowActive(node.power_window);
+      const hasQual = isQualifierActive(node.qualifier);
+      if (!hasPw && !hasQual) return 1.0;
+      let m = 1.0;
+      if (hasPw) m *= evaluatePowerWindowMask(node.power_window, u, v);
+      if (hasQual) m *= evaluateQualifierMask(node.qualifier, curR, curG, curB);
+      return clampUnitColor(m);
+    }
+    if (node.enabled === false) continue;
+    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+    if (!isColorCurvesIdentity(node.curves)) {
+      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
+    }
+    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
+      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
+    }
+    const hasPw = isPowerWindowActive(node.power_window);
+    const hasQual = isQualifierActive(node.qualifier);
+    if (hasPw || hasQual) {
+      let m = 1.0;
+      if (hasPw) m *= evaluatePowerWindowMask(node.power_window, u, v);
+      if (hasQual) m *= evaluateQualifierMask(node.qualifier, curR, curG, curB);
+      curR = clampUnitColor(curR + (outR - curR) * m);
+      curG = clampUnitColor(curG + (outG - curG) * m);
+      curB = clampUnitColor(curB + (outB - curB) * m);
+    } else {
+      curR = outR;
+      curG = outG;
+      curB = outB;
+    }
+  }
+  return 1.0;
+}
+
+export function applyColorNodesBeforeTargetClient(r, g, b, u, v, treeOrNodes, targetNodeId = null) {
+  const nodes = Array.isArray(treeOrNodes)
+    ? treeOrNodes
+    : treeOrNodes && Array.isArray(treeOrNodes.nodes)
+      ? treeOrNodes.nodes
+      : [];
+  const targetId =
+    targetNodeId ||
+    (treeOrNodes && !Array.isArray(treeOrNodes) ? treeOrNodes.selectedNodeId : null);
+  let curR = clampUnitColor(r);
+  let curG = clampUnitColor(g);
+  let curB = clampUnitColor(b);
+  for (const node of nodes) {
+    if (!node) continue;
+    if (node.id === targetId) break;
+    if (node.enabled === false) continue;
+    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+    if (!isColorCurvesIdentity(node.curves)) {
+      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
+    }
+    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
+      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
+    }
+    const hasPw = isPowerWindowActive(node.power_window);
+    const hasQual = isQualifierActive(node.qualifier);
+    if (hasPw || hasQual) {
+      let m = 1.0;
+      if (hasPw) m *= evaluatePowerWindowMask(node.power_window, u, v);
+      if (hasQual) m *= evaluateQualifierMask(node.qualifier, curR, curG, curB);
       curR = clampUnitColor(curR + (outR - curR) * m);
       curG = clampUnitColor(curG + (outG - curG) * m);
       curB = clampUnitColor(curB + (outB - curB) * m);
@@ -6206,13 +6679,17 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
   let hasLutNodes = false;
   let hasPowerWindows = false;
   let hasCurves = false;
+  let hasQualifiers = false;
   let pwIdx = 0;
 
   for (const node of nodes) {
     if (!node || node.enabled === false) continue;
     const hasLut = Boolean(node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6);
     if (hasLut) hasLutNodes = true;
-    if (isPowerWindowActive(node.power_window)) hasPowerWindows = true;
+    const hasPw = isPowerWindowActive(node.power_window);
+    const hasQual = isQualifierActive(node.qualifier);
+    if (hasPw) hasPowerWindows = true;
+    if (hasQual) hasQualifiers = true;
     const nodeStages = [];
     if (!isColorGradeIdentity(node.grade)) {
       nodeStages.push(compileSingleGradeFilterStr(node.grade));
@@ -6224,20 +6701,50 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
     }
     if (nodeStages.length > 0) {
       const nodeFg = nodeStages.join(",");
-      if (isPowerWindowActive(node.power_window)) {
+      if (!hasPw && !hasQual) {
+        parts.push(nodeFg);
+      } else {
         const tag = `pw${pwIdx}`;
         pwIdx += 1;
-        const maskExpr = compilePowerWindowMaskExprClient(node.power_window);
-        parts.push(
-          `split=3[${tag}b][${tag}g][${tag}m];` +
-            `[${tag}b]format=gbrp[${tag}bg];` +
-            `[${tag}g]${nodeFg},format=gbrp[${tag}fg];` +
-            `[${tag}m]format=gray,geq=lum='${maskExpr}',split=3[${tag}mr][${tag}mg][${tag}mb];` +
-            `[${tag}mr][${tag}mg][${tag}mb]mergeplanes=0x001020:gbrp[${tag}msk];` +
-            `[${tag}bg][${tag}fg][${tag}msk]maskedmerge`
-        );
-      } else {
-        parts.push(nodeFg);
+        if (hasPw && !hasQual) {
+          const maskExpr = compilePowerWindowMaskExprClient(node.power_window);
+          parts.push(
+            `split=3[${tag}b][${tag}g][${tag}m];` +
+              `[${tag}b]format=gbrp[${tag}bg];` +
+              `[${tag}g]${nodeFg},format=gbrp[${tag}fg];` +
+              `[${tag}m]format=gray,geq=lum='${maskExpr}',split=3[${tag}mr][${tag}mg][${tag}mb];` +
+              `[${tag}mr][${tag}mg][${tag}mb]mergeplanes=0x001020:gbrp[${tag}msk];` +
+              `[${tag}bg][${tag}fg][${tag}msk]maskedmerge`
+          );
+        } else {
+          const qualNorm = normalizeQualifier(node.qualifier);
+          const qualExpr = compileQualifierMaskExprClient(qualNorm);
+          const blurPart =
+            qualNorm.blur_radius > 1e-3 ? `,gblur=sigma=${qualNorm.blur_radius.toFixed(2)}` : "";
+          if (!hasPw) {
+            parts.push(
+              `split=3[${tag}b][${tag}g][${tag}m];` +
+                `[${tag}b]format=gbrp[${tag}bg];` +
+                `[${tag}g]${nodeFg},format=gbrp[${tag}fg];` +
+                `[${tag}m]format=gbrp,geq=r='${qualExpr}':g='0':b='0',extractplanes=r${blurPart},` +
+                `split=3[${tag}mr][${tag}mg][${tag}mb];` +
+                `[${tag}mr][${tag}mg][${tag}mb]mergeplanes=0x001020:gbrp[${tag}msk];` +
+                `[${tag}bg][${tag}fg][${tag}msk]maskedmerge`
+            );
+          } else {
+            const pwExpr = compilePowerWindowMaskExprClient(node.power_window);
+            parts.push(
+              `split=4[${tag}b][${tag}g][${tag}mq][${tag}mp];` +
+                `[${tag}b]format=gbrp[${tag}bg];` +
+                `[${tag}g]${nodeFg},format=gbrp[${tag}fg];` +
+                `[${tag}mq]format=gbrp,geq=r='${qualExpr}':g='0':b='0',extractplanes=r${blurPart}[${tag}qm];` +
+                `[${tag}mp]format=gray,geq=lum='${pwExpr}'[${tag}pm];` +
+                `[${tag}qm][${tag}pm]blend=all_mode=multiply,split=3[${tag}mr][${tag}mg][${tag}mb];` +
+                `[${tag}mr][${tag}mg][${tag}mb]mergeplanes=0x001020:gbrp[${tag}msk];` +
+                `[${tag}bg][${tag}fg][${tag}msk]maskedmerge`
+            );
+          }
+        }
       }
     }
     if (!isColorNodeIdentity(node)) {
@@ -6260,7 +6767,8 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
     total_node_count: nodes.length,
     has_lut_nodes: hasLutNodes,
     has_power_windows: hasPowerWindows,
-    has_curves: hasCurves
+    has_curves: hasCurves,
+    has_qualifiers: hasQualifiers
   };
 }
 
@@ -6274,6 +6782,7 @@ export function serializeColorNodeForApi(node) {
     grade: norm.grade,
     curves: normalizeColorCurves(norm.curves),
     power_window: normalizePowerWindow(norm.power_window),
+    qualifier: normalizeQualifier(norm.qualifier),
     lut_title: lut ? lut.title : "",
     lut_dimension: lut ? lut.dimension : null,
     lut_size: lut ? lut.size : null,
@@ -6308,6 +6817,7 @@ export function deserializeColorNodeFromApi(rawNode, index = 0) {
     grade: n.grade,
     curves: n.curves,
     power_window: n.power_window,
+    qualifier: n.qualifier,
     lut
   });
 }

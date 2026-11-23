@@ -51,6 +51,37 @@ POWER_WINDOW_ROT_MAX: float = 180.0
 POWER_WINDOW_SOFTNESS_MIN: float = 0.0
 POWER_WINDOW_SOFTNESS_MAX: float = 0.5
 
+QualifierPresetId = Literal[
+    "off",
+    "skin_tones",
+    "sky_blue",
+    "foliage_green",
+    "teal_accents",
+    "highlights",
+    "shadows",
+    "custom",
+]
+QUALIFIER_PRESET_IDS: tuple[QualifierPresetId, ...] = (
+    "off",
+    "skin_tones",
+    "sky_blue",
+    "foliage_green",
+    "teal_accents",
+    "highlights",
+    "shadows",
+    "custom",
+)
+QUALIFIER_HUE_MIN: float = 0.0
+QUALIFIER_HUE_MAX: float = 360.0
+QUALIFIER_HUE_WIDTH_MIN: float = 2.0
+QUALIFIER_HUE_WIDTH_MAX: float = 360.0
+QUALIFIER_HUE_SOFT_MIN: float = 0.0
+QUALIFIER_HUE_SOFT_MAX: float = 60.0
+QUALIFIER_SAT_LUM_SOFT_MIN: float = 0.0
+QUALIFIER_SAT_LUM_SOFT_MAX: float = 0.4
+QUALIFIER_BLUR_MIN: float = 0.0
+QUALIFIER_BLUR_MAX: float = 8.0
+
 ALLOWED_COLOR_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "rgb24", "yuv444p"}
 )
@@ -802,6 +833,368 @@ def compile_power_window_mask_expr(pw: PowerWindowParams) -> str:
     return f"{setup}255*(1-({t_expr}))"
 
 
+def rgb_to_hsl(r: float, g: float, b: float) -> tuple[float, float, float]:
+    """Convert unit RGB [0, 1] into (hue_deg [0, 360), saturation [0, 1], luminance [0, 1])."""
+    rc = _clamp_unit(r)
+    gc = _clamp_unit(g)
+    bc = _clamp_unit(b)
+    cmax = max(rc, gc, bc)
+    cmin = min(rc, gc, bc)
+    delta = cmax - cmin
+    lum = 0.5 * (cmax + cmin)
+    if delta <= 1e-6:
+        return (0.0, 0.0, lum)
+    denom = max(1e-6, 1.0 - abs(2.0 * lum - 1.0))
+    sat = _clamp_unit(delta / denom)
+    if cmax == rc:
+        hue = 60.0 * (((gc - bc) / delta + 6.0) % 6.0)
+    elif cmax == gc:
+        hue = 60.0 * ((bc - rc) / delta + 2.0)
+    else:
+        hue = 60.0 * ((rc - gc) / delta + 4.0)
+    hue = hue % 360.0
+    return (hue, sat, lum)
+
+
+def _eval_band_weight(val: float, lo: float, hi: float, soft: float) -> float:
+    w = 1.0
+    if lo > 0.0:
+        if soft <= 1e-6:
+            w *= 1.0 if val >= lo else 0.0
+        else:
+            w *= _smoothstep(lo - soft, lo, val)
+    if hi < 1.0:
+        if soft <= 1e-6:
+            w *= 1.0 if val <= hi else 0.0
+        else:
+            w *= 1.0 - _smoothstep(hi, hi + soft, val)
+    return w
+
+
+class QualifierParams(BaseModel):
+    """DaVinci Resolve HSL Secondary Qualifier parameters for color-range keying."""
+
+    enabled: bool = False
+    preset: QualifierPresetId = "off"
+    hue_center: float = 22.0
+    hue_width: float = 44.0
+    hue_softness: float = 18.0
+    sat_low: float = 0.12
+    sat_high: float = 0.75
+    sat_softness: float = 0.08
+    lum_low: float = 0.18
+    lum_high: float = 0.88
+    lum_softness: float = 0.10
+    blur_radius: float = 0.0
+    invert: bool = False
+
+    @field_validator("enabled", "invert", mode="before")
+    @classmethod
+    def _validate_bool_flag(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"qualifier.{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> QualifierPresetId:
+        if raw is None:
+            return "off"
+        if not isinstance(raw, str):
+            raise ValueError(f"qualifier.preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in QUALIFIER_PRESET_IDS:
+            allowed = ", ".join(QUALIFIER_PRESET_IDS)
+            raise ValueError(f"Unsupported qualifier.preset {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("hue_center", mode="before")
+    @classmethod
+    def _validate_hue_center(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "qualifier.hue_center", QUALIFIER_HUE_MIN, QUALIFIER_HUE_MAX
+        )
+
+    @field_validator("hue_width", mode="before")
+    @classmethod
+    def _validate_hue_width(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "qualifier.hue_width", QUALIFIER_HUE_WIDTH_MIN, QUALIFIER_HUE_WIDTH_MAX
+        )
+
+    @field_validator("hue_softness", mode="before")
+    @classmethod
+    def _validate_hue_softness(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "qualifier.hue_softness", QUALIFIER_HUE_SOFT_MIN, QUALIFIER_HUE_SOFT_MAX
+        )
+
+    @field_validator("sat_low", "sat_high", "lum_low", "lum_high", mode="before")
+    @classmethod
+    def _validate_unit_bound(cls, raw: Any, info: Any) -> float:
+        return _validate_bounded_float(raw, f"qualifier.{info.field_name}", 0.0, 1.0)
+
+    @field_validator("sat_softness", "lum_softness", mode="before")
+    @classmethod
+    def _validate_sl_softness(cls, raw: Any, info: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            f"qualifier.{info.field_name}",
+            QUALIFIER_SAT_LUM_SOFT_MIN,
+            QUALIFIER_SAT_LUM_SOFT_MAX,
+        )
+
+    @field_validator("blur_radius", mode="before")
+    @classmethod
+    def _validate_blur_radius(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "qualifier.blur_radius", QUALIFIER_BLUR_MIN, QUALIFIER_BLUR_MAX
+        )
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> QualifierParams:
+        if self.sat_low > self.sat_high:
+            raise ValueError(
+                f"qualifier.sat_low ({self.sat_low}) must be <= sat_high ({self.sat_high})"
+            )
+        if self.lum_low > self.lum_high:
+            raise ValueError(
+                f"qualifier.lum_low ({self.lum_low}) must be <= lum_high ({self.lum_high})"
+            )
+        return self
+
+    def is_active(self) -> bool:
+        """Return True when HSL Qualifier secondary keying is enabled."""
+        return bool(self.enabled)
+
+    def evaluate_mask(self, r: float, g: float, b: float) -> float:
+        """Evaluate smooth HSL Qualifier matte weight in [0.0, 1.0] for unit RGB."""
+        if not self.enabled:
+            return 1.0
+        hue, sat, lum = rgb_to_hsl(r, g, b)
+        if self.hue_width >= 359.9:
+            h_weight = 1.0
+        else:
+            diff = abs(hue - (self.hue_center % 360.0))
+            dh = min(diff, 360.0 - diff)
+            hw = self.hue_width * 0.5
+            if dh <= hw:
+                h_weight = 1.0
+            elif self.hue_softness <= 1e-6:
+                h_weight = 0.0
+            else:
+                h_weight = 1.0 - _smoothstep(hw, hw + self.hue_softness, dh)
+
+        s_weight = _eval_band_weight(sat, self.sat_low, self.sat_high, self.sat_softness)
+        l_weight = _eval_band_weight(lum, self.lum_low, self.lum_high, self.lum_softness)
+        weight = _clamp_unit(h_weight * s_weight * l_weight)
+        return (1.0 - weight) if self.invert else weight
+
+
+class QualifierPreset(BaseModel):
+    """Built-in DaVinci Resolve HSL Qualifier secondary preset."""
+
+    id: QualifierPresetId
+    label: str
+    description: str
+    qualifier: QualifierParams
+
+
+QUALIFIER_PRESETS: tuple[QualifierPreset, ...] = (
+    QualifierPreset(
+        id="off",
+        label="Off",
+        description="Bypass HSL Qualifier secondary keyer.",
+        qualifier=QualifierParams(enabled=False, preset="off"),
+    ),
+    QualifierPreset(
+        id="skin_tones",
+        label="Skin Tones",
+        description="Isolate warm flesh tones along the Rec.709 skin line.",
+        qualifier=QualifierParams(
+            enabled=True,
+            preset="skin_tones",
+            hue_center=22.0,
+            hue_width=44.0,
+            hue_softness=18.0,
+            sat_low=0.12,
+            sat_high=0.75,
+            sat_softness=0.08,
+            lum_low=0.18,
+            lum_high=0.88,
+            lum_softness=0.10,
+            blur_radius=1.0,
+        ),
+    ),
+    QualifierPreset(
+        id="sky_blue",
+        label="Sky Blue",
+        description="Isolate cyan-blue sky gradients without affecting warm foreground.",
+        qualifier=QualifierParams(
+            enabled=True,
+            preset="sky_blue",
+            hue_center=210.0,
+            hue_width=52.0,
+            hue_softness=18.0,
+            sat_low=0.20,
+            sat_high=1.00,
+            sat_softness=0.10,
+            lum_low=0.25,
+            lum_high=0.95,
+            lum_softness=0.10,
+            blur_radius=1.0,
+        ),
+    ),
+    QualifierPreset(
+        id="foliage_green",
+        label="Foliage Green",
+        description="Target natural greens and botanical hues for filmic emerald tuning.",
+        qualifier=QualifierParams(
+            enabled=True,
+            preset="foliage_green",
+            hue_center=115.0,
+            hue_width=64.0,
+            hue_softness=20.0,
+            sat_low=0.18,
+            sat_high=0.95,
+            sat_softness=0.10,
+            lum_low=0.12,
+            lum_high=0.82,
+            lum_softness=0.10,
+            blur_radius=1.0,
+        ),
+    ),
+    QualifierPreset(
+        id="teal_accents",
+        label="Teal Accents",
+        description="Isolate cinema teal shadows and cool cyan accents.",
+        qualifier=QualifierParams(
+            enabled=True,
+            preset="teal_accents",
+            hue_center=180.0,
+            hue_width=46.0,
+            hue_softness=16.0,
+            sat_low=0.20,
+            sat_high=1.00,
+            sat_softness=0.10,
+            lum_low=0.15,
+            lum_high=0.85,
+            lum_softness=0.10,
+            blur_radius=0.5,
+        ),
+    ),
+    QualifierPreset(
+        id="highlights",
+        label="Highlights",
+        description="Luminance-only key isolating bright specular highlights.",
+        qualifier=QualifierParams(
+            enabled=True,
+            preset="highlights",
+            hue_center=0.0,
+            hue_width=360.0,
+            hue_softness=0.0,
+            sat_low=0.0,
+            sat_high=1.0,
+            sat_softness=0.0,
+            lum_low=0.65,
+            lum_high=1.0,
+            lum_softness=0.15,
+            blur_radius=1.0,
+        ),
+    ),
+    QualifierPreset(
+        id="shadows",
+        label="Shadows",
+        description="Luminance-only key isolating deep shadow regions.",
+        qualifier=QualifierParams(
+            enabled=True,
+            preset="shadows",
+            hue_center=0.0,
+            hue_width=360.0,
+            hue_softness=0.0,
+            sat_low=0.0,
+            sat_high=1.0,
+            sat_softness=0.0,
+            lum_low=0.0,
+            lum_high=0.32,
+            lum_softness=0.15,
+            blur_radius=1.0,
+        ),
+    ),
+)
+
+
+def list_qualifier_presets() -> tuple[QualifierPreset, ...]:
+    """Return all built-in HSL Qualifier presets."""
+    return QUALIFIER_PRESETS
+
+
+def get_qualifier_preset(preset_id: str) -> QualifierPreset:
+    """Resolve a built-in HSL Qualifier preset by id."""
+    for preset in QUALIFIER_PRESETS:
+        if preset.id == preset_id:
+            return preset
+    raise ValueError(f"Unknown qualifier preset {preset_id!r}")
+
+
+def _compile_geq_band(reg_idx: int, lo: float, hi: float, soft: float) -> str:
+    expr = ""
+    if lo > 0.0:
+        if soft <= 1e-4:
+            expr += f"st(8,ld(8)*gte(ld({reg_idx}),{lo:.4f}));"
+        else:
+            e0 = lo - soft
+            expr += (
+                f"st(9,clip((ld({reg_idx})-({e0:.4f}))/{soft:.4f},0,1));"
+                f"st(8,ld(8)*(ld(9)*ld(9)*(3-2*ld(9))));"
+            )
+    if hi < 1.0:
+        if soft <= 1e-4:
+            expr += f"st(8,ld(8)*lte(ld({reg_idx}),{hi:.4f}));"
+        else:
+            expr += (
+                f"st(9,clip((ld({reg_idx})-{hi:.4f})/{soft:.4f},0,1));"
+                f"st(8,ld(8)*(1-ld(9)*ld(9)*(3-2*ld(9))));"
+            )
+    return expr
+
+
+def compile_qualifier_mask_expr(q: QualifierParams) -> str:
+    """Compile QualifierParams HSL selection into a deterministic FFmpeg geq r-plane expr."""
+    if not q.is_active():
+        return "255"
+    base = (
+        "st(0,r(X,Y)/255);st(1,g(X,Y)/255);st(2,b(X,Y)/255);"
+        "st(3,max(max(ld(0),ld(1)),ld(2)));"
+        "st(4,min(min(ld(0),ld(1)),ld(2)));"
+        "st(5,ld(3)-ld(4));"
+        "st(6,0.5*(ld(3)+ld(4)));"
+        "st(7,if(gt(ld(5),1e-5),clip(ld(5)/max(1e-5,1-abs(2*ld(6)-1)),0,1),0));"
+        "st(8,if(lte(ld(5),1e-5),0,60*if(eq(ld(3),ld(0)),mod((ld(1)-ld(2))/max(1e-5,ld(5))+6,6),if(eq(ld(3),ld(1)),(ld(2)-ld(0))/max(1e-5,ld(5))+2,(ld(0)-ld(1))/max(1e-5,ld(5))+4))));"
+    )
+    if q.hue_width >= 359.9:
+        h_part = "st(8,1);"
+    else:
+        hc = q.hue_center % 360.0
+        hw = q.hue_width * 0.5
+        if q.hue_softness <= 1e-4:
+            h_part = (
+                f"st(9,min(abs(ld(8)-{hc:.4f}),360-abs(ld(8)-{hc:.4f})));"
+                f"st(8,lte(ld(9),{hw:.4f}));"
+            )
+        else:
+            hs = q.hue_softness
+            h_part = (
+                f"st(9,min(abs(ld(8)-{hc:.4f}),360-abs(ld(8)-{hc:.4f})));"
+                f"st(9,clip((ld(9)-{hw:.4f})/{hs:.4f},0,1));"
+                f"st(8,1-ld(9)*ld(9)*(3-2*ld(9)));"
+            )
+    s_part = _compile_geq_band(7, q.sat_low, q.sat_high, q.sat_softness)
+    l_part = _compile_geq_band(6, q.lum_low, q.lum_high, q.lum_softness)
+    out_expr = "255*(1-ld(8))" if q.invert else "255*ld(8)"
+    return f"{base}{h_part}{s_part}{l_part}{out_expr}"
+
+
 def normalize_curve_points(raw_points: Any) -> list[tuple[float, float]]:
     """Validate, sort, and clamp YRGB curve points to [0, 1] with pinned endpoints."""
     if raw_points is None:
@@ -1081,6 +1474,7 @@ class ColorNodeParams(BaseModel):
     grade: ColorGradeParams = Field(default_factory=ColorGradeParams)
     curves: ColorCurvesParams = Field(default_factory=ColorCurvesParams)
     power_window: PowerWindowParams = Field(default_factory=PowerWindowParams)
+    qualifier: QualifierParams = Field(default_factory=QualifierParams)
     lut_title: str = ""
     lut_dimension: Literal["1D", "3D"] | None = None
     lut_size: int | None = None
@@ -1235,14 +1629,20 @@ class ColorNodeParams(BaseModel):
         u: float = 0.5,
         v: float = 0.5,
     ) -> tuple[float, float, float]:
-        """Apply this node's grade, curves, and optional LUT blended by its Power Window mask."""
+        """Apply this node's grade, curves, and LUT blended by Power Window & HSL Qualifier."""
         in_rgb = (_clamp_unit(r), _clamp_unit(g), _clamp_unit(b))
         if not self.enabled:
             return in_rgb
         out_r, out_g, out_b = self.apply_rgb(in_rgb[0], in_rgb[1], in_rgb[2])
-        if not self.power_window.is_active():
+        has_pw = self.power_window.is_active()
+        has_qual = self.qualifier.is_active()
+        if not has_pw and not has_qual:
             return (out_r, out_g, out_b)
-        mask = self.power_window.evaluate_mask(u, v)
+        mask = 1.0
+        if has_pw:
+            mask *= self.power_window.evaluate_mask(u, v)
+        if has_qual:
+            mask *= self.qualifier.evaluate_mask(in_rgb[0], in_rgb[1], in_rgb[2])
         return (
             _clamp_unit(in_rgb[0] + (out_r - in_rgb[0]) * mask),
             _clamp_unit(in_rgb[1] + (out_g - in_rgb[1]) * mask),
@@ -1261,6 +1661,7 @@ class ColorNodeChainCompileResult(BaseModel):
     has_lut_nodes: bool
     has_power_windows: bool = False
     has_curves: bool = False
+    has_qualifiers: bool = False
 
 
 def _coerce_color_nodes(
@@ -1300,20 +1701,53 @@ def compile_color_node_chain_filter(
         if not node_stages:
             continue
         node_fg = ",".join(node_stages)
-        if not node.power_window.is_active():
+        has_pw = node.power_window.is_active()
+        has_qual = node.qualifier.is_active()
+        if not has_pw and not has_qual:
             parts.append(node_fg)
             continue
         tag = f"pw{pw_idx}"
         pw_idx += 1
-        mask_expr = compile_power_window_mask_expr(node.power_window)
-        parts.append(
-            f"split=3[{tag}b][{tag}g][{tag}m];"
-            f"[{tag}b]format=gbrp[{tag}bg];"
-            f"[{tag}g]{node_fg},format=gbrp[{tag}fg];"
-            f"[{tag}m]format=gray,geq=lum='{mask_expr}',split=3[{tag}mr][{tag}mg][{tag}mb];"
-            f"[{tag}mr][{tag}mg][{tag}mb]mergeplanes=0x001020:gbrp[{tag}msk];"
-            f"[{tag}bg][{tag}fg][{tag}msk]maskedmerge"
+        if has_pw and not has_qual:
+            mask_expr = compile_power_window_mask_expr(node.power_window)
+            parts.append(
+                f"split=3[{tag}b][{tag}g][{tag}m];"
+                f"[{tag}b]format=gbrp[{tag}bg];"
+                f"[{tag}g]{node_fg},format=gbrp[{tag}fg];"
+                f"[{tag}m]format=gray,geq=lum='{mask_expr}',split=3[{tag}mr][{tag}mg][{tag}mb];"
+                f"[{tag}mr][{tag}mg][{tag}mb]mergeplanes=0x001020:gbrp[{tag}msk];"
+                f"[{tag}bg][{tag}fg][{tag}msk]maskedmerge"
+            )
+            continue
+        qual_expr = compile_qualifier_mask_expr(node.qualifier)
+        blur_part = (
+            f",gblur=sigma={node.qualifier.blur_radius:.2f}"
+            if node.qualifier.blur_radius > 1e-3
+            else ""
         )
+        if not has_pw:
+            parts.append(
+                f"split=3[{tag}b][{tag}g][{tag}m];"
+                f"[{tag}b]format=gbrp[{tag}bg];"
+                f"[{tag}g]{node_fg},format=gbrp[{tag}fg];"
+                f"[{tag}m]format=gbrp,geq=r='{qual_expr}':g='0':b='0',extractplanes=r{blur_part},"
+                f"split=3[{tag}mr][{tag}mg][{tag}mb];"
+                f"[{tag}mr][{tag}mg][{tag}mb]mergeplanes=0x001020:gbrp[{tag}msk];"
+                f"[{tag}bg][{tag}fg][{tag}msk]maskedmerge"
+            )
+        else:
+            pw_expr = compile_power_window_mask_expr(node.power_window)
+            parts.append(
+                f"split=4[{tag}b][{tag}g][{tag}mq][{tag}mp];"
+                f"[{tag}b]format=gbrp[{tag}bg];"
+                f"[{tag}g]{node_fg},format=gbrp[{tag}fg];"
+                f"[{tag}mq]format=gbrp,geq=r='{qual_expr}':g='0':b='0',"
+                f"extractplanes=r{blur_part}[{tag}qm];"
+                f"[{tag}mp]format=gray,geq=lum='{pw_expr}'[{tag}pm];"
+                f"[{tag}qm][{tag}pm]blend=all_mode=multiply,split=3[{tag}mr][{tag}mg][{tag}mb];"
+                f"[{tag}mr][{tag}mg][{tag}mb]mergeplanes=0x001020:gbrp[{tag}msk];"
+                f"[{tag}bg][{tag}fg][{tag}msk]maskedmerge"
+            )
     if not parts:
         parts.append(compile_color_grade_filter(ColorGradeParams(), pix_fmt=None))
     if pix_fmt is not None:
@@ -1333,6 +1767,7 @@ def compile_color_node_chain(
     has_lut_nodes = any(n.enabled and n.has_lut() and n.lut_mix > 1e-6 for n in validated)
     has_power_windows = any(n.enabled and n.power_window.is_active() for n in validated)
     has_curves = any(n.enabled and not n.curves.is_identity() for n in validated)
+    has_qualifiers = any(n.enabled and n.qualifier.is_active() for n in validated)
     return ColorNodeChainCompileResult(
         filtergraph=fg,
         ffmpeg_vf_args=["-vf", fg],
@@ -1342,6 +1777,7 @@ def compile_color_node_chain(
         has_lut_nodes=has_lut_nodes,
         has_power_windows=has_power_windows,
         has_curves=has_curves,
+        has_qualifiers=has_qualifiers,
     )
 
 
@@ -1373,7 +1809,14 @@ def bake_color_node_chain_to_cube(
             for r_idx in range(size):
                 r_cur, g_cur, b_cur = r_idx / denom, g_in, b_in
                 for node in validated:
-                    r_cur, g_cur, b_cur = node.apply_rgb(r_cur, g_cur, b_cur)
+                    if node.enabled and node.qualifier.is_active():
+                        out_r, out_g, out_b = node.apply_rgb(r_cur, g_cur, b_cur)
+                        q_mask = node.qualifier.evaluate_mask(r_cur, g_cur, b_cur)
+                        r_cur = _clamp_unit(r_cur + (out_r - r_cur) * q_mask)
+                        g_cur = _clamp_unit(g_cur + (out_g - g_cur) * q_mask)
+                        b_cur = _clamp_unit(b_cur + (out_b - b_cur) * q_mask)
+                    else:
+                        r_cur, g_cur, b_cur = node.apply_rgb(r_cur, g_cur, b_cur)
                 lines.append(f"{r_cur:.6f} {g_cur:.6f} {b_cur:.6f}")
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

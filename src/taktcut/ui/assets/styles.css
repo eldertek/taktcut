@@ -3513,6 +3513,122 @@ input[type="range"] {
   min-width: 0;
 }
 
+/* DAVINCI HSL SECONDARY QUALIFIER DOCK */
+.color-qualifier-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.qual-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.qual-title-group,
+.qual-preset-group,
+.qual-toggles {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.qual-pick-readout {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+}
+
+.qual-preset-btn.is-active,
+#btn-qual-pick.is-active,
+#btn-qual-highlight.is-active,
+.btn-qual-highlight.is-active {
+  border-color: var(--accent-amber);
+  background: var(--accent-amber-soft);
+  color: #f4a46b;
+}
+
+#btn-qual-invert.is-active {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue-soft);
+  color: #8cb4ff;
+}
+
+.qual-spectrum-canvas {
+  display: block;
+  width: 100%;
+  height: 56px;
+  border: 1px solid var(--border-inner);
+  background: #111114;
+}
+
+.qual-param-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px 10px;
+  min-width: 0;
+  transition: opacity 0.12s ease;
+}
+
+.qual-param-grid.is-dimmed {
+  opacity: 0.5;
+}
+
+.qual-param-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.qual-param-row label {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qual-param-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.qual-param-row .input-num {
+  width: 48px;
+  min-width: 0;
+}
+
+#color-preview-canvas.is-eyedropper {
+  cursor: crosshair;
+}
+
+.color-node-qual-tag {
+  padding: 1px 4px;
+  border: 1px solid rgba(230, 132, 66, 0.45);
+  background: rgba(230, 132, 66, 0.14);
+  color: #f4a46b;
+  font-size: 9px;
+}
+
+.color-node-qual-tag.is-invert {
+  border-color: rgba(104, 156, 255, 0.55);
+  background: rgba(104, 156, 255, 0.16);
+  color: #8cb4ff;
+}
+
 /* DAVINCI PRIMARY WHEELS */
 .wheels-grid {
   display: grid;
@@ -6407,6 +6523,14 @@ input[type="range"] {
   #btn-pw-reset,
   .pw-param-row input[type="range"],
   .pw-param-row .input-num,
+  .qual-preset-btn,
+  #btn-qual-pick,
+  #btn-qual-highlight,
+  #btn-color-qual-highlight,
+  #btn-qual-invert,
+  #btn-qual-reset,
+  .qual-param-row input[type="range"],
+  .qual-param-row .input-num,
   .curves-ch-btn,
   .curves-preset-btn,
   #btn-curves-delete-pt,
@@ -6418,13 +6542,19 @@ input[type="range"] {
   #btn-pw-invert,
   #btn-pw-overlay,
   #btn-pw-reset,
+  .qual-preset-btn,
+  #btn-qual-pick,
+  #btn-qual-highlight,
+  #btn-qual-invert,
+  #btn-qual-reset,
   .curves-ch-btn,
   #btn-curves-delete-pt,
   #btn-curves-reset-ch,
   #btn-curves-reset-all {
     min-width: 44px;
   }
-  .pw-param-grid {
+  .pw-param-grid,
+  .qual-param-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .color-node-bypass-btn {
@@ -6524,24 +6654,33 @@ input[type="range"] {
   }
   .audio-ctrl-row input[type="range"],
   .wipe-range-slider,
-  .pw-param-row input[type="range"] {
+  .pw-param-row input[type="range"],
+  .qual-param-row input[type="range"] {
     min-height: 44px;
   }
-  .pw-param-grid {
+  .pw-param-grid,
+  .qual-param-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
   }
-  .pw-param-row {
+  .pw-param-row,
+  .qual-param-row {
     grid-template-columns: minmax(0, 1fr) 56px;
     gap: 4px 6px;
   }
-  .pw-param-row label {
+  .pw-param-row label,
+  .qual-param-row label {
     grid-column: 1 / -1;
   }
   .pw-shape-btn,
   #btn-pw-invert,
   #btn-pw-overlay,
-  #btn-pw-reset {
+  #btn-pw-reset,
+  .qual-preset-btn,
+  #btn-qual-pick,
+  #btn-qual-highlight,
+  #btn-qual-invert,
+  #btn-qual-reset {
     min-height: 44px;
   }
 }

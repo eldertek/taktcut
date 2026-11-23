@@ -7,12 +7,14 @@ import {
   TRANSFORM_PARAM_BOUNDS,
   applyColorNodeChainRgbAtClient,
   applyColorNodeChainRgbClient,
+  applyColorNodesBeforeTargetClient,
   buildCurveLut256Client,
   clampSplitWipePercent,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
   computeTimelineZoomViewport,
+  evaluateActiveNodeMaskAtClient,
   evaluateClipFadeEnvelope,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
@@ -36,6 +38,7 @@ import {
   isClipTransformIdentity,
   isCurveChannelIdentity,
   isPowerWindowActive,
+  isQualifierActive,
   normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransform,
@@ -44,6 +47,7 @@ import {
   normalizeCurvePoints,
   normalizePlanarTrackerClient,
   normalizePowerWindow,
+  normalizeQualifier,
   normalizeStabilizerClient,
   resolveTransformKeyframeBezier,
   sampleTransformCurve
@@ -5205,9 +5209,14 @@ const REFERENCE_SWATCHES = [
 let _pwBaseCanvas = null;
 let _pwOutCanvas = null;
 
-function hasActivePowerWindowInChain(cdl) {
+function hasActiveNodeMaskInChain(cdl) {
   if (!cdl || !Array.isArray(cdl.nodes)) return false;
-  return cdl.nodes.some((n) => n && n.enabled !== false && isPowerWindowActive(n.power_window));
+  return cdl.nodes.some(
+    (n) =>
+      n &&
+      n.enabled !== false &&
+      (isPowerWindowActive(n.power_window) || isQualifierActive(n.qualifier))
+  );
 }
 
 function drawColorPreviewSwatchLabels(ctx, width, height) {
@@ -5276,8 +5285,10 @@ function renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels
   }
 }
 
-function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
-  if (!graded || !hasActivePowerWindowInChain(cdl)) {
+function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels, sceneOpts = null) {
+  const showHighlight = Boolean(graded && sceneOpts && sceneOpts.qualifierHighlight);
+  const hasMasks = Boolean(graded && hasActiveNodeMaskInChain(cdl));
+  if (!showHighlight && !hasMasks) {
     renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels);
     return;
   }
@@ -5306,7 +5317,8 @@ function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
   const outImg = outCtx.createImageData(pwW, pwH);
   const s = srcImg.data;
   const d = outImg.data;
-  const nodes = cdl.nodes;
+  const nodes = cdl && Array.isArray(cdl.nodes) ? cdl.nodes : [];
+  const activeNodeId = sceneOpts && sceneOpts.activeNodeId ? sceneOpts.activeNodeId : null;
 
   for (let py = 0; py < pwH; py++) {
     const v = (py + 0.5) / pwH;
@@ -5314,23 +5326,28 @@ function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
     for (let px = 0; px < pwW; px++) {
       const u = (px + 0.5) / pwW;
       const idx = rowOff + px * 4;
-      const [ro, go, bo] = applyColorNodeChainRgbAtClient(
-        s[idx] / 255,
-        s[idx + 1] / 255,
-        s[idx + 2] / 255,
-        u,
-        v,
-        nodes
-      );
-      d[idx] = Math.round(clamp01(ro) * 255);
-      d[idx + 1] = Math.round(clamp01(go) * 255);
-      d[idx + 2] = Math.round(clamp01(bo) * 255);
-      d[idx + 3] = 255;
+      const rIn = s[idx] / 255;
+      const gIn = s[idx + 1] / 255;
+      const bIn = s[idx + 2] / 255;
+      if (showHighlight) {
+        const m = evaluateActiveNodeMaskAtClient(rIn, gIn, bIn, u, v, nodes, activeNodeId);
+        const lumByte = Math.round(clamp01(m) * 255);
+        d[idx] = lumByte;
+        d[idx + 1] = lumByte;
+        d[idx + 2] = lumByte;
+        d[idx + 3] = 255;
+      } else {
+        const [ro, go, bo] = applyColorNodeChainRgbAtClient(rIn, gIn, bIn, u, v, nodes);
+        d[idx] = Math.round(clamp01(ro) * 255);
+        d[idx + 1] = Math.round(clamp01(go) * 255);
+        d[idx + 2] = Math.round(clamp01(bo) * 255);
+        d[idx + 3] = 255;
+      }
     }
   }
   outCtx.putImageData(outImg, 0, 0);
   ctx.drawImage(_pwOutCanvas, 0, 0, width, height);
-  if (showLabels) {
+  if (showLabels && !showHighlight) {
     drawColorPreviewSwatchLabels(ctx, width, height);
   }
 }
@@ -5484,7 +5501,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     ctx.beginPath();
     ctx.rect(xStart, 0, xEnd - xStart, height);
     ctx.clip();
-    renderColorPreviewScene(ctx, width, height, cdl, graded, true);
+    renderColorPreviewScene(ctx, width, height, cdl, graded, true, splitOpts);
     ctx.restore();
   };
 
@@ -5503,11 +5520,40 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     canvas._splitWipeGeom = null;
   }
 
+  if (splitOpts && splitOpts.qualifierHighlight) {
+    ctx.save();
+    ctx.fillStyle = "rgba(17, 17, 20, 0.85)";
+    ctx.strokeStyle = "#e68442";
+    ctx.lineWidth = 1;
+    ctx.fillRect(width - 122, 8, 114, 20);
+    ctx.strokeRect(width - 122, 8, 114, 20);
+    ctx.fillStyle = "#f4a46b";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText("HIGHLIGHT MATTE", width - 115, 21);
+    ctx.restore();
+  }
+
   const pwOpts = splitOpts && splitOpts.powerWindow ? splitOpts.powerWindow : null;
   if (pwOpts && pwOpts.showOverlay && pwOpts.window && isPowerWindowActive(pwOpts.window)) {
     canvas._powerWindowGeom = drawPowerWindowOverlay(ctx, width, height, pwOpts.window, pwOpts);
   } else {
     canvas._powerWindowGeom = null;
+  }
+
+  // Maintain an ungraded source buffer for instant eyedropper sampling
+  const pickW = 280;
+  const pickH = 168;
+  if (!canvas._ungradedSourceCanvas) {
+    canvas._ungradedSourceCanvas = document.createElement("canvas");
+  }
+  const srcBuf = canvas._ungradedSourceCanvas;
+  if (srcBuf.width !== pickW || srcBuf.height !== pickH) {
+    srcBuf.width = pickW;
+    srcBuf.height = pickH;
+  }
+  const srcBufCtx = srcBuf.getContext("2d", { willReadFrequently: true });
+  if (srcBufCtx) {
+    renderColorPreviewBaseChart(srcBufCtx, pickW, pickH, null, false, false);
   }
 
   // Maintain a clean full-frame graded buffer of #color-preview-canvas for real ImageData scopes
@@ -5525,6 +5571,146 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   if (gradedCtx) {
     renderColorPreviewScene(gradedCtx, scopeW, scopeH, cdl, true, false);
   }
+}
+
+export function sampleColorViewerInputRgb(canvas, cdl, u, v, activeNodeId = null) {
+  if (!canvas || !canvas._ungradedSourceCanvas) return null;
+  const buf = canvas._ungradedSourceCanvas;
+  const ctx = buf.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  const cu = clamp01(u);
+  const cv = clamp01(v);
+  const px = Math.min(buf.width - 1, Math.max(0, Math.floor(cu * buf.width)));
+  const py = Math.min(buf.height - 1, Math.max(0, Math.floor(cv * buf.height)));
+  const pixel = ctx.getImageData(px, py, 1, 1).data;
+  const rIn = pixel[0] / 255;
+  const gIn = pixel[1] / 255;
+  const bIn = pixel[2] / 255;
+  const nodes = cdl && Array.isArray(cdl.nodes) ? cdl.nodes : [];
+  if (nodes.length === 0) return [rIn, gIn, bIn];
+  return applyColorNodesBeforeTargetClient(rIn, gIn, bIn, cu, cv, nodes, activeNodeId);
+}
+
+export function drawQualifierSpectrumCanvas(canvas, rawQualifier) {
+  if (!canvas) return;
+  const { ctx, width, height } = setupCanvas(canvas, 56);
+  const q = normalizeQualifier(rawQualifier);
+
+  ctx.fillStyle = "#111114";
+  ctx.fillRect(0, 0, width, height);
+
+  const labelW = 28;
+  const padR = 6;
+  const barX = labelW;
+  const barW = Math.max(40, width - labelW - padR);
+  const rows = [
+    { key: "H", y: 5, h: 12 },
+    { key: "S", y: 22, h: 12 },
+    { key: "L", y: 39, h: 12 }
+  ];
+
+  // Hue spectrum track
+  const hueGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  hueGrad.addColorStop(0.0, "#ff2a2a");
+  hueGrad.addColorStop(1 / 6, "#ffff2a");
+  hueGrad.addColorStop(2 / 6, "#2aff2a");
+  hueGrad.addColorStop(3 / 6, "#2affff");
+  hueGrad.addColorStop(4 / 6, "#2a2aff");
+  hueGrad.addColorStop(5 / 6, "#ff2aff");
+  hueGrad.addColorStop(1.0, "#ff2a2a");
+  ctx.fillStyle = hueGrad;
+  ctx.fillRect(barX, rows[0].y, barW, rows[0].h);
+
+  // Saturation gradient track
+  const satGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  satGrad.addColorStop(0.0, "#404046");
+  satGrad.addColorStop(1.0, `hsl(${Math.round(q.hue_center)}, 92%, 55%)`);
+  ctx.fillStyle = satGrad;
+  ctx.fillRect(barX, rows[1].y, barW, rows[1].h);
+
+  // Luminance gradient track
+  const lumGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  lumGrad.addColorStop(0.0, "#0b0b0d");
+  lumGrad.addColorStop(0.5, "#7e7e86");
+  lumGrad.addColorStop(1.0, "#f5f5f7");
+  ctx.fillStyle = lumGrad;
+  ctx.fillRect(barX, rows[2].y, barW, rows[2].h);
+
+  // Row labels & borders
+  ctx.font = "9px ui-monospace, monospace";
+  rows.forEach((row) => {
+    ctx.fillStyle = q.enabled ? "#d8d8de" : "#6c6c75";
+    ctx.fillText(row.key, 8, row.y + 9);
+    ctx.strokeStyle = "#2b2b31";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, row.y, barW, row.h);
+  });
+
+  if (!q.enabled) {
+    ctx.fillStyle = "rgba(17, 17, 20, 0.55)";
+    ctx.fillRect(barX, 0, barW, height);
+    return;
+  }
+
+  const strokeColor = q.invert ? "#689cff" : "#e68442";
+  const drawRangeBracket = (y, h, lo, hi, soft) => {
+    const x0 = barX + clamp01(lo) * barW;
+    const x1 = barX + clamp01(hi) * barW;
+    const xSoftL = barX + clamp01(lo - soft) * barW;
+    const xSoftR = barX + clamp01(hi + soft) * barW;
+    ctx.fillStyle = "rgba(12, 12, 15, 0.68)";
+    if (!q.invert) {
+      if (xSoftL > barX) ctx.fillRect(barX, y, xSoftL - barX, h);
+      if (xSoftR < barX + barW) ctx.fillRect(xSoftR, y, barX + barW - xSoftR, h);
+    } else if (x1 > x0) {
+      ctx.fillRect(x0, y, x1 - x0, h);
+    }
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x0, y, Math.max(2, x1 - x0), h);
+    if (soft > 0.005) {
+      ctx.save();
+      ctx.setLineDash([2, 2]);
+      ctx.strokeStyle = q.invert ? "rgba(104, 156, 255, 0.7)" : "rgba(230, 132, 66, 0.7)";
+      ctx.beginPath();
+      ctx.moveTo(xSoftL, y);
+      ctx.lineTo(xSoftL, y + h);
+      ctx.moveTo(xSoftR, y);
+      ctx.lineTo(xSoftR, y + h);
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+
+  // Hue bracket with wrap-around awareness
+  if (q.hue_width < 359.9) {
+    const hwNorm = (q.hue_width * 0.5) / 360.0;
+    const hsNorm = q.hue_softness / 360.0;
+    const cNorm = (q.hue_center % 360.0) / 360.0;
+    const lo = cNorm - hwNorm;
+    const hi = cNorm + hwNorm;
+    if (lo < 0) {
+      drawRangeBracket(rows[0].y, rows[0].h, 0, hi, hsNorm);
+      drawRangeBracket(rows[0].y, rows[0].h, 1 + lo, 1, hsNorm);
+    } else if (hi > 1) {
+      drawRangeBracket(rows[0].y, rows[0].h, lo, 1, hsNorm);
+      drawRangeBracket(rows[0].y, rows[0].h, 0, hi - 1, hsNorm);
+    } else {
+      drawRangeBracket(rows[0].y, rows[0].h, lo, hi, hsNorm);
+    }
+    const cx = barX + cNorm * barW;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.moveTo(cx, rows[0].y - 2);
+    ctx.lineTo(cx, rows[0].y + rows[0].h + 2);
+    ctx.stroke();
+  } else {
+    drawRangeBracket(rows[0].y, rows[0].h, 0, 1, 0);
+  }
+
+  drawRangeBracket(rows[1].y, rows[1].h, q.sat_low, q.sat_high, q.sat_softness);
+  drawRangeBracket(rows[2].y, rows[2].h, q.lum_low, q.lum_high, q.lum_softness);
 }
 
 function resolveCaptureCssWidth(sourceCanvas, fallbackWidth = 640) {

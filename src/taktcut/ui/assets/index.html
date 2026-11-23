@@ -1849,6 +1849,10 @@
                   <input type="range" id="cdl-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="Color split wipe position">
                   <span id="cdl-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
                 </div>
+                <button type="button" id="btn-color-qual-highlight" class="btn btn-secondary btn-qual-highlight" aria-pressed="false" title="Qualifier Highlight Matte (Shift+H)">
+                  <span data-i18n="color.qual.highlight">Highlight</span>
+                  <span class="kbd-chip mono">Shift+H</span>
+                </button>
                 <button type="button" id="btn-color-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
                   <span class="kbd-chip mono">Shift+S</span>
@@ -1987,6 +1991,83 @@
                       <label for="pw-soft-range" data-i18n="color.window.softness">Softness (%)</label>
                       <input type="range" id="pw-soft-range" min="0" max="50" step="1" value="12" disabled>
                       <input type="number" id="pw-soft-num" class="input-num" min="0" max="50" step="1" value="12" aria-label="Power Window Feather Softness percentage" disabled>
+                    </div>
+                  </div>
+                </div>
+                <div id="color-qualifier-dock" class="color-qualifier-dock" role="region" aria-label="HSL Secondary Qualifier">
+                  <div class="qual-toolbar">
+                    <div class="qual-title-group">
+                      <span class="pane-subheader-label" data-i18n="color.qual.title">HSL Qualifier</span>
+                      <span id="qual-status-badge" class="nle-tag mono">OFF</span>
+                      <span id="qual-pick-readout" class="qual-pick-readout mono" aria-live="polite">H -- | S -- | L --</span>
+                    </div>
+                    <div id="qual-preset-group" class="qual-preset-group" role="group" aria-label="HSL Qualifier presets">
+                      <button type="button" class="btn btn-mini qual-preset-btn is-active" data-qual-preset="off" aria-pressed="true" data-i18n="color.qual.off">Off</button>
+                      <button type="button" class="btn btn-mini qual-preset-btn" data-qual-preset="skin_tones" aria-pressed="false" data-i18n="color.qual.skin">Skin</button>
+                      <button type="button" class="btn btn-mini qual-preset-btn" data-qual-preset="sky_blue" aria-pressed="false" data-i18n="color.qual.sky">Sky</button>
+                      <button type="button" class="btn btn-mini qual-preset-btn" data-qual-preset="foliage_green" aria-pressed="false" data-i18n="color.qual.foliage">Foliage</button>
+                      <button type="button" class="btn btn-mini qual-preset-btn" data-qual-preset="teal_accents" aria-pressed="false" data-i18n="color.qual.teal">Teal</button>
+                      <button type="button" class="btn btn-mini qual-preset-btn" data-qual-preset="highlights" aria-pressed="false" data-i18n="color.qual.highlights">Highs</button>
+                      <button type="button" class="btn btn-mini qual-preset-btn" data-qual-preset="shadows" aria-pressed="false" data-i18n="color.qual.shadows">Lows</button>
+                    </div>
+                    <div class="qual-toggles">
+                      <button type="button" id="btn-qual-pick" class="btn btn-mini" aria-pressed="false" title="Pick Hue/Sat/Lum from Color Viewer" data-i18n="color.qual.pick">Pick</button>
+                      <button type="button" id="btn-qual-highlight" class="btn btn-mini" aria-pressed="false" title="Highlight Matte Preview (Shift+H)" data-i18n="color.qual.highlight">Highlight</button>
+                      <button type="button" id="btn-qual-invert" class="btn btn-mini" aria-pressed="false" disabled data-i18n="color.qual.invert">Invert</button>
+                      <button type="button" id="btn-qual-reset" class="btn btn-mini" disabled aria-label="Reset HSL Qualifier">Rst</button>
+                    </div>
+                  </div>
+                  <canvas id="qual-spectrum-canvas" class="qual-spectrum-canvas" aria-label="HSL Qualifier spectrum range"></canvas>
+                  <div id="color-qual-controls" class="qual-param-grid mono is-dimmed">
+                    <div class="qual-param-row">
+                      <label for="qual-hue-center-range" data-i18n="color.qual.hueCenter">Hue (deg)</label>
+                      <input type="range" id="qual-hue-center-range" min="0" max="360" step="1" value="22" disabled>
+                      <input type="number" id="qual-hue-center-num" class="input-num" min="0" max="360" step="1" value="22" aria-label="Qualifier Hue center degrees" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-hue-width-range" data-i18n="color.qual.hueWidth">H Width</label>
+                      <input type="range" id="qual-hue-width-range" min="2" max="360" step="1" value="44" disabled>
+                      <input type="number" id="qual-hue-width-num" class="input-num" min="2" max="360" step="1" value="44" aria-label="Qualifier Hue width degrees" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-hue-soft-range" data-i18n="color.qual.hueSoft">H Soft</label>
+                      <input type="range" id="qual-hue-soft-range" min="0" max="60" step="1" value="18" disabled>
+                      <input type="number" id="qual-hue-soft-num" class="input-num" min="0" max="60" step="1" value="18" aria-label="Qualifier Hue softness degrees" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-sat-low-range" data-i18n="color.qual.satLow">Sat Low (%)</label>
+                      <input type="range" id="qual-sat-low-range" min="0" max="100" step="1" value="12" disabled>
+                      <input type="number" id="qual-sat-low-num" class="input-num" min="0" max="100" step="1" value="12" aria-label="Qualifier Saturation low percentage" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-sat-high-range" data-i18n="color.qual.satHigh">Sat High (%)</label>
+                      <input type="range" id="qual-sat-high-range" min="0" max="100" step="1" value="75" disabled>
+                      <input type="number" id="qual-sat-high-num" class="input-num" min="0" max="100" step="1" value="75" aria-label="Qualifier Saturation high percentage" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-sat-soft-range" data-i18n="color.qual.satSoft">Sat Soft (%)</label>
+                      <input type="range" id="qual-sat-soft-range" min="0" max="40" step="1" value="8" disabled>
+                      <input type="number" id="qual-sat-soft-num" class="input-num" min="0" max="40" step="1" value="8" aria-label="Qualifier Saturation softness percentage" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-lum-low-range" data-i18n="color.qual.lumLow">Lum Low (%)</label>
+                      <input type="range" id="qual-lum-low-range" min="0" max="100" step="1" value="18" disabled>
+                      <input type="number" id="qual-lum-low-num" class="input-num" min="0" max="100" step="1" value="18" aria-label="Qualifier Luminance low percentage" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-lum-high-range" data-i18n="color.qual.lumHigh">Lum High (%)</label>
+                      <input type="range" id="qual-lum-high-range" min="0" max="100" step="1" value="88" disabled>
+                      <input type="number" id="qual-lum-high-num" class="input-num" min="0" max="100" step="1" value="88" aria-label="Qualifier Luminance high percentage" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-lum-soft-range" data-i18n="color.qual.lumSoft">Lum Soft (%)</label>
+                      <input type="range" id="qual-lum-soft-range" min="0" max="40" step="1" value="10" disabled>
+                      <input type="number" id="qual-lum-soft-num" class="input-num" min="0" max="40" step="1" value="10" aria-label="Qualifier Luminance softness percentage" disabled>
+                    </div>
+                    <div class="qual-param-row">
+                      <label for="qual-blur-range" data-i18n="color.qual.blur">Matte Blur (px)</label>
+                      <input type="range" id="qual-blur-range" min="0" max="8" step="0.5" value="0" disabled>
+                      <input type="number" id="qual-blur-num" class="input-num" min="0" max="8" step="0.5" value="0" aria-label="Qualifier matte blur radius" disabled>
                     </div>
                   </div>
                 </div>

@@ -1227,7 +1227,12 @@ def test_project_delivery_voice_cleanup_roundtrip(tmp_path: Path) -> None:
 
 
 def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
-    from taktcut.color import ColorNodeParams, PowerWindowParams, parse_cube_lut_text
+    from taktcut.color import (
+        ColorNodeParams,
+        PowerWindowParams,
+        QualifierParams,
+        parse_cube_lut_text,
+    )
 
     cube_text = (
         'TITLE "Demo_LUT"\n'
@@ -1259,6 +1264,21 @@ def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
                 softness=0.14,
                 invert=False,
             ),
+            qualifier=QualifierParams(
+                enabled=True,
+                preset="skin_tones",
+                hue_center=24.0,
+                hue_width=40.0,
+                hue_softness=16.0,
+                sat_low=0.14,
+                sat_high=0.78,
+                sat_softness=0.09,
+                lum_low=0.18,
+                lum_high=0.86,
+                lum_softness=0.10,
+                blur_radius=1.5,
+                invert=False,
+            ),
         ),
         ColorNodeParams(
             id="node-2",
@@ -1285,6 +1305,10 @@ def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
     assert loaded.color.nodes[0].power_window.shape == "circle"
     assert loaded.color.nodes[0].power_window.center_x == pytest.approx(0.42)
     assert loaded.color.nodes[0].power_window.rotation_deg == pytest.approx(15.0)
+    assert loaded.color.nodes[0].qualifier.enabled is True
+    assert loaded.color.nodes[0].qualifier.preset == "skin_tones"
+    assert loaded.color.nodes[0].qualifier.hue_center == pytest.approx(24.0)
+    assert loaded.color.nodes[0].qualifier.blur_radius == pytest.approx(1.5)
     assert loaded.color.nodes[1].lut_title == "Demo_LUT"
     assert loaded.color.nodes[1].lut_mix == pytest.approx(0.8)
     assert loaded.color.nodes[1].lut_size == 2

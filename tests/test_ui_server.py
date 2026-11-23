@@ -3813,6 +3813,65 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator('[data-pw-shape="gradient"]').click()
                     assert page.locator("#pw-status-badge").text_content() == "GRADIENT"
 
+                    # DaVinci HSL Qualifier: preset, FFmpeg compile, Highlight, Pick & Outside
+                    page.locator("#btn-cdl-reset").click()
+                    assert page.locator("#qual-status-badge").text_content() == "OFF"
+                    page.locator('[data-qual-preset="skin_tones"]').click()
+                    assert page.locator("#qual-status-badge").text_content() == "SKIN_TONES"
+                    assert page.locator("#btn-color-node-outside").is_disabled() is False
+                    page.locator('[data-grade-preset="teal_orange"]').click()
+                    page.wait_for_function(
+                        "() => (document.getElementById('color-compile-badge')"
+                        ".textContent || '').includes('QUAL')"
+                        " && (document.getElementById('color-filtergraph-output')"
+                        ".textContent || '').includes('extractplanes=r')"
+                        " && (document.getElementById('color-filtergraph-output')"
+                        ".textContent || '').includes('maskedmerge')"
+                    )
+                    scope_qual_normal = page.evaluate(
+                        "() => document.getElementById('color-preview-canvas').toDataURL()"
+                    )
+                    page.locator("#btn-qual-highlight").click()
+                    assert (
+                        page.locator("#btn-qual-highlight").get_attribute("aria-pressed") == "true"
+                    )
+                    assert (
+                        page.locator("#btn-color-qual-highlight").get_attribute("aria-pressed")
+                        == "true"
+                    )
+                    scope_qual_hl = page.evaluate(
+                        "() => document.getElementById('color-preview-canvas').toDataURL()"
+                    )
+                    assert scope_qual_hl != scope_qual_normal
+                    page.keyboard.press("Shift+H")
+                    assert (
+                        page.locator("#btn-qual-highlight").get_attribute("aria-pressed") == "false"
+                    )
+
+                    # Eyedropper Pick directly on #color-preview-canvas (sky/blue swatch area)
+                    page.locator("#btn-qual-pick").click()
+                    assert page.locator("#btn-qual-pick").get_attribute("aria-pressed") == "true"
+                    prev_box = page.locator("#color-preview-canvas").bounding_box()
+                    assert prev_box is not None and prev_box["width"] > 120
+                    page.mouse.click(
+                        prev_box["x"] + prev_box["width"] * 0.50,
+                        prev_box["y"] + prev_box["height"] * 0.50,
+                    )
+                    assert page.locator("#qual-status-badge").text_content() == "CUSTOM"
+                    pick_readout = page.locator("#qual-pick-readout").text_content() or ""
+                    assert "deg |" in pick_readout and "S " in pick_readout and "L " in pick_readout
+                    page.locator("#btn-qual-pick").click()
+                    assert page.locator("#btn-qual-pick").get_attribute("aria-pressed") == "false"
+
+                    page.locator("#btn-qual-invert").click()
+                    assert page.locator("#qual-status-badge").text_content() == "CUSTOM | INV"
+                    page.locator("#btn-color-node-outside").click()
+                    assert page.locator("#color-node-count").text_content() == "2 / 8 NODES"
+                    assert page.locator("#color-node-graph .color-node-qual-tag").count() == 2
+                    page.locator("#btn-qual-reset").click()
+                    assert page.locator("#qual-status-badge").text_content() == "OFF"
+                    page.locator("#btn-cdl-reset").click()
+
                     # Custom YRGB Spline Curves: preset, canvas knot insert + keyboard nudge + reset
                     assert page.locator("#curves-status-badge").text_content() == "LINEAR"
                     page.locator('[data-curve-preset="film_s_curve"]').click()
@@ -3860,6 +3919,11 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                             "#btn-color-node-bypass",
                             "#cube-file-input",
                             '[data-pw-shape="circle"]',
+                            '[data-qual-preset="skin_tones"]',
+                            "#btn-qual-pick",
+                            "#btn-qual-highlight",
+                            "#btn-qual-invert",
+                            "#btn-qual-reset",
                             '[data-curve-channel="master"]',
                             '[data-curve-preset="film_s_curve"]',
                         ):
@@ -7200,6 +7264,67 @@ def test_ui_color_node_tree_and_cube_import_endpoints(ui_server: tuple[str, Path
     assert pw_plan_status == 200
     pw_plan = json.loads(pw_plan_raw.decode("utf-8"))
     assert "maskedmerge" in (pw_plan["plan"]["video_filter"] or "")
+
+    # Verify /api/color/presets includes qualifier_presets and compiles HSL Qualifier
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/color/presets")
+    assert presets_status == 200
+    presets_json = json.loads(presets_raw.decode("utf-8"))
+    assert len(presets_json.get("qualifier_presets", [])) >= 6
+
+    qual_nodes_payload = [
+        {
+            "id": "node-1",
+            "label": "Skin Key",
+            "enabled": True,
+            "grade": {
+                "lift": [0.0, 0.0, 0.0],
+                "gamma": [0.06, 0.01, -0.04],
+                "gain": [0.04, 0.01, -0.03],
+                "contrast": 1.05,
+                "saturation": 1.15,
+                "temperature": 0.08,
+            },
+            "qualifier": {
+                "enabled": True,
+                "preset": "skin_tones",
+                "hue_center": 22.0,
+                "hue_width": 44.0,
+                "hue_softness": 18.0,
+                "sat_low": 0.12,
+                "sat_high": 0.75,
+                "sat_softness": 0.08,
+                "lum_low": 0.18,
+                "lum_high": 0.88,
+                "lum_softness": 0.10,
+                "blur_radius": 1.0,
+                "invert": False,
+            },
+        }
+    ]
+    qual_comp_status, _, qual_comp_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"nodes": qual_nodes_payload, "pix_fmt": "yuv420p"},
+    )
+    assert qual_comp_status == 200
+    qual_comp = json.loads(qual_comp_raw.decode("utf-8"))
+    assert qual_comp["has_qualifiers"] is True
+    assert "extractplanes=r" in qual_comp["filtergraph"]
+    assert "maskedmerge" in qual_comp["filtergraph"]
+
+    qual_plan_status, _, qual_plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/qual_node_tree_out.mp4",
+            "color_nodes": qual_nodes_payload,
+            "execute": False,
+        },
+    )
+    assert qual_plan_status == 200
+    qual_plan = json.loads(qual_plan_raw.decode("utf-8"))
+    assert "extractplanes=r" in (qual_plan["plan"]["video_filter"] or "")
 
 
 def test_ui_fairlight_mixer_compile_and_project_persistence(

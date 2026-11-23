@@ -44,6 +44,7 @@ from taktcut.color import (
     compile_color_node_chain,
     list_color_curves_presets,
     list_color_presets,
+    list_qualifier_presets,
     parse_cdl_xml,
     parse_cube_lut,
     parse_cube_lut_text,
@@ -1373,6 +1374,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "curve_presets": [
                         p.model_dump(mode="json") for p in list_color_curves_presets()
                     ],
+                    "qualifier_presets": [
+                        p.model_dump(mode="json") for p in list_qualifier_presets()
+                    ],
                     "bounds": {
                         "lift": {
                             "min": COLOR_BALANCE_MIN,
@@ -1875,10 +1879,15 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, compiled_chain.model_dump(mode="json"))
                 return
             grade = _build_color_grade_from_payload(payload)
-            if isinstance(payload.get("curves"), dict):
-                single_node = ColorNodeParams.model_validate(
-                    {"grade": grade, "curves": payload["curves"]}
-                )
+            if isinstance(payload.get("curves"), dict) or isinstance(
+                payload.get("qualifier"), dict
+            ):
+                node_payload: dict[str, Any] = {"grade": grade}
+                if isinstance(payload.get("curves"), dict):
+                    node_payload["curves"] = payload["curves"]
+                if isinstance(payload.get("qualifier"), dict):
+                    node_payload["qualifier"] = payload["qualifier"]
+                single_node = ColorNodeParams.model_validate(node_payload)
                 compiled_chain = compile_color_node_chain([single_node], pix_fmt=pix_fmt)
                 self._send_json(HTTPStatus.OK, compiled_chain.model_dump(mode="json"))
                 return
