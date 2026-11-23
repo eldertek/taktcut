@@ -76,6 +76,8 @@ import {
   MAX_COLOR_NODES,
   MAX_COMPOUND_NESTING_DEPTH,
   MAX_CURVE_POINTS,
+  MULTICAM_CUT_MODES,
+  MULTICAM_SYNC_MODES,
   PLANAR_TRACKER_PRESETS_CLIENT,
   PRECOMP_BLEND_MODES,
   QUALIFIER_PRESETS,
@@ -149,17 +151,20 @@ import {
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
+  compileMulticamFiltergraphClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
   compoundClipToTimelineDoc,
   computeCompoundDepthClient,
   computeInOutRangeMetrics,
+  computeMulticamSegmentsClient,
   computeRetimeRampSummary,
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
   countCompoundClipsInDocument,
+  countMulticamClipsInDocument,
   countSyncLockedTracks,
   createCompoundClipInDocument,
   createDefaultColorCurves,
@@ -169,9 +174,11 @@ import {
   createDefaultPowerWindow,
   createDefaultQualifier,
   createEmptyTransformKeyframes,
+  createMulticamClipInDocument,
   createStillRecord,
   decomposeCompoundClipInDocument,
   deleteMarkerInDocument,
+  deleteMulticamCutInDocument,
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
   estimateFairlightCompressorGrClient,
@@ -192,6 +199,7 @@ import {
   findMagneticSnap,
   findTrackAndClip,
   flattenAllCompoundsInDocument,
+  flattenMulticamClipInDocument,
   formatCmx3600Edl,
   formatFcpxmlTimeline,
   formatFfmetadataFromMarkers,
@@ -258,6 +266,7 @@ import {
   parseCubeLutTextClient,
   pickQualifierFromRgb,
   removeColorNodeFromTree,
+  resolveMulticamActiveAngleAtFrame,
   removeStillById,
   removeTransformKeyframeInDocument,
   resetAllTracksMixerInDocument,
@@ -287,8 +296,11 @@ import {
   toggleTrackArmInDocument,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
+  switchMulticamAngleInDocument,
+  syncMulticamClipInDocument,
   toggleTrackSyncLockInDocument,
   updateCompoundSubsequenceInDocument,
+  updateMulticamAngleInDocument,
   trimClipInDocument,
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
@@ -472,6 +484,11 @@ const state = {
   timelineUndoStack: [],
   timelineRedoStack: [],
   compoundStack: [],
+  multicamQuadView: false,
+  multicamCutMode: "video_only",
+  multicamCompileMode: "active_cuts",
+  multicamSelectedAngle: 1,
+  multicamHoveredAngle: null,
   tfGraphParam: "zoom_pct",
   tfGraphMode: "value",
   tfGraphSelectedKfIdx: 0,
@@ -1144,6 +1161,7 @@ function redrawActiveCanvases() {
   const activeColorChain = getActiveColorChainState();
   if (state.activeTab === "timeline") {
     const selVideoCtx = getSelectedClipLocalContext();
+    const mcCtx = getActiveMulticamClipContext();
     drawProgramMonitorCanvas(
       byId("timeline-program-canvas"),
       state.timelineDoc,
@@ -1161,10 +1179,13 @@ function redrawActiveCanvases() {
         filmGrain: { ...state.filmGrain },
         vignette: { ...state.vignette },
         showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay),
-        dveOverlay: Boolean(state.dveOverlay),
+        dveOverlay: Boolean(state.dveOverlay) && !(state.multicamQuadView && mcCtx),
         dveSplitGrid: Boolean(state.dveSplitGrid),
         selectedDveClip: selVideoCtx ? selVideoCtx.clip : null,
-        trimHud: state.timelineActiveEditHud
+        trimHud: state.timelineActiveEditHud,
+        multicamQuadView: Boolean(state.multicamQuadView && mcCtx),
+        multicamClip: mcCtx ? mcCtx.clip : null,
+        multicamHoveredAngle: state.multicamHoveredAngle
       }
     );
     const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
@@ -3554,6 +3575,7 @@ function renderTimelineSelection() {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
     renderTimelineClipLabelInspector();
     renderTimelineCompoundInspector();
+    renderTimelineMulticamInspector();
     renderTimelineEditNudgeInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
@@ -3597,6 +3619,7 @@ function renderTimelineSelection() {
     ]);
     renderTimelineClipLabelInspector();
     renderTimelineCompoundInspector();
+    renderTimelineMulticamInspector();
     renderTimelineEditNudgeInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
@@ -3617,6 +3640,7 @@ function renderTimelineSelection() {
   ]);
   renderTimelineClipLabelInspector();
   renderTimelineCompoundInspector();
+  renderTimelineMulticamInspector();
   renderTimelineMarkerInspector();
   renderTimelineTransformInspector();
   renderTimelineAudioInspector();
@@ -10774,6 +10798,23 @@ function updateTimelineToolbarUI() {
   if (cmpFlattenBtn) {
     cmpFlattenBtn.disabled = !state.timelineDoc || cmpCount === 0;
   }
+  const mcCreateBtn = byId("btn-timeline-multicam-create");
+  if (mcCreateBtn) {
+    const selInfo = getSelectedClipTrack();
+    mcCreateBtn.disabled =
+      !state.timelineDoc ||
+      !selInfo ||
+      !selInfo.clip ||
+      selInfo.clip.media_type === "audio" ||
+      Boolean(selInfo.clip.multicam_bank);
+  }
+  const mcQuadTopBtn = byId("btn-multicam-quad-toggle");
+  if (mcQuadTopBtn) {
+    const hasAnyMc = countMulticamClipsInDocument(state.timelineDoc) > 0;
+    mcQuadTopBtn.disabled = !hasAnyMc;
+    mcQuadTopBtn.classList.toggle("is-active", Boolean(state.multicamQuadView && hasAnyMc));
+    mcQuadTopBtn.setAttribute("aria-pressed", state.multicamQuadView && hasAnyMc ? "true" : "false");
+  }
   if (toolBadge) {
     const modeLabel = getTimelineToolLabel(tool);
     const snapLabel = state.timelineSnapEnabled ? " | SNAP (N)" : "";
@@ -11016,6 +11057,9 @@ function setPlayhead(frame) {
   }
   if (state.activeTab === "fx") {
     syncPlanarTrackerAndStabilizerUi();
+  }
+  if (state.activeTab === "timeline") {
+    renderTimelineMulticamInspector();
   }
   if (
     state.activeTab === "timeline" ||
@@ -11350,6 +11394,8 @@ const NLE_SHORTCUT_GROUPS = [
     items: [
       { kbd: "W / Ctrl+W", descKey: "shortcuts.key.splitWipe" },
       { kbd: "Shift+H", descKey: "shortcuts.key.qualHighlight" },
+      { kbd: "Shift+M", descKey: "shortcuts.key.multicamQuad" },
+      { kbd: "1 - 4", descKey: "shortcuts.key.multicamCut" },
       { kbd: "Shift+S", descKey: "shortcuts.key.grabStill" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
@@ -11584,6 +11630,31 @@ function handleTransportKeydown(ev) {
   }
 
   if (state.activeTab === "timeline") {
+    if (lower === "m" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      toggleMulticamQuadViewAction();
+      return;
+    }
+    if (
+      state.multicamQuadView &&
+      !ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.altKey &&
+      ["1", "2", "3", "4"].includes(ev.key)
+    ) {
+      const mcCtx = getActiveMulticamClipContext();
+      const targetIdx = Number.parseInt(ev.key, 10);
+      if (
+        mcCtx &&
+        mcCtx.clip &&
+        mcCtx.clip.multicam_bank &&
+        (mcCtx.clip.multicam_bank.angles || []).some((a) => a.angle_index === targetIdx)
+      ) {
+        ev.preventDefault();
+        switchMulticamAngleAction(targetIdx);
+        return;
+      }
+    }
     if (lower === "m") {
       ev.preventDefault();
       addMarkerAtPlayheadAction();
@@ -14318,7 +14389,39 @@ function wireClipTransformInspector() {
       return Math.abs(lx) <= geom.boxW * 0.5 && Math.abs(ly) <= geom.boxH * 0.5;
     };
 
+    const toQuadPoint = (ev) => {
+      const quadGeom = programCanvas._multicamQuadGeom;
+      if (!quadGeom || !Array.isArray(quadGeom.cells)) return null;
+      const rect = programCanvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const logicalW = quadGeom.canvasWidth || rect.width;
+      const logicalH = quadGeom.canvasHeight || rect.height;
+      const containScale = Math.min(rect.width / logicalW, rect.height / logicalH);
+      const drawnW = logicalW * containScale;
+      const drawnH = logicalH * containScale;
+      const offsetX = (rect.width - drawnW) * 0.5;
+      const offsetY = (rect.height - drawnH) * 0.5;
+      return {
+        quadGeom,
+        x: (ev.clientX - rect.left - offsetX) / containScale,
+        y: (ev.clientY - rect.top - offsetY) / containScale
+      };
+    };
+
     programCanvas.addEventListener("pointerdown", (ev) => {
+      if (state.multicamQuadView && programCanvas._multicamQuadGeom) {
+        const qp = toQuadPoint(ev);
+        if (qp) {
+          const hitCell = qp.quadGeom.cells.find(
+            (c) => qp.x >= c.x && qp.x <= c.x + c.w && qp.y >= c.y && qp.y <= c.y + c.h
+          );
+          if (hitCell) {
+            ev.preventDefault();
+            switchMulticamAngleAction(hitCell.angleIndex);
+            return;
+          }
+        }
+      }
       if (!state.dveOverlay) return;
       const ctx = getSelectedClipLocalContext();
       if (!ctx) return;
@@ -14364,6 +14467,22 @@ function wireClipTransformInspector() {
     });
 
     programCanvas.addEventListener("pointermove", (ev) => {
+      if (state.multicamQuadView && programCanvas._multicamQuadGeom && !state.dveDrag) {
+        const qp = toQuadPoint(ev);
+        let hovered = null;
+        if (qp) {
+          const hitCell = qp.quadGeom.cells.find(
+            (c) => qp.x >= c.x && qp.x <= c.x + c.w && qp.y >= c.y && qp.y <= c.y + c.h
+          );
+          if (hitCell) hovered = hitCell.angleIndex;
+        }
+        programCanvas.style.cursor = hovered ? "pointer" : "";
+        if (state.multicamHoveredAngle !== hovered) {
+          state.multicamHoveredAngle = hovered;
+          if (state.activeTab === "timeline") redrawActiveCanvases();
+        }
+        return;
+      }
       if (!state.dveDrag) return;
       const pt = toProgramPoint(ev);
       if (!pt || !pt.geom) return;
@@ -14446,6 +14565,13 @@ function wireClipTransformInspector() {
     };
     programCanvas.addEventListener("pointerup", endDveDrag);
     programCanvas.addEventListener("pointercancel", endDveDrag);
+    programCanvas.addEventListener("pointerleave", () => {
+      if (state.multicamHoveredAngle !== null) {
+        state.multicamHoveredAngle = null;
+        programCanvas.style.cursor = "";
+        if (state.activeTab === "timeline" && state.multicamQuadView) redrawActiveCanvases();
+      }
+    });
   }
 
   if (sendBtn) {
@@ -17520,6 +17646,7 @@ function wireEvents() {
   window.addEventListener("resize", redrawActiveCanvases);
   wireFairlightAudioRackEvents();
   wireCompoundInspectorEvents();
+  wireMulticamInspectorEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -18468,6 +18595,483 @@ function wireCompoundInspectorEvents() {
       if (hit && hit.kind === "clip" && hit.box && hit.box.data && hit.box.data.compound_subsequence) {
         stepIntoCompoundClipAction(hit.box.trackKind, hit.box.trackIndex, hit.box.clipIndex);
       }
+    });
+  }
+}
+
+// =========================================================================
+// CYCLE #93: MULTI-CAM ANGLE SYNC BANK & LIVE CUT SWITCHER UI
+// =========================================================================
+
+function getActiveMulticamClipContext() {
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks)) return null;
+  const selInfo = getSelectedClipTrack();
+  if (selInfo && selInfo.clip && selInfo.clip.multicam_bank) {
+    return selInfo;
+  }
+  const ph = state.playheadFrame;
+  for (const trk of doc.tracks) {
+    if (trk.kind !== "video") continue;
+    for (let cIdx = 0; cIdx < (trk.clips || []).length; cIdx += 1) {
+      const c = trk.clips[cIdx];
+      if (c && c.multicam_bank && ph >= c.start_frame && ph < c.start_frame + c.duration_frames) {
+        return {
+          ref: { trackKind: trk.kind, trackIndex: trk.index, clipIndex: cIdx },
+          trk,
+          clip: c
+        };
+      }
+    }
+  }
+  for (const trk of doc.tracks) {
+    if (trk.kind !== "video") continue;
+    for (let cIdx = 0; cIdx < (trk.clips || []).length; cIdx += 1) {
+      const c = trk.clips[cIdx];
+      if (c && c.multicam_bank) {
+        return {
+          ref: { trackKind: trk.kind, trackIndex: trk.index, clipIndex: cIdx },
+          trk,
+          clip: c
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function renderTimelineMulticamInspector() {
+  const badge = byId("clip-multicam-badge");
+  const createBtn = byId("btn-multicam-create-sel");
+  const quadBtn = byId("btn-multicam-inspector-quad");
+  const flattenBtn = byId("btn-multicam-flatten");
+  const syncSelect = byId("multicam-sync-mode");
+  const syncBtn = byId("btn-multicam-auto-sync");
+  const cutModeGroup = byId("multicam-cut-mode-group");
+  const bankEl = byId("multicam-angle-bank");
+  const slipLabel = byId("multicam-slip-label");
+  const cutsList = byId("multicam-cuts-list");
+  const fgPreview = byId("multicam-filtergraph-preview");
+
+  const selInfo = getSelectedClipTrack();
+  const mcCtx = getActiveMulticamClipContext();
+  const clip = mcCtx ? mcCtx.clip : null;
+  const bank = clip && clip.multicam_bank ? clip.multicam_bank : null;
+  const isMc = Boolean(bank);
+
+  if (createBtn) {
+    createBtn.disabled =
+      !state.timelineDoc ||
+      !selInfo ||
+      !selInfo.clip ||
+      selInfo.clip.media_type === "audio" ||
+      Boolean(selInfo.clip.multicam_bank);
+  }
+  if (quadBtn) {
+    quadBtn.disabled = !isMc;
+    quadBtn.classList.toggle("is-active", Boolean(state.multicamQuadView && isMc));
+    quadBtn.setAttribute("aria-pressed", state.multicamQuadView && isMc ? "true" : "false");
+  }
+  if (flattenBtn) {
+    flattenBtn.disabled = !isMc;
+  }
+  if (syncSelect) {
+    syncSelect.disabled = !isMc;
+    if (isMc && bank.sync_mode) {
+      syncSelect.value = bank.sync_mode;
+    }
+  }
+  if (syncBtn) {
+    syncBtn.disabled = !isMc;
+  }
+
+  if (badge) {
+    if (isMc) {
+      badge.textContent = `MC ${bank.angles.length}x / ${bank.cuts.length}C`;
+      badge.className = "nle-tag mono is-snap";
+    } else {
+      badge.textContent = selInfo && selInfo.clip ? "SINGLE" : "--";
+      badge.className = "nle-tag mono";
+    }
+  }
+
+  if (cutModeGroup) {
+    for (const pill of cutModeGroup.querySelectorAll("[data-multicam-cut-mode]")) {
+      const mVal = pill.getAttribute("data-multicam-cut-mode");
+      const active = state.multicamCutMode === mVal;
+      pill.disabled = !isMc;
+      pill.classList.toggle("is-active", active);
+      pill.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+  }
+
+  for (const btnId of ["btn-mc-slip-m5", "btn-mc-slip-m1", "btn-mc-slip-p1", "btn-mc-slip-p5"]) {
+    const b = byId(btnId);
+    if (b) b.disabled = !isMc;
+  }
+
+  for (const pill of document.querySelectorAll(".multicam-compile-pill[data-mc-compile-mode]")) {
+    const cVal = pill.getAttribute("data-mc-compile-mode");
+    const active = state.multicamCompileMode === cVal;
+    pill.disabled = !isMc;
+    pill.classList.toggle("is-active", active);
+    pill.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  if (!isMc) {
+    if (bankEl) bankEl.replaceChildren();
+    if (slipLabel) slipLabel.textContent = t("timeline.multicam.slipIdle");
+    if (cutsList) cutsList.replaceChildren();
+    if (fgPreview) fgPreview.textContent = t("timeline.multicam.idleHint");
+    return;
+  }
+
+  const localFrame = Math.max(
+    0,
+    Math.min((bank.duration_frames || 1) - 1, state.playheadFrame - (clip.start_frame || 0))
+  );
+  const activeCut = resolveMulticamActiveAngleAtFrame(bank, localFrame);
+
+  if (bankEl) {
+    const pads = [];
+    for (const angle of bank.angles.slice(0, 4)) {
+      const isLive = activeCut.angle_index === angle.angle_index;
+      const isSelected = state.multicamSelectedAngle === angle.angle_index;
+      const pad = dom(
+        "button",
+        `multicam-angle-pad${isLive ? " is-live" : ""}${isSelected ? " is-selected" : ""}`
+      );
+      pad.type = "button";
+      pad.setAttribute("data-multicam-angle", String(angle.angle_index));
+      pad.setAttribute("aria-pressed", isLive ? "true" : "false");
+
+      const topRow = dom("div", "multicam-pad-top");
+      topRow.appendChild(
+        dom("span", "multicam-pad-key mono", isLive ? `LIVE ${angle.angle_index}` : `CAM ${angle.angle_index}`)
+      );
+      const offNum = Number(angle.sync_offset_frames || 0);
+      topRow.appendChild(
+        dom("span", "multicam-pad-offset mono", `${offNum >= 0 ? "+" : ""}${offNum}f`)
+      );
+
+      const nameRow = dom("span", "multicam-pad-name", angle.name);
+      const metaRow = dom(
+        "span",
+        "multicam-pad-meta mono",
+        `${angle.timecode_start || "01:00:00:00"}${angle.audio_follow ? ` | ${t("timeline.multicam.audioBadge")}` : ""}`
+      );
+
+      pad.appendChild(topRow);
+      pad.appendChild(nameRow);
+      pad.appendChild(metaRow);
+      pad.addEventListener("click", () => {
+        state.multicamSelectedAngle = angle.angle_index;
+        switchMulticamAngleAction(angle.angle_index);
+      });
+      pads.push(pad);
+    }
+    bankEl.replaceChildren(...pads);
+  }
+
+  const slipAngle =
+    bank.angles.find((a) => a.angle_index === state.multicamSelectedAngle) || bank.angles[0];
+  if (slipLabel && slipAngle) {
+    const offVal = Number(slipAngle.sync_offset_frames || 0);
+    slipLabel.textContent = t("timeline.multicam.slipValue")
+      .replace("{angle}", String(slipAngle.angle_index))
+      .replace("{offset}", `${offVal >= 0 ? "+" : ""}${offVal}`);
+  }
+
+  if (cutsList) {
+    const orderedCuts = [...(bank.cuts || [])].sort((a, b) => a.frame - b.frame);
+    if (orderedCuts.length <= 1) {
+      cutsList.replaceChildren(dom("span", "telemetry-note", t("timeline.multicam.noCuts")));
+    } else {
+      const chips = orderedCuts.map((cut) => {
+        const chip = dom("span", "multicam-cut-chip");
+        const jumpBtn = dom("button", "multicam-cut-jump", `+${cut.frame}f A${cut.angle_index}`);
+        jumpBtn.type = "button";
+        jumpBtn.addEventListener("click", () => {
+          stopPlayback();
+          setPlayhead((clip.start_frame || 0) + cut.frame);
+        });
+        chip.appendChild(jumpBtn);
+        if (cut.frame > 0) {
+          const rmBtn = dom("button", "multicam-cut-remove", "x");
+          rmBtn.type = "button";
+          rmBtn.setAttribute("aria-label", `Remove cut at +${cut.frame}f`);
+          rmBtn.addEventListener("click", () => deleteMulticamCutAction(cut.frame));
+          chip.appendChild(rmBtn);
+        }
+        return chip;
+      });
+      cutsList.replaceChildren(...chips);
+    }
+  }
+
+  if (fgPreview) {
+    try {
+      const compiled = compileMulticamFiltergraphClient(bank, {
+        mode: state.multicamCompileMode
+      });
+      fgPreview.textContent = compiled.filter_complex || "";
+    } catch (err) {
+      fgPreview.textContent = err.message;
+    }
+  }
+}
+
+async function createMulticamClipAction() {
+  if (!state.timelineDoc) return false;
+  const info = getSelectedClipTrack();
+  if (!info || !info.clip || info.clip.media_type === "audio") {
+    showBanner(t("timeline.multicam.idleHint"), "info");
+    return false;
+  }
+  if (info.clip.multicam_bank) {
+    state.multicamQuadView = true;
+    renderTimelineMulticamInspector();
+    updateTimelineToolbarUI();
+    redrawActiveCanvases();
+    return true;
+  }
+  const preSnap = captureTimelineSnapshot();
+  const syncMode = (byId("multicam-sync-mode") && byId("multicam-sync-mode").value) || "audio_waveform";
+  try {
+    const res = await api.multicamTimeline({
+      op: "create",
+      document: state.timelineDoc,
+      track_kind: info.ref.trackKind,
+      track_index: info.ref.trackIndex,
+      clip_index: info.ref.clipIndex,
+      sync_mode: syncMode
+    });
+    if (!res.changed) {
+      showBanner(res.detail || "Multi-Cam already active.", "info");
+      return false;
+    }
+    const nextDoc = res.document;
+    const found = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    const nextSel = found ? { kind: "clip", data: found.clip } : null;
+    state.multicamQuadView = true;
+    state.multicamSelectedAngle = res.active_angle || 1;
+    commitTimelineMutation(nextDoc, nextSel, preSnap);
+    showBanner(
+      t("timeline.multicam.created")
+        .replace("{name}", found ? found.clip.name : res.multicam_id)
+        .replace("{angles}", String(res.angle_count)),
+      "success"
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+async function syncMulticamClipAction(syncMode) {
+  const mcCtx = getActiveMulticamClipContext();
+  if (!mcCtx || !state.timelineDoc) return false;
+  const preSnap = captureTimelineSnapshot();
+  try {
+    const res = await api.multicamTimeline({
+      op: "sync",
+      document: state.timelineDoc,
+      track_kind: mcCtx.ref.trackKind,
+      track_index: mcCtx.ref.trackIndex,
+      clip_index: mcCtx.ref.clipIndex,
+      sync_mode: syncMode
+    });
+    const nextDoc = res.document;
+    const found = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    commitTimelineMutation(nextDoc, found ? { kind: "clip", data: found.clip } : state.timelineSelected, preSnap);
+    showBanner(
+      t("timeline.multicam.synced")
+        .replace("{angles}", String(res.angle_count))
+        .replace("{mode}", String(syncMode)),
+      "success"
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+async function switchMulticamAngleAction(angleIndex) {
+  const mcCtx = getActiveMulticamClipContext();
+  if (!mcCtx || !state.timelineDoc) return false;
+  const preSnap = captureTimelineSnapshot();
+  const targetFrame = Math.max(
+    mcCtx.clip.start_frame,
+    Math.min(mcCtx.clip.start_frame + mcCtx.clip.duration_frames - 1, state.playheadFrame)
+  );
+  try {
+    const res = await api.multicamTimeline({
+      op: "switch_angle",
+      document: state.timelineDoc,
+      track_kind: mcCtx.ref.trackKind,
+      track_index: mcCtx.ref.trackIndex,
+      clip_index: mcCtx.ref.clipIndex,
+      frame: targetFrame,
+      angle_index: angleIndex,
+      cut_mode: state.multicamCutMode
+    });
+    const nextDoc = res.document;
+    const found = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    state.multicamSelectedAngle = angleIndex;
+    commitTimelineMutation(nextDoc, found ? { kind: "clip", data: found.clip } : state.timelineSelected, preSnap);
+    const localF = Math.max(0, targetFrame - mcCtx.clip.start_frame);
+    showBanner(
+      t("timeline.multicam.switched")
+        .replace("{angle}", String(angleIndex))
+        .replace("{frame}", String(localF)),
+      "info"
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+async function deleteMulticamCutAction(localFrame) {
+  const mcCtx = getActiveMulticamClipContext();
+  if (!mcCtx || !state.timelineDoc) return false;
+  const preSnap = captureTimelineSnapshot();
+  try {
+    const res = await api.multicamTimeline({
+      op: "delete_cut",
+      document: state.timelineDoc,
+      track_kind: mcCtx.ref.trackKind,
+      track_index: mcCtx.ref.trackIndex,
+      clip_index: mcCtx.ref.clipIndex,
+      local_frame: localFrame
+    });
+    if (!res.changed) return false;
+    const nextDoc = res.document;
+    const found = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    commitTimelineMutation(nextDoc, found ? { kind: "clip", data: found.clip } : state.timelineSelected, preSnap);
+    showBanner(t("timeline.multicam.cutRemoved").replace("{frame}", String(localFrame)), "info");
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+async function nudgeMulticamAngleOffsetAction(delta) {
+  const mcCtx = getActiveMulticamClipContext();
+  if (!mcCtx || !mcCtx.clip || !mcCtx.clip.multicam_bank || !state.timelineDoc) return false;
+  const bank = mcCtx.clip.multicam_bank;
+  const angle = bank.angles.find((a) => a.angle_index === state.multicamSelectedAngle) || bank.angles[0];
+  if (!angle) return false;
+  const preSnap = captureTimelineSnapshot();
+  const nextOffset = Number(angle.sync_offset_frames || 0) + Number(delta || 0);
+  try {
+    const res = await api.multicamTimeline({
+      op: "update_angle",
+      document: state.timelineDoc,
+      track_kind: mcCtx.ref.trackKind,
+      track_index: mcCtx.ref.trackIndex,
+      clip_index: mcCtx.ref.clipIndex,
+      angle_index: angle.angle_index,
+      sync_offset_frames: nextOffset
+    });
+    const nextDoc = res.document;
+    const found = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    commitTimelineMutation(nextDoc, found ? { kind: "clip", data: found.clip } : state.timelineSelected, preSnap);
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+async function flattenMulticamClipAction() {
+  const mcCtx = getActiveMulticamClipContext();
+  if (!mcCtx || !mcCtx.clip || !mcCtx.clip.multicam_bank || !state.timelineDoc) return false;
+  const preSnap = captureTimelineSnapshot();
+  const mcName = mcCtx.clip.name;
+  try {
+    const res = await api.multicamTimeline({
+      op: "flatten",
+      document: state.timelineDoc,
+      track_kind: mcCtx.ref.trackKind,
+      track_index: mcCtx.ref.trackIndex,
+      clip_index: mcCtx.ref.clipIndex
+    });
+    if (!res.changed) return false;
+    const nextDoc = res.document;
+    const found = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    state.multicamQuadView = false;
+    commitTimelineMutation(nextDoc, found ? { kind: "clip", data: found.clip } : null, preSnap);
+    showBanner(
+      t("timeline.multicam.flattened")
+        .replace("{name}", mcName)
+        .replace("{cuts}", String(res.cut_count)),
+      "success"
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+function toggleMulticamQuadViewAction() {
+  const mcCtx = getActiveMulticamClipContext();
+  if (!mcCtx) {
+    state.multicamQuadView = false;
+    updateTimelineToolbarUI();
+    renderTimelineMulticamInspector();
+    return false;
+  }
+  state.multicamQuadView = !state.multicamQuadView;
+  updateTimelineToolbarUI();
+  renderTimelineMulticamInspector();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+  return true;
+}
+
+function wireMulticamInspectorEvents() {
+  byId("btn-timeline-multicam-create")?.addEventListener("click", createMulticamClipAction);
+  byId("btn-multicam-create-sel")?.addEventListener("click", createMulticamClipAction);
+  byId("btn-multicam-quad-toggle")?.addEventListener("click", toggleMulticamQuadViewAction);
+  byId("btn-multicam-inspector-quad")?.addEventListener("click", toggleMulticamQuadViewAction);
+  byId("btn-multicam-flatten")?.addEventListener("click", flattenMulticamClipAction);
+  byId("btn-multicam-auto-sync")?.addEventListener("click", () => {
+    const mode = (byId("multicam-sync-mode") && byId("multicam-sync-mode").value) || "audio_waveform";
+    syncMulticamClipAction(mode);
+  });
+  byId("multicam-sync-mode")?.addEventListener("change", (ev) => {
+    const val = String(ev.target.value || "audio_waveform");
+    if (MULTICAM_SYNC_MODES.includes(val)) {
+      syncMulticamClipAction(val);
+    }
+  });
+  for (const pill of document.querySelectorAll(".multicam-cutmode-pill[data-multicam-cut-mode]")) {
+    pill.addEventListener("click", () => {
+      const mVal = pill.getAttribute("data-multicam-cut-mode");
+      if (MULTICAM_CUT_MODES.includes(mVal)) {
+        state.multicamCutMode = mVal;
+        renderTimelineMulticamInspector();
+      }
+    });
+  }
+  for (const pill of document.querySelectorAll(".multicam-compile-pill[data-mc-compile-mode]")) {
+    pill.addEventListener("click", () => {
+      const cVal = pill.getAttribute("data-mc-compile-mode");
+      if (cVal === "active_cuts" || cVal === "quad_view") {
+        state.multicamCompileMode = cVal;
+        renderTimelineMulticamInspector();
+      }
+    });
+  }
+  for (const btn of document.querySelectorAll("[data-mc-slip]")) {
+    btn.addEventListener("click", () => {
+      const delta = Number.parseInt(btn.getAttribute("data-mc-slip") || "0", 10);
+      if (delta !== 0) nudgeMulticamAngleOffsetAction(delta);
     });
   }
 }

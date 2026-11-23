@@ -39,6 +39,7 @@ import {
   compileFairlightMixerClient,
   compileFramingFilterClient,
   compileMinterpolateFilterClient,
+  compileMulticamFiltergraphClient,
   compilePlanarTrackerFilterClient,
   compileRetimeFilterClient,
   compileRetimeRampSetptsClient,
@@ -47,13 +48,17 @@ import {
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
   computeRetimeRampSummary,
+  countMulticamClipsInDocument,
   countSyncLockedTracks,
   createColorNode,
   createCompoundClipInDocument,
+  createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
+  deleteMulticamCutInDocument,
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
   flattenAllCompoundsInDocument,
+  flattenMulticamClipInDocument,
   getDeliveryPresetClient,
   normalizeFairlightAudioParams,
   normalizeRetimeProcess,
@@ -66,8 +71,11 @@ import {
   setAllTracksSyncLockInDocument,
   slideClipInDocument,
   slipClipInDocument,
+  switchMulticamAngleInDocument,
+  syncMulticamClipInDocument,
   toggleTrackSyncLockInDocument,
   updateCompoundSubsequenceInDocument,
+  updateMulticamAngleInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -3025,6 +3033,85 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/timeline/compound", { method: "POST", body: payload });
+    },
+    async multicamTimeline(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const op = String((payload && payload.op) || "").trim().toLowerCase();
+        const tkKind = payload && payload.track_kind === "audio" ? "audio" : "video";
+        const tkIdx = Number.isInteger(payload && payload.track_index) ? payload.track_index : 1;
+        const cIdx = Number.isInteger(payload && payload.clip_index) ? payload.clip_index : 0;
+
+        if (op === "compile") {
+          const trk = (doc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+          const clip = trk && Array.isArray(trk.clips) ? trk.clips[cIdx] : null;
+          if (!clip || !clip.multicam_bank) {
+            throw new Error("Selected clip is not a Multi-Cam Sync Bank");
+          }
+          return {
+            op: "compile",
+            compile: compileMulticamFiltergraphClient(clip.multicam_bank, {
+              mode: payload && payload.mode === "quad_view" ? "quad_view" : "active_cuts"
+            })
+          };
+        }
+
+        let res;
+        if (op === "create") {
+          res = createMulticamClipInDocument(doc, {
+            track_kind: tkKind,
+            track_index: tkIdx,
+            clip_index: cIdx,
+            name: payload && payload.name,
+            sync_mode: payload && payload.sync_mode,
+            angles: payload && payload.angles
+          });
+        } else if (op === "sync") {
+          res = syncMulticamClipInDocument(doc, tkKind, tkIdx, cIdx, payload && payload.sync_mode);
+        } else if (op === "switch_angle") {
+          res = switchMulticamAngleInDocument(
+            doc,
+            tkKind,
+            tkIdx,
+            cIdx,
+            payload && payload.frame !== undefined ? payload.frame : 0,
+            payload && payload.angle_index !== undefined ? payload.angle_index : 1,
+            payload && payload.cut_mode ? payload.cut_mode : "video_only"
+          );
+        } else if (op === "delete_cut") {
+          res = deleteMulticamCutInDocument(
+            doc,
+            tkKind,
+            tkIdx,
+            cIdx,
+            payload && payload.local_frame !== undefined ? payload.local_frame : 0
+          );
+        } else if (op === "update_angle") {
+          res = updateMulticamAngleInDocument(doc, tkKind, tkIdx, cIdx, payload || {});
+        } else if (op === "flatten") {
+          res = flattenMulticamClipInDocument(doc, tkKind, tkIdx, cIdx);
+        } else {
+          throw new Error(`Unsupported multicam op: ${op}`);
+        }
+        const nextDoc = res.doc || doc;
+        return {
+          changed: Boolean(res.changed),
+          op: res.op,
+          multicam_id: res.multicam_id || "",
+          track_kind: res.track_kind || tkKind,
+          track_index: res.track_index || tkIdx,
+          clip_index: res.clip_index !== undefined ? res.clip_index : cIdx,
+          angle_count: res.angle_count || 0,
+          cut_count: res.cut_count || 0,
+          active_angle: res.active_angle || 1,
+          detail: res.detail || "",
+          multicam_count: countMulticamClipsInDocument(nextDoc),
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc)
+        };
+      }
+      return requestJson("/api/timeline/multicam", { method: "POST", body: payload });
     }
   };
 }

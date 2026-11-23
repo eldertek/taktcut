@@ -1228,6 +1228,7 @@ class TimelineClip(BaseModel):
     transition_out: ClipTransition | None = None
     transform: ClipTransformParams | None = None
     compound_subsequence: CompoundSubSequence | None = None
+    multicam_bank: MulticamBank | None = None
 
     @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", "speed_rate", mode="before")
     @classmethod
@@ -1283,8 +1284,35 @@ class TimelineClip(BaseModel):
     def is_compound(self) -> bool:
         return self.compound_subsequence is not None
 
+    @property
+    def is_multicam(self) -> bool:
+        return self.multicam_bank is not None
+
 
 MAX_COMPOUND_NESTING_DEPTH: int = 4
+MAX_MULTICAM_ANGLES: int = 8
+
+MulticamSyncMode = Literal["audio_waveform", "timecode", "in_point", "marker"]
+ALLOWED_MULTICAM_SYNC_MODES: tuple[MulticamSyncMode, ...] = (
+    "audio_waveform",
+    "timecode",
+    "in_point",
+    "marker",
+)
+
+MulticamCutMode = Literal["video_only", "audio_video", "audio_only"]
+ALLOWED_MULTICAM_CUT_MODES: tuple[MulticamCutMode, ...] = (
+    "video_only",
+    "audio_video",
+    "audio_only",
+)
+
+MULTICAM_ANGLE_COLORS: tuple[CompoundColorTag, ...] = (
+    "blue",
+    "teal",
+    "amber",
+    "violet",
+)
 
 PrecompBlendMode = Literal["normal", "screen", "multiply", "overlay"]
 ALLOWED_PRECOMP_BLEND_MODES: tuple[PrecompBlendMode, ...] = (
@@ -1370,6 +1398,163 @@ class CompoundSubSequence(BaseModel):
         return raw
 
 
+_SMPTE_TC_RE = re.compile(r"^(\d{2}):([0-5]\d):([0-5]\d):(\d{2})$")
+
+
+class MulticamAngle(BaseModel):
+    """Single synchronized camera angle inside a Multi-Cam Sync Bank."""
+
+    angle_index: int = Field(ge=1, le=MAX_MULTICAM_ANGLES)
+    name: str
+    source_path: str = ""
+    media_ref: str = ""
+    source_in_frame: int = Field(default=0, ge=0)
+    duration_frames: int = Field(default=100, ge=1)
+    sync_offset_frames: int = Field(default=0, ge=-100000, le=100000)
+    timecode_start: str = "01:00:00:00"
+    audio_peak_frame: int | None = Field(default=None, ge=0)
+    color_tag: CompoundColorTag = "blue"
+    audio_follow: bool = True
+    enabled: bool = True
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _validate_angle_name(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"angle name must be a string, got {raw!r}")
+        cleaned = raw.strip()
+        if not cleaned:
+            raise ValueError("angle name must not be empty")
+        return cleaned[:80]
+
+    @field_validator("timecode_start", mode="before")
+    @classmethod
+    def _validate_timecode_start(cls, raw: Any) -> str:
+        if raw is None or raw == "":
+            return "01:00:00:00"
+        text = str(raw).strip()
+        if not _SMPTE_TC_RE.match(text):
+            raise ValueError(f"Invalid SMPTE timecode {raw!r}; expected HH:MM:SS:FF")
+        return text
+
+    @field_validator("color_tag", mode="before")
+    @classmethod
+    def _validate_angle_color_tag(cls, raw: Any) -> CompoundColorTag:
+        if raw is None or raw == "":
+            return "blue"
+        cleaned = str(raw).strip().lower()
+        if cleaned == "amber":
+            return "amber"
+        if cleaned == "violet":
+            return "violet"
+        if cleaned == "teal":
+            return "teal"
+        if cleaned == "blue":
+            return "blue"
+        allowed = ", ".join(ALLOWED_COMPOUND_COLOR_TAGS)
+        raise ValueError(f"Unsupported color_tag {raw!r}; expected one of: {allowed}")
+
+    @field_validator("audio_follow", "enabled", mode="before")
+    @classmethod
+    def _validate_angle_bool(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+
+class MulticamCutEvent(BaseModel):
+    """Frame-accurate angle switch event inside a Multi-Cam Sync Bank."""
+
+    frame: int = Field(ge=0)
+    angle_index: int = Field(ge=1, le=MAX_MULTICAM_ANGLES)
+    cut_mode: MulticamCutMode = "video_only"
+
+    @field_validator("cut_mode", mode="before")
+    @classmethod
+    def _validate_cut_mode(cls, raw: Any) -> MulticamCutMode:
+        if raw is None or raw == "":
+            return "video_only"
+        cleaned = str(raw).strip().lower()
+        if cleaned == "video_only":
+            return "video_only"
+        if cleaned == "audio_video":
+            return "audio_video"
+        if cleaned == "audio_only":
+            return "audio_only"
+        allowed = ", ".join(ALLOWED_MULTICAM_CUT_MODES)
+        raise ValueError(f"Unsupported cut_mode {raw!r}; expected one of: {allowed}")
+
+
+class MulticamBank(BaseModel):
+    """Multi-Cam Angle Sync Bank and Live Cut Switcher container."""
+
+    id: str
+    name: str
+    fps: RationalFrameRate
+    width: int = Field(default=1920, ge=0)
+    height: int = Field(default=1080, ge=0)
+    duration_frames: int = Field(ge=1)
+    sync_mode: MulticamSyncMode = "audio_waveform"
+    audio_follow_angle: int | None = Field(default=1, ge=1, le=MAX_MULTICAM_ANGLES)
+    angles: list[MulticamAngle] = Field(min_length=2, max_length=MAX_MULTICAM_ANGLES)
+    cuts: list[MulticamCutEvent] = Field(default_factory=list)
+
+    @field_validator("id", "name", mode="before")
+    @classmethod
+    def _validate_mc_label(cls, raw: Any, info: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"{info.field_name} must be a string, got {raw!r}")
+        cleaned = raw.strip()
+        if not cleaned:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return cleaned[:120]
+
+    @field_validator("sync_mode", mode="before")
+    @classmethod
+    def _validate_sync_mode(cls, raw: Any) -> MulticamSyncMode:
+        if raw is None or raw == "":
+            return "audio_waveform"
+        cleaned = str(raw).strip().lower()
+        if cleaned == "audio_waveform":
+            return "audio_waveform"
+        if cleaned == "timecode":
+            return "timecode"
+        if cleaned == "in_point":
+            return "in_point"
+        if cleaned == "marker":
+            return "marker"
+        allowed = ", ".join(ALLOWED_MULTICAM_SYNC_MODES)
+        raise ValueError(f"Unsupported sync_mode {raw!r}; expected one of: {allowed}")
+
+    @model_validator(mode="after")
+    def _normalize_angles_and_cuts(self) -> MulticamBank:
+        valid_indices = {a.angle_index for a in self.angles}
+        if len(valid_indices) != len(self.angles):
+            raise ValueError("MulticamBank angle_index values must be unique")
+        first_angle = min(valid_indices)
+        if self.audio_follow_angle is not None and self.audio_follow_angle not in valid_indices:
+            self.audio_follow_angle = first_angle
+
+        by_frame: dict[int, MulticamCutEvent] = {}
+        for cut in self.cuts:
+            if cut.frame >= self.duration_frames:
+                continue
+            target_angle = cut.angle_index if cut.angle_index in valid_indices else first_angle
+            by_frame[cut.frame] = MulticamCutEvent(
+                frame=cut.frame,
+                angle_index=target_angle,
+                cut_mode=cut.cut_mode,
+            )
+        if 0 not in by_frame:
+            by_frame[0] = MulticamCutEvent(
+                frame=0,
+                angle_index=first_angle,
+                cut_mode="video_only",
+            )
+        self.cuts = [by_frame[f] for f in sorted(by_frame)]
+        return self
+
+
 TRACK_VOLUME_DB_MIN: float = -48.0
 TRACK_VOLUME_DB_MAX: float = 12.0
 TRACK_PAN_MIN: float = -1.0
@@ -1420,6 +1605,7 @@ class TimelineDocument(BaseModel):
 
 
 CompoundSubSequence.model_rebuild()
+MulticamBank.model_rebuild()
 TimelineClip.model_rebuild()
 TimelineTrack.model_rebuild()
 TimelineDocument.model_rebuild()

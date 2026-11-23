@@ -3996,6 +3996,48 @@ export function drawProgramMonitorCanvas(
     drawSplitWipeOverlay(ctx, fx, fy, frameW, frameH, wipeGeom, splitWipeState);
   }
 
+  const mcQuadBank =
+    renderOpts &&
+    renderOpts.multicamQuadView &&
+    renderOpts.multicamClip &&
+    renderOpts.multicamClip.multicam_bank
+      ? renderOpts.multicamClip.multicam_bank
+      : null;
+
+  if (mcQuadBank) {
+    const quadGeom = drawMulticamQuadSwitcherOverlay(
+      ctx,
+      fx,
+      fy,
+      frameW,
+      frameH,
+      renderOpts.multicamClip,
+      mcQuadBank,
+      playheadFrame,
+      fps,
+      renderOpts.multicamHoveredAngle || null
+    );
+    canvas._multicamQuadGeom = {
+      ...quadGeom,
+      canvasWidth: width,
+      canvasHeight: height
+    };
+  } else {
+    canvas._multicamQuadGeom = null;
+    const activeMcEntry = activeClips.find((entry) => entry.clip && entry.clip.multicam_bank);
+    if (activeMcEntry && activeMcEntry.clip && activeMcEntry.clip.multicam_bank) {
+      drawMulticamActiveAngleBadge(
+        ctx,
+        fx,
+        fy,
+        frameW,
+        activeMcEntry.clip,
+        activeMcEntry.clip.multicam_bank,
+        playheadFrame
+      );
+    }
+  }
+
   if (renderOpts && renderOpts.trimHud && renderOpts.trimHud.label) {
     const hud = renderOpts.trimHud;
     const hudText = hud.detail ? `${hud.label}  |  ${hud.detail}` : hud.label;
@@ -4024,6 +4066,223 @@ export function drawProgramMonitorCanvas(
   ctx.strokeStyle = "#2c2c31";
   ctx.lineWidth = 1;
   ctx.strokeRect(fx, fy, frameW, frameH);
+}
+
+const MULTICAM_PALETTE = {
+  blue: { border: "#60a5fa", fill: "rgba(37, 99, 235, 0.22)", badge: "#1d4ed8", text: "#dbeafe" },
+  teal: { border: "#2dd4bf", fill: "rgba(20, 184, 166, 0.22)", badge: "#0f766e", text: "#ccfbf1" },
+  amber: { border: "#fbbf24", fill: "rgba(245, 158, 11, 0.22)", badge: "#b45309", text: "#fef3c7" },
+  violet: { border: "#a78bfa", fill: "rgba(139, 92, 246, 0.22)", badge: "#6d28d9", text: "#ede9fe" }
+};
+
+function resolveMulticamCutAtFrameCanvas(bank, localFrame) {
+  const cuts = Array.isArray(bank && bank.cuts) && bank.cuts.length
+    ? [...bank.cuts].sort((a, b) => a.frame - b.frame)
+    : [{ frame: 0, angle_index: 1, cut_mode: "video_only" }];
+  const target = Math.max(0, Math.round(localFrame || 0));
+  let active = cuts[0];
+  for (const cut of cuts) {
+    if (cut.frame <= target) {
+      active = cut;
+    } else {
+      break;
+    }
+  }
+  return active;
+}
+
+function drawMulticamActiveAngleBadge(ctx, fx, fy, frameW, clip, bank, playheadFrame) {
+  const localFrame = Math.max(0, Math.min((bank.duration_frames || 1) - 1, playheadFrame - (clip.start_frame || 0)));
+  const activeCut = resolveMulticamCutAtFrameCanvas(bank, localFrame);
+  const angle = (bank.angles || []).find((a) => a.angle_index === activeCut.angle_index) || (bank.angles || [])[0];
+  if (!angle) return;
+  const pal = MULTICAM_PALETTE[angle.color_tag] || MULTICAM_PALETTE.blue;
+  const offStr = `${angle.sync_offset_frames >= 0 ? "+" : ""}${angle.sync_offset_frames || 0}f`;
+  const text = `MC A${angle.angle_index} ${angle.name.slice(0, 18)} | ${offStr}`;
+  ctx.save();
+  ctx.font = "700 10px ui-monospace, monospace";
+  const bw = Math.min(frameW - 16, Math.ceil(ctx.measureText(text).width) + 14);
+  const bx = fx + frameW - bw - 8;
+  const by = fy + 8;
+  ctx.fillStyle = "rgba(14, 15, 20, 0.90)";
+  roundRectPath(ctx, bx, by, bw, 18, 2);
+  ctx.fill();
+  ctx.strokeStyle = pal.border;
+  ctx.lineWidth = 1.25;
+  ctx.stroke();
+  ctx.fillStyle = pal.text;
+  ctx.fillText(text, bx + 7, by + 12.5, bw - 12);
+  ctx.restore();
+}
+
+function drawMulticamQuadSwitcherOverlay(
+  ctx,
+  fx,
+  fy,
+  frameW,
+  frameH,
+  clip,
+  bank,
+  playheadFrame,
+  fps,
+  hoveredAngleIndex
+) {
+  const localFrame = Math.max(
+    0,
+    Math.min((bank.duration_frames || 1) - 1, playheadFrame - (clip.start_frame || 0))
+  );
+  const activeCut = resolveMulticamCutAtFrameCanvas(bank, localFrame);
+  const angles = (bank.angles || []).slice(0, 4);
+  const gap = 4;
+  const pad = 4;
+  const cellW = Math.max(40, (frameW - pad * 2 - gap) / 2);
+  const cellH = Math.max(30, (frameH - pad * 2 - gap) / 2);
+  const cells = [];
+  const tSec = playheadFrame / Math.max(1, fps || 25);
+
+  ctx.save();
+  ctx.fillStyle = "#0b0c10";
+  ctx.fillRect(fx, fy, frameW, frameH);
+
+  const cameraLooks = [
+    { scale: 1.0, cx: 0.5, cy: 0.52, sky: "#182942", floor: "#141820", accent: "#60a5fa" },
+    { scale: 1.32, cx: 0.48, cy: 0.48, sky: "#143030", floor: "#121b1b", accent: "#2dd4bf" },
+    { scale: 1.75, cx: 0.53, cy: 0.44, sky: "#332515", floor: "#1c1610", accent: "#fbbf24" },
+    { scale: 1.15, cx: 0.5, cy: 0.62, sky: "#261c3c", floor: "#171322", accent: "#a78bfa" }
+  ];
+
+  for (let i = 0; i < 4; i += 1) {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const cx = fx + pad + col * (cellW + gap);
+    const cy = fy + pad + row * (cellH + gap);
+    const angle = angles[i] || null;
+    const look = cameraLooks[i % cameraLooks.length];
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx, cy, cellW, cellH);
+    ctx.clip();
+
+    const bgGrad = ctx.createLinearGradient(cx, cy, cx, cy + cellH);
+    bgGrad.addColorStop(0, look.sky);
+    bgGrad.addColorStop(0.62, "#13161f");
+    bgGrad.addColorStop(1, look.floor);
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(cx, cy, cellW, cellH);
+
+    if (angle) {
+      const pal = MULTICAM_PALETTE[angle.color_tag] || MULTICAM_PALETTE.blue;
+      const isLive = activeCut.angle_index === angle.angle_index;
+      const isHovered = hoveredAngleIndex === angle.angle_index;
+      const pulse = 0.5 + 0.5 * Math.sin(tSec * 2.2 + i * 1.4);
+
+      // Stylized camera framing geometry (horizon + talent silhouette + motion bar)
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.10)";
+      ctx.lineWidth = 1;
+      const horizonY = cy + cellH * (0.58 + (i === 3 ? -0.14 : 0));
+      ctx.beginPath();
+      ctx.moveTo(cx, horizonY);
+      ctx.lineTo(cx + cellW, horizonY);
+      ctx.stroke();
+
+      const subjX = cx + cellW * look.cx + Math.sin(tSec * 1.1 + i * 0.9) * (cellW * 0.03);
+      const subjY = cy + cellH * look.cy;
+      const subjR = Math.min(cellW, cellH) * 0.11 * look.scale;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
+      ctx.beginPath();
+      ctx.arc(subjX, subjY - subjR * 0.55, subjR * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(subjX, subjY + subjR * 0.55, subjR * 0.72, subjR * 0.58, 0, Math.PI, 0);
+      ctx.fill();
+
+      // Viewfinder rule-of-thirds corner brackets
+      ctx.strokeStyle = isLive ? "rgba(239, 68, 68, 0.75)" : "rgba(255, 255, 255, 0.22)";
+      ctx.lineWidth = 1;
+      const bLen = Math.max(6, Math.min(12, cellW * 0.06));
+      ctx.beginPath();
+      ctx.moveTo(cx + 8, cy + 8 + bLen);
+      ctx.lineTo(cx + 8, cy + 8);
+      ctx.lineTo(cx + 8 + bLen, cy + 8);
+      ctx.moveTo(cx + cellW - 8 - bLen, cy + cellH - 8);
+      ctx.lineTo(cx + cellW - 8, cy + cellH - 8);
+      ctx.lineTo(cx + cellW - 8, cy + cellH - 8 - bLen);
+      ctx.stroke();
+
+      // Mini synced audio activity bars bottom-right
+      const barBaseX = cx + cellW - 36;
+      const barBaseY = cy + cellH - 8;
+      for (let b = 0; b < 5; b += 1) {
+        const amp = Math.max(2, Math.round(3 + 8 * Math.abs(Math.sin(tSec * 5.2 + i * 1.3 + b * 0.7)) * (0.6 + 0.4 * pulse)));
+        ctx.fillStyle = isLive ? "#ef4444" : pal.border;
+        ctx.fillRect(barBaseX + b * 5, barBaseY - amp, 3, amp);
+      }
+
+      // Top-left angle badge
+      const labelTxt = `${angle.angle_index}  ${angle.name.slice(0, 16)}`;
+      ctx.font = "700 9.5px ui-monospace, monospace";
+      const tw = Math.min(cellW - 54, ctx.measureText(labelTxt).width + 10);
+      ctx.fillStyle = "rgba(12, 13, 18, 0.86)";
+      roundRectPath(ctx, cx + 6, cy + 6, tw, 16, 2);
+      ctx.fill();
+      ctx.fillStyle = pal.text;
+      ctx.fillText(labelTxt, cx + 10, cy + 17, tw - 6);
+
+      // Sync offset + slate pill bottom-left
+      const offVal = Number(angle.sync_offset_frames || 0);
+      const offTxt = `${offVal >= 0 ? "+" : ""}${offVal}f | ${angle.timecode_start || "01:00:00:00"}`;
+      ctx.font = "600 8.5px ui-monospace, monospace";
+      const ow = Math.min(cellW - 48, ctx.measureText(offTxt).width + 8);
+      ctx.fillStyle = "rgba(12, 13, 18, 0.80)";
+      ctx.fillRect(cx + 6, cy + cellH - 20, ow, 14);
+      ctx.fillStyle = "#b8bcc8";
+      ctx.fillText(offTxt, cx + 10, cy + cellH - 10, ow - 6);
+
+      // LIVE Program Tally badge top-right
+      if (isLive) {
+        ctx.fillStyle = "#dc2626";
+        roundRectPath(ctx, cx + cellW - 42, cy + 6, 36, 16, 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "800 9px ui-monospace, monospace";
+        ctx.fillText("LIVE", cx + cellW - 36, cy + 17);
+      } else {
+        ctx.fillStyle = "rgba(17, 19, 26, 0.82)";
+        roundRectPath(ctx, cx + cellW - 36, cy + 6, 30, 16, 2);
+        ctx.fill();
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "700 8.5px ui-monospace, monospace";
+        ctx.fillText(`KEY ${angle.angle_index}`, cx + cellW - 33, cy + 17);
+      }
+
+      ctx.restore();
+
+      // Border tally (Red = Live Program, Cyan = Hover, Angle color = idle)
+      ctx.strokeStyle = isLive ? "#ef4444" : isHovered ? "#38bdf8" : pal.border;
+      ctx.lineWidth = isLive ? 2.5 : isHovered ? 2 : 1;
+      ctx.strokeRect(cx + 0.5, cy + 0.5, cellW - 1, cellH - 1);
+
+      cells.push({
+        angleIndex: angle.angle_index,
+        x: cx,
+        y: cy,
+        w: cellW,
+        h: cellH
+      });
+    } else {
+      ctx.fillStyle = "#4b5563";
+      ctx.font = "700 10px ui-monospace, monospace";
+      ctx.fillText(`ANGLE ${i + 1} EMPTY`, cx + 10, cy + 20);
+      ctx.restore();
+      ctx.strokeStyle = "#262833";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx + 0.5, cy + 0.5, cellW - 1, cellH - 1);
+    }
+  }
+
+  ctx.restore();
+  return { fx, fy, frameW, frameH, cells };
 }
 
 function drawSplitScreenGridGuide(ctx, fx, fy, frameW, frameH) {
@@ -4559,6 +4818,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         fadeTarget.clipIndex === clipIndex;
 
       const isCompound = Boolean(clip.compound_subsequence);
+      const isMulticam = Boolean(clip.multicam_bank);
       const cmpTagColors = {
         amber: { fill: "#382812", border: "#f59e0b", strip: "#fbbf24", text: "#fde68a" },
         violet: { fill: "#2a1e42", border: "#a78bfa", strip: "#c4b5fd", text: "#ede9fe" },
@@ -4575,20 +4835,67 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         ? (isAudio ? "#1a2925" : "#1c2533")
         : isCompound && clip.enabled
           ? cmpPal.fill
-          : isAudio
-            ? clip.enabled ? "#1d4a40" : "#252529"
-            : clip.enabled ? "#264066" : "#252529";
+          : isMulticam && clip.enabled
+            ? "#182438"
+            : isAudio
+              ? clip.enabled ? "#1d4a40" : "#252529"
+              : clip.enabled ? "#264066" : "#252529";
       const borderCol = isSelected
         ? "#e68442"
         : trackAudiblyMuted
           ? "#3b3b44"
           : isCompound
             ? cmpPal.border
-            : isAudio ? "#347867" : "#446a9c";
+            : isMulticam
+              ? "#38bdf8"
+              : isAudio ? "#347867" : "#446a9c";
 
       ctx.fillStyle = baseFill;
       roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
       ctx.fill();
+
+      if (isMulticam && drawW > 8) {
+        const mcBank = clip.multicam_bank;
+        const mcDur = Math.max(1, Number(mcBank.duration_frames || clip.duration_frames || 1));
+        const mcCuts = Array.isArray(mcBank.cuts) && mcBank.cuts.length
+          ? [...mcBank.cuts].sort((a, b) => a.frame - b.frame)
+          : [{ frame: 0, angle_index: 1 }];
+        const angleMap = new Map((mcBank.angles || []).map((a) => [a.angle_index, a]));
+        ctx.save();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+        ctx.clip();
+        for (let mIdx = 0; mIdx < mcCuts.length; mIdx += 1) {
+          const cut = mcCuts[mIdx];
+          const segStart = Math.max(0, cut.frame);
+          const segEnd = mIdx + 1 < mcCuts.length ? Math.min(mcDur, mcCuts[mIdx + 1].frame) : mcDur;
+          const sx = drawX + (segStart / mcDur) * drawW;
+          const sw = Math.max(2, ((segEnd - segStart) / mcDur) * drawW);
+          const angleObj = angleMap.get(cut.angle_index);
+          const palKey = angleObj && MULTICAM_PALETTE[angleObj.color_tag] ? angleObj.color_tag : "blue";
+          const pal = MULTICAM_PALETTE[palKey];
+          ctx.fillStyle = pal.border;
+          ctx.fillRect(sx, clipY, sw, 3);
+          ctx.fillStyle = pal.fill;
+          ctx.fillRect(sx, clipY + clipH - 9, sw, 9);
+          if (mIdx > 0 && sx > drawX + 1 && sx < drawX + drawW - 1) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.72)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(sx, clipY + 3);
+            ctx.lineTo(sx, clipY + clipH);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+          if (sw >= 18) {
+            ctx.fillStyle = pal.text;
+            ctx.font = "700 8px ui-monospace, monospace";
+            ctx.fillText(`A${cut.angle_index}`, sx + 3, clipY + clipH - 2);
+          }
+        }
+        ctx.restore();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+      }
 
       if (isCompound && drawW > 8) {
         ctx.save();
@@ -4976,6 +5283,10 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           const cmpTag = cmpSub
             ? ` | CMP ${(cmpSub.tracks || []).length}T/${cmpCount}C`
             : "";
+          const mcBank = clip.multicam_bank;
+          const mcTag = mcBank
+            ? ` | MC ${(mcBank.angles || []).length}x/${(mcBank.cuts || []).length}C`
+            : "";
           const retimeTag = hasRetime && speedBadgeW === 0
             ? ` | ${formatRetimeBadgeText(
                 retimeNorm.speedRate,
@@ -4985,7 +5296,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
               )}`
             : "";
           ctx.fillText(
-            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${cmpTag}${gainTag}${muteTag}${retimeTag}`,
+            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${cmpTag}${mcTag}${gainTag}${muteTag}${retimeTag}`,
             textStartX + 2,
             rowY + 32
           );

@@ -9834,3 +9834,582 @@ export function compileCompoundFiltergraphClient(sub, opts = {}) {
     warnings
   };
 }
+
+export const MULTICAM_SYNC_MODES = ["audio_waveform", "timecode", "in_point", "marker"];
+export const MULTICAM_CUT_MODES = ["video_only", "audio_video", "audio_only"];
+export const MULTICAM_ANGLE_COLORS = ["blue", "teal", "amber", "violet"];
+export const MAX_MULTICAM_ANGLES = 8;
+
+const MULTICAM_ANGLE_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+const MULTICAM_DEFAULT_LABELS = [
+  "CAM A - Wide Master",
+  "CAM B - Medium Talent",
+  "CAM C - Tight Close",
+  "CAM D - Overhead Stage"
+];
+const MULTICAM_DEFAULT_SLATE_PEAKS = [12, 26, 5, 34];
+
+function smpteToFramesClient(tc, fpsInt) {
+  const parts = String(tc || "").trim().split(":");
+  if (parts.length !== 4) return 0;
+  const hh = Number.parseInt(parts[0], 10) || 0;
+  const mm = Number.parseInt(parts[1], 10) || 0;
+  const ss = Number.parseInt(parts[2], 10) || 0;
+  const ff = Number.parseInt(parts[3], 10) || 0;
+  const rate = Math.max(1, fpsInt);
+  return (hh * 3600 + mm * 60 + ss) * rate + Math.min(rate - 1, Math.max(0, ff));
+}
+
+function framesToSmpteClient(frames, fpsInt) {
+  const rate = Math.max(1, fpsInt);
+  const total = Math.max(0, Math.round(frames || 0));
+  const ff = total % rate;
+  const totalS = Math.floor(total / rate);
+  const ss = totalS % 60;
+  const mm = Math.floor(totalS / 60) % 60;
+  const hh = Math.floor(totalS / 3600);
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${pad(hh)}:${pad(mm)}:${pad(ss)}:${pad(ff)}`;
+}
+
+function slugifyMulticamIdClient(raw) {
+  const cleaned = String(raw || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned ? cleaned.slice(0, 48) : "multicam_bank";
+}
+
+function nextMulticamNameAndIdClient(doc, requestedName) {
+  const existingIds = new Set();
+  let existingCount = 0;
+  for (const trk of doc.tracks || []) {
+    for (const c of trk.clips || []) {
+      if (c && c.multicam_bank) {
+        existingCount += 1;
+        existingIds.add(c.multicam_bank.id);
+      }
+    }
+  }
+  const cleanReq = typeof requestedName === "string" ? requestedName.trim() : "";
+  const baseName = (cleanReq || `Multi-Cam Bank ${existingCount + 1}`).slice(0, 120);
+  const baseId = slugifyMulticamIdClient(baseName);
+  let candId = baseId;
+  let suffix = 2;
+  while (existingIds.has(candId)) {
+    candId = `${baseId}_${suffix}`;
+    suffix += 1;
+  }
+  return { name: baseName, id: candId };
+}
+
+export function countMulticamClipsInDocument(doc) {
+  if (!doc || !Array.isArray(doc.tracks)) return 0;
+  let total = 0;
+  for (const trk of doc.tracks) {
+    for (const c of trk.clips || []) {
+      if (c && c.multicam_bank) total += 1;
+    }
+  }
+  return total;
+}
+
+export function resolveMulticamActiveAngleAtFrame(bank, localFrame) {
+  if (!bank || !Array.isArray(bank.cuts) || !bank.cuts.length) {
+    return { frame: 0, angle_index: 1, cut_mode: "video_only" };
+  }
+  const dur = Math.max(1, Number(bank.duration_frames || 1));
+  const target = Math.max(0, Math.min(dur - 1, Math.round(localFrame || 0)));
+  const ordered = [...bank.cuts].sort((a, b) => a.frame - b.frame);
+  let active = ordered[0];
+  for (const cut of ordered) {
+    if (cut.frame <= target) {
+      active = cut;
+    } else {
+      break;
+    }
+  }
+  return active;
+}
+
+export function computeMulticamSegmentsClient(bank) {
+  if (!bank || !Array.isArray(bank.angles) || !bank.angles.length) return [];
+  const dur = Math.max(1, Number(bank.duration_frames || 1));
+  const angleMap = new Map(bank.angles.map((a) => [a.angle_index, a]));
+  const cuts = Array.isArray(bank.cuts) && bank.cuts.length
+    ? [...bank.cuts].sort((a, b) => a.frame - b.frame)
+    : [{ frame: 0, angle_index: bank.angles[0].angle_index, cut_mode: "video_only" }];
+  const segments = [];
+  for (let idx = 0; idx < cuts.length; idx += 1) {
+    const cut = cuts[idx];
+    const startF = Math.max(0, Math.min(dur - 1, Math.round(cut.frame)));
+    const nextF = idx + 1 < cuts.length ? cuts[idx + 1].frame : dur;
+    const endF = Math.max(startF + 1, Math.min(dur, Math.round(nextF)));
+    const angle = angleMap.get(cut.angle_index) || bank.angles[0];
+    const srcIn = Math.max(0, Number(angle.source_in_frame || 0) + Number(angle.sync_offset_frames || 0) + startF);
+    segments.push({
+      start_frame: startF,
+      end_frame: endF,
+      duration_frames: endF - startF,
+      angle_index: angle.angle_index,
+      angle_name: angle.name,
+      cut_mode: cut.cut_mode || "video_only",
+      source_in_frame: srcIn,
+      source_path: angle.source_path || ""
+    });
+  }
+  return segments;
+}
+
+export function syncMulticamBankClient(bank, syncMode = "audio_waveform") {
+  const mode = MULTICAM_SYNC_MODES.includes(syncMode) ? syncMode : "audio_waveform";
+  const fpsVal = bank && bank.fps ? Math.max(1, Math.round(bank.fps.num / Math.max(1, bank.fps.den))) : 25;
+  const angles = (bank.angles || []).map((a) => ({ ...a }));
+  if (!angles.length) return { ...bank, sync_mode: mode };
+
+  if (mode === "in_point") {
+    for (const a of angles) {
+      a.sync_offset_frames = 0;
+    }
+  } else if (mode === "timecode") {
+    const tcs = angles.map((a) => smpteToFramesClient(a.timecode_start, fpsVal));
+    const minTc = Math.min(...tcs);
+    angles.forEach((a, i) => {
+      a.sync_offset_frames = Math.max(-100000, Math.min(100000, tcs[i] - minTc));
+    });
+  } else if (mode === "audio_waveform") {
+    const refPeak = angles[0].audio_peak_frame !== null && angles[0].audio_peak_frame !== undefined
+      ? Number(angles[0].audio_peak_frame)
+      : 12;
+    angles.forEach((a, i) => {
+      let peak = a.audio_peak_frame;
+      if (peak === null || peak === undefined) {
+        peak = MULTICAM_DEFAULT_SLATE_PEAKS[i % MULTICAM_DEFAULT_SLATE_PEAKS.length];
+        a.audio_peak_frame = peak;
+      }
+      a.sync_offset_frames = Math.max(-100000, Math.min(100000, refPeak - Number(peak)));
+    });
+  } else {
+    const refIn = Number(angles[0].source_in_frame || 0);
+    for (const a of angles) {
+      a.sync_offset_frames = Math.max(-100000, Math.min(100000, Number(a.source_in_frame || 0) - refIn));
+    }
+  }
+  return { ...bank, sync_mode: mode, angles };
+}
+
+export function createMulticamClipInDocument(doc, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const tkKind = opts.track_kind === "audio" ? "audio" : "video";
+  const tkIdx = Number.isInteger(opts.track_index) ? opts.track_index : 1;
+  const cIdx = Number.isInteger(opts.clip_index) ? opts.clip_index : 0;
+  if (tkKind !== "video") {
+    throw new Error("Multi-Cam Sync Bank requires a video track clip");
+  }
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+  if (!trk || cIdx < 0 || cIdx >= (trk.clips || []).length) {
+    throw new Error("Target clip not found for Multi-Cam");
+  }
+  const target = trk.clips[cIdx];
+  if (target.multicam_bank) {
+    return {
+      changed: false,
+      op: "create_multicam",
+      multicam_id: target.multicam_bank.id,
+      track_kind: "video",
+      track_index: tkIdx,
+      clip_index: cIdx,
+      angle_count: target.multicam_bank.angles.length,
+      cut_count: target.multicam_bank.cuts.length,
+      active_angle: target.multicam_bank.cuts[0]?.angle_index || 1,
+      detail: "Selected clip is already a Multi-Cam Sync Bank",
+      doc
+    };
+  }
+  if ((target.duration_frames || 0) < 1) {
+    throw new Error("Multi-Cam clip requires positive duration_frames (>= 1)");
+  }
+
+  const syncMode = MULTICAM_SYNC_MODES.includes(opts.sync_mode) ? opts.sync_mode : "audio_waveform";
+  const { name: bankName, id: bankId } = nextMulticamNameAndIdClient(nextDoc, opts.name);
+  const fpsVal = nextDoc.fps ? Math.max(1, Math.round(nextDoc.fps.num / Math.max(1, nextDoc.fps.den))) : 25;
+  const spanStart = target.start_frame;
+  const spanEnd = target.start_frame + target.duration_frames;
+
+  let builtAngles = [];
+  if (Array.isArray(opts.angles) && opts.angles.length >= 2) {
+    builtAngles = opts.angles.slice(0, MAX_MULTICAM_ANGLES).map((a) => ({ ...a }));
+  } else {
+    const stacked = [target];
+    const sortedTracks = [...(nextDoc.tracks || [])].sort((a, b) => a.index - b.index);
+    for (const otherTrk of sortedTracks) {
+      if (otherTrk.kind !== "video" || otherTrk.index === tkIdx) continue;
+      const match = (otherTrk.clips || []).find(
+        (c) => c.duration_frames > 0 && c.start_frame < spanEnd && c.start_frame + c.duration_frames > spanStart
+      );
+      if (match) stacked.push(match);
+    }
+    const baseTcFrames = smpteToFramesClient("01:00:00:00", fpsVal) + (target.source_in_frame || 0);
+    if (stacked.length >= 2) {
+      builtAngles = stacked.slice(0, MAX_MULTICAM_ANGLES).map((sc, idx) => ({
+        angle_index: idx + 1,
+        name: sc.name || `CAM ${MULTICAM_ANGLE_LETTERS[idx]}`,
+        source_path: sc.source_path || "",
+        media_ref: sc.media_ref || "",
+        source_in_frame: sc.source_in_frame || 0,
+        duration_frames: Math.max(target.duration_frames, sc.duration_frames),
+        sync_offset_frames: 0,
+        timecode_start: framesToSmpteClient(smpteToFramesClient("01:00:00:00", fpsVal) + (sc.source_in_frame || 0), fpsVal),
+        audio_peak_frame: MULTICAM_DEFAULT_SLATE_PEAKS[idx % MULTICAM_DEFAULT_SLATE_PEAKS.length],
+        color_tag: MULTICAM_ANGLE_COLORS[idx % MULTICAM_ANGLE_COLORS.length],
+        audio_follow: idx === 0,
+        enabled: true
+      }));
+    } else {
+      const baseStem = String(target.source_path || target.name || "cam").replace(/\.[A-Za-z0-9]+$/, "").trim() || "cam";
+      for (let idx = 0; idx < 4; idx += 1) {
+        builtAngles.push({
+          angle_index: idx + 1,
+          name: MULTICAM_DEFAULT_LABELS[idx],
+          source_path: idx === 0 && target.source_path ? target.source_path : `${baseStem}_cam${MULTICAM_ANGLE_LETTERS[idx]}.mov`,
+          media_ref: idx === 0 ? target.media_ref || "" : "",
+          source_in_frame: target.source_in_frame || 0,
+          duration_frames: Math.max(target.duration_frames, 1),
+          sync_offset_frames: 0,
+          timecode_start: framesToSmpteClient(baseTcFrames + idx * 8, fpsVal),
+          audio_peak_frame: MULTICAM_DEFAULT_SLATE_PEAKS[idx],
+          color_tag: MULTICAM_ANGLE_COLORS[idx % MULTICAM_ANGLE_COLORS.length],
+          audio_follow: idx === 0,
+          enabled: true
+        });
+      }
+    }
+  }
+
+  const rawBank = {
+    id: bankId,
+    name: bankName,
+    fps: { ...nextDoc.fps },
+    width: nextDoc.width || 1920,
+    height: nextDoc.height || 1080,
+    duration_frames: target.duration_frames,
+    sync_mode: syncMode,
+    audio_follow_angle: builtAngles[0].angle_index,
+    angles: builtAngles,
+    cuts: [{ frame: 0, angle_index: builtAngles[0].angle_index, cut_mode: "video_only" }]
+  };
+  const syncedBank = syncMulticamBankClient(rawBank, syncMode);
+  trk.clips[cIdx] = { ...target, name: bankName, multicam_bank: syncedBank };
+
+  return {
+    changed: true,
+    op: "create_multicam",
+    multicam_id: syncedBank.id,
+    track_kind: "video",
+    track_index: tkIdx,
+    clip_index: cIdx,
+    angle_count: syncedBank.angles.length,
+    cut_count: syncedBank.cuts.length,
+    active_angle: syncedBank.cuts[0].angle_index,
+    detail: `Created Multi-Cam Bank '${bankName}' (${syncedBank.angles.length} angles, sync=${syncMode})`,
+    doc: nextDoc
+  };
+}
+
+export function syncMulticamClipInDocument(doc, tkKind, tkIdx, cIdx, syncMode) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+  const target = trk && trk.clips ? trk.clips[cIdx] : null;
+  if (!target || !target.multicam_bank) {
+    throw new Error("Selected clip is not a Multi-Cam Sync Bank");
+  }
+  const syncedBank = syncMulticamBankClient(target.multicam_bank, syncMode);
+  trk.clips[cIdx] = { ...target, multicam_bank: syncedBank };
+  return {
+    changed: true,
+    op: "sync_multicam",
+    multicam_id: syncedBank.id,
+    track_kind: tkKind,
+    track_index: tkIdx,
+    clip_index: cIdx,
+    angle_count: syncedBank.angles.length,
+    cut_count: syncedBank.cuts.length,
+    active_angle: syncedBank.cuts[0]?.angle_index || 1,
+    detail: `Synchronized ${syncedBank.angles.length} angles via ${syncedBank.sync_mode}`,
+    doc: nextDoc
+  };
+}
+
+export function switchMulticamAngleInDocument(doc, tkKind, tkIdx, cIdx, frame, angleIndex, cutMode = "video_only") {
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+  const target = trk && trk.clips ? trk.clips[cIdx] : null;
+  if (!target || !target.multicam_bank) {
+    throw new Error("Selected clip is not a Multi-Cam Sync Bank");
+  }
+  const bank = target.multicam_bank;
+  const validAngle = (bank.angles || []).some((a) => a.angle_index === angleIndex);
+  if (!validAngle) {
+    throw new Error(`Angle ${angleIndex} does not exist in Multi-Cam Bank`);
+  }
+  const mode = MULTICAM_CUT_MODES.includes(cutMode) ? cutMode : "video_only";
+  const localFrame = Math.max(0, Math.min(bank.duration_frames - 1, Math.round(frame) - target.start_frame));
+  const cutsMap = new Map((bank.cuts || []).map((c) => [c.frame, { ...c }]));
+  cutsMap.set(localFrame, { frame: localFrame, angle_index: angleIndex, cut_mode: mode });
+  const ordered = [];
+  for (const f of [...cutsMap.keys()].sort((a, b) => a - b)) {
+    const ev = cutsMap.get(f);
+    if (ordered.length && ordered[ordered.length - 1].angle_index === ev.angle_index && ev.frame !== 0) {
+      continue;
+    }
+    ordered.push(ev);
+  }
+  const audioFollow = (mode === "audio_video" || mode === "audio_only") && localFrame === 0
+    ? angleIndex
+    : bank.audio_follow_angle;
+  const updatedBank = { ...bank, cuts: ordered, audio_follow_angle: audioFollow };
+  trk.clips[cIdx] = { ...target, multicam_bank: updatedBank };
+  return {
+    changed: true,
+    op: "switch_angle",
+    multicam_id: updatedBank.id,
+    track_kind: tkKind,
+    track_index: tkIdx,
+    clip_index: cIdx,
+    angle_count: updatedBank.angles.length,
+    cut_count: updatedBank.cuts.length,
+    active_angle: angleIndex,
+    detail: `Switched to Angle ${angleIndex} at +${localFrame}f (${mode})`,
+    doc: nextDoc
+  };
+}
+
+export function deleteMulticamCutInDocument(doc, tkKind, tkIdx, cIdx, localFrame) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+  const target = trk && trk.clips ? trk.clips[cIdx] : null;
+  if (!target || !target.multicam_bank) {
+    throw new Error("Selected clip is not a Multi-Cam Sync Bank");
+  }
+  const bank = target.multicam_bank;
+  if (localFrame <= 0) {
+    return {
+      changed: false,
+      op: "delete_cut",
+      multicam_id: bank.id,
+      track_kind: tkKind,
+      track_index: tkIdx,
+      clip_index: cIdx,
+      angle_count: bank.angles.length,
+      cut_count: bank.cuts.length,
+      active_angle: bank.cuts[0]?.angle_index || 1,
+      detail: "Base angle cut at frame 0 cannot be deleted",
+      doc
+    };
+  }
+  const kept = (bank.cuts || []).filter((c) => c.frame !== localFrame);
+  if (kept.length === bank.cuts.length) {
+    return {
+      changed: false,
+      op: "delete_cut",
+      multicam_id: bank.id,
+      track_kind: tkKind,
+      track_index: tkIdx,
+      clip_index: cIdx,
+      angle_count: bank.angles.length,
+      cut_count: bank.cuts.length,
+      active_angle: bank.cuts[0]?.angle_index || 1,
+      detail: `No Multi-Cam cut found at +${localFrame}f`,
+      doc
+    };
+  }
+  const updatedBank = { ...bank, cuts: kept };
+  trk.clips[cIdx] = { ...target, multicam_bank: updatedBank };
+  return {
+    changed: true,
+    op: "delete_cut",
+    multicam_id: updatedBank.id,
+    track_kind: tkKind,
+    track_index: tkIdx,
+    clip_index: cIdx,
+    angle_count: updatedBank.angles.length,
+    cut_count: updatedBank.cuts.length,
+    active_angle: updatedBank.cuts[0]?.angle_index || 1,
+    detail: `Removed Multi-Cam cut at +${localFrame}f`,
+    doc: nextDoc
+  };
+}
+
+export function updateMulticamAngleInDocument(doc, tkKind, tkIdx, cIdx, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+  const target = trk && trk.clips ? trk.clips[cIdx] : null;
+  if (!target || !target.multicam_bank) {
+    throw new Error("Selected clip is not a Multi-Cam Sync Bank");
+  }
+  const bank = target.multicam_bank;
+  const angleIndex = Number(opts.angle_index);
+  let found = false;
+  const nextAngles = (bank.angles || []).map((a) => {
+    if (a.angle_index !== angleIndex) return a;
+    found = true;
+    return {
+      ...a,
+      name: typeof opts.name === "string" && opts.name.trim() ? opts.name.trim().slice(0, 80) : a.name,
+      sync_offset_frames:
+        opts.sync_offset_frames !== undefined && opts.sync_offset_frames !== null
+          ? Math.max(-100000, Math.min(100000, Math.round(Number(opts.sync_offset_frames))))
+          : a.sync_offset_frames,
+      timecode_start: typeof opts.timecode_start === "string" ? opts.timecode_start : a.timecode_start,
+      audio_follow: typeof opts.audio_follow === "boolean" ? opts.audio_follow : a.audio_follow,
+      audio_peak_frame:
+        opts.audio_peak_frame !== undefined && opts.audio_peak_frame !== null
+          ? Math.max(0, Math.round(Number(opts.audio_peak_frame)))
+          : a.audio_peak_frame
+    };
+  });
+  if (!found) {
+    throw new Error(`Angle ${angleIndex} does not exist in Multi-Cam Bank`);
+  }
+  const updatedBank = { ...bank, angles: nextAngles };
+  trk.clips[cIdx] = { ...target, multicam_bank: updatedBank };
+  return {
+    changed: true,
+    op: "update_angle",
+    multicam_id: updatedBank.id,
+    track_kind: tkKind,
+    track_index: tkIdx,
+    clip_index: cIdx,
+    angle_count: updatedBank.angles.length,
+    cut_count: updatedBank.cuts.length,
+    active_angle: angleIndex,
+    detail: `Updated Angle ${angleIndex} in '${updatedBank.name}'`,
+    doc: nextDoc
+  };
+}
+
+export function flattenMulticamClipInDocument(doc, tkKind, tkIdx, cIdx) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+  const target = trk && trk.clips ? trk.clips[cIdx] : null;
+  if (!target || !target.multicam_bank) {
+    throw new Error("Selected clip is not a Multi-Cam Sync Bank");
+  }
+  const bank = target.multicam_bank;
+  const segments = computeMulticamSegmentsClient(bank);
+  const angleMap = new Map((bank.angles || []).map((a) => [a.angle_index, a]));
+  const flatClips = segments.map((seg) => {
+    const angle = angleMap.get(seg.angle_index) || bank.angles[0];
+    return {
+      ...target,
+      name: angle.name,
+      start_frame: target.start_frame + seg.start_frame,
+      duration_frames: seg.duration_frames,
+      source_in_frame: seg.source_in_frame,
+      source_path: angle.source_path || target.source_path,
+      media_ref: angle.media_ref || target.media_ref,
+      fade_in_s: seg.start_frame === 0 ? target.fade_in_s || 0 : 0,
+      fade_out_s: seg.end_frame === bank.duration_frames ? target.fade_out_s || 0 : 0,
+      multicam_bank: null
+    };
+  });
+  trk.clips = [...trk.clips.slice(0, cIdx), ...flatClips, ...trk.clips.slice(cIdx + 1)];
+  return {
+    changed: true,
+    op: "flatten_multicam",
+    multicam_id: bank.id,
+    track_kind: tkKind,
+    track_index: tkIdx,
+    clip_index: cIdx,
+    angle_count: bank.angles.length,
+    cut_count: flatClips.length,
+    active_angle: segments[0]?.angle_index || 1,
+    detail: `Flattened Multi-Cam '${bank.name}' into ${flatClips.length} timeline clip(s)`,
+    doc: nextDoc
+  };
+}
+
+export function compileMulticamFiltergraphClient(bank, opts = {}) {
+  const mode = opts.mode === "quad_view" ? "quad_view" : "active_cuts";
+  const fpsVal = bank && bank.fps ? Math.max(1e-6, bank.fps.num / Math.max(1, bank.fps.den)) : 25;
+  const durationS = Number((bank.duration_frames / fpsVal).toFixed(4));
+  const segments = computeMulticamSegmentsClient(bank);
+  const angleToInput = new Map((bank.angles || []).map((a, idx) => [a.angle_index, idx]));
+
+  if (mode === "quad_view") {
+    const quadAngles = (bank.angles || []).slice(0, 4);
+    const cellW = Math.max(320, Math.floor((bank.width || 1920) / 2));
+    const cellH = Math.max(180, Math.floor((bank.height || 1080) / 2));
+    const stages = [];
+    const labels = [];
+    quadAngles.forEach((angle, idx) => {
+      const inIdx = angleToInput.get(angle.angle_index) ?? idx;
+      const lbl = `[mc_q${idx}]`;
+      const offF = Math.max(0, Number(angle.source_in_frame || 0) + Number(angle.sync_offset_frames || 0));
+      const endF = offF + bank.duration_frames;
+      stages.push(
+        `[${inIdx}:v]trim=start_frame=${offF}:end_frame=${endF},setpts=PTS-STARTPTS,scale=${cellW}:${cellH}:force_original_aspect_ratio=decrease,pad=${cellW}:${cellH}:(ow-iw)/2:(oh-ih)/2:color=#101116${lbl}`
+      );
+      labels.push(lbl);
+    });
+    while (labels.length < 4) {
+      const padLbl = `[mc_q${labels.length}]`;
+      stages.push(`color=c=#101116:s=${cellW}x${cellH}:d=${durationS.toFixed(4)}${padLbl}`);
+      labels.push(padLbl);
+    }
+    stages.push(`${labels.join("")}xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[v_mc_quad]`);
+    return {
+      multicam_id: bank.id,
+      name: bank.name,
+      mode: "quad_view",
+      duration_s: durationS,
+      angle_count: bank.angles.length,
+      segment_count: segments.length,
+      segments,
+      filter_complex: stages.join(";"),
+      video_map_label: "[v_mc_quad]",
+      audio_map_label: null,
+      warnings: []
+    };
+  }
+
+  const stages = [];
+  const vLabels = [];
+  const aLabels = [];
+  const w = bank.width || 1920;
+  const h = bank.height || 1080;
+  segments.forEach((seg, idx) => {
+    const inIdx = angleToInput.get(seg.angle_index) ?? 0;
+    const vLbl = `[mc_v${idx}]`;
+    const vEnd = seg.source_in_frame + seg.duration_frames;
+    stages.push(
+      `[${inIdx}:v]trim=start_frame=${seg.source_in_frame}:end_frame=${vEnd},setpts=PTS-STARTPTS,scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2${vLbl}`
+    );
+    vLabels.push(vLbl);
+    const audioInIdx = seg.cut_mode === "audio_video" || seg.cut_mode === "audio_only"
+      ? inIdx
+      : angleToInput.get(bank.audio_follow_angle || 1) ?? 0;
+    const t0 = (seg.source_in_frame / fpsVal).toFixed(4);
+    const t1 = (vEnd / fpsVal).toFixed(4);
+    const aLbl = `[mc_a${idx}]`;
+    stages.push(`[${audioInIdx}:a]atrim=start=${t0}:end=${t1},asetpts=PTS-STARTPTS${aLbl}`);
+    aLabels.push(aLbl);
+  });
+  if (vLabels.length === 1) {
+    stages.push(`${vLabels[0]}copy[v_mc]`);
+    stages.push(`${aLabels[0]}acopy[a_mc]`);
+  } else {
+    stages.push(`${vLabels.join("")}concat=n=${vLabels.length}:v=1:a=0[v_mc]`);
+    stages.push(`${aLabels.join("")}concat=n=${aLabels.length}:v=0:a=1[a_mc]`);
+  }
+  return {
+    multicam_id: bank.id,
+    name: bank.name,
+    mode: "active_cuts",
+    duration_s: durationS,
+    angle_count: bank.angles.length,
+    segment_count: segments.length,
+    segments,
+    filter_complex: stages.join(";"),
+    video_map_label: "[v_mc]",
+    audio_map_label: "[a_mc]",
+    warnings: []
+  };
+}

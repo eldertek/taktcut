@@ -99,6 +99,8 @@ from taktcut.fx import (
 )
 from taktcut.models import (
     ALLOWED_COMPOUND_COLOR_TAGS,
+    ALLOWED_MULTICAM_CUT_MODES,
+    ALLOWED_MULTICAM_SYNC_MODES,
     ALLOWED_PRECOMP_BLEND_MODES,
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     TRANSFORM_BORDER_FEATHER_MAX,
@@ -123,12 +125,27 @@ from taktcut.models import (
     ExportFpsOption,
     HardwareCapabilities,
     LoudnessPresetId,
+    MulticamAngle,
+    MulticamCutMode,
+    MulticamSyncMode,
     PrecompBlendMode,
     RationalFrameRate,
     RenderProfile,
     TimecodeBurnInPosition,
     TimelineDocument,
     list_dve_layout_presets,
+)
+from taktcut.multicam import (
+    ALLOWED_MULTICAM_COMPILE_MODES,
+    ALLOWED_MULTICAM_OPS,
+    MulticamCompileMode,
+    compile_multicam_filtergraph,
+    create_multicam_clip,
+    delete_multicam_cut,
+    flatten_multicam_clip,
+    switch_multicam_angle,
+    sync_multicam_clip,
+    update_multicam_angle,
 )
 from taktcut.project import (
     PROJECT_FILE_SUFFIX,
@@ -1911,6 +1928,198 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "max_depth": cmp_res.max_depth,
                     "detail": cmp_res.detail,
                     "document": cmp_res.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/multicam":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_op = payload.get("op")
+            op_clean = raw_op.strip().lower() if isinstance(raw_op, str) else ""
+            if op_clean not in ALLOWED_MULTICAM_OPS:
+                allowed_ops = ", ".join(ALLOWED_MULTICAM_OPS)
+                raise ValueError(
+                    f"Unsupported multicam op {raw_op!r}; expected one of: {allowed_ops}"
+                )
+
+            raw_kind = str(payload.get("track_kind", "video")).strip().lower()
+            if raw_kind not in ("video", "audio"):
+                raise ValueError("track_kind must be 'video' or 'audio'")
+            mc_track_kind: Literal["video", "audio"] = "video" if raw_kind == "video" else "audio"
+
+            raw_tidx = payload.get("track_index", 1)
+            if isinstance(raw_tidx, bool) or not isinstance(raw_tidx, int) or raw_tidx < 1:
+                raise ValueError("track_index must be a positive integer")
+            raw_cidx = payload.get("clip_index", 0)
+            if isinstance(raw_cidx, bool) or not isinstance(raw_cidx, int) or raw_cidx < 0:
+                raise ValueError("clip_index must be a non-negative integer")
+
+            if op_clean == "compile":
+                target_clip = None
+                for trk in doc.tracks:
+                    if trk.kind == mc_track_kind and trk.index == raw_tidx:
+                        if 0 <= raw_cidx < len(trk.clips):
+                            target_clip = trk.clips[raw_cidx]
+                        break
+                if target_clip is None or target_clip.multicam_bank is None:
+                    raise ValueError("Selected clip is not a Multi-Cam Sync Bank")
+                raw_mode = str(payload.get("mode", "active_cuts")).strip().lower()
+                if raw_mode not in ALLOWED_MULTICAM_COMPILE_MODES:
+                    allowed_m = ", ".join(ALLOWED_MULTICAM_COMPILE_MODES)
+                    raise ValueError(f"Unsupported mode {raw_mode!r}; expected one of: {allowed_m}")
+                mc_mode: MulticamCompileMode = (
+                    "quad_view" if raw_mode == "quad_view" else "active_cuts"
+                )
+                mc_compiled = compile_multicam_filtergraph(
+                    target_clip.multicam_bank,
+                    mode=mc_mode,
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "op": "compile",
+                        "compile": mc_compiled.model_dump(mode="json"),
+                    },
+                )
+                return
+
+            def _parse_sync_mode(raw: Any) -> MulticamSyncMode:
+                cleaned = str(raw if raw is not None else "audio_waveform").strip().lower()
+                if cleaned == "audio_waveform":
+                    return "audio_waveform"
+                if cleaned == "timecode":
+                    return "timecode"
+                if cleaned == "in_point":
+                    return "in_point"
+                if cleaned == "marker":
+                    return "marker"
+                allowed_s = ", ".join(ALLOWED_MULTICAM_SYNC_MODES)
+                raise ValueError(f"Unsupported sync_mode {raw!r}; expected one of: {allowed_s}")
+
+            def _parse_cut_mode(raw: Any) -> MulticamCutMode:
+                cleaned = str(raw if raw is not None else "video_only").strip().lower()
+                if cleaned == "video_only":
+                    return "video_only"
+                if cleaned == "audio_video":
+                    return "audio_video"
+                if cleaned == "audio_only":
+                    return "audio_only"
+                allowed_c = ", ".join(ALLOWED_MULTICAM_CUT_MODES)
+                raise ValueError(f"Unsupported cut_mode {raw!r}; expected one of: {allowed_c}")
+
+            if op_clean == "create":
+                raw_name = payload.get("name")
+                mc_name = raw_name if isinstance(raw_name, str) else None
+                sync_m = _parse_sync_mode(payload.get("sync_mode", "audio_waveform"))
+                raw_angles = payload.get("angles")
+                parsed_angles: list[MulticamAngle] | None = None
+                if raw_angles is not None:
+                    if not isinstance(raw_angles, list):
+                        raise ValueError("angles must be a list")
+                    parsed_angles = [MulticamAngle.model_validate(item) for item in raw_angles]
+                mc_res = create_multicam_clip(
+                    doc,
+                    track_kind=mc_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                    name=mc_name,
+                    sync_mode=sync_m,
+                    angles=parsed_angles,
+                )
+            elif op_clean == "sync":
+                sync_m = _parse_sync_mode(payload.get("sync_mode", "audio_waveform"))
+                mc_res = sync_multicam_clip(
+                    doc,
+                    track_kind=mc_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                    sync_mode=sync_m,
+                )
+            elif op_clean == "switch_angle":
+                raw_frame = payload.get("frame", 0)
+                if isinstance(raw_frame, bool) or not isinstance(raw_frame, int):
+                    raise ValueError("frame must be an integer")
+                raw_angle = payload.get("angle_index", 1)
+                if isinstance(raw_angle, bool) or not isinstance(raw_angle, int) or raw_angle < 1:
+                    raise ValueError("angle_index must be a positive integer")
+                cut_m = _parse_cut_mode(payload.get("cut_mode", "video_only"))
+                mc_res = switch_multicam_angle(
+                    doc,
+                    track_kind=mc_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                    frame=raw_frame,
+                    angle_index=raw_angle,
+                    cut_mode=cut_m,
+                )
+            elif op_clean == "delete_cut":
+                raw_lf = payload.get("local_frame")
+                if isinstance(raw_lf, bool) or not isinstance(raw_lf, int):
+                    raise ValueError("local_frame must be an integer")
+                mc_res = delete_multicam_cut(
+                    doc,
+                    track_kind=mc_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                    local_frame=raw_lf,
+                )
+            elif op_clean == "update_angle":
+                raw_angle = payload.get("angle_index")
+                if isinstance(raw_angle, bool) or not isinstance(raw_angle, int) or raw_angle < 1:
+                    raise ValueError("angle_index must be a positive integer")
+                raw_off = payload.get("sync_offset_frames")
+                if raw_off is not None and (
+                    isinstance(raw_off, bool) or not isinstance(raw_off, int)
+                ):
+                    raise ValueError("sync_offset_frames must be an integer")
+                raw_peak = payload.get("audio_peak_frame")
+                if raw_peak is not None and (
+                    isinstance(raw_peak, bool) or not isinstance(raw_peak, int)
+                ):
+                    raise ValueError("audio_peak_frame must be an integer")
+                raw_af = payload.get("audio_follow")
+                if raw_af is not None and not isinstance(raw_af, bool):
+                    raise ValueError("audio_follow must be a boolean")
+                raw_tc = payload.get("timecode_start")
+                tc_val = str(raw_tc) if raw_tc is not None else None
+                raw_aname = payload.get("name")
+                aname_val = raw_aname if isinstance(raw_aname, str) else None
+                mc_res = update_multicam_angle(
+                    doc,
+                    track_kind=mc_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                    angle_index=raw_angle,
+                    name=aname_val,
+                    sync_offset_frames=raw_off,
+                    timecode_start=tc_val,
+                    audio_follow=raw_af,
+                    audio_peak_frame=raw_peak,
+                )
+            else:  # flatten
+                mc_res = flatten_multicam_clip(
+                    doc,
+                    track_kind=mc_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                )
+
+            val = validate_timeline(mc_res.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": mc_res.changed,
+                    "op": mc_res.op,
+                    "multicam_id": mc_res.multicam_id,
+                    "track_kind": mc_res.track_kind,
+                    "track_index": mc_res.track_index,
+                    "clip_index": mc_res.clip_index,
+                    "angle_count": mc_res.angle_count,
+                    "cut_count": mc_res.cut_count,
+                    "active_angle": mc_res.active_angle,
+                    "detail": mc_res.detail,
+                    "document": mc_res.document.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                 },
             )

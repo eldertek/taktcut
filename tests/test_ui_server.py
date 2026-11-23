@@ -9868,6 +9868,324 @@ def test_ui_compound_clip_api_and_playwright_live_e2e(tmp_path: Path) -> None:
         thread.join(timeout=5)
 
 
+def test_multicam_sync_bank_api_demo_parity_and_playwright_ui(tmp_path: Path) -> None:
+    """Verify /api/timeline/multicam API, JS parity, Quad Switcher, EN/FR, and 375px/1440px."""
+    from taktcut.ui.samples import build_sample_timeline
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+    try:
+        doc = build_sample_timeline("clean").model_dump(mode="json")
+
+        # 1. API create Multi-Cam Sync Bank on V1 clip 2 (4-angle bank)
+        c_status, _, c_raw = _http_call(
+            f"{base_url}/api/timeline/multicam",
+            method="POST",
+            payload={
+                "op": "create",
+                "document": doc,
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 2,
+                "sync_mode": "audio_waveform",
+            },
+        )
+        assert c_status == 200
+        created = json.loads(c_raw.decode("utf-8"))
+        assert created["changed"] is True
+        assert created["op"] == "create_multicam"
+        assert created["angle_count"] == 4
+        assert created["cut_count"] == 1
+
+        # 2. API switch_angle at frame 255 -> Angle 2, frame 295 -> Angle 3
+        s1_status, _, s1_raw = _http_call(
+            f"{base_url}/api/timeline/multicam",
+            method="POST",
+            payload={
+                "op": "switch_angle",
+                "document": created["document"],
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 2,
+                "frame": 255,
+                "angle_index": 2,
+                "cut_mode": "video_only",
+            },
+        )
+        assert s1_status == 200
+        switched1 = json.loads(s1_raw.decode("utf-8"))
+        assert switched1["cut_count"] == 2
+        assert switched1["active_angle"] == 2
+
+        s2_status, _, s2_raw = _http_call(
+            f"{base_url}/api/timeline/multicam",
+            method="POST",
+            payload={
+                "op": "switch_angle",
+                "document": switched1["document"],
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 2,
+                "frame": 295,
+                "angle_index": 3,
+                "cut_mode": "audio_video",
+            },
+        )
+        assert s2_status == 200
+        switched2 = json.loads(s2_raw.decode("utf-8"))
+        assert switched2["cut_count"] == 3
+
+        # 3. API compile active_cuts & quad_view FFmpeg filtergraphs
+        fc_status, _, fc_raw = _http_call(
+            f"{base_url}/api/timeline/multicam",
+            method="POST",
+            payload={
+                "op": "compile",
+                "document": switched2["document"],
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 2,
+                "mode": "active_cuts",
+            },
+        )
+        assert fc_status == 200
+        compiled_cuts = json.loads(fc_raw.decode("utf-8"))["compile"]
+        assert "concat=n=3:v=1:a=0[v_mc]" in compiled_cuts["filter_complex"]
+
+        fq_status, _, fq_raw = _http_call(
+            f"{base_url}/api/timeline/multicam",
+            method="POST",
+            payload={
+                "op": "compile",
+                "document": switched2["document"],
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 2,
+                "mode": "quad_view",
+            },
+        )
+        assert fq_status == 200
+        compiled_quad = json.loads(fq_raw.decode("utf-8"))["compile"]
+        assert "xstack=inputs=4" in compiled_quad["filter_complex"]
+
+        # 4. API flatten Multi-Cam into discrete timeline clips
+        fl_status, _, fl_raw = _http_call(
+            f"{base_url}/api/timeline/multicam",
+            method="POST",
+            payload={
+                "op": "flatten",
+                "document": switched2["document"],
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 2,
+            },
+        )
+        assert fl_status == 200
+        flattened = json.loads(fl_raw.decode("utf-8"))
+        assert flattened["changed"] is True
+        assert flattened["cut_count"] == 3
+        assert not any(
+            issue["kind"] in ("overlap", "zero_duration", "fps_mismatch")
+            for issue in flattened["validation"]["issues"]
+        )
+
+        # 5. API invalid op / boolean int rejected with 400
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/timeline/multicam",
+            method="POST",
+            payload={"op": "invalid_op", "document": doc},
+        )
+        assert bad_status == 400
+
+        # 6. Node.js demo_adapter.js static-demo parity
+        node_bin = shutil.which("node")
+        if node_bin:
+            assets_dir = (
+                Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+            )
+            demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+            script = (
+                f"import {{ createApiClient }} from {json.dumps(demo_uri)};\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const client = createApiClient();\n"
+                f"const doc = {json.dumps(doc)};\n"
+                "const created = await client.multicamTimeline({"
+                "  op: 'create', document: doc, track_kind: 'video', track_index: 1,"
+                "  clip_index: 2, sync_mode: 'audio_waveform'"
+                "});\n"
+                "if (!created.changed || created.angle_count !== 4) throw new Error('mc create');\n"
+                "const sw = await client.multicamTimeline({"
+                "  op: 'switch_angle', document: created.document, track_kind: 'video',"
+                "  track_index: 1, clip_index: 2, frame: 265, angle_index: 2"
+                "});\n"
+                "if (sw.cut_count !== 2 || sw.active_angle !== 2) throw new Error('mc switch');\n"
+                "const cmp = await client.multicamTimeline({"
+                "  op: 'compile', document: sw.document, track_kind: 'video',"
+                "  track_index: 1, clip_index: 2, mode: 'quad_view'"
+                "});\n"
+                "if (!cmp.compile.filter_complex.includes('xstack=inputs=4')) "
+                "throw new Error('mc compile');\n"
+                "const fl = await client.multicamTimeline({"
+                "  op: 'flatten', document: sw.document, track_kind: 'video',"
+                "  track_index: 1, clip_index: 2"
+                "});\n"
+                "if (!fl.changed || fl.cut_count !== 2) throw new Error('mc flatten');\n"
+                "console.log('MULTICAM_PARITY_OK');\n"
+            )
+            proc = subprocess.run(
+                [node_bin, "--input-type=module", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, proc.stderr
+            assert "MULTICAM_PARITY_OK" in proc.stdout
+
+        # 7. Live Playwright verification at 1440x900 & 375x812 (EN + FR)
+        sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_function(
+                    "() => document.getElementById('btn-multicam-create-sel') !== null"
+                )
+                page.wait_for_function(
+                    "() => document.getElementById('btn-multicam-create-sel').disabled === false"
+                )
+
+                # Select A003_Talent_Close (4-angle Quad Bank) via Timeline Index
+                page.locator(
+                    "#timeline-index-list .timeline-index-row",
+                    has_text="A003_Talent_Close",
+                ).click()
+                page.wait_for_function(
+                    "() => document.getElementById('btn-multicam-create-sel').disabled === false"
+                )
+
+                # Create 4-angle Multi-Cam Sync Bank -> Quad View auto-activates
+                page.click("#btn-multicam-create-sel")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-multicam-badge')?.textContent || '')"
+                    ".startsWith('MC 4x')"
+                )
+                assert (
+                    page.locator("#btn-multicam-quad-toggle").get_attribute("aria-pressed")
+                    == "true"
+                )
+                assert page.locator("#btn-multicam-flatten").is_disabled() is False
+
+                # Move playhead to frame 260 and click Angle 2 pad -> live cut added
+                page.evaluate(
+                    "() => {"
+                    "  const s = document.getElementById('playhead-slider');"
+                    "  s.value = '260';"
+                    "  s.dispatchEvent(new Event('input', { bubbles: true }));"
+                    "}"
+                )
+                page.click("[data-multicam-angle='2']")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-multicam-badge')?.textContent || '')"
+                    ".includes('2C')"
+                )
+
+                # Move playhead to frame 300 and switch via keyboard '3' in Quad View
+                page.evaluate(
+                    "() => {"
+                    "  const s = document.getElementById('playhead-slider');"
+                    "  s.value = '300';"
+                    "  s.dispatchEvent(new Event('input', { bubbles: true }));"
+                    "}"
+                )
+                page.keyboard.press("3")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-multicam-badge')?.textContent || '')"
+                    ".includes('3C')"
+                )
+
+                # Verify FFmpeg Quad 2x2 compile preview updates
+                page.click("[data-mc-compile-mode='quad_view']")
+                assert "xstack=inputs=4" in (
+                    page.locator("#multicam-filtergraph-preview").text_content() or ""
+                )
+                page.click("[data-mc-compile-mode='active_cuts']")
+                assert "concat=n=3" in (
+                    page.locator("#multicam-filtergraph-preview").text_content() or ""
+                )
+
+                # Switch Sync Mode to Timecode (SMPTE) and nudge slip offset
+                page.select_option("#multicam-sync-mode", "timecode")
+                page.wait_for_function(
+                    "() => ("
+                    "document.querySelector('[data-multicam-angle=\"2\"]')?.textContent || ''"
+                    ").includes('+8f')"
+                )
+
+                # Switch to FR i18n and verify clean French labels without em/en dashes
+                page.click("#lang-fr")
+                fr_text = page.locator("#timeline-multicam-inspector").text_content() or ""
+                assert "Banque Multi-Cam" in fr_text
+                assert "Aplatir" in (
+                    page.locator("#btn-multicam-flatten").text_content() or ""
+                )
+                assert "\u2013" not in fr_text and "\u2014" not in fr_text
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in (
+                    "btn-timeline-multicam-create",
+                    "btn-multicam-create-sel",
+                    "btn-multicam-inspector-quad",
+                    "btn-multicam-flatten",
+                    "btn-multicam-quad-toggle",
+                    "btn-multicam-auto-sync",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}')"
+                        ".getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                # Flatten Multi-Cam clip back to regular clips
+                page.click("#btn-multicam-flatten")
+                page.wait_for_function(
+                    "() => document.getElementById('clip-multicam-badge')?.textContent === 'SINGLE'"
+                )
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+
 
 
 

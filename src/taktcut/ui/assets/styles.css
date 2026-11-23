@@ -7608,3 +7608,266 @@ input[type="range"] {
     min-height: 44px;
   }
 }
+
+.multicam-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  background: rgba(18, 22, 32, 0.82);
+  min-width: 0;
+}
+
+.multicam-action-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.multicam-sync-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.multicam-sync-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.multicam-sync-col label,
+.multicam-sub-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.multicam-sync-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  min-width: 0;
+}
+
+.multicam-cutmode-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.multicam-cut-mode-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.multicam-cutmode-pill.is-active,
+.multicam-compile-pill.is-active,
+#btn-multicam-quad-toggle.is-active,
+#btn-multicam-inspector-quad.is-active {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.22);
+  color: #e0f2fe;
+}
+
+.multicam-angle-bank {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.multicam-angle-pad {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 6px 7px;
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  background: rgba(16, 19, 27, 0.92);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  min-height: 44px;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.multicam-angle-pad:hover:not(:disabled) {
+  border-color: #38bdf8;
+  background: rgba(30, 41, 59, 0.85);
+}
+
+.multicam-angle-pad:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+.multicam-angle-pad.is-live {
+  border-color: #ef4444;
+  background: rgba(127, 29, 29, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.35);
+}
+
+.multicam-angle-pad.is-selected:not(.is-live) {
+  border-color: #38bdf8;
+}
+
+.multicam-pad-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.multicam-pad-key {
+  font-size: 9.5px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(56, 189, 248, 0.18);
+  color: #bae6fd;
+}
+
+.multicam-angle-pad.is-live .multicam-pad-key {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.multicam-pad-offset {
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+
+.multicam-pad-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.multicam-pad-meta {
+  font-size: 9px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.multicam-slip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.multicam-slip-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.multicam-slip-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.multicam-cuts-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.multicam-cut-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  background: rgba(15, 18, 25, 0.9);
+  font-size: 9.5px;
+  color: var(--text-primary);
+}
+
+.multicam-cut-jump {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.multicam-cut-remove {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: #f87171;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.multicam-compile-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.multicam-compile-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.multicam-filtergraph-preview {
+  font-size: 10px;
+  max-height: 68px;
+  overflow-y: auto;
+  word-break: break-word;
+}
+
+@media (max-width: 760px) {
+  .multicam-action-row,
+  .multicam-cut-mode-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .multicam-angle-bank {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #btn-timeline-multicam-create,
+  #btn-multicam-create-sel,
+  #btn-multicam-inspector-quad,
+  #btn-multicam-flatten,
+  #btn-multicam-quad-toggle,
+  #btn-multicam-auto-sync,
+  #multicam-sync-mode,
+  .multicam-cutmode-pill,
+  .multicam-compile-pill,
+  .multicam-angle-pad,
+  .multicam-slip-btns .btn {
+    min-height: 44px;
+  }
+  .multicam-cut-chip {
+    min-height: 36px;
+    padding: 4px 8px;
+  }
+}
