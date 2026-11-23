@@ -18,6 +18,8 @@ FxType = Literal[
     "chroma_aberration",
     "vignette",
     "film_grain",
+    "optical_glow",
+    "rgb_split",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -29,6 +31,8 @@ FX_TYPES: tuple[FxType, ...] = (
     "chroma_aberration",
     "vignette",
     "film_grain",
+    "optical_glow",
+    "rgb_split",
 )
 
 EasingType = Literal["linear", "ease_in", "ease_out", "ease_in_out"]
@@ -79,6 +83,9 @@ _PARAM_ALIASES: dict[str, str] = {
     "Angle": "angle",
     "AngleRad": "angle_rad",
     "Strength": "strength",
+    "GlowIntensity": "glow_intensity",
+    "GlowRadius": "glow_radius",
+    "ChromaShiftPx": "chroma_shift_px",
 }
 
 
@@ -348,6 +355,39 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             step=1.0,
         ),
     ),
+    "optical_glow": (
+        FxParamSpec(
+            name="glow_intensity",
+            label="Glow Intensity",
+            kind="float",
+            default=0.45,
+            min_val=0.0,
+            max_val=1.0,
+            step=0.05,
+        ),
+        FxParamSpec(
+            name="glow_radius",
+            label="Glow Radius",
+            kind="float",
+            default=10.0,
+            min_val=2.0,
+            max_val=24.0,
+            step=0.5,
+            unit="px",
+        ),
+    ),
+    "rgb_split": (
+        FxParamSpec(
+            name="chroma_shift_px",
+            label="Chroma Shift",
+            kind="int",
+            default=4,
+            min_val=0.0,
+            max_val=12.0,
+            step=1.0,
+            unit="px",
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -359,6 +399,8 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "chroma_aberration": 0.65,
     "vignette": 0.35,
     "film_grain": 0.45,
+    "optical_glow": 1.20,
+    "rgb_split": 0.55,
 }
 
 
@@ -768,6 +810,61 @@ FX_PRESETS: tuple[FxPreset, ...] = (
                 enabled=True,
                 params={
                     "strength": 8.0,
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="cyberpunk_glow",
+        name="Cyberpunk Glow",
+        category="Stylize",
+        description=(
+            "Neon Sapphire optical glow paired with prismatic RGB horizontal channel split."
+        ),
+        nodes=[
+            FxNode(
+                effect="optical_glow",
+                enabled=True,
+                params={
+                    "glow_intensity": 0.72,
+                    "glow_radius": 16.0,
+                },
+            ),
+            FxNode(
+                effect="rgb_split",
+                enabled=True,
+                params={
+                    "chroma_shift_px": 6,
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="anamorphic_dream",
+        name="Anamorphic Dream",
+        category="Optical",
+        description="Wide optical halation with subtle chromatic fringe and cinema vignette.",
+        nodes=[
+            FxNode(
+                effect="optical_glow",
+                enabled=True,
+                params={
+                    "glow_intensity": 0.55,
+                    "glow_radius": 20.0,
+                },
+            ),
+            FxNode(
+                effect="rgb_split",
+                enabled=True,
+                params={
+                    "chroma_shift_px": 3,
+                },
+            ),
+            FxNode(
+                effect="vignette",
+                enabled=True,
+                params={
+                    "angle_rad": 0.42,
                 },
             ),
         ],
@@ -1262,6 +1359,24 @@ def _compile_film_grain(params: dict[str, float | int | str]) -> str:
     return f"noise=alls={alls}:allf=t+u"
 
 
+def _compile_optical_glow(idx: int, params: dict[str, float | int | str]) -> str:
+    intensity = _clamp_num(float(params["glow_intensity"]), 0.0, 1.0)
+    radius = _clamp_num(float(params["glow_radius"]), 2.0, 24.0)
+    g0 = "g0" if idx == 0 else f"g{idx}a"
+    g1 = "g1" if idx == 0 else f"g{idx}b"
+    gb = "gb" if idx == 0 else f"gb{idx}"
+    return (
+        f"split[{g0}][{g1}];"
+        f"[{g1}]gblur=sigma={radius:.2f}[{gb}];"
+        f"[{g0}][{gb}]blend=all_mode=screen:all_opacity={intensity:.4f}"
+    )
+
+
+def _compile_rgb_split(params: dict[str, float | int | str]) -> str:
+    shift_px = round(_clamp_num(float(params["chroma_shift_px"]), 0.0, 12.0))
+    return f"rgbashift=rh={shift_px}:bh={-shift_px}"
+
+
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
     """Return all built-in Chroma Key / Green Screen Studio presets."""
     return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
@@ -1380,7 +1495,8 @@ def compile_fx_filtergraph(
         )
 
     needs_rgb = any(
-        n.effect in {"glow", "lens_flare", "chroma_aberration"} for n in active_nodes
+        n.effect in {"glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split"}
+        for n in active_nodes
     )
 
     segments: list[str] = []
@@ -1425,6 +1541,12 @@ def compile_fx_filtergraph(
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "film_grain":
             seg = _compile_film_grain(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "optical_glow":
+            seg = _compile_optical_glow(idx, node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "rgb_split":
+            seg = _compile_rgb_split(node.params)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb or ck_active:

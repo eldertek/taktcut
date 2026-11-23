@@ -2537,3 +2537,53 @@ def test_ui_auto_duck_compile_and_vu_meter_assets(ui_server: tuple[str, Path]) -
         assert "\u2013" not in content, f"U+2013 found in {asset_name}"
         if asset_name.endswith(".js"):
             assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+
+def test_ui_sapphire_optical_glow_and_rgb_split_endpoints_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/fx/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    preset_ids = {p["id"] for p in presets_data["presets"]}
+    assert {"cyberpunk_glow", "anamorphic_dream"}.issubset(preset_ids)
+    assert "optical_glow" in presets_data["specs"]
+    assert "rgb_split" in presets_data["specs"]
+
+    compile_status, _, compile_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={
+            "nodes": [
+                {
+                    "effect": "optical_glow",
+                    "enabled": True,
+                    "params": {"glow_intensity": 0.65, "glow_radius": 12.0},
+                },
+                {
+                    "effect": "rgb_split",
+                    "enabled": True,
+                    "params": {"chroma_shift_px": 7},
+                },
+            ],
+            "duration_seconds": 6.0,
+        },
+    )
+    assert compile_status == 200
+    compiled = json.loads(compile_raw.decode("utf-8"))
+    assert compiled["active_effects"] == ["optical_glow", "rgb_split"]
+    assert "split[g0][g1];[g1]gblur=sigma=12.00[gb]" in compiled["filtergraph"]
+    assert "blend=all_mode=screen:all_opacity=0.6500" in compiled["filtergraph"]
+    assert "rgbashift=rh=7:bh=-7" in compiled["filtergraph"]
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'data-fx-add="optical_glow"' in html_text
+    assert 'data-fx-add="rgb_split"' in html_text
+    assert 'data-fx-preset="cyberpunk_glow"' in html_text
+    assert 'data-fx-preset="anamorphic_dream"' in html_text
+    demo_js = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    assert "\u2014" not in demo_js and "\u2013" not in demo_js
+    assert "innerHTML" not in demo_js

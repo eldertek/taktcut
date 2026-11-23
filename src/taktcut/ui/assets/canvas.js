@@ -1388,15 +1388,29 @@ export function drawProgramMonitorCanvas(
         applyChromaKeyOnBuffer(bctx, bw, bh, pCkRaw, pCkMatteView);
       }
 
-      // Apply Chroma Aberration RGB channel split directly on frame buffer
-      const chromaNode = pActiveFx.find((n) => n.effect === "chroma_aberration");
-      if (chromaNode && !(pCkActive && pCkMatteView === "alpha_matte")) {
-        const chromaMul = evaluateNodeIntensity(chromaNode, tSec);
-        const p = chromaNode.params || {};
-        const spread = Number(p.spread ?? 8) * chromaMul;
-        const angleRad = (Number(p.angle ?? 15) * Math.PI) / 180;
-        const dx = Math.round(Math.cos(angleRad) * spread * (bw / 640));
-        const dy = Math.round(Math.sin(angleRad) * spread * (bw / 640));
+      // Apply Chroma Aberration & Sapphire RGB Split channel shift directly on frame buffer
+      const shiftNodes = pActiveFx.filter(
+        (n) => n.effect === "chroma_aberration" || n.effect === "rgb_split"
+      );
+      if (shiftNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        let dx = 0;
+        let dy = 0;
+        for (const sNode of shiftNodes) {
+          const mul = evaluateNodeIntensity(sNode, tSec);
+          if (mul <= 0.0001) continue;
+          const sp = sNode.params || {};
+          if (sNode.effect === "chroma_aberration") {
+            const spread = Number(sp.spread ?? 8) * mul;
+            const angleRad = (Number(sp.angle ?? 15) * Math.PI) / 180;
+            dx += Math.round(Math.cos(angleRad) * spread * (bw / 640));
+            dy += Math.round(Math.sin(angleRad) * spread * (bw / 640));
+          } else {
+            const rawShift = Math.min(12, Math.max(0, Number(sp.chroma_shift_px ?? 4))) * mul;
+            if (rawShift > 0.05) {
+              dx += Math.max(1, Math.round(rawShift * Math.max(0.5, bw / 640)));
+            }
+          }
+        }
         if (dx !== 0 || dy !== 0) {
           const srcImg = bctx.getImageData(0, 0, bw, bh);
           const outImg = bctx.createImageData(bw, bh);
@@ -1644,6 +1658,31 @@ export function drawProgramMonitorCanvas(
             ctx.fillRect(sx, sy, sz, sz);
           }
           ctx.restore();
+        }
+      } else if (node.effect === "optical_glow") {
+        const intensity = clamp01(Number(p.glow_intensity ?? 0.45) * kfMul);
+        const radius = Math.min(24, Math.max(2, Number(p.glow_radius ?? 10)));
+        if (intensity > 0.005) {
+          if (buf && typeof ctx.filter === "string") {
+            ctx.save();
+            ctx.globalCompositeOperation = "screen";
+            ctx.globalAlpha = intensity;
+            const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, frameW / 640)));
+            ctx.filter = `blur(${blurPx}px)`;
+            ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
+            ctx.restore();
+          } else {
+            const midX = fx + frameW * 0.5 + shiftX;
+            const midY = fy + frameH * 0.5 + shiftY;
+            const gGrad = ctx.createRadialGradient(midX, midY, 4, midX, midY, Math.max(32, radius * 8));
+            gGrad.addColorStop(0, `rgba(255, 244, 224, ${(intensity * 0.55).toFixed(3)})`);
+            gGrad.addColorStop(1, "rgba(255, 244, 224, 0)");
+            ctx.save();
+            ctx.globalCompositeOperation = "screen";
+            ctx.fillStyle = gGrad;
+            ctx.fillRect(fx, fy, frameW, frameH);
+            ctx.restore();
+          }
         }
       }
     }

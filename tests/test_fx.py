@@ -109,6 +109,17 @@ def test_compile_all_six_individual_effects() -> None:
     assert grain.filtergraph == "noise=alls=14:allf=t+u"
     assert grain.active_effects == ["film_grain"]
 
+    opt_glow = compile_fx_filtergraph([default_fx_node("optical_glow")])
+    assert (
+        "split[g0][g1];[g1]gblur=sigma=10.00[gb];"
+        "[g0][gb]blend=all_mode=screen:all_opacity=0.4500"
+    ) in opt_glow.filtergraph
+    assert opt_glow.active_effects == ["optical_glow"]
+
+    rgb_split = compile_fx_filtergraph([default_fx_node("rgb_split")])
+    assert rgb_split.filtergraph == "format=rgb24,rgbashift=rh=4:bh=-4,format=yuv420p"
+    assert rgb_split.active_effects == ["rgb_split"]
+
     # Determinism check
     assert compile_fx_filtergraph([default_fx_node("glow")]).filtergraph == glow.filtergraph
 
@@ -139,7 +150,7 @@ def test_compile_multi_effect_chain_and_bypass() -> None:
     assert all_off.estimated_render_seconds == 0.0
 
 
-def test_eight_presets_compile_and_lookup() -> None:
+def test_ten_presets_compile_and_lookup() -> None:
     expected_names = {
         "Dreamy Glow",
         "Music Video Shake",
@@ -149,9 +160,11 @@ def test_eight_presets_compile_and_lookup() -> None:
         "Strobe Flicker",
         "35mm Cinema",
         "Moody Vignette",
+        "Cyberpunk Glow",
+        "Anamorphic Dream",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 8
+    assert len(FX_PRESETS) == 10
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -166,6 +179,16 @@ def test_eight_presets_compile_and_lookup() -> None:
 
     moody_res = compile_preset_filtergraph("moody_vignette", duration_seconds=5.0)
     assert moody_res.filtergraph == "vignette=angle=0.920,noise=alls=8:allf=t+u"
+
+    cyber_res = compile_preset_filtergraph("cyberpunk_glow", duration_seconds=5.0)
+    assert "gblur=sigma=16.00" in cyber_res.filtergraph
+    assert "blend=all_mode=screen:all_opacity=0.7200" in cyber_res.filtergraph
+    assert "rgbashift=rh=6:bh=-6" in cyber_res.filtergraph
+
+    dream_res = compile_preset_filtergraph("anamorphic_dream", duration_seconds=5.0)
+    assert "gblur=sigma=20.00" in dream_res.filtergraph
+    assert "rgbashift=rh=3:bh=-3" in dream_res.filtergraph
+    assert "vignette=angle=0.420" in dream_res.filtergraph
 
     with pytest.raises(ValueError, match="Unknown FX preset"):
         get_fx_preset("nonexistent_preset")
@@ -244,7 +267,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 8
+    assert len(p_data["presets"]) == 10
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -716,7 +739,7 @@ def test_vignette_and_film_grain_bounds_and_compilation() -> None:
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
 def test_film_finishing_presets_execute_in_real_ffmpeg() -> None:
     ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-    for preset_id in ("35mm_cinema", "moody_vignette"):
+    for preset_id in ("35mm_cinema", "moody_vignette", "cyberpunk_glow", "anamorphic_dream"):
         res = compile_preset_filtergraph(
             preset_id,
             duration_seconds=0.2,
@@ -743,3 +766,67 @@ def test_film_finishing_presets_execute_in_real_ffmpeg() -> None:
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
         assert proc.returncode == 0, f"FFmpeg rejected {preset_id}: {proc.stderr}"
+
+
+def test_optical_glow_and_rgb_split_bounds_and_compilation() -> None:
+    glow_low = normalize_fx_node(
+        {
+            "effect": "optical_glow",
+            "params": {"GlowIntensity": -0.5, "GlowRadius": 0.5},
+        }
+    )
+    assert glow_low.params["glow_intensity"] == 0.0
+    assert glow_low.params["glow_radius"] == 2.0
+    low_res = compile_fx_filtergraph([glow_low])
+    assert (
+        low_res.filtergraph
+        == "format=rgb24,split[g0][g1];[g1]gblur=sigma=2.00[gb];"
+        "[g0][gb]blend=all_mode=screen:all_opacity=0.0000,format=yuv420p"
+    )
+
+    glow_high = normalize_fx_node(
+        {
+            "effect": "optical_glow",
+            "params": {"glow_intensity": 2.4, "glow_radius": 99.0},
+        }
+    )
+    assert glow_high.params["glow_intensity"] == 1.0
+    assert glow_high.params["glow_radius"] == 24.0
+    high_res = compile_fx_filtergraph([glow_high])
+    assert "gblur=sigma=24.00" in high_res.filtergraph
+    assert "all_opacity=1.0000" in high_res.filtergraph
+
+    split_low = normalize_fx_node(
+        {"effect": "rgb_split", "params": {"ChromaShiftPx": -3}}
+    )
+    assert split_low.params["chroma_shift_px"] == 0
+    assert compile_fx_filtergraph([split_low]).filtergraph == (
+        "format=rgb24,rgbashift=rh=0:bh=0,format=yuv420p"
+    )
+
+    split_high = normalize_fx_node(
+        {"effect": "rgb_split", "params": {"chroma_shift_px": 25.4}}
+    )
+    assert split_high.params["chroma_shift_px"] == 12
+    assert compile_fx_filtergraph([split_high]).filtergraph == (
+        "format=rgb24,rgbashift=rh=12:bh=-12,format=yuv420p"
+    )
+
+    # Multi-node optical_glow chain must produce unique pad names
+    multi = compile_fx_filtergraph(
+        [
+            FxNode(effect="optical_glow", params={"glow_intensity": 0.4, "glow_radius": 6.0}),
+            FxNode(effect="optical_glow", params={"glow_intensity": 0.6, "glow_radius": 14.0}),
+            FxNode(effect="rgb_split", params={"chroma_shift_px": 5}),
+        ]
+    )
+    assert "split[g0][g1]" in multi.filtergraph
+    assert "split[g1a][g1b]" in multi.filtergraph
+    assert "rgbashift=rh=5:bh=-5" in multi.filtergraph
+
+    with pytest.raises(ValueError, match="finite"):
+        normalize_fx_node({"effect": "optical_glow", "params": {"glow_intensity": float("nan")}})
+    with pytest.raises(ValueError, match="finite"):
+        normalize_fx_node({"effect": "optical_glow", "params": {"glow_radius": float("inf")}})
+    with pytest.raises(ValueError, match="not bool"):
+        normalize_fx_node({"effect": "rgb_split", "params": {"chroma_shift_px": True}})

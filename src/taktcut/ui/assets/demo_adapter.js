@@ -306,7 +306,7 @@ function compileFxClient(nodes, opts = {}) {
   }
   const pixFmt = opts.pix_fmt || "yuv420p";
   const dur = Math.max(0.1, Number(opts.duration_seconds || 10));
-  const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration"].includes(n.effect));
+  const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split"].includes(n.effect));
   const segs = [];
   let totalWeight = 0;
   if (ckActive && ckCompiled) {
@@ -314,7 +314,7 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45 };
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55 };
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -347,6 +347,16 @@ function compileFxClient(nodes, opts = {}) {
     } else if (n.effect === "film_grain") {
       const alls = Math.round(Math.min(40, Math.max(0, Number(p.strength ?? 14))));
       segs.push(`noise=alls=${alls}:allf=t+u`);
+    } else if (n.effect === "optical_glow") {
+      const intensity = Math.min(1, Math.max(0, Number(p.glow_intensity ?? 0.45))).toFixed(4);
+      const radius = Math.min(24, Math.max(2, Number(p.glow_radius ?? 10))).toFixed(2);
+      const g0 = idx === 0 ? "g0" : `g${idx}a`;
+      const g1 = idx === 0 ? "g1" : `g${idx}b`;
+      const gb = idx === 0 ? "gb" : `gb${idx}`;
+      segs.push(`split[${g0}][${g1}];[${g1}]gblur=sigma=${radius}[${gb}];[${g0}][${gb}]blend=all_mode=screen:all_opacity=${intensity}`);
+    } else if (n.effect === "rgb_split") {
+      const px = Math.round(Math.min(12, Math.max(0, Number(p.chroma_shift_px ?? 4))));
+      segs.push(`rgbashift=rh=${px}:bh=${-px}`);
     }
   });
   if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);

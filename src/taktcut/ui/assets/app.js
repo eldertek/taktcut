@@ -2155,6 +2155,13 @@ const FX_PARAM_FALLBACK = {
   ],
   film_grain: [
     { name: "strength", label: "Strength", kind: "float", default: 14, min_val: 0, max_val: 40, step: 1 }
+  ],
+  optical_glow: [
+    { name: "glow_intensity", label: "Glow Intensity", kind: "float", default: 0.45, min_val: 0, max_val: 1, step: 0.05 },
+    { name: "glow_radius", label: "Glow Radius", kind: "float", default: 10, min_val: 2, max_val: 24, step: 0.5 }
+  ],
+  rgb_split: [
+    { name: "chroma_shift_px", label: "Chroma Shift", kind: "int", default: 4, min_val: 0, max_val: 12, step: 1 }
   ]
 };
 
@@ -2189,6 +2196,15 @@ const FX_PRESET_FALLBACK = {
   moody_vignette: [
     { effect: "vignette", enabled: true, params: { angle_rad: 0.92 } },
     { effect: "film_grain", enabled: true, params: { strength: 8 } }
+  ],
+  cyberpunk_glow: [
+    { effect: "optical_glow", enabled: true, params: { glow_intensity: 0.72, glow_radius: 16 } },
+    { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 6 } }
+  ],
+  anamorphic_dream: [
+    { effect: "optical_glow", enabled: true, params: { glow_intensity: 0.55, glow_radius: 20 } },
+    { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 3 } },
+    { effect: "vignette", enabled: true, params: { angle_rad: 0.42 } }
   ]
 };
 
@@ -2200,7 +2216,9 @@ const FX_DISPLAY_TITLES = {
   film_damage: "S_FilmDamage",
   chroma_aberration: "S_ChromaAberration",
   vignette: "S_Vignette",
-  film_grain: "S_FilmGrain"
+  film_grain: "S_FilmGrain",
+  optical_glow: "S_OpticalGlow",
+  rgb_split: "S_RGBSplit"
 };
 
 function getFxSpecs(effect) {
