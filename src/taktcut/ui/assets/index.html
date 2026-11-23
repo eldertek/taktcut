@@ -444,35 +444,80 @@
                       <option value="pan_right_to_left" data-i18n="timeline.transform.dzPanR2L">Pan Right -&gt; Left</option>
                     </select>
                   </div>
-                  <div class="audio-ctrl-row">
+                  <div class="audio-ctrl-row transform-kf-row">
                     <label for="clip-transform-zoom-range" data-i18n="timeline.transform.zoom">Zoom (%)</label>
                     <input type="range" id="clip-transform-zoom-range" min="10" max="300" step="1" value="100">
                     <input type="number" id="clip-transform-zoom-num" class="input-num" min="10" max="300" step="1" value="100.0" aria-label="Clip zoom percentage">
+                    <button type="button" id="btn-clip-transform-zoom-kf" class="btn btn-mini kf-diamond-btn" data-kf-param="zoom_pct" aria-pressed="false" aria-label="Toggle zoom keyframe at playhead" title="Toggle Zoom Keyframe">&#9670;</button>
                     <button type="button" id="btn-clip-transform-zoom-reset" class="btn btn-mini" aria-label="Reset clip zoom">Rst</button>
                   </div>
-                  <div class="audio-ctrl-row">
+                  <div class="audio-ctrl-row transform-kf-row">
                     <label for="clip-transform-posx-range" data-i18n="timeline.transform.posX">Pos X (%)</label>
                     <input type="range" id="clip-transform-posx-range" min="-100" max="100" step="0.5" value="0">
                     <input type="number" id="clip-transform-posx-num" class="input-num" min="-100" max="100" step="0.5" value="0.0" aria-label="Clip horizontal position percentage">
+                    <button type="button" id="btn-clip-transform-posx-kf" class="btn btn-mini kf-diamond-btn" data-kf-param="pos_x_pct" aria-pressed="false" aria-label="Toggle horizontal position keyframe at playhead" title="Toggle Pos X Keyframe">&#9670;</button>
                     <button type="button" id="btn-clip-transform-posx-reset" class="btn btn-mini" aria-label="Reset clip horizontal position">Rst</button>
                   </div>
-                  <div class="audio-ctrl-row">
+                  <div class="audio-ctrl-row transform-kf-row">
                     <label for="clip-transform-posy-range" data-i18n="timeline.transform.posY">Pos Y (%)</label>
                     <input type="range" id="clip-transform-posy-range" min="-100" max="100" step="0.5" value="0">
                     <input type="number" id="clip-transform-posy-num" class="input-num" min="-100" max="100" step="0.5" value="0.0" aria-label="Clip vertical position percentage">
+                    <button type="button" id="btn-clip-transform-posy-kf" class="btn btn-mini kf-diamond-btn" data-kf-param="pos_y_pct" aria-pressed="false" aria-label="Toggle vertical position keyframe at playhead" title="Toggle Pos Y Keyframe">&#9670;</button>
                     <button type="button" id="btn-clip-transform-posy-reset" class="btn btn-mini" aria-label="Reset clip vertical position">Rst</button>
                   </div>
-                  <div class="audio-ctrl-row">
+                  <div class="audio-ctrl-row transform-kf-row">
                     <label for="clip-transform-rot-range" data-i18n="timeline.transform.rotation">Rotation (deg)</label>
                     <input type="range" id="clip-transform-rot-range" min="-180" max="180" step="0.5" value="0">
                     <input type="number" id="clip-transform-rot-num" class="input-num" min="-180" max="180" step="0.5" value="0.0" aria-label="Clip rotation in degrees">
+                    <button type="button" id="btn-clip-transform-rot-kf" class="btn btn-mini kf-diamond-btn" data-kf-param="rotation_deg" aria-pressed="false" aria-label="Toggle rotation keyframe at playhead" title="Toggle Rotation Keyframe">&#9670;</button>
                     <button type="button" id="btn-clip-transform-rot-reset" class="btn btn-mini" aria-label="Reset clip rotation">Rst</button>
                   </div>
-                  <div class="audio-ctrl-row">
+                  <div class="audio-ctrl-row transform-kf-row">
                     <label for="clip-transform-opacity-range" data-i18n="timeline.transform.opacity">Opacity (%)</label>
                     <input type="range" id="clip-transform-opacity-range" min="0" max="100" step="1" value="100">
                     <input type="number" id="clip-transform-opacity-num" class="input-num" min="0" max="100" step="1" value="100.0" aria-label="Clip opacity percentage">
+                    <button type="button" id="btn-clip-transform-opacity-kf" class="btn btn-mini kf-diamond-btn" data-kf-param="opacity_pct" aria-pressed="false" aria-label="Toggle opacity keyframe at playhead" title="Toggle Opacity Keyframe">&#9670;</button>
                     <button type="button" id="btn-clip-transform-opacity-reset" class="btn btn-mini" aria-label="Reset clip opacity">Rst</button>
+                  </div>
+
+                  <div id="transform-graph-editor" class="transform-graph-editor" role="region" aria-label="Transform Keyframe Bezier Graph Editor">
+                    <div class="transform-graph-header">
+                      <span class="transform-graph-title" data-i18n="timeline.transform.graphTitle">Keyframe Graph Editor</span>
+                      <div class="transform-graph-mode-group" role="group" aria-label="Graph curve mode">
+                        <button type="button" id="btn-tf-graph-value" class="btn btn-mini transform-graph-mode-btn is-active" data-tf-graph-mode="value" aria-pressed="true" data-i18n="timeline.transform.modeValue">Value</button>
+                        <button type="button" id="btn-tf-graph-speed" class="btn btn-mini transform-graph-mode-btn" data-tf-graph-mode="speed" aria-pressed="false" data-i18n="timeline.transform.modeSpeed">Speed</button>
+                      </div>
+                    </div>
+                    <div id="transform-graph-param-strip" class="transform-graph-param-strip" role="group" aria-label="Keyframe curve parameter">
+                      <button type="button" class="btn btn-mini transform-graph-param-btn is-active" data-tf-graph-param="zoom_pct" aria-pressed="true" data-i18n="timeline.transform.paramZoom">Zoom</button>
+                      <button type="button" class="btn btn-mini transform-graph-param-btn" data-tf-graph-param="pos_x_pct" aria-pressed="false" data-i18n="timeline.transform.paramPosX">Pos X</button>
+                      <button type="button" class="btn btn-mini transform-graph-param-btn" data-tf-graph-param="pos_y_pct" aria-pressed="false" data-i18n="timeline.transform.paramPosY">Pos Y</button>
+                      <button type="button" class="btn btn-mini transform-graph-param-btn" data-tf-graph-param="rotation_deg" aria-pressed="false" data-i18n="timeline.transform.paramRot">Rot</button>
+                      <button type="button" class="btn btn-mini transform-graph-param-btn" data-tf-graph-param="opacity_pct" aria-pressed="false" data-i18n="timeline.transform.paramOpacity">Opacity</button>
+                    </div>
+                    <div class="transform-graph-canvas-well">
+                      <canvas id="transform-graph-canvas" class="transform-graph-canvas" aria-label="Bezier easing curve graph editor"></canvas>
+                    </div>
+                    <div class="transform-graph-actions">
+                      <button type="button" id="btn-tf-kf-prev" class="btn btn-mini" aria-label="Jump to previous keyframe" title="Previous Keyframe">&lt; KF</button>
+                      <button type="button" id="btn-tf-kf-toggle" class="btn btn-mini" data-i18n="timeline.transform.kfAdd">+ Keyframe</button>
+                      <button type="button" id="btn-tf-kf-next" class="btn btn-mini" aria-label="Jump to next keyframe" title="Next Keyframe">KF &gt;</button>
+                      <button type="button" id="btn-tf-kf-clear" class="btn btn-mini" data-i18n="timeline.transform.kfClear" disabled>Clear</button>
+                    </div>
+                    <div id="transform-bezier-presets" class="transform-bezier-presets" role="group" aria-label="Cubic-Bezier easing presets">
+                      <button type="button" class="btn btn-mini transform-bezier-btn" data-tf-bezier-preset="linear" aria-pressed="false" data-i18n="timeline.transform.easeLinear">Linear</button>
+                      <button type="button" class="btn btn-mini transform-bezier-btn is-active" data-tf-bezier-preset="ease_in_out" aria-pressed="true" data-i18n="timeline.transform.easeEasy">Easy Ease</button>
+                      <button type="button" class="btn btn-mini transform-bezier-btn" data-tf-bezier-preset="ease_in" aria-pressed="false" data-i18n="timeline.transform.easeIn">Ease In</button>
+                      <button type="button" class="btn btn-mini transform-bezier-btn" data-tf-bezier-preset="ease_out" aria-pressed="false" data-i18n="timeline.transform.easeOut">Ease Out</button>
+                      <button type="button" class="btn btn-mini transform-bezier-btn" data-tf-bezier-preset="snap_pop" aria-pressed="false" data-i18n="timeline.transform.easeSnap">Snap Pop</button>
+                    </div>
+                    <div class="transform-bezier-inputs">
+                      <label class="tf-bz-field" for="tf-bezier-x1"><span>X1</span><input type="number" id="tf-bezier-x1" class="input-num transform-bezier-num" min="0" max="1" step="0.02" value="0.42" aria-label="Bezier handle X1"></label>
+                      <label class="tf-bz-field" for="tf-bezier-y1"><span>Y1</span><input type="number" id="tf-bezier-y1" class="input-num transform-bezier-num" min="-1.5" max="2.5" step="0.05" value="0" aria-label="Bezier handle Y1"></label>
+                      <label class="tf-bz-field" for="tf-bezier-x2"><span>X2</span><input type="number" id="tf-bezier-x2" class="input-num transform-bezier-num" min="0" max="1" step="0.02" value="0.58" aria-label="Bezier handle X2"></label>
+                      <label class="tf-bz-field" for="tf-bezier-y2"><span>Y2</span><input type="number" id="tf-bezier-y2" class="input-num transform-bezier-num" min="-1.5" max="2.5" step="0.05" value="1" aria-label="Bezier handle Y2"></label>
+                    </div>
+                    <div id="transform-kf-readout" class="telemetry-note mono" aria-live="polite">0 KF</div>
                   </div>
                 </div>
               </div>

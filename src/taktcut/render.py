@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from taktcut.color import (
     REC709_FFMPEG_FLAGS,
@@ -83,9 +83,11 @@ from taktcut.models import (
     RenderProfile,
     RenderResult,
     TimecodeBurnInPosition,
+    TransformKeyframe,
     VignetteMode,
     VignettePresetId,
     VoiceCleanupPresetId,
+    evaluate_cubic_bezier,
 )
 from taktcut.subtitles import SubtitleTrackParams, compile_subtitles_filter
 from taktcut.titles import (
@@ -2177,7 +2179,74 @@ class TransformCompileResult(BaseModel):
     filtergraph: str
     ffmpeg_vf_args: list[str]
     is_identity: bool
+    has_keyframes: bool = False
+    keyframe_count: int = 0
+    keyframed_params: list[str] = Field(default_factory=list)
     params: ClipTransformParams
+
+
+def _build_bezier_segment_ffmpeg_expr(
+    u_expr: str,
+    v0: float,
+    v1: float,
+    bezier: tuple[float, float, float, float],
+) -> str:
+    """Compile a cubic-bezier segment in u_expr into a safe piecewise FFmpeg expression."""
+    dv = v1 - v0
+    if abs(dv) <= 1e-7:
+        return f"{v0:.6f}"
+    x1, y1, x2, y2 = bezier
+    if abs(x1 - y1) <= 1e-5 and abs(x2 - y2) <= 1e-5:
+        return f"({v0:.6f}+({dv:.6f})*{u_expr})"
+    knots = (0.0, 0.25, 0.5, 0.75, 1.0)
+    vals = [v0 + dv * evaluate_cubic_bezier(k, x1, y1, x2, y2) for k in knots]
+    expr = (
+        f"({vals[3]:.6f}+({(vals[4] - vals[3]) / 0.25:.6f})*({u_expr}-0.75))"
+    )
+    for idx in (2, 1, 0):
+        k_lo = knots[idx]
+        k_hi = knots[idx + 1]
+        slope = (vals[idx + 1] - vals[idx]) / 0.25
+        seg = f"({vals[idx]:.6f}+({slope:.6f})*({u_expr}-{k_lo:.2f}))"
+        expr = f"if(lt({u_expr},{k_hi:.2f}),{seg},{expr})"
+    return expr
+
+
+def _build_transform_keyframe_ffmpeg_expr(
+    keyframes: Sequence[TransformKeyframe],
+    static_val: float,
+    *,
+    scale: float = 1.0,
+    lo: float | None = None,
+    hi: float | None = None,
+    time_var: str = "t",
+) -> str:
+    """Compile a TransformKeyframe lane into a deterministic FFmpeg time expression."""
+    if not keyframes:
+        return f"{static_val * scale:.6f}"
+    ordered = sorted(keyframes, key=lambda item: item.time_s)
+    if len(ordered) == 1:
+        return f"{ordered[0].value * scale:.6f}"
+
+    expr = f"{ordered[-1].value * scale:.6f}"
+    for idx in range(len(ordered) - 2, -1, -1):
+        k0 = ordered[idx]
+        k1 = ordered[idx + 1]
+        v0 = k0.value * scale
+        v1 = k1.value * scale
+        dt = k1.time_s - k0.time_s
+        if dt <= 1e-6:
+            seg_expr = f"{v1:.6f}"
+        else:
+            u = f"clip(({time_var}-{k0.time_s:.4f})/{dt:.4f},0,1)"
+            seg_expr = _build_bezier_segment_ffmpeg_expr(u, v0, v1, k0.resolved_bezier())
+        expr = f"if(lt({time_var},{k1.time_s:.4f}),{seg_expr},{expr})"
+
+    first_v = ordered[0].value * scale
+    full_expr = f"if(lte({time_var},{ordered[0].time_s:.4f}),{first_v:.6f},{expr})"
+    if lo is not None and hi is not None:
+        return f"clip({full_expr},{lo:.4f},{hi:.4f})"
+    return full_expr
 
 
 def compile_transform_filter(
@@ -2192,60 +2261,132 @@ def compile_transform_filter(
     if params.is_identity():
         return None
 
-    if params.opacity_pct <= 1e-6:
+    has_kfs = params.has_keyframes()
+    if not has_kfs and params.opacity_pct <= 1e-6:
         parts = ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill", "setsar=1"]
         if pix_fmt is not None:
             parts.append(f"format={pix_fmt}")
         return ",".join(parts)
 
     dz_graph = compile_dynamic_zoom_filter(params.dynamic_zoom, clip_duration_s=clip_duration_s)
-    if not params.has_static_transform():
+    if not has_kfs and not params.has_static_transform():
         assert dz_graph is not None
         return f"{dz_graph},format={pix_fmt}" if pix_fmt is not None else dz_graph
 
+    kf_zoom = bool(params.keyframes.zoom_pct)
+    kf_pos_x = bool(params.keyframes.pos_x_pct)
+    kf_pos_y = bool(params.keyframes.pos_y_pct)
+    kf_rot = bool(params.keyframes.rotation_deg)
+    kf_opacity = bool(params.keyframes.opacity_pct)
+
     fg_steps: list[str] = []
-    if not math.isclose(params.zoom_pct, 100.0, abs_tol=1e-4):
+    if kf_zoom:
+        z_expr = _build_transform_keyframe_ffmpeg_expr(
+            params.keyframes.zoom_pct,
+            params.zoom_pct,
+            scale=0.01,
+            lo=0.1,
+            hi=3.0,
+            time_var="t",
+        )
+        fg_steps.append(
+            f"scale=w='trunc(iw*({z_expr})/2)*2':h='trunc(ih*({z_expr})/2)*2':eval=frame:flags=lanczos"
+        )
+    elif not math.isclose(params.zoom_pct, 100.0, abs_tol=1e-4):
         zoom_scale = params.zoom_pct / 100.0
         fg_steps.append(
             f"scale=w=ceil(iw*{zoom_scale:.6f}/2)*2:h=ceil(ih*{zoom_scale:.6f}/2)*2:flags=lanczos"
         )
 
-    has_rot = not math.isclose(params.rotation_deg, 0.0, abs_tol=1e-4)
-    has_opacity = not math.isclose(params.opacity_pct, 100.0, abs_tol=1e-4)
-    if has_rot or has_opacity:
+    has_static_rot = not kf_rot and not math.isclose(params.rotation_deg, 0.0, abs_tol=1e-4)
+    has_static_opacity = not kf_opacity and not math.isclose(
+        params.opacity_pct, 100.0, abs_tol=1e-4
+    )
+    if kf_rot or has_static_rot or has_static_opacity:
         fg_steps.append("format=yuva420p")
-    if has_rot:
+    if kf_rot:
+        rad_expr = _build_transform_keyframe_ffmpeg_expr(
+            params.keyframes.rotation_deg,
+            params.rotation_deg,
+            scale=math.pi / 180.0,
+            time_var="t",
+        )
+        fg_steps.append(f"rotate='{rad_expr}':ow=iw:oh=ih:c=black@0")
+    elif has_static_rot:
         rad = params.rotation_deg * math.pi / 180.0
         fg_steps.append(f"rotate={rad:.6f}:ow=rotw({rad:.6f}):oh=roth({rad:.6f}):c=black@0")
-    if has_opacity:
+    if has_static_opacity:
         alpha = params.opacity_pct / 100.0
         fg_steps.append(f"colorchannelmixer=aa={alpha:.4f}")
 
-    dx = params.pos_x_pct / 100.0
-    dy = params.pos_y_pct / 100.0
-    x_expr = "(W-w)/2" if math.isclose(dx, 0.0, abs_tol=1e-6) else f"(W-w)/2+W*({dx:.4f})"
-    y_expr = "(H-h)/2" if math.isclose(dy, 0.0, abs_tol=1e-6) else f"(H-h)/2+H*({dy:.4f})"
+    if kf_pos_x:
+        dx_expr = _build_transform_keyframe_ffmpeg_expr(
+            params.keyframes.pos_x_pct,
+            params.pos_x_pct,
+            scale=0.01,
+            lo=-1.0,
+            hi=1.0,
+            time_var="t",
+        )
+        x_expr = f"'(W-w)/2+W*({dx_expr})'"
+    else:
+        dx = params.pos_x_pct / 100.0
+        x_expr = "(W-w)/2" if math.isclose(dx, 0.0, abs_tol=1e-6) else f"(W-w)/2+W*({dx:.4f})"
+
+    if kf_pos_y:
+        dy_expr = _build_transform_keyframe_ffmpeg_expr(
+            params.keyframes.pos_y_pct,
+            params.pos_y_pct,
+            scale=0.01,
+            lo=-1.0,
+            hi=1.0,
+            time_var="t",
+        )
+        y_expr = f"'(H-h)/2+H*({dy_expr})'"
+    else:
+        dy = params.pos_y_pct / 100.0
+        y_expr = "(H-h)/2" if math.isclose(dy, 0.0, abs_tol=1e-6) else f"(H-h)/2+H*({dy:.4f})"
 
     fg_chain = ",".join(fg_steps)
-    if fg_chain:
-        graph = (
-            "split[xf_bg][xf_fg];"
-            "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
-            f"[xf_fg]{fg_chain}[xf_ov];"
-            f"[xf_blk][xf_ov]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
-        )
+    needs_overlay = bool(fg_chain) or kf_pos_x or kf_pos_y or params.has_static_transform()
+    if needs_overlay:
+        if fg_chain:
+            graph = (
+                "split[xf_bg][xf_fg];"
+                "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
+                f"[xf_fg]{fg_chain}[xf_ov];"
+                f"[xf_blk][xf_ov]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+            )
+        else:
+            graph = (
+                "split[xf_bg][xf_fg];"
+                "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
+                f"[xf_blk][xf_fg]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+            )
     else:
-        graph = (
-            "split[xf_bg][xf_fg];"
-            "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
-            f"[xf_blk][xf_fg]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+        graph = ""
+
+    if kf_opacity:
+        op_expr = _build_transform_keyframe_ffmpeg_expr(
+            params.keyframes.opacity_pct,
+            params.opacity_pct,
+            scale=0.01,
+            lo=0.0,
+            hi=1.0,
+            time_var="T",
         )
+        op_stage = (
+            "split[xf_op_bg][xf_op_fg];"
+            "[xf_op_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_op_blk];"
+            f"[xf_op_blk][xf_op_fg]blend=all_expr='A*(1-({op_expr}))+B*({op_expr})'"
+        )
+        graph = f"{graph},{op_stage}" if graph else op_stage
 
     if dz_graph is not None:
-        graph = f"{dz_graph},{graph}"
+        graph = f"{dz_graph},{graph}" if graph else dz_graph
     if pix_fmt is not None:
-        graph = f"{graph},format={pix_fmt}"
-    return graph
+        graph = f"{graph},format={pix_fmt}" if graph else f"format={pix_fmt}"
+    return graph or None
 
 
 def compile_transform_filter_result(
@@ -2260,6 +2401,9 @@ def compile_transform_filter_result(
         filtergraph=fg,
         ffmpeg_vf_args=["-vf", fg] if fg else [],
         is_identity=(fg == ""),
+        has_keyframes=params.has_keyframes(),
+        keyframe_count=params.keyframes.total_count(),
+        keyframed_params=list(params.keyframes.keyframed_params()),
         params=params,
     )
 

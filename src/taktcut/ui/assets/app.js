@@ -10,6 +10,7 @@ import {
   drawStereoVuMeterCanvas,
   drawTimelineCanvas,
   drawTimelineOverviewCanvas,
+  drawTransformGraphCanvas,
   findActiveSubtitleCue,
   framesToSmpte
 } from "./canvas.js";
@@ -53,9 +54,12 @@ import {
   TRACK_PAN_MIN,
   TRACK_VOLUME_DB_MAX,
   TRACK_VOLUME_DB_MIN,
+  TRANSFORM_BEZIER_PRESETS,
+  TRANSFORM_KEYFRAME_PARAMS,
   TRANSFORM_OPACITY_DEFAULT,
   TRANSFORM_OPACITY_MAX,
   TRANSFORM_OPACITY_MIN,
+  TRANSFORM_PARAM_BOUNDS,
   TRANSFORM_POS_DEFAULT,
   TRANSFORM_POS_MAX,
   TRANSFORM_POS_MIN,
@@ -74,6 +78,7 @@ import {
   appendStillBounded,
   buildSourceTapeSegments,
   classifyMediaPoolEntry,
+  clearTransformParamKeyframesInDocument,
   cloneTimelineDoc,
   collectSnapTargets,
   clampSplitWipePercent,
@@ -89,10 +94,13 @@ import {
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
   createDefaultColorNodeTree,
+  createEmptyTransformKeyframes,
   createStillRecord,
   deleteMarkerInDocument,
   deserializeColorNodeFromApi,
   estimateRenderFileSize,
+  evaluateClipTransformAtTime,
+  evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
   filterMediaPoolEntries,
   filterTimelineClips,
@@ -111,9 +119,11 @@ import {
   getAspectRatioPreset,
   getClipTrimBounds,
   getSelectedColorNode,
+  getTransformKeyframeCount,
   getTransformPresetClient,
   getTransitionPresetName,
   hasSplittableClipAtFrame,
+  hasTransformKeyframes,
   insertClipAtFrameInDocument,
   isClipTransformIdentity,
   isColorNodeIdentity,
@@ -136,8 +146,10 @@ import {
   parseCubeLutTextClient,
   removeColorNodeFromTree,
   removeStillById,
+  removeTransformKeyframeInDocument,
   resetAllTracksMixerInDocument,
   resolveSourceTapeFrame,
+  resolveTransformKeyframeBezier,
   rippleDeleteClipInDocument,
   sanitizeStillDataUrl,
   selectColorNodeInTree,
@@ -162,6 +174,8 @@ import {
   updateColorNodeInTree,
   updateMarkerInDocument,
   updateTrackMixerInDocument,
+  updateTransformKeyframeBezierInDocument,
+  upsertTransformKeyframeInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -331,6 +345,10 @@ const state = {
   timelineDragFixedMaxFrame: null,
   timelineUndoStack: [],
   timelineRedoStack: [],
+  tfGraphParam: "zoom_pct",
+  tfGraphMode: "value",
+  tfGraphSelectedKfIdx: 0,
+  tfGraphDrawMeta: null,
   playheadFrame: 25,
   timelineMaxFrame: 500,
   ioRange: { in_frame: null, out_frame: null },
@@ -900,6 +918,9 @@ function updatePlayheadReadout() {
   }
   updateTitleTimingBadges();
   updateSubtitleTimingBadges();
+  if (state.activeTab === "timeline" && state.timelineDoc) {
+    renderTimelineTransformInspector();
+  }
 }
 
 function redrawActiveCanvases() {
@@ -2244,6 +2265,17 @@ function renderTimelineRetimeInspector() {
   }
 }
 
+function getSelectedClipLocalContext() {
+  const doc = state.timelineDoc;
+  const info = getSelectedClipTrack();
+  if (!doc || !info || !info.clip || info.clip.media_type === "audio") return null;
+  const fpsRate = doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+  const durS = Math.max(0.2, (info.clip.duration_frames || 0) / fpsRate);
+  const rawLocalS = (state.playheadFrame - (info.clip.start_frame || 0)) / fpsRate;
+  const localTimeS = Number(Math.max(0, Math.min(durS, rawLocalS)).toFixed(4));
+  return { ...info, fpsRate, durS, localTimeS };
+}
+
 function renderTimelineTransformInspector() {
   const ctrlBox = byId("clip-transform-controls");
   const badge = byId("clip-transform-badge");
@@ -2266,11 +2298,26 @@ function renderTimelineTransformInspector() {
   const opRst = byId("btn-clip-transform-opacity-reset");
   const dzSel = byId("clip-transform-dynamic-zoom");
   const presetBtns = document.querySelectorAll(".transform-preset-btn");
+  const kfDiamondBtns = document.querySelectorAll(".kf-diamond-btn");
+  const graphParamBtns = document.querySelectorAll(".transform-graph-param-btn");
+  const graphModeBtns = document.querySelectorAll(".transform-graph-mode-btn");
+  const bezierPresetBtns = document.querySelectorAll(".transform-bezier-btn");
+  const kfPrevBtn = byId("btn-tf-kf-prev");
+  const kfToggleBtn = byId("btn-tf-kf-toggle");
+  const kfNextBtn = byId("btn-tf-kf-next");
+  const kfClearBtn = byId("btn-tf-kf-clear");
+  const bzX1 = byId("tf-bezier-x1");
+  const bzY1 = byId("tf-bezier-y1");
+  const bzX2 = byId("tf-bezier-x2");
+  const bzY2 = byId("tf-bezier-y2");
+  const kfReadout = byId("transform-kf-readout");
+  const graphCanvas = byId("transform-graph-canvas");
 
   if (!ctrlBox) return;
 
   const info = getSelectedClipTrack();
-  const hasVideoClip = Boolean(info && info.clip && info.clip.media_type !== "audio");
+  const ctx = getSelectedClipLocalContext();
+  const hasVideoClip = Boolean(ctx);
   ctrlBox.classList.toggle("is-disabled", !hasVideoClip);
   for (const el of [
     rstAllBtn,
@@ -2291,9 +2338,27 @@ function renderTimelineTransformInspector() {
     opNum,
     opRst,
     dzSel,
-    ...presetBtns
+    kfPrevBtn,
+    kfToggleBtn,
+    kfNextBtn,
+    kfClearBtn,
+    bzX1,
+    bzY1,
+    bzX2,
+    bzY2,
+    ...presetBtns,
+    ...kfDiamondBtns,
+    ...graphParamBtns,
+    ...graphModeBtns,
+    ...bezierPresetBtns
   ]) {
     if (el) el.disabled = !hasVideoClip;
+  }
+
+  for (const modeBtn of graphModeBtns) {
+    const isMode = (modeBtn.getAttribute("data-tf-graph-mode") || "value") === state.tfGraphMode;
+    modeBtn.classList.toggle("is-active", isMode);
+    modeBtn.setAttribute("aria-pressed", isMode ? "true" : "false");
   }
 
   if (!hasVideoClip) {
@@ -2312,6 +2377,27 @@ function renderTimelineTransformInspector() {
       btn.classList.remove("is-active");
       btn.setAttribute("aria-pressed", "false");
     }
+    for (const dBtn of kfDiamondBtns) {
+      dBtn.classList.remove("is-active", "has-keyframes");
+      dBtn.setAttribute("aria-pressed", "false");
+    }
+    for (const pBtn of graphParamBtns) {
+      const activeP = (pBtn.getAttribute("data-tf-graph-param") || "") === state.tfGraphParam;
+      pBtn.classList.toggle("is-active", activeP);
+      pBtn.classList.remove("has-keyframes");
+      pBtn.setAttribute("aria-pressed", activeP ? "true" : "false");
+    }
+    if (kfReadout) kfReadout.textContent = "0 KF";
+    if (graphCanvas) {
+      state.tfGraphDrawMeta = drawTransformGraphCanvas(
+        graphCanvas,
+        null,
+        state.tfGraphParam,
+        5.0,
+        0.0,
+        { mode: state.tfGraphMode, selectedKfIdx: -1 }
+      );
+    }
     if (badge) {
       badge.textContent = info ? "AUDIO ONLY" : "NO CLIP";
       badge.className = "nle-tag mono";
@@ -2319,24 +2405,129 @@ function renderTimelineTransformInspector() {
     return;
   }
 
-  const norm = normalizeClipTransform(info.clip);
-  if (zoomRange) zoomRange.value = String(norm.zoom_pct);
-  if (zoomNum && document.activeElement !== zoomNum) zoomNum.value = norm.zoom_pct.toFixed(1);
-  if (posXRange) posXRange.value = String(norm.pos_x_pct);
-  if (posXNum && document.activeElement !== posXNum) posXNum.value = norm.pos_x_pct.toFixed(1);
-  if (posYRange) posYRange.value = String(norm.pos_y_pct);
-  if (posYNum && document.activeElement !== posYNum) posYNum.value = norm.pos_y_pct.toFixed(1);
-  if (rotRange) rotRange.value = String(norm.rotation_deg);
-  if (rotNum && document.activeElement !== rotNum) rotNum.value = norm.rotation_deg.toFixed(1);
-  if (opRange) opRange.value = String(norm.opacity_pct);
-  if (opNum && document.activeElement !== opNum) opNum.value = norm.opacity_pct.toFixed(1);
+  const norm = normalizeClipTransform(ctx.clip);
+  const evalTf = evaluateClipTransformAtTime(norm, ctx.localTimeS);
+  if (zoomRange) zoomRange.value = String(evalTf.zoom_pct);
+  if (zoomNum && document.activeElement !== zoomNum) zoomNum.value = evalTf.zoom_pct.toFixed(1);
+  if (posXRange) posXRange.value = String(evalTf.pos_x_pct);
+  if (posXNum && document.activeElement !== posXNum) posXNum.value = evalTf.pos_x_pct.toFixed(1);
+  if (posYRange) posYRange.value = String(evalTf.pos_y_pct);
+  if (posYNum && document.activeElement !== posYNum) posYNum.value = evalTf.pos_y_pct.toFixed(1);
+  if (rotRange) rotRange.value = String(evalTf.rotation_deg);
+  if (rotNum && document.activeElement !== rotNum) rotNum.value = evalTf.rotation_deg.toFixed(1);
+  if (opRange) opRange.value = String(evalTf.opacity_pct);
+  if (opNum && document.activeElement !== opNum) opNum.value = evalTf.opacity_pct.toFixed(1);
   if (dzSel) dzSel.value = norm.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT;
+
+  for (const dBtn of kfDiamondBtns) {
+    const param = dBtn.getAttribute("data-kf-param") || "";
+    const lane = norm.keyframes[param] || [];
+    const atPlayhead = lane.some((kf) => Math.abs(kf.time_s - ctx.localTimeS) <= 0.02);
+    dBtn.classList.toggle("has-keyframes", lane.length > 0);
+    dBtn.classList.toggle("is-active", atPlayhead);
+    dBtn.setAttribute("aria-pressed", atPlayhead ? "true" : "false");
+  }
+
+  for (const pBtn of graphParamBtns) {
+    const param = pBtn.getAttribute("data-tf-graph-param") || "";
+    const lane = norm.keyframes[param] || [];
+    const activeP = param === state.tfGraphParam;
+    pBtn.classList.toggle("is-active", activeP);
+    pBtn.classList.toggle("has-keyframes", lane.length > 0);
+    pBtn.setAttribute("aria-pressed", activeP ? "true" : "false");
+  }
+
+  const activeLane = norm.keyframes[state.tfGraphParam] || [];
+  if (activeLane.length === 0) {
+    state.tfGraphSelectedKfIdx = -1;
+  } else {
+    const nearIdx = activeLane.findIndex((k) => Math.abs(k.time_s - ctx.localTimeS) <= 0.02);
+    if (nearIdx >= 0) {
+      state.tfGraphSelectedKfIdx = nearIdx;
+    } else if (state.tfGraphSelectedKfIdx < 0 || state.tfGraphSelectedKfIdx >= activeLane.length) {
+      state.tfGraphSelectedKfIdx = 0;
+    }
+  }
+
+  const selKf =
+    state.tfGraphSelectedKfIdx >= 0 && state.tfGraphSelectedKfIdx < activeLane.length
+      ? activeLane[state.tfGraphSelectedKfIdx]
+      : null;
+  const activeBezier = selKf
+    ? resolveTransformKeyframeBezier(selKf)
+    : [...TRANSFORM_BEZIER_PRESETS.ease_in_out];
+  const activeEasing = selKf ? selKf.easing : "ease_in_out";
+  for (const bBtn of bezierPresetBtns) {
+    const pId = bBtn.getAttribute("data-tf-bezier-preset") || "";
+    const presetArr = TRANSFORM_BEZIER_PRESETS[pId];
+    const isMatch = Boolean(
+      selKf
+        ? activeEasing === pId ||
+            (presetArr &&
+              presetArr.every((v, idx) => Math.abs(v - activeBezier[idx]) < 0.015))
+        : pId === "ease_in_out"
+    );
+    bBtn.classList.toggle("is-active", isMatch);
+    bBtn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+    bBtn.disabled = activeLane.length === 0;
+  }
+  const bzDisabled = activeLane.length === 0;
+  for (const [el, val] of [
+    [bzX1, activeBezier[0]],
+    [bzY1, activeBezier[1]],
+    [bzX2, activeBezier[2]],
+    [bzY2, activeBezier[3]]
+  ]) {
+    if (el) {
+      el.disabled = bzDisabled;
+      if (document.activeElement !== el) el.value = String(Number(val.toFixed(2)));
+    }
+  }
+
+  const hasAtCurrent = activeLane.some((k) => Math.abs(k.time_s - ctx.localTimeS) <= 0.02);
+  if (kfToggleBtn) {
+    kfToggleBtn.textContent = hasAtCurrent
+      ? t("timeline.transform.kfDel")
+      : t("timeline.transform.kfAdd");
+    kfToggleBtn.classList.toggle("is-active", hasAtCurrent);
+  }
+  if (kfPrevBtn) kfPrevBtn.disabled = activeLane.length === 0;
+  if (kfNextBtn) kfNextBtn.disabled = activeLane.length === 0;
+  if (kfClearBtn) kfClearBtn.disabled = activeLane.length === 0;
+
+  if (kfReadout) {
+    const totalKf = getTransformKeyframeCount(norm);
+    const paramMeta = TRANSFORM_PARAM_BOUNDS[state.tfGraphParam] || TRANSFORM_PARAM_BOUNDS.zoom_pct;
+    if (selKf) {
+      const bzStr = activeBezier.map((v) => v.toFixed(2)).join(",");
+      kfReadout.textContent =
+        `${paramMeta.label} KF ${state.tfGraphSelectedKfIdx + 1}/${activeLane.length}` +
+        ` @ ${selKf.time_s.toFixed(2)}s (${selKf.value.toFixed(1)}${paramMeta.unit})` +
+        ` | bezier(${bzStr}) | ${totalKf}KF`;
+    } else {
+      kfReadout.textContent =
+        `${paramMeta.label}: 0 KF @ t=${ctx.localTimeS.toFixed(2)}s` +
+        ` | ${totalKf}KF total`;
+    }
+  }
+
+  if (graphCanvas) {
+    state.tfGraphDrawMeta = drawTransformGraphCanvas(
+      graphCanvas,
+      norm,
+      state.tfGraphParam,
+      ctx.durS,
+      ctx.localTimeS,
+      { mode: state.tfGraphMode, selectedKfIdx: state.tfGraphSelectedKfIdx }
+    );
+  }
 
   for (const btn of presetBtns) {
     const pid = btn.getAttribute("data-transform-preset") || "";
     const preset = getTransformPresetClient(pid);
     const isMatch = Boolean(
       preset &&
+        !hasTransformKeyframes(norm) &&
         Math.abs(preset.zoom_pct - norm.zoom_pct) < 0.1 &&
         Math.abs(preset.pos_x_pct - norm.pos_x_pct) < 0.1 &&
         Math.abs(preset.pos_y_pct - norm.pos_y_pct) < 0.1 &&
@@ -9344,12 +9535,15 @@ function bindTimelineCanvasScrub(canvas) {
       const match = hitTestTimeline(x, y, { includeTrim: false });
       state.timelineSelected = match
         ? {
-            kind: match.kind,
+            kind: match.kind === "clip_keyframe" ? "clip" : match.kind,
             markerIndex: match.kind === "marker" && match.box ? match.box.markerIndex : undefined,
             data: match.data
           }
         : null;
-      if (match && match.kind === "transition" && match.box) {
+      if (match && match.kind === "clip_keyframe" && match.box) {
+        state.playheadFrame = match.box.frame;
+        updatePlayheadReadout();
+      } else if (match && match.kind === "transition" && match.box) {
         state.playheadFrame = match.box.cutFrame;
         updatePlayheadReadout();
       } else if (match && match.kind === "clip") {
@@ -9924,21 +10118,49 @@ function wireClipTransformInspector() {
     }
   ];
 
-  const liveUpdateTransform = (patch) => {
-    const info = getSelectedClipTrack();
-    if (!info || info.clip.media_type === "audio") return;
-    const res = updateClipTransformInDocument(
-      state.timelineDoc,
-      info.ref.trackKind,
-      info.ref.trackIndex,
-      info.ref.clipIndex,
-      patch
-    );
-    if (!res.changed) return;
+  const liveUpdateTransformField = (field, val, baseDocOverride = null, baseRefOverride = null) => {
+    const ctx = getSelectedClipLocalContext();
+    if (!ctx) return { changed: false };
+    const docSrc = baseDocOverride || state.timelineDoc;
+    const ref = baseRefOverride || ctx.ref;
+    const found = findTrackAndClip(docSrc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+    if (!found || found.clip.media_type === "audio") return { changed: false };
+    const norm = normalizeClipTransform(found.clip);
+    const lane = norm.keyframes[field] || [];
+    let res;
+    if (lane.length > 0) {
+      const nearest =
+        lane.find((k) => Math.abs(k.time_s - ctx.localTimeS) <= 0.02) ||
+        lane[Math.max(0, Math.min(lane.length - 1, state.tfGraphSelectedKfIdx))] ||
+        lane[0];
+      res = upsertTransformKeyframeInDocument(
+        docSrc,
+        ref.trackKind,
+        ref.trackIndex,
+        ref.clipIndex,
+        field,
+        {
+          time_s: ctx.localTimeS,
+          value: val,
+          easing: nearest ? nearest.easing : "ease_in_out",
+          bezier: nearest ? resolveTransformKeyframeBezier(nearest) : [...TRANSFORM_BEZIER_PRESETS.ease_in_out]
+        }
+      );
+    } else {
+      res = updateClipTransformInDocument(
+        docSrc,
+        ref.trackKind,
+        ref.trackIndex,
+        ref.clipIndex,
+        { [field]: val }
+      );
+    }
+    if (!res.changed) return res;
     state.timelineDoc = res.doc;
     state.timelineSelected = { kind: "clip", data: res.clip };
     renderTimelineSelection();
     if (state.activeTab === "timeline") redrawActiveCanvases();
+    return res;
   };
 
   for (const btn of presetBtns) {
@@ -9959,7 +10181,8 @@ function wireClipTransformInspector() {
           pos_y_pct: preset.pos_y_pct,
           rotation_deg: preset.rotation_deg,
           opacity_pct: preset.opacity_pct,
-          dynamic_zoom: preset.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT
+          dynamic_zoom: preset.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT,
+          keyframes: createEmptyTransformKeyframes()
         }
       );
       if (res.changed) {
@@ -9999,7 +10222,7 @@ function wireClipTransformInspector() {
         const val = Number.parseFloat(rangeEl.value);
         if (!Number.isFinite(val)) return;
         if (!dragSnap) dragSnap = captureTimelineSnapshot();
-        liveUpdateTransform({ [spec.field]: val });
+        liveUpdateTransformField(spec.field, val);
       });
       rangeEl.addEventListener("change", () => {
         const val = Number.parseFloat(rangeEl.value);
@@ -10022,7 +10245,7 @@ function wireClipTransformInspector() {
         const val = Number.parseFloat(numEl.value);
         if (Number.isFinite(val) && val >= spec.min && val <= spec.max) {
           if (!dragSnap) dragSnap = captureTimelineSnapshot();
-          liveUpdateTransform({ [spec.field]: val });
+          liveUpdateTransformField(spec.field, val);
         }
       });
       numEl.addEventListener("change", () => {
@@ -10041,13 +10264,7 @@ function wireClipTransformInspector() {
             ? findClipIndex(baseDoc, dragSnap.selected.data)
             : info.ref;
         if (baseRef) {
-          const res = updateClipTransformInDocument(
-            baseDoc,
-            baseRef.trackKind,
-            baseRef.trackIndex,
-            baseRef.clipIndex,
-            { [spec.field]: clamped }
-          );
+          const res = liveUpdateTransformField(spec.field, clamped, baseDoc, baseRef);
           if (res.changed) {
             commitTimelineMutation(res.doc, { kind: "clip", data: res.clip }, dragSnap);
           } else {
@@ -10063,18 +10280,356 @@ function wireClipTransformInspector() {
       rstEl.addEventListener("click", () => {
         const info = getSelectedClipTrack();
         if (!info || info.clip.media_type === "audio") return;
+        const origNorm = normalizeClipTransform(info.clip);
         const res = updateClipTransformInDocument(
           state.timelineDoc,
           info.ref.trackKind,
           info.ref.trackIndex,
           info.ref.clipIndex,
-          { [spec.field]: spec.def }
+          {
+            [spec.field]: spec.def,
+            keyframes: {
+              ...origNorm.keyframes,
+              [spec.field]: []
+            }
+          }
         );
         if (res.changed) {
           commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
         }
       });
     }
+  }
+
+  const toggleKeyframeAtPlayhead = (paramName) => {
+    const ctx = getSelectedClipLocalContext();
+    if (!ctx) return;
+    state.tfGraphParam = paramName;
+    const norm = normalizeClipTransform(ctx.clip);
+    const lane = norm.keyframes[paramName] || [];
+    const existing = lane.find((k) => Math.abs(k.time_s - ctx.localTimeS) <= 0.02);
+    let res;
+    if (existing) {
+      res = removeTransformKeyframeInDocument(
+        state.timelineDoc,
+        ctx.ref.trackKind,
+        ctx.ref.trackIndex,
+        ctx.ref.clipIndex,
+        paramName,
+        existing.time_s
+      );
+    } else {
+      const curVal = evaluateTransformParamAtTime(norm, paramName, ctx.localTimeS);
+      res = upsertTransformKeyframeInDocument(
+        state.timelineDoc,
+        ctx.ref.trackKind,
+        ctx.ref.trackIndex,
+        ctx.ref.clipIndex,
+        paramName,
+        {
+          time_s: ctx.localTimeS,
+          value: curVal,
+          easing: "ease_in_out",
+          bezier: [...TRANSFORM_BEZIER_PRESETS.ease_in_out]
+        }
+      );
+    }
+    if (res.changed) {
+      commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+    } else {
+      renderTimelineTransformInspector();
+    }
+  };
+
+  for (const dBtn of document.querySelectorAll(".kf-diamond-btn")) {
+    dBtn.addEventListener("click", () => {
+      const param = dBtn.getAttribute("data-kf-param") || "zoom_pct";
+      toggleKeyframeAtPlayhead(param);
+    });
+  }
+
+  for (const pBtn of document.querySelectorAll(".transform-graph-param-btn")) {
+    pBtn.addEventListener("click", () => {
+      const param = pBtn.getAttribute("data-tf-graph-param") || "zoom_pct";
+      if (TRANSFORM_KEYFRAME_PARAMS.includes(param)) {
+        state.tfGraphParam = param;
+        state.tfGraphSelectedKfIdx = 0;
+        renderTimelineTransformInspector();
+      }
+    });
+  }
+
+  for (const modeBtn of document.querySelectorAll(".transform-graph-mode-btn")) {
+    modeBtn.addEventListener("click", () => {
+      const mode = modeBtn.getAttribute("data-tf-graph-mode") === "speed" ? "speed" : "value";
+      state.tfGraphMode = mode;
+      renderTimelineTransformInspector();
+    });
+  }
+
+  const jumpToAdjacentKeyframe = (dir) => {
+    const ctx = getSelectedClipLocalContext();
+    if (!ctx) return;
+    const norm = normalizeClipTransform(ctx.clip);
+    const lane = norm.keyframes[state.tfGraphParam] || [];
+    if (lane.length === 0) return;
+    let target = null;
+    if (dir < 0) {
+      for (let i = lane.length - 1; i >= 0; i -= 1) {
+        if (lane[i].time_s < ctx.localTimeS - 0.02) {
+          target = { kf: lane[i], idx: i };
+          break;
+        }
+      }
+      if (!target) target = { kf: lane[0], idx: 0 };
+    } else {
+      for (let i = 0; i < lane.length; i += 1) {
+        if (lane[i].time_s > ctx.localTimeS + 0.02) {
+          target = { kf: lane[i], idx: i };
+          break;
+        }
+      }
+      if (!target) target = { kf: lane[lane.length - 1], idx: lane.length - 1 };
+    }
+    state.tfGraphSelectedKfIdx = target.idx;
+    const absFrame = Math.max(
+      0,
+      Math.min(
+        state.timelineMaxFrame,
+        Math.round((ctx.clip.start_frame || 0) + target.kf.time_s * ctx.fpsRate)
+      )
+    );
+    state.playheadFrame = absFrame;
+    updatePlayheadReadout();
+    redrawActiveCanvases();
+  };
+
+  byId("btn-tf-kf-prev")?.addEventListener("click", () => jumpToAdjacentKeyframe(-1));
+  byId("btn-tf-kf-next")?.addEventListener("click", () => jumpToAdjacentKeyframe(1));
+  byId("btn-tf-kf-toggle")?.addEventListener("click", () => {
+    toggleKeyframeAtPlayhead(state.tfGraphParam);
+  });
+  byId("btn-tf-kf-clear")?.addEventListener("click", () => {
+    const ctx = getSelectedClipLocalContext();
+    if (!ctx) return;
+    const res = clearTransformParamKeyframesInDocument(
+      state.timelineDoc,
+      ctx.ref.trackKind,
+      ctx.ref.trackIndex,
+      ctx.ref.clipIndex,
+      state.tfGraphParam
+    );
+    if (res.changed) {
+      state.tfGraphSelectedKfIdx = -1;
+      commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+    }
+  });
+
+  const applySelectedKeyframeBezier = (easing, bezier, commit = true, dragSnap = null) => {
+    const ctx = getSelectedClipLocalContext();
+    if (!ctx) return;
+    const norm = normalizeClipTransform(ctx.clip);
+    const lane = norm.keyframes[state.tfGraphParam] || [];
+    if (lane.length === 0) return;
+    const kfIdx = Math.max(0, Math.min(lane.length - 1, state.tfGraphSelectedKfIdx));
+    const res = updateTransformKeyframeBezierInDocument(
+      state.timelineDoc,
+      ctx.ref.trackKind,
+      ctx.ref.trackIndex,
+      ctx.ref.clipIndex,
+      state.tfGraphParam,
+      kfIdx,
+      easing,
+      bezier
+    );
+    if (!res.changed) return;
+    if (commit) {
+      commitTimelineMutation(res.doc, { kind: "clip", data: res.clip }, dragSnap);
+    } else {
+      state.timelineDoc = res.doc;
+      state.timelineSelected = { kind: "clip", data: res.clip };
+      renderTimelineSelection();
+      if (state.activeTab === "timeline") redrawActiveCanvases();
+    }
+  };
+
+  for (const bBtn of document.querySelectorAll(".transform-bezier-btn")) {
+    bBtn.addEventListener("click", () => {
+      const pId = bBtn.getAttribute("data-tf-bezier-preset") || "ease_in_out";
+      const preset = TRANSFORM_BEZIER_PRESETS[pId];
+      if (!preset) return;
+      const easing = pId === "snap_pop" ? "bezier" : pId;
+      applySelectedKeyframeBezier(easing, [...preset], true);
+    });
+  }
+
+  for (const bzId of ["tf-bezier-x1", "tf-bezier-y1", "tf-bezier-x2", "tf-bezier-y2"]) {
+    const el = byId(bzId);
+    if (!el) continue;
+    el.addEventListener("change", () => {
+      const x1 = Number.parseFloat(byId("tf-bezier-x1")?.value || "0.42");
+      const y1 = Number.parseFloat(byId("tf-bezier-y1")?.value || "0");
+      const x2 = Number.parseFloat(byId("tf-bezier-x2")?.value || "0.58");
+      const y2 = Number.parseFloat(byId("tf-bezier-y2")?.value || "1");
+      if (![x1, y1, x2, y2].every((v) => Number.isFinite(v))) {
+        renderTimelineTransformInspector();
+        return;
+      }
+      applySelectedKeyframeBezier(
+        "bezier",
+        [
+          Math.max(0, Math.min(1, x1)),
+          Math.max(-1.5, Math.min(2.5, y1)),
+          Math.max(0, Math.min(1, x2)),
+          Math.max(-1.5, Math.min(2.5, y2))
+        ],
+        true
+      );
+    });
+  }
+
+  const graphCanvas = byId("transform-graph-canvas");
+  if (graphCanvas) {
+    const graphPtr = { active: false, mode: null, kfIdx: -1, handleRole: null, snap: null, pointerId: null };
+    const getCanvasXY = (ev) => {
+      const rect = graphCanvas.getBoundingClientRect();
+      return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+    };
+
+    graphCanvas.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      const ctx = getSelectedClipLocalContext();
+      const meta = state.tfGraphDrawMeta;
+      if (!ctx || !meta) return;
+      const { x, y } = getCanvasXY(ev);
+
+      for (const h of meta.handles || []) {
+        if (Math.hypot(x - h.x, y - h.y) <= 11) {
+          graphPtr.active = true;
+          graphPtr.mode = "handle";
+          graphPtr.kfIdx = h.kfIdx;
+          graphPtr.handleRole = h.role;
+          graphPtr.snap = captureTimelineSnapshot();
+          graphPtr.pointerId = ev.pointerId;
+          try { graphCanvas.setPointerCapture(ev.pointerId); } catch (_) {}
+          return;
+        }
+      }
+      for (const kf of meta.keyframes || []) {
+        if (Math.hypot(x - kf.x, y - kf.y) <= 11) {
+          state.tfGraphSelectedKfIdx = kf.idx;
+          graphPtr.active = true;
+          graphPtr.mode = "keyframe";
+          graphPtr.kfIdx = kf.idx;
+          graphPtr.snap = captureTimelineSnapshot();
+          graphPtr.pointerId = ev.pointerId;
+          try { graphCanvas.setPointerCapture(ev.pointerId); } catch (_) {}
+          renderTimelineTransformInspector();
+          return;
+        }
+      }
+      const { plotRect, durationSec } = meta;
+      if (
+        x >= plotRect.x &&
+        x <= plotRect.x + plotRect.w &&
+        y >= plotRect.y &&
+        y <= plotRect.y + plotRect.h
+      ) {
+        const tClick = ((x - plotRect.x) / Math.max(1, plotRect.w)) * durationSec;
+        const absF = Math.max(
+          0,
+          Math.min(
+            state.timelineMaxFrame,
+            Math.round((ctx.clip.start_frame || 0) + tClick * ctx.fpsRate)
+          )
+        );
+        state.playheadFrame = absF;
+        updatePlayheadReadout();
+        redrawActiveCanvases();
+      }
+    });
+
+    graphCanvas.addEventListener("pointermove", (ev) => {
+      if (!graphPtr.active) return;
+      const ctx = getSelectedClipLocalContext();
+      const meta = state.tfGraphDrawMeta;
+      if (!ctx || !meta) return;
+      const { x, y } = getCanvasXY(ev);
+      const { plotRect, durationSec, yMin, yMax } = meta;
+      const norm = normalizeClipTransform(ctx.clip);
+      const lane = norm.keyframes[state.tfGraphParam] || [];
+      if (graphPtr.mode === "handle" && graphPtr.kfIdx >= 0 && graphPtr.kfIdx < lane.length - 1) {
+        const k0 = lane[graphPtr.kfIdx];
+        const k1 = lane[graphPtr.kfIdx + 1];
+        const dt = k1.time_s - k0.time_s;
+        const dv = k1.value - k0.value;
+        if (dt <= 1e-5) return;
+        const tPtr = ((x - plotRect.x) / Math.max(1, plotRect.w)) * durationSec;
+        const vPtr = yMax - ((y - plotRect.y) / Math.max(1, plotRect.h)) * (yMax - yMin);
+        const uNorm = Math.max(0, Math.min(1, (tPtr - k0.time_s) / dt));
+        const yNorm = Math.abs(dv) <= 1e-4 ? 0.5 : Math.max(-1.5, Math.min(2.5, (vPtr - k0.value) / dv));
+        const bz = resolveTransformKeyframeBezier(k0);
+        if (graphPtr.handleRole === "p1") {
+          bz[0] = Number(uNorm.toFixed(4));
+          bz[1] = Number(yNorm.toFixed(4));
+        } else {
+          bz[2] = Number(uNorm.toFixed(4));
+          bz[3] = Number(yNorm.toFixed(4));
+        }
+        applySelectedKeyframeBezier("bezier", bz, false);
+      } else if (graphPtr.mode === "keyframe" && graphPtr.kfIdx >= 0 && graphPtr.kfIdx < lane.length) {
+        const curKf = lane[graphPtr.kfIdx];
+        const bounds = TRANSFORM_PARAM_BOUNDS[state.tfGraphParam] || TRANSFORM_PARAM_BOUNDS.zoom_pct;
+        const tRaw = Math.max(0, Math.min(durationSec, ((x - plotRect.x) / Math.max(1, plotRect.w)) * durationSec));
+        const nextVal =
+          meta.mode === "value"
+            ? Math.max(bounds.min, Math.min(bounds.max, yMax - ((y - plotRect.y) / Math.max(1, plotRect.h)) * (yMax - yMin)))
+            : curKf.value;
+        const prevT = graphPtr.kfIdx > 0 ? lane[graphPtr.kfIdx - 1].time_s + 0.04 : 0;
+        const nextT = graphPtr.kfIdx < lane.length - 1 ? lane[graphPtr.kfIdx + 1].time_s - 0.04 : durationSec;
+        const clampedT = Math.max(prevT, Math.min(nextT, tRaw));
+        const nextLane = lane.map((item, idx) =>
+          idx === graphPtr.kfIdx
+            ? { ...item, time_s: Number(clampedT.toFixed(4)), value: Number(nextVal.toFixed(2)) }
+            : item
+        );
+        const res = updateClipTransformInDocument(
+          state.timelineDoc,
+          ctx.ref.trackKind,
+          ctx.ref.trackIndex,
+          ctx.ref.clipIndex,
+          {
+            keyframes: {
+              ...norm.keyframes,
+              [state.tfGraphParam]: nextLane
+            }
+          }
+        );
+        if (res.changed) {
+          state.timelineDoc = res.doc;
+          state.timelineSelected = { kind: "clip", data: res.clip };
+          renderTimelineSelection();
+          redrawActiveCanvases();
+        }
+      }
+    });
+
+    const endGraphPtr = (ev) => {
+      if (!graphPtr.active) return;
+      if (graphPtr.snap) {
+        pushUndoSnapshot(graphPtr.snap);
+        updateTimelineToolbarUI();
+      }
+      if (graphPtr.pointerId !== null) {
+        try { graphCanvas.releasePointerCapture(graphPtr.pointerId); } catch (_) {}
+      }
+      graphPtr.active = false;
+      graphPtr.mode = null;
+      graphPtr.snap = null;
+      graphPtr.pointerId = null;
+    };
+    graphCanvas.addEventListener("pointerup", endGraphPtr);
+    graphCanvas.addEventListener("pointercancel", endGraphPtr);
   }
 
   if (rstAllBtn) {
@@ -10092,10 +10647,12 @@ function wireClipTransformInspector() {
           pos_y_pct: TRANSFORM_POS_DEFAULT,
           rotation_deg: TRANSFORM_ROT_DEFAULT,
           opacity_pct: TRANSFORM_OPACITY_DEFAULT,
-          dynamic_zoom: DYNAMIC_ZOOM_DEFAULT
+          dynamic_zoom: DYNAMIC_ZOOM_DEFAULT,
+          keyframes: createEmptyTransformKeyframes()
         }
       );
       if (res.changed) {
+        state.tfGraphSelectedKfIdx = -1;
         commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
       }
     });

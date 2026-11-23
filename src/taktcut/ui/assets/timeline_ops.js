@@ -143,6 +143,40 @@ export const TRANSITION_PRESETS = [
   { id: "zoomin", name: "Smooth Zoom", shortTag: "ZOOM" }
 ];
 
+export const TRANSFORM_KEYFRAME_PARAMS = Object.freeze([
+  "zoom_pct",
+  "pos_x_pct",
+  "pos_y_pct",
+  "rotation_deg",
+  "opacity_pct"
+]);
+
+export const TRANSFORM_PARAM_BOUNDS = Object.freeze({
+  zoom_pct: Object.freeze({ min: 10, max: 300, def: 100, label: "Zoom", unit: "%" }),
+  pos_x_pct: Object.freeze({ min: -100, max: 100, def: 0, label: "Pos X", unit: "%" }),
+  pos_y_pct: Object.freeze({ min: -100, max: 100, def: 0, label: "Pos Y", unit: "%" }),
+  rotation_deg: Object.freeze({ min: -180, max: 180, def: 0, label: "Rot", unit: "deg" }),
+  opacity_pct: Object.freeze({ min: 0, max: 100, def: 100, label: "Opacity", unit: "%" })
+});
+
+export const TRANSFORM_EASINGS = Object.freeze([
+  "linear",
+  "ease_in",
+  "ease_out",
+  "ease_in_out",
+  "bezier"
+]);
+
+export const TRANSFORM_BEZIER_PRESETS = Object.freeze({
+  linear: Object.freeze([0.0, 0.0, 1.0, 1.0]),
+  ease_in: Object.freeze([0.42, 0.0, 1.0, 1.0]),
+  ease_out: Object.freeze([0.0, 0.0, 0.58, 1.0]),
+  ease_in_out: Object.freeze([0.42, 0.0, 0.58, 1.0]),
+  snap_pop: Object.freeze([0.16, 1.0, 0.3, 1.0])
+});
+
+export const MAX_TRANSFORM_KEYFRAMES_PER_PARAM = 64;
+
 export const TRANSFORM_PRESETS = [
   {
     id: "full_frame",
@@ -463,6 +497,188 @@ export function getDynamicZoomShortTag(presetId) {
   return found ? found.shortTag : "OFF";
 }
 
+function _cubicBezierCoord(s, p1, p2) {
+  const inv = 1.0 - s;
+  return 3.0 * inv * inv * s * p1 + 3.0 * inv * s * s * p2 + s * s * s;
+}
+
+function _cubicBezierSlope(s, p1, p2) {
+  const inv = 1.0 - s;
+  return 3.0 * inv * inv * p1 + 6.0 * inv * s * (p2 - p1) + 3.0 * s * s * (1.0 - p2);
+}
+
+export function solveCubicBezierS(u, x1, x2) {
+  const uc = Math.max(0.0, Math.min(1.0, Number.isFinite(u) ? u : 0));
+  if (uc <= 0.0) return 0.0;
+  if (uc >= 1.0) return 1.0;
+  let lo = 0.0;
+  let hi = 1.0;
+  let s = uc;
+  for (let i = 0; i < 8; i += 1) {
+    const err = _cubicBezierCoord(s, x1, x2) - uc;
+    if (Math.abs(err) < 1e-6) return s;
+    if (err < 0.0) lo = s;
+    else hi = s;
+    const dx = _cubicBezierSlope(s, x1, x2);
+    if (Math.abs(dx) > 1e-6) {
+      const cand = s - err / dx;
+      if (cand > lo && cand < hi) {
+        s = cand;
+        continue;
+      }
+    }
+    s = 0.5 * (lo + hi);
+  }
+  for (let i = 0; i < 16; i += 1) {
+    const err = _cubicBezierCoord(s, x1, x2) - uc;
+    if (Math.abs(err) < 1e-6) return s;
+    if (err < 0.0) lo = s;
+    else hi = s;
+    s = 0.5 * (lo + hi);
+  }
+  return s;
+}
+
+export function evaluateCubicBezier(u, x1, y1, x2, y2) {
+  const uc = Math.max(0.0, Math.min(1.0, Number.isFinite(u) ? u : 0));
+  if (uc <= 0.0) return 0.0;
+  if (uc >= 1.0) return 1.0;
+  if (Math.abs(x1 - y1) <= 1e-7 && Math.abs(x2 - y2) <= 1e-7) return uc;
+  const s = solveCubicBezierS(uc, x1, x2);
+  return _cubicBezierCoord(s, y1, y2);
+}
+
+export function evaluateCubicBezierDerivative(u, x1, y1, x2, y2) {
+  const uc = Math.max(0.0, Math.min(1.0, Number.isFinite(u) ? u : 0));
+  if (Math.abs(x1 - y1) <= 1e-7 && Math.abs(x2 - y2) <= 1e-7) return 1.0;
+  const s = solveCubicBezierS(uc, x1, x2);
+  const dx = _cubicBezierSlope(s, x1, x2);
+  const dy = _cubicBezierSlope(s, y1, y2);
+  if (Math.abs(dx) <= 1e-5) {
+    if (Math.abs(dy) <= 1e-5) return 0.0;
+    return dy >= 0 ? 12.0 : -12.0;
+  }
+  return dy / dx;
+}
+
+export function createEmptyTransformKeyframes() {
+  return {
+    zoom_pct: [],
+    pos_x_pct: [],
+    pos_y_pct: [],
+    rotation_deg: [],
+    opacity_pct: []
+  };
+}
+
+export function resolveTransformKeyframeBezier(kf) {
+  const easing = kf && typeof kf.easing === "string" ? kf.easing.trim().toLowerCase() : "ease_in_out";
+  if (easing === "bezier" && kf && Array.isArray(kf.bezier) && kf.bezier.length === 4) {
+    const x1 = clampNum(Number(kf.bezier[0]), 0.0, 1.0);
+    const y1 = clampNum(Number(kf.bezier[1]), -1.5, 2.5);
+    const x2 = clampNum(Number(kf.bezier[2]), 0.0, 1.0);
+    const y2 = clampNum(Number(kf.bezier[3]), -1.5, 2.5);
+    if ([x1, y1, x2, y2].every((v) => Number.isFinite(v))) {
+      return [
+        Number(x1.toFixed(4)),
+        Number(y1.toFixed(4)),
+        Number(x2.toFixed(4)),
+        Number(y2.toFixed(4))
+      ];
+    }
+  }
+  const preset = TRANSFORM_BEZIER_PRESETS[easing] || TRANSFORM_BEZIER_PRESETS.ease_in_out;
+  return [...preset];
+}
+
+export function normalizeTransformKeyframe(rawKf, paramName) {
+  const bounds = TRANSFORM_PARAM_BOUNDS[paramName] || TRANSFORM_PARAM_BOUNDS.zoom_pct;
+  const src = rawKf && typeof rawKf === "object" ? rawKf : {};
+  const rawTime = Number(src.time_s);
+  const rawVal = Number(src.value);
+  const timeS = Number.isFinite(rawTime) ? clampNum(rawTime, 0, 3600) : 0;
+  const val = Number.isFinite(rawVal) ? clampNum(rawVal, bounds.min, bounds.max) : bounds.def;
+  const rawEasing = typeof src.easing === "string" ? src.easing.trim().toLowerCase() : "ease_in_out";
+  const easing = TRANSFORM_EASINGS.includes(rawEasing) ? rawEasing : "ease_in_out";
+  const bezier =
+    Array.isArray(src.bezier) && src.bezier.length === 4 && src.bezier.every((v) => Number.isFinite(Number(v)))
+      ? [
+          Number(clampNum(Number(src.bezier[0]), 0, 1).toFixed(4)),
+          Number(clampNum(Number(src.bezier[1]), -1.5, 2.5).toFixed(4)),
+          Number(clampNum(Number(src.bezier[2]), 0, 1).toFixed(4)),
+          Number(clampNum(Number(src.bezier[3]), -1.5, 2.5).toFixed(4))
+        ]
+      : [...(TRANSFORM_BEZIER_PRESETS[easing] || TRANSFORM_BEZIER_PRESETS.ease_in_out)];
+  return {
+    time_s: Number(timeS.toFixed(4)),
+    value: Number(val.toFixed(4)),
+    easing,
+    bezier
+  };
+}
+
+export function normalizeTransformKeyframes(rawKeyframes) {
+  const out = createEmptyTransformKeyframes();
+  const src = rawKeyframes && typeof rawKeyframes === "object" ? rawKeyframes : {};
+  for (const param of TRANSFORM_KEYFRAME_PARAMS) {
+    const rawLane = Array.isArray(src[param]) ? src[param] : [];
+    const normalized = rawLane
+      .slice(0, MAX_TRANSFORM_KEYFRAMES_PER_PARAM)
+      .map((kf) => normalizeTransformKeyframe(kf, param))
+      .sort((a, b) => a.time_s - b.time_s);
+    const deduped = [];
+    for (const kf of normalized) {
+      if (deduped.length > 0 && Math.abs(deduped[deduped.length - 1].time_s - kf.time_s) <= 1e-4) {
+        deduped[deduped.length - 1] = kf;
+      } else {
+        deduped.push(kf);
+      }
+    }
+    out[param] = deduped;
+  }
+  return out;
+}
+
+export function hasTransformKeyframes(transformOrClip) {
+  const tf =
+    transformOrClip && transformOrClip.transform && typeof transformOrClip.transform === "object"
+      ? transformOrClip.transform
+      : transformOrClip;
+  if (!tf || !tf.keyframes || typeof tf.keyframes !== "object") return false;
+  return TRANSFORM_KEYFRAME_PARAMS.some(
+    (p) => Array.isArray(tf.keyframes[p]) && tf.keyframes[p].length > 0
+  );
+}
+
+export function getTransformKeyframeCount(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return TRANSFORM_KEYFRAME_PARAMS.reduce(
+    (acc, p) => acc + (Array.isArray(norm.keyframes[p]) ? norm.keyframes[p].length : 0),
+    0
+  );
+}
+
+export function getTransformKeyframedParams(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return TRANSFORM_KEYFRAME_PARAMS.filter(
+    (p) => Array.isArray(norm.keyframes[p]) && norm.keyframes[p].length > 0
+  );
+}
+
+export function getAllTransformKeyframeTimes(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  const times = [];
+  for (const p of TRANSFORM_KEYFRAME_PARAMS) {
+    for (const kf of norm.keyframes[p] || []) {
+      const t = Number(kf.time_s);
+      if (Number.isFinite(t) && !times.some((ex) => Math.abs(ex - t) < 0.005)) {
+        times.push(t);
+      }
+    }
+  }
+  return times.sort((a, b) => a - b);
+}
+
 export function normalizeClipTransform(clipOrTransform) {
   const src =
     clipOrTransform && clipOrTransform.transform && typeof clipOrTransform.transform === "object"
@@ -473,7 +689,8 @@ export function normalizeClipTransform(clipOrTransform) {
             clipOrTransform.pos_y_pct !== undefined ||
             clipOrTransform.rotation_deg !== undefined ||
             clipOrTransform.opacity_pct !== undefined ||
-            clipOrTransform.dynamic_zoom !== undefined)
+            clipOrTransform.dynamic_zoom !== undefined ||
+            clipOrTransform.keyframes !== undefined)
         ? clipOrTransform
         : {};
   const numOr = (raw, fallback) =>
@@ -488,13 +705,15 @@ export function normalizeClipTransform(clipOrTransform) {
     TRANSFORM_OPACITY_MAX
   );
   const dynamicZoom = normalizeDynamicZoomPreset(src.dynamic_zoom);
+  const keyframes = normalizeTransformKeyframes(src.keyframes);
   return {
     zoom_pct: Number(zoom.toFixed(1)),
     pos_x_pct: Number(posX.toFixed(1)),
     pos_y_pct: Number(posY.toFixed(1)),
     rotation_deg: Number(rot.toFixed(1)),
     opacity_pct: Number(opacity.toFixed(1)),
-    dynamic_zoom: dynamicZoom
+    dynamic_zoom: dynamicZoom,
+    keyframes
   };
 }
 
@@ -511,7 +730,85 @@ export function hasStaticClipTransform(transformOrClip) {
 
 export function isClipTransformIdentity(transformOrClip) {
   const norm = normalizeClipTransform(transformOrClip);
-  return !hasStaticClipTransform(norm) && norm.dynamic_zoom === DYNAMIC_ZOOM_DEFAULT;
+  return (
+    !hasStaticClipTransform(norm) &&
+    norm.dynamic_zoom === DYNAMIC_ZOOM_DEFAULT &&
+    !hasTransformKeyframes(norm)
+  );
+}
+
+export function evaluateTransformParamAtTime(transformOrClip, paramName, timeSec) {
+  const norm = normalizeClipTransform(transformOrClip);
+  const bounds = TRANSFORM_PARAM_BOUNDS[paramName] || TRANSFORM_PARAM_BOUNDS.zoom_pct;
+  const fallback = Number.isFinite(Number(norm[paramName])) ? Number(norm[paramName]) : bounds.def;
+  const lane = norm.keyframes && Array.isArray(norm.keyframes[paramName]) ? norm.keyframes[paramName] : [];
+  if (lane.length === 0) return fallback;
+  const t = Math.max(0, Number.isFinite(Number(timeSec)) ? Number(timeSec) : 0);
+  if (t <= lane[0].time_s) return lane[0].value;
+  const last = lane[lane.length - 1];
+  if (t >= last.time_s) return last.value;
+  for (let i = 0; i < lane.length - 1; i += 1) {
+    const k0 = lane[i];
+    const k1 = lane[i + 1];
+    if (t <= k1.time_s) {
+      const dt = k1.time_s - k0.time_s;
+      if (dt <= 1e-6) return k1.value;
+      const u = (t - k0.time_s) / dt;
+      const [x1, y1, x2, y2] = resolveTransformKeyframeBezier(k0);
+      const w = evaluateCubicBezier(u, x1, y1, x2, y2);
+      return clampNum(k0.value + (k1.value - k0.value) * w, bounds.min, bounds.max);
+    }
+  }
+  return last.value;
+}
+
+export function evaluateTransformParamSpeedAtTime(transformOrClip, paramName, timeSec) {
+  const norm = normalizeClipTransform(transformOrClip);
+  const lane = norm.keyframes && Array.isArray(norm.keyframes[paramName]) ? norm.keyframes[paramName] : [];
+  if (lane.length < 2) return 0;
+  const t = Math.max(0, Number.isFinite(Number(timeSec)) ? Number(timeSec) : 0);
+  if (t < lane[0].time_s || t > lane[lane.length - 1].time_s) return 0;
+  for (let i = 0; i < lane.length - 1; i += 1) {
+    const k0 = lane[i];
+    const k1 = lane[i + 1];
+    if (t <= k1.time_s) {
+      const dt = k1.time_s - k0.time_s;
+      if (dt <= 1e-6) return 0;
+      const u = (t - k0.time_s) / dt;
+      const [x1, y1, x2, y2] = resolveTransformKeyframeBezier(k0);
+      const dyDu = evaluateCubicBezierDerivative(u, x1, y1, x2, y2);
+      return ((k1.value - k0.value) / dt) * dyDu;
+    }
+  }
+  return 0;
+}
+
+export function evaluateClipTransformAtTime(transformOrClip, timeSec) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return {
+    zoom_pct: evaluateTransformParamAtTime(norm, "zoom_pct", timeSec),
+    pos_x_pct: evaluateTransformParamAtTime(norm, "pos_x_pct", timeSec),
+    pos_y_pct: evaluateTransformParamAtTime(norm, "pos_y_pct", timeSec),
+    rotation_deg: evaluateTransformParamAtTime(norm, "rotation_deg", timeSec),
+    opacity_pct: evaluateTransformParamAtTime(norm, "opacity_pct", timeSec),
+    dynamic_zoom: norm.dynamic_zoom,
+    keyframes: norm.keyframes
+  };
+}
+
+export function sampleTransformCurve(transformOrClip, paramName, durationSec, count = 64) {
+  const dur = Math.max(0.2, Number.isFinite(Number(durationSec)) ? Number(durationSec) : 5.0);
+  const n = Math.max(8, Math.min(256, Math.round(count)));
+  const out = [];
+  for (let i = 0; i <= n; i += 1) {
+    const t = (dur * i) / n;
+    out.push({
+      time_s: Number(t.toFixed(4)),
+      value: evaluateTransformParamAtTime(transformOrClip, paramName, t),
+      speed: evaluateTransformParamSpeedAtTime(transformOrClip, paramName, t)
+    });
+  }
+  return out;
 }
 
 export function getTransformPresetClient(presetId) {
@@ -538,6 +835,10 @@ export function formatTransformBadgeText(transformOrClip) {
   }
   if (norm.dynamic_zoom && norm.dynamic_zoom !== DYNAMIC_ZOOM_DEFAULT) {
     parts.push(getDynamicZoomShortTag(norm.dynamic_zoom));
+  }
+  const kfCount = getTransformKeyframeCount(norm);
+  if (kfCount > 0) {
+    parts.push(`${kfCount}KF`);
   }
   return parts.join(" ");
 }
@@ -582,18 +883,76 @@ export function compileDynamicZoomFilterClient(presetId, clipDurationS = null) {
   );
 }
 
+function _buildBezierSegmentFfmpegExprClient(uExpr, v0, v1, bezier) {
+  const dv = v1 - v0;
+  if (Math.abs(dv) <= 1e-7) return v0.toFixed(6);
+  const [x1, y1, x2, y2] = bezier;
+  if (Math.abs(x1 - y1) <= 1e-5 && Math.abs(x2 - y2) <= 1e-5) {
+    return `(${v0.toFixed(6)}+(${dv.toFixed(6)})*${uExpr})`;
+  }
+  const knots = [0.0, 0.25, 0.5, 0.75, 1.0];
+  const vals = knots.map((k) => v0 + dv * evaluateCubicBezier(k, x1, y1, x2, y2));
+  let expr = `(${vals[3].toFixed(6)}+(${((vals[4] - vals[3]) / 0.25).toFixed(6)})*(${uExpr}-0.75))`;
+  for (const idx of [2, 1, 0]) {
+    const kLo = knots[idx];
+    const kHi = knots[idx + 1];
+    const slope = (vals[idx + 1] - vals[idx]) / 0.25;
+    const seg = `(${vals[idx].toFixed(6)}+(${slope.toFixed(6)})*(${uExpr}-${kLo.toFixed(2)}))`;
+    expr = `if(lt(${uExpr},${kHi.toFixed(2)}),${seg},${expr})`;
+  }
+  return expr;
+}
+
+function _buildTransformKeyframeFfmpegExprClient(keyframes, staticVal, scale = 1.0, lo = null, hi = null, timeVar = "t") {
+  if (!Array.isArray(keyframes) || keyframes.length === 0) {
+    return (staticVal * scale).toFixed(6);
+  }
+  const ordered = [...keyframes].sort((a, b) => a.time_s - b.time_s);
+  if (ordered.length === 1) {
+    return (ordered[0].value * scale).toFixed(6);
+  }
+  let expr = (ordered[ordered.length - 1].value * scale).toFixed(6);
+  for (let idx = ordered.length - 2; idx >= 0; idx -= 1) {
+    const k0 = ordered[idx];
+    const k1 = ordered[idx + 1];
+    const v0 = k0.value * scale;
+    const v1 = k1.value * scale;
+    const dt = k1.time_s - k0.time_s;
+    let segExpr;
+    if (dt <= 1e-6) {
+      segExpr = v1.toFixed(6);
+    } else {
+      const u = `clip((${timeVar}-${k0.time_s.toFixed(4)})/${dt.toFixed(4)},0,1)`;
+      segExpr = _buildBezierSegmentFfmpegExprClient(u, v0, v1, resolveTransformKeyframeBezier(k0));
+    }
+    expr = `if(lt(${timeVar},${k1.time_s.toFixed(4)}),${segExpr},${expr})`;
+  }
+  const firstV = (ordered[0].value * scale).toFixed(6);
+  const fullExpr = `if(lte(${timeVar},${ordered[0].time_s.toFixed(4)}),${firstV},${expr})`;
+  if (lo !== null && hi !== null) {
+    return `clip(${fullExpr},${lo.toFixed(4)},${hi.toFixed(4)})`;
+  }
+  return fullExpr;
+}
+
 export function compileTransformFilterClient(params, pixFmt = null, clipDurationS = null) {
   const norm = normalizeClipTransform(params);
   const isIdentity = isClipTransformIdentity(norm);
+  const hasKfs = hasTransformKeyframes(norm);
+  const kfCount = getTransformKeyframeCount(norm);
+  const kfParams = getTransformKeyframedParams(norm);
   if (isIdentity) {
     return {
       filtergraph: "",
       ffmpeg_vf_args: [],
       is_identity: true,
+      has_keyframes: false,
+      keyframe_count: 0,
+      keyframed_params: [],
       params: norm
     };
   }
-  if (norm.opacity_pct <= 1e-6) {
+  if (!hasKfs && norm.opacity_pct <= 1e-6) {
     const parts = ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill", "setsar=1"];
     if (pixFmt) parts.push(`format=${pixFmt}`);
     const fg = parts.join(",");
@@ -601,53 +960,130 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
       filtergraph: fg,
       ffmpeg_vf_args: ["-vf", fg],
       is_identity: false,
+      has_keyframes: false,
+      keyframe_count: 0,
+      keyframed_params: [],
       params: norm
     };
   }
   const dzGraph = compileDynamicZoomFilterClient(norm.dynamic_zoom, clipDurationS);
-  if (!hasStaticClipTransform(norm) && dzGraph) {
+  if (!hasKfs && !hasStaticClipTransform(norm) && dzGraph) {
     const fg = pixFmt ? `${dzGraph},format=${pixFmt}` : dzGraph;
     return {
       filtergraph: fg,
       ffmpeg_vf_args: ["-vf", fg],
       is_identity: false,
+      has_keyframes: false,
+      keyframe_count: 0,
+      keyframed_params: [],
       params: norm
     };
   }
+  const kfZoom = norm.keyframes.zoom_pct.length > 0;
+  const kfPosX = norm.keyframes.pos_x_pct.length > 0;
+  const kfPosY = norm.keyframes.pos_y_pct.length > 0;
+  const kfRot = norm.keyframes.rotation_deg.length > 0;
+  const kfOpacity = norm.keyframes.opacity_pct.length > 0;
+
   const fgSteps = [];
-  if (Math.abs(norm.zoom_pct - 100.0) > 1e-4) {
+  if (kfZoom) {
+    const zExpr = _buildTransformKeyframeFfmpegExprClient(
+      norm.keyframes.zoom_pct,
+      norm.zoom_pct,
+      0.01,
+      0.1,
+      3.0,
+      "t"
+    );
+    fgSteps.push(`scale=w='trunc(iw*(${zExpr})/2)*2':h='trunc(ih*(${zExpr})/2)*2':eval=frame:flags=lanczos`);
+  } else if (Math.abs(norm.zoom_pct - 100.0) > 1e-4) {
     const zScale = norm.zoom_pct / 100.0;
     fgSteps.push(
       `scale=w=ceil(iw*${zScale.toFixed(6)}/2)*2:h=ceil(ih*${zScale.toFixed(6)}/2)*2:flags=lanczos`
     );
   }
-  const hasRot = Math.abs(norm.rotation_deg) > 1e-4;
-  const hasOpacity = Math.abs(norm.opacity_pct - 100.0) > 1e-4;
-  if (hasRot || hasOpacity) {
+  const hasStaticRot = !kfRot && Math.abs(norm.rotation_deg) > 1e-4;
+  const hasStaticOpacity = !kfOpacity && Math.abs(norm.opacity_pct - 100.0) > 1e-4;
+  if (kfRot || hasStaticRot || hasStaticOpacity) {
     fgSteps.push("format=yuva420p");
   }
-  if (hasRot) {
+  if (kfRot) {
+    const radExpr = _buildTransformKeyframeFfmpegExprClient(
+      norm.keyframes.rotation_deg,
+      norm.rotation_deg,
+      Math.PI / 180.0,
+      null,
+      null,
+      "t"
+    );
+    fgSteps.push(`rotate='${radExpr}':ow=iw:oh=ih:c=black@0`);
+  } else if (hasStaticRot) {
     const rad = (norm.rotation_deg * Math.PI) / 180.0;
     fgSteps.push(`rotate=${rad.toFixed(6)}:ow=rotw(${rad.toFixed(6)}):oh=roth(${rad.toFixed(6)}):c=black@0`);
   }
-  if (hasOpacity) {
+  if (hasStaticOpacity) {
     const alpha = norm.opacity_pct / 100.0;
     fgSteps.push(`colorchannelmixer=aa=${alpha.toFixed(4)}`);
   }
-  const dx = norm.pos_x_pct / 100.0;
-  const dy = norm.pos_y_pct / 100.0;
-  const xExpr = Math.abs(dx) <= 1e-6 ? "(W-w)/2" : `(W-w)/2+W*(${dx.toFixed(4)})`;
-  const yExpr = Math.abs(dy) <= 1e-6 ? "(H-h)/2" : `(H-h)/2+H*(${dy.toFixed(4)})`;
+  let xExpr;
+  if (kfPosX) {
+    const dxExpr = _buildTransformKeyframeFfmpegExprClient(
+      norm.keyframes.pos_x_pct,
+      norm.pos_x_pct,
+      0.01,
+      -1.0,
+      1.0,
+      "t"
+    );
+    xExpr = `'(W-w)/2+W*(${dxExpr})'`;
+  } else {
+    const dx = norm.pos_x_pct / 100.0;
+    xExpr = Math.abs(dx) <= 1e-6 ? "(W-w)/2" : `(W-w)/2+W*(${dx.toFixed(4)})`;
+  }
+  let yExpr;
+  if (kfPosY) {
+    const dyExpr = _buildTransformKeyframeFfmpegExprClient(
+      norm.keyframes.pos_y_pct,
+      norm.pos_y_pct,
+      0.01,
+      -1.0,
+      1.0,
+      "t"
+    );
+    yExpr = `'(H-h)/2+H*(${dyExpr})'`;
+  } else {
+    const dy = norm.pos_y_pct / 100.0;
+    yExpr = Math.abs(dy) <= 1e-6 ? "(H-h)/2" : `(H-h)/2+H*(${dy.toFixed(4)})`;
+  }
   const fgChain = fgSteps.join(",");
-  let graph = fgChain
-    ? `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_fg]${fgChain}[xf_ov];[xf_blk][xf_ov]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`
-    : `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_blk][xf_fg]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
-  if (dzGraph) graph = `${dzGraph},${graph}`;
-  if (pixFmt) graph = `${graph},format=${pixFmt}`;
+  const needsOverlay = Boolean(fgChain) || kfPosX || kfPosY || hasStaticClipTransform(norm);
+  let graph = "";
+  if (needsOverlay) {
+    graph = fgChain
+      ? `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_fg]${fgChain}[xf_ov];[xf_blk][xf_ov]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`
+      : `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_blk][xf_fg]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+  }
+  if (kfOpacity) {
+    const opExpr = _buildTransformKeyframeFfmpegExprClient(
+      norm.keyframes.opacity_pct,
+      norm.opacity_pct,
+      0.01,
+      0.0,
+      1.0,
+      "T"
+    );
+    const opStage = `split[xf_op_bg][xf_op_fg];[xf_op_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_op_blk];[xf_op_blk][xf_op_fg]blend=all_expr='A*(1-(${opExpr}))+B*(${opExpr})'`;
+    graph = graph ? `${graph},${opStage}` : opStage;
+  }
+  if (dzGraph) graph = graph ? `${dzGraph},${graph}` : dzGraph;
+  if (pixFmt) graph = graph ? `${graph},format=${pixFmt}` : `format=${pixFmt}`;
   return {
     filtergraph: graph,
-    ffmpeg_vf_args: ["-vf", graph],
-    is_identity: false,
+    ffmpeg_vf_args: graph ? ["-vf", graph] : [],
+    is_identity: graph === "",
+    has_keyframes: hasKfs,
+    keyframe_count: kfCount,
+    keyframed_params: kfParams,
     params: norm
   };
 }
@@ -1837,7 +2273,8 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
     pos_y_pct: p.pos_y_pct !== undefined ? Number(p.pos_y_pct) : origNorm.pos_y_pct,
     rotation_deg: p.rotation_deg !== undefined ? Number(p.rotation_deg) : origNorm.rotation_deg,
     opacity_pct: p.opacity_pct !== undefined ? Number(p.opacity_pct) : origNorm.opacity_pct,
-    dynamic_zoom: p.dynamic_zoom !== undefined ? p.dynamic_zoom : origNorm.dynamic_zoom
+    dynamic_zoom: p.dynamic_zoom !== undefined ? p.dynamic_zoom : origNorm.dynamic_zoom,
+    keyframes: p.keyframes !== undefined ? p.keyframes : origNorm.keyframes
   };
   if (
     !Number.isFinite(nextRaw.zoom_pct) ||
@@ -1857,7 +2294,8 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
     Math.abs(nextNorm.pos_y_pct - origNorm.pos_y_pct) < 1e-4 &&
     Math.abs(nextNorm.rotation_deg - origNorm.rotation_deg) < 1e-4 &&
     Math.abs(nextNorm.opacity_pct - origNorm.opacity_pct) < 1e-4 &&
-    nextNorm.dynamic_zoom === origNorm.dynamic_zoom;
+    nextNorm.dynamic_zoom === origNorm.dynamic_zoom &&
+    JSON.stringify(nextNorm.keyframes) === JSON.stringify(origNorm.keyframes);
   if (unchanged) {
     return { doc, clip: foundOrig.clip, changed: false };
   }
@@ -1867,6 +2305,132 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
   if (!found) return { doc, clip: null, changed: false };
   found.clip.transform = isClipTransformIdentity(nextNorm) ? null : nextNorm;
   return { doc: nextDoc, clip: found.clip, changed: true };
+}
+
+export function upsertTransformKeyframeInDocument(
+  doc,
+  trackKind,
+  trackIndex,
+  clipIndex,
+  paramName,
+  keyframe,
+  toleranceS = 0.02
+) {
+  if (!TRANSFORM_KEYFRAME_PARAMS.includes(paramName)) {
+    return { doc, clip: null, changed: false };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origNorm = normalizeClipTransform(foundOrig.clip);
+  const lane = [...(origNorm.keyframes[paramName] || [])];
+  const kf = normalizeTransformKeyframe(keyframe, paramName);
+  const existingIdx = lane.findIndex((item) => Math.abs(item.time_s - kf.time_s) <= toleranceS);
+  if (existingIdx >= 0) {
+    lane[existingIdx] = kf;
+  } else {
+    if (lane.length >= MAX_TRANSFORM_KEYFRAMES_PER_PARAM) {
+      return { doc, clip: foundOrig.clip, changed: false };
+    }
+    lane.push(kf);
+  }
+  const nextKeyframes = {
+    ...origNorm.keyframes,
+    [paramName]: lane
+  };
+  return updateClipTransformInDocument(doc, trackKind, trackIndex, clipIndex, {
+    keyframes: nextKeyframes
+  });
+}
+
+export function removeTransformKeyframeInDocument(
+  doc,
+  trackKind,
+  trackIndex,
+  clipIndex,
+  paramName,
+  timeS,
+  toleranceS = 0.02
+) {
+  if (!TRANSFORM_KEYFRAME_PARAMS.includes(paramName)) {
+    return { doc, clip: null, changed: false };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origNorm = normalizeClipTransform(foundOrig.clip);
+  const lane = (origNorm.keyframes[paramName] || []).filter(
+    (item) => Math.abs(item.time_s - Number(timeS)) > toleranceS
+  );
+  if (lane.length === (origNorm.keyframes[paramName] || []).length) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+  return updateClipTransformInDocument(doc, trackKind, trackIndex, clipIndex, {
+    keyframes: {
+      ...origNorm.keyframes,
+      [paramName]: lane
+    }
+  });
+}
+
+export function clearTransformParamKeyframesInDocument(
+  doc,
+  trackKind,
+  trackIndex,
+  clipIndex,
+  paramName
+) {
+  if (!TRANSFORM_KEYFRAME_PARAMS.includes(paramName)) {
+    return { doc, clip: null, changed: false };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origNorm = normalizeClipTransform(foundOrig.clip);
+  if ((origNorm.keyframes[paramName] || []).length === 0) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+  return updateClipTransformInDocument(doc, trackKind, trackIndex, clipIndex, {
+    keyframes: {
+      ...origNorm.keyframes,
+      [paramName]: []
+    }
+  });
+}
+
+export function updateTransformKeyframeBezierInDocument(
+  doc,
+  trackKind,
+  trackIndex,
+  clipIndex,
+  paramName,
+  kfIndex,
+  easing,
+  bezier
+) {
+  if (!TRANSFORM_KEYFRAME_PARAMS.includes(paramName)) {
+    return { doc, clip: null, changed: false };
+  }
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origNorm = normalizeClipTransform(foundOrig.clip);
+  const lane = [...(origNorm.keyframes[paramName] || [])];
+  if (kfIndex < 0 || kfIndex >= lane.length) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+  const current = lane[kfIndex];
+  lane[kfIndex] = normalizeTransformKeyframe(
+    {
+      time_s: current.time_s,
+      value: current.value,
+      easing: easing || current.easing,
+      bezier: bezier || current.bezier
+    },
+    paramName
+  );
+  return updateClipTransformInDocument(doc, trackKind, trackIndex, clipIndex, {
+    keyframes: {
+      ...origNorm.keyframes,
+      [paramName]: lane
+    }
+  });
 }
 
 export function isValidClipLabelColor(colorId) {

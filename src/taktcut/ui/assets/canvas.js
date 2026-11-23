@@ -1,6 +1,7 @@
 import {
   CLIP_LABEL_COLORS,
   MARKER_COLOR_HEX,
+  TRANSFORM_PARAM_BOUNDS,
   applyColorNodeChainRgbClient,
   clampSplitWipePercent,
   computeBpmBeatFrames,
@@ -8,18 +9,25 @@ import {
   computeSplitWipeGeometry,
   computeTimelineZoomViewport,
   evaluateClipFadeEnvelope,
+  evaluateClipTransformAtTime,
+  evaluateTransformParamAtTime,
+  evaluateTransformParamSpeedAtTime,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
   formatTransformBadgeText,
+  getAllTransformKeyframeTimes,
   getAspectRatioPreset,
   getDynamicZoomShortTag,
   getTransitionPresetName,
   getTransitionShortTag,
+  hasTransformKeyframes,
   isClipTransformIdentity,
   normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransform,
-  normalizeClipTransition
+  normalizeClipTransition,
+  resolveTransformKeyframeBezier,
+  sampleTransformCurve
 } from "./timeline_ops.js";
 
 export function evaluateEasing(tNorm, easing = "linear") {
@@ -154,6 +162,256 @@ export function drawKeyframeCurveCanvas(canvas, keyframes, durationSec, currentT
   const tag = `t=${curT.toFixed(2)}s | ${(curV * 100).toFixed(0)}%`;
   const tw = ctx.measureText(tag).width;
   ctx.fillText(tag, Math.max(padL, padL + plotW - tw - 2), padT + 2);
+}
+
+export function drawTransformGraphCanvas(
+  canvas,
+  transformOrClip,
+  paramName,
+  durationSec,
+  currentTimeSec,
+  options = {}
+) {
+  if (!canvas) return null;
+  const { ctx, width, height } = setupCanvas(canvas, 136);
+  const norm = normalizeClipTransform(transformOrClip);
+  const bounds = TRANSFORM_PARAM_BOUNDS[paramName] || TRANSFORM_PARAM_BOUNDS.zoom_pct;
+  const lane = norm.keyframes && Array.isArray(norm.keyframes[paramName]) ? norm.keyframes[paramName] : [];
+  const dur = Math.max(0.2, Number.isFinite(Number(durationSec)) ? Number(durationSec) : 5.0);
+  const mode = options.mode === "speed" ? "speed" : "value";
+  const selectedKfIdx =
+    Number.isInteger(options.selectedKfIdx) && options.selectedKfIdx >= 0 && options.selectedKfIdx < lane.length
+      ? options.selectedKfIdx
+      : lane.length > 0
+        ? 0
+        : -1;
+
+  const padL = 36;
+  const padR = 12;
+  const padT = 16;
+  const padB = 18;
+  const plotW = Math.max(60, width - padL - padR);
+  const plotH = Math.max(40, height - padT - padB);
+  const samples = sampleTransformCurve(norm, paramName, dur, 72);
+
+  let yMin;
+  let yMax;
+  if (mode === "speed") {
+    const speeds = samples.map((s) => s.speed);
+    const minS = Math.min(0, ...speeds);
+    const maxS = Math.max(0, ...speeds);
+    const span = Math.max(10, maxS - minS);
+    yMin = minS - span * 0.12;
+    yMax = maxS + span * 0.18;
+  } else {
+    const vals = [
+      ...samples.map((s) => s.value),
+      ...lane.map((k) => k.value),
+      Number(norm[paramName]) || bounds.def
+    ];
+    let lo = Math.min(...vals);
+    let hi = Math.max(...vals);
+    if (Math.abs(hi - lo) < 1e-3) {
+      const margin = paramName === "zoom_pct" ? 30 : paramName === "opacity_pct" ? 25 : 20;
+      lo = Math.max(bounds.min, lo - margin);
+      hi = Math.min(bounds.max, hi + margin);
+    } else {
+      const pad = (hi - lo) * 0.16;
+      lo = Math.max(bounds.min, lo - pad);
+      hi = Math.min(bounds.max, hi + pad);
+    }
+    if (Math.abs(hi - lo) < 1e-3) {
+      lo = bounds.min;
+      hi = bounds.max;
+    }
+    yMin = lo;
+    yMax = hi;
+  }
+
+  const timeToX = (t) => padL + clamp01(t / dur) * plotW;
+  const valToY = (v) => padT + (1 - (v - yMin) / Math.max(1e-6, yMax - yMin)) * plotH;
+
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#16171d";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  // Grid lines
+  ctx.strokeStyle = "#262832";
+  ctx.lineWidth = 1;
+  for (const frac of [0, 0.25, 0.5, 0.75, 1]) {
+    const gy = padT + (1 - frac) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+  }
+  for (const tFrac of [0.25, 0.5, 0.75]) {
+    const gx = padL + tFrac * plotW;
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+  }
+
+  // Zero baseline when visible
+  if (yMin < 0 && yMax > 0) {
+    const zy = valToY(0);
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = "#3f4354";
+    ctx.beginPath();
+    ctx.moveTo(padL, zy);
+    ctx.lineTo(padL + plotW, zy);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Axis labels
+  ctx.fillStyle = "#8e91a0";
+  ctx.font = "9px ui-monospace, monospace";
+  const fmtAxis = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+  ctx.fillText(fmtAxis(yMax), 3, padT + 6);
+  ctx.fillText(fmtAxis((yMin + yMax) * 0.5), 3, padT + plotH * 0.5 + 3);
+  ctx.fillText(fmtAxis(yMin), 3, padT + plotH);
+  ctx.fillText("0.0s", padL, height - 4);
+  const endLabel = `${dur.toFixed(1)}s`;
+  ctx.fillText(endLabel, padL + plotW - ctx.measureText(endLabel).width, height - 4);
+
+  // Sampled Value or Speed Curve
+  const strokeColor =
+    mode === "speed" ? "#3fb950" : lane.length > 0 ? "#e68442" : "#528bff";
+  const fillColor =
+    mode === "speed"
+      ? "rgba(63, 185, 80, 0.14)"
+      : lane.length > 0
+        ? "rgba(230, 132, 66, 0.15)"
+        : "rgba(82, 139, 255, 0.10)";
+
+  ctx.beginPath();
+  samples.forEach((pt, i) => {
+    const px = timeToX(pt.time_s);
+    const py = valToY(mode === "speed" ? pt.speed : pt.value);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  });
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  const baseFillY = mode === "speed" && yMin < 0 && yMax > 0 ? valToY(0) : padT + plotH;
+  ctx.lineTo(padL + plotW, baseFillY);
+  ctx.lineTo(padL, baseFillY);
+  ctx.closePath();
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+
+  const handleHits = [];
+  const kfHits = [];
+
+  // Bezier control handles for selected segment (Value mode)
+  if (mode === "value" && selectedKfIdx >= 0 && selectedKfIdx < lane.length - 1) {
+    const k0 = lane[selectedKfIdx];
+    const k1 = lane[selectedKfIdx + 1];
+    const dt = k1.time_s - k0.time_s;
+    const dv = k1.value - k0.value;
+    if (dt > 1e-5) {
+      const [bx1, by1, bx2, by2] = resolveTransformKeyframeBezier(k0);
+      const x0 = timeToX(k0.time_s);
+      const y0 = valToY(k0.value);
+      const xEnd = timeToX(k1.time_s);
+      const yEnd = valToY(k1.value);
+
+      const h1x = timeToX(k0.time_s + bx1 * dt);
+      const h1y = valToY(k0.value + by1 * dv);
+      const h2x = timeToX(k0.time_s + bx2 * dt);
+      const h2y = valToY(k0.value + by2 * dv);
+
+      ctx.save();
+      ctx.strokeStyle = "#ffd166";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(h1x, h1y);
+      ctx.moveTo(xEnd, yEnd);
+      ctx.lineTo(h2x, h2y);
+      ctx.stroke();
+
+      for (const h of [
+        { role: "p1", x: h1x, y: h1y, kfIdx: selectedKfIdx },
+        { role: "p2", x: h2x, y: h2y, kfIdx: selectedKfIdx }
+      ]) {
+        ctx.fillStyle = "#ffd166";
+        ctx.strokeStyle = "#16171d";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        handleHits.push(h);
+      }
+      ctx.restore();
+    }
+  }
+
+  // Keyframe diamonds
+  lane.forEach((kf, idx) => {
+    const kx = timeToX(kf.time_s);
+    const ky = mode === "speed"
+      ? valToY(evaluateTransformParamSpeedAtTime(norm, paramName, kf.time_s))
+      : valToY(kf.value);
+    const isSel = idx === selectedKfIdx;
+    const r = isSel ? 5.5 : 4.5;
+    ctx.save();
+    ctx.fillStyle = isSel ? "#ffd166" : "#ffd8a8";
+    ctx.strokeStyle = isSel ? "#ffffff" : "#e68442";
+    ctx.lineWidth = isSel ? 1.8 : 1.3;
+    ctx.beginPath();
+    ctx.moveTo(kx, ky - r);
+    ctx.lineTo(kx + r, ky);
+    ctx.lineTo(kx, ky + r);
+    ctx.lineTo(kx - r, ky);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    kfHits.push({ idx, x: kx, y: ky, time_s: kf.time_s, value: kf.value });
+  });
+
+  // Playhead needle & telemetry readout
+  const curT = Math.max(0, Math.min(dur, Number.isFinite(Number(currentTimeSec)) ? Number(currentTimeSec) : 0));
+  const curVal =
+    mode === "speed"
+      ? evaluateTransformParamSpeedAtTime(norm, paramName, curT)
+      : evaluateTransformParamAtTime(norm, paramName, curT);
+  const nx = timeToX(curT);
+  ctx.strokeStyle = "#689cff";
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.moveTo(nx, padT - 3);
+  ctx.lineTo(nx, padT + plotH + 2);
+  ctx.stroke();
+
+  const unitTag = mode === "speed" ? `${bounds.unit}/s` : bounds.unit;
+  const tag =
+    mode === "speed"
+      ? `SPEED t=${curT.toFixed(2)}s | ${curVal >= 0 ? "+" : ""}${curVal.toFixed(1)} ${unitTag}`
+      : `VALUE t=${curT.toFixed(2)}s | ${curVal.toFixed(1)}${unitTag}`;
+  ctx.fillStyle = "#d8d8de";
+  ctx.font = "600 9px ui-monospace, monospace";
+  const tw = ctx.measureText(tag).width;
+  ctx.fillText(tag, Math.max(padL, padL + plotW - tw - 2), padT - 4);
+
+  return {
+    plotRect: { x: padL, y: padT, w: plotW, h: plotH },
+    durationSec: dur,
+    yMin,
+    yMax,
+    mode,
+    paramName,
+    keyframes: kfHits,
+    handles: handleHits
+  };
 }
 
 function clamp01(val) {
@@ -1429,7 +1687,11 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
   for (let idx = 0; idx < clips.length; idx += 1) {
     const layer = clips[idx];
     const isTop = idx === clips.length - 1;
-    const tf = normalizeClipTransform(layer && layer.clip ? layer.clip : null);
+    const clipLocalTimeS =
+      layer && layer.clip
+        ? Math.max(0, (playheadFrame - (layer.clip.start_frame || 0)) / fpsRate)
+        : 0;
+    const tf = evaluateClipTransformAtTime(layer && layer.clip ? layer.clip : null, clipLocalTimeS);
     const fadeEnv =
       layer && layer.clip ? evaluateClipFadeEnvelope(layer.clip, playheadFrame, fpsRate) : 1.0;
     const alpha = clamp01((tf.opacity_pct / 100.0) * fadeEnv);
@@ -1443,7 +1705,13 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
     targetCtx.clip();
     targetCtx.globalAlpha *= alpha;
 
-    if (!isClipTransformIdentity(tf)) {
+    const hasActiveTf =
+      !isClipTransformIdentity(layer && layer.clip ? layer.clip : null) ||
+      Math.abs(tf.zoom_pct - 100.0) > 1e-4 ||
+      Math.abs(tf.pos_x_pct) > 1e-4 ||
+      Math.abs(tf.pos_y_pct) > 1e-4 ||
+      Math.abs(tf.rotation_deg) > 1e-4;
+    if (hasActiveTf) {
       const cx = bufW * 0.5 + (tf.pos_x_pct / 100.0) * bufW;
       const cy = bufH * 0.5 + (tf.pos_y_pct / 100.0) * bufH;
       targetCtx.translate(cx, cy);
@@ -3245,6 +3513,21 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         }
       }
 
+      const kfTimes = !isAudio && hasTransformKeyframes(transformNorm)
+        ? getAllTransformKeyframeTimes(transformNorm)
+        : [];
+      if (kfTimes.length > 0 && drawW >= 18) {
+        const kfLaneY = clipY + clipH - 8;
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 209, 102, 0.32)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(drawX + 4, kfLaneY);
+        ctx.lineTo(drawX + drawW - 4, kfLaneY);
+        ctx.stroke();
+        ctx.restore();
+      }
+
       hitboxes.push({
         kind: "clip",
         x: drawX,
@@ -3261,6 +3544,41 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         fadeHandleY,
         data: clip
       });
+
+      if (kfTimes.length > 0 && drawW >= 18) {
+        const kfLaneY = clipY + clipH - 8;
+        for (const tSec of kfTimes) {
+          const kfFrame = clip.start_frame + Math.round(tSec * fpsFloat);
+          const kx = frameToX(kfFrame);
+          if (kx < drawX + 3 || kx > drawX + drawW - 3) continue;
+          ctx.save();
+          ctx.fillStyle = "#ffd166";
+          ctx.strokeStyle = "#e68442";
+          ctx.lineWidth = 1.25;
+          ctx.beginPath();
+          ctx.moveTo(kx, kfLaneY - 4);
+          ctx.lineTo(kx + 4, kfLaneY);
+          ctx.lineTo(kx, kfLaneY + 4);
+          ctx.lineTo(kx - 4, kfLaneY);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+          hitboxes.push({
+            kind: "clip_keyframe",
+            x: kx - 6,
+            y: kfLaneY - 6,
+            w: 12,
+            h: 12,
+            frame: kfFrame,
+            time_s: tSec,
+            trackKind: trk.kind,
+            trackIndex: trk.index,
+            clipIndex,
+            data: clip
+          });
+        }
+      }
     }
 
     // Visual Bowtie Transition Badges at adjacent clip cut junctions

@@ -709,28 +709,30 @@ def _build_transform_params_from_payload(
     if raw_transform is not None:
         if not isinstance(raw_transform, dict):
             raise ValueError("'transform_params' must be a JSON object")
-        return ClipTransformParams.model_validate(
-            {
-                "zoom_pct": raw_transform.get("zoom_pct", 100.0),
-                "pos_x_pct": raw_transform.get("pos_x_pct", 0.0),
-                "pos_y_pct": raw_transform.get("pos_y_pct", 0.0),
-                "rotation_deg": raw_transform.get("rotation_deg", 0.0),
-                "opacity_pct": raw_transform.get("opacity_pct", 100.0),
-                "dynamic_zoom": raw_transform.get("dynamic_zoom", "off"),
-            }
-        )
+        xf_payload: dict[str, Any] = {
+            "zoom_pct": raw_transform.get("zoom_pct", 100.0),
+            "pos_x_pct": raw_transform.get("pos_x_pct", 0.0),
+            "pos_y_pct": raw_transform.get("pos_y_pct", 0.0),
+            "rotation_deg": raw_transform.get("rotation_deg", 0.0),
+            "opacity_pct": raw_transform.get("opacity_pct", 100.0),
+            "dynamic_zoom": raw_transform.get("dynamic_zoom", "off"),
+        }
+        if raw_transform.get("keyframes") is not None:
+            xf_payload["keyframes"] = raw_transform["keyframes"]
+        return ClipTransformParams.model_validate(xf_payload)
 
     if allow_top_level:
-        return ClipTransformParams.model_validate(
-            {
-                "zoom_pct": payload.get("zoom_pct", 100.0),
-                "pos_x_pct": payload.get("pos_x_pct", 0.0),
-                "pos_y_pct": payload.get("pos_y_pct", 0.0),
-                "rotation_deg": payload.get("rotation_deg", 0.0),
-                "opacity_pct": payload.get("opacity_pct", 100.0),
-                "dynamic_zoom": payload.get("dynamic_zoom", "off"),
-            }
-        )
+        top_payload: dict[str, Any] = {
+            "zoom_pct": payload.get("zoom_pct", 100.0),
+            "pos_x_pct": payload.get("pos_x_pct", 0.0),
+            "pos_y_pct": payload.get("pos_y_pct", 0.0),
+            "rotation_deg": payload.get("rotation_deg", 0.0),
+            "opacity_pct": payload.get("opacity_pct", 100.0),
+            "dynamic_zoom": payload.get("dynamic_zoom", "off"),
+        }
+        if payload.get("keyframes") is not None:
+            top_payload["keyframes"] = payload["keyframes"]
+        return ClipTransformParams.model_validate(top_payload)
     return None
 
 

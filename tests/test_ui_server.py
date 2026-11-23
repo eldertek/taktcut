@@ -1098,6 +1098,7 @@ import {{
   compileFairlightAudioFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
+  compileTransformFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
   computeBpmBeatFrames,
@@ -1105,12 +1106,16 @@ import {{
   computeSplitWipeGeometry,
   computeSplitWipePercentFromPointer,
   computeTimelineZoomViewport,
+  clearTransformParamKeyframesInDocument,
   createDefaultColorNodeTree,
   createStillRecord,
   deleteMarkerInDocument,
   escapeFfmetadataValue,
   escapeXmlAttr,
   estimateRenderFileSize,
+  evaluateClipTransformAtTime,
+  evaluateCubicBezier,
+  evaluateCubicBezierDerivative,
   filterMediaPoolEntries,
   filterTimelineClips,
   findActiveTransitionAtFrame,
@@ -1142,7 +1147,9 @@ import {{
   parseCubeLutTextClient,
   removeColorNodeFromTree,
   removeStillById,
+  removeTransformKeyframeInDocument,
   resolveSourceTapeFrame,
+  sampleTransformCurve,
   sanitizeStillDataUrl,
   selectColorNodeInTree,
   toggleColorNodeBypassInTree,
@@ -1164,6 +1171,8 @@ import {{
   updateClipRetimeInDocument,
   updateClipTransitionInDocument,
   updateMarkerInDocument,
+  updateTransformKeyframeBezierInDocument,
+  upsertTransformKeyframeInDocument,
   validateTimelineClient
 }} from {json.dumps(ops_path)};
 
@@ -2629,6 +2638,58 @@ colorTree = removeColorNodeFromTree(colorTree, "node-2");
 assert.equal(colorTree.nodes.length, 1);
 assert.equal(removeColorNodeFromTree(colorTree, "node-1").nodes.length, 1);
 assert.equal(MAX_COLOR_NODES, 8);
+
+// Cubic-Bezier Transform Keyframe Graph Editor unit tests
+assert.ok(Math.abs(evaluateCubicBezier(0.5, 0, 0, 1, 1) - 0.5) < 1e-5);
+assert.ok(Math.abs(evaluateCubicBezier(0.5, 0.42, 0, 0.58, 1) - 0.5) < 1e-4);
+assert.ok(evaluateCubicBezier(0.5, 0.16, 1.0, 0.3, 1.0) > 0.8);
+assert.ok(evaluateCubicBezierDerivative(0.5, 0.42, 0, 0.58, 1) > 1.4);
+assert.ok(evaluateCubicBezierDerivative(0.0, 0.42, 0, 0.58, 1) < 0.1);
+
+let kfDoc = doc;
+let kfRes = upsertTransformKeyframeInDocument(kfDoc, "video", 1, 0, "zoom_pct", {{
+  time_s: 0.0,
+  value: 100,
+  easing: "ease_in_out",
+  bezier: [0.42, 0, 0.58, 1]
+}});
+assert.equal(kfRes.changed, true);
+kfDoc = kfRes.doc;
+kfRes = upsertTransformKeyframeInDocument(kfDoc, "video", 1, 0, "zoom_pct", {{
+  time_s: 2.0,
+  value: 160,
+  easing: "linear"
+}});
+assert.equal(kfRes.changed, true);
+kfDoc = kfRes.doc;
+const evalMid = evaluateClipTransformAtTime(kfRes.clip, 1.0);
+assert.ok(Math.abs(evalMid.zoom_pct - 130.0) < 0.2);
+
+kfRes = updateTransformKeyframeBezierInDocument(
+  kfDoc, "video", 1, 0, "zoom_pct", 0, "bezier", [0.16, 1.0, 0.3, 1.0]
+);
+assert.equal(kfRes.changed, true);
+kfDoc = kfRes.doc;
+const evalPop = evaluateClipTransformAtTime(kfRes.clip, 1.0);
+assert.ok(evalPop.zoom_pct > 145.0);
+
+const curveSamples = sampleTransformCurve(kfRes.clip, "zoom_pct", 2.0, 20);
+assert.equal(curveSamples.length, 21);
+assert.ok(curveSamples.some((pt) => pt.speed > 20));
+
+const compiledKf = compileTransformFilterClient(kfRes.clip.transform, "yuv420p", 4.0);
+assert.equal(compiledKf.is_identity, false);
+assert.equal(compiledKf.has_keyframes, true);
+assert.equal(compiledKf.keyframe_count, 2);
+assert.deepEqual(compiledKf.keyframed_params, ["zoom_pct"]);
+assert.ok(compiledKf.filtergraph.includes("eval=frame"));
+
+kfRes = removeTransformKeyframeInDocument(kfDoc, "video", 1, 0, "zoom_pct", 2.0);
+assert.equal(kfRes.changed, true);
+assert.equal(kfRes.clip.transform.keyframes.zoom_pct.length, 1);
+kfRes = clearTransformParamKeyframesInDocument(kfRes.doc, "video", 1, 0, "zoom_pct");
+assert.equal(kfRes.changed, true);
+assert.equal(kfRes.clip.transform, null);
 """
     proc = subprocess.run(
         [node, "--input-type=module"],
@@ -3223,6 +3284,39 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator("#btn-clip-retime-reset").click()
                     assert page.locator("#clip-retime-badge").text_content() == "1.0x NORMAL"
 
+                    # Verify Transform Keyframe Graph Editor (Value/Speed + Bezier Presets)
+                    assert page.locator("#transform-graph-editor").is_visible() is True
+                    assert page.locator("#transform-graph-canvas").is_visible() is True
+                    page.locator("#timeline-index-list .timeline-index-row").first.click()
+                    page.locator("#btn-clip-transform-zoom-kf").click()
+                    assert "1/1" in (page.locator("#transform-kf-readout").text_content() or "")
+                    prog_kf0 = page.evaluate(
+                        "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                    )
+                    for _ in range(12):
+                        page.locator("#btn-tc-next").click()
+                    page.locator("#clip-transform-zoom-num").fill("160")
+                    page.locator("#clip-transform-zoom-num").press("Enter")
+                    assert "2KF" in (page.locator("#clip-transform-badge").text_content() or "")
+                    prog_kf1 = page.evaluate(
+                        "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                    )
+                    assert prog_kf1 != prog_kf0
+                    page.locator("#btn-tf-kf-prev").click()
+                    page.locator('[data-tf-bezier-preset="snap_pop"]').click()
+                    assert page.locator("#tf-bezier-x1").input_value() == "0.16"
+                    page.locator("#btn-tf-graph-speed").click()
+                    assert (
+                        page.locator("#btn-tf-graph-speed").get_attribute("aria-pressed")
+                        == "true"
+                    )
+                    page.locator("#btn-tf-graph-value").click()
+                    tl_mon_box_kf = page.locator("#timeline-program-canvas").bounding_box()
+                    assert tl_mon_box_kf is not None
+                    assert tl_mon_box_kf["y"] + tl_mon_box_kf["height"] <= 900
+                    page.locator("#btn-clip-transform-reset-all").click()
+                    assert page.locator("#clip-transform-badge").text_content() == "100% | 0,0"
+
                     # Verify Cut Transition Selector & Preview Cut scrub
                     page.locator("#clip-transition-preset").select_option("fadeblack")
                     page.locator("#clip-transition-dur-num").fill("0.90")
@@ -3325,6 +3419,14 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                         '[data-master-iso="M1"]',
                         '[data-track-fader="A1"]',
                         '[data-track-pan="A1"]',
+                        "#btn-clip-transform-zoom-kf",
+                        "#btn-tf-graph-value",
+                        "#btn-tf-graph-speed",
+                        "#btn-tf-kf-prev",
+                        "#btn-tf-kf-toggle",
+                        "#btn-tf-kf-next",
+                        "#btn-tf-kf-clear",
+                        '[data-tf-bezier-preset="ease_in_out"]',
                     ):
                         box = page.locator(idx_selector).first.bounding_box()
                         assert box is not None and box["height"] >= 44, (
@@ -6860,3 +6962,160 @@ def test_ui_fairlight_mixer_compile_and_project_persistence(
         assert "\u2013" not in content
         if asset_name.endswith(".js"):
             assert "innerHTML" not in content
+
+
+def test_ui_transform_keyframes_bezier_compile_and_project_persistence(
+    ui_server: tuple[str, Path],
+) -> None:
+    import shutil
+    import subprocess
+
+    base_url, _ = ui_server
+
+    payload = {
+        "zoom_pct": 100.0,
+        "pos_x_pct": 0.0,
+        "pos_y_pct": 0.0,
+        "rotation_deg": 0.0,
+        "opacity_pct": 100.0,
+        "dynamic_zoom": "off",
+        "keyframes": {
+            "zoom_pct": [
+                {
+                    "time_s": 0.0,
+                    "value": 100.0,
+                    "easing": "bezier",
+                    "bezier": [0.16, 1.0, 0.3, 1.0],
+                },
+                {"time_s": 0.4, "value": 145.0, "easing": "ease_in_out"},
+            ],
+            "pos_x_pct": [
+                {"time_s": 0.0, "value": -12.0, "easing": "ease_out"},
+                {"time_s": 0.4, "value": 8.0, "easing": "linear"},
+            ],
+            "rotation_deg": [
+                {"time_s": 0.0, "value": 0.0, "easing": "ease_in"},
+                {"time_s": 0.4, "value": 12.0, "easing": "linear"},
+            ],
+            "opacity_pct": [
+                {"time_s": 0.0, "value": 50.0, "easing": "linear"},
+                {"time_s": 0.4, "value": 100.0, "easing": "linear"},
+            ],
+        },
+        "pix_fmt": "yuv420p",
+    }
+    ok_status, _, ok_raw = _http_call(
+        f"{base_url}/api/transform/compile",
+        method="POST",
+        payload=payload,
+    )
+    assert ok_status == 200
+    compiled = json.loads(ok_raw.decode("utf-8"))
+    assert compiled["is_identity"] is False
+    assert compiled["has_keyframes"] is True
+    assert compiled["keyframe_count"] == 8
+    assert compiled["keyframed_params"] == [
+        "zoom_pct",
+        "pos_x_pct",
+        "rotation_deg",
+        "opacity_pct",
+    ]
+    assert "eval=frame" in compiled["filtergraph"]
+    assert "blend=all_expr=" in compiled["filtergraph"]
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin is not None:
+        proc = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=320x180:d=0.4",
+                "-vf",
+                compiled["filtergraph"],
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert proc.returncode == 0, f"FFmpeg failed on keyframed transform: {proc.stderr}"
+
+    for bad_kf in (
+        {"keyframes": {"zoom_pct": [{"time_s": -1.0, "value": 100.0}]}},
+        {"keyframes": {"zoom_pct": [{"time_s": 0.0, "value": 500.0}]}},
+        {
+            "keyframes": {
+                "zoom_pct": [
+                    {
+                        "time_s": 0.0,
+                        "value": 100.0,
+                        "easing": "bezier",
+                        "bezier": [1.5, 0.0, 0.5, 1.0],
+                    }
+                ]
+            }
+        },
+        {"keyframes": {"zoom_pct": [{"time_s": 0.0, "value": 100.0, "easing": "bogus"}]}},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/transform/compile",
+            method="POST",
+            payload=bad_kf,
+        )
+        assert bad_status == 400
+
+    # Verify project save/export roundtrip preserves clip.transform.keyframes
+    sample_status, _, sample_raw = _http_call(f"{base_url}/api/sample")
+    assert sample_status == 200
+    doc = json.loads(sample_raw.decode("utf-8"))["document"]
+    doc["tracks"][0]["clips"][0]["transform"] = {
+        "zoom_pct": 100.0,
+        "pos_x_pct": 0.0,
+        "pos_y_pct": 0.0,
+        "rotation_deg": 0.0,
+        "opacity_pct": 100.0,
+        "dynamic_zoom": "off",
+        "keyframes": {
+            "zoom_pct": [
+                {
+                    "time_s": 0.0,
+                    "value": 100.0,
+                    "easing": "bezier",
+                    "bezier": [0.16, 1.0, 0.3, 1.0],
+                },
+                {"time_s": 1.2, "value": 135.0, "easing": "ease_in_out"},
+            ]
+        },
+    }
+    project_payload = {
+        "schema_version": "taktcut.project.v1",
+        "project_name": "Keyframe_Bezier_Test",
+        "timeline": doc,
+    }
+    exp_status, _, exp_raw = _http_call(
+        f"{base_url}/api/project/export",
+        method="POST",
+        payload={"project": project_payload},
+    )
+    assert exp_status == 200
+    exported_text = json.loads(exp_raw.decode("utf-8"))["project_json"]
+    imp_status, _, imp_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={"project_json": exported_text},
+    )
+    assert imp_status == 200
+    imported = json.loads(imp_raw.decode("utf-8"))["project"]
+    imp_kf = imported["timeline"]["tracks"][0]["clips"][0]["transform"]["keyframes"]["zoom_pct"]
+    assert len(imp_kf) == 2
+    assert imp_kf[0]["easing"] == "bezier"
+    assert imp_kf[0]["bezier"] == [0.16, 1.0, 0.3, 1.0]
+    assert imp_kf[1]["value"] == pytest.approx(135.0)
+
