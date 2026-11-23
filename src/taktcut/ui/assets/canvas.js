@@ -1114,6 +1114,61 @@ export function drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeSt
   return true;
 }
 
+const FILM_GRAIN_PRESET_TAGS = {
+  "35mm_fine": "35MM",
+  "16mm_organic": "16MM",
+  "super8_heavy": "SUPER 8",
+  custom: "CUSTOM"
+};
+
+export function drawFilmGrainOverlayOnFrame(ctx, fx, fy, frameW, frameH, filmGrainState, playheadFrame = 0) {
+  if (!filmGrainState || !filmGrainState.enabled) return false;
+  const rawStrength = Number(filmGrainState.strength ?? 0);
+  const strength = Number.isFinite(rawStrength) ? Math.max(0, Math.min(60, Math.round(rawStrength))) : 0;
+  if (strength <= 0) return false;
+  const presetKey = String(filmGrainState.preset || "35mm_fine").trim().toLowerCase();
+  const presetTag = FILM_GRAIN_PRESET_TAGS[presetKey] || "35MM";
+  const temporal = filmGrainState.temporal !== undefined ? Boolean(filmGrainState.temporal) : true;
+  const norm = strength / 60;
+  const particleCount = Math.max(40, Math.min(260, Math.round(40 + norm * 220)));
+  const grainSize = presetKey === "super8_heavy" ? 2 : 1;
+
+  let seed = (temporal ? (Math.floor(Number(playheadFrame) || 0) + 1) * 2654435761 : 1337) ^ (strength * 1597334677);
+  seed = seed >>> 0;
+  const nextRand = () => {
+    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  ctx.save();
+  const alphaBase = 0.06 + norm * 0.22;
+  for (let i = 0; i < particleCount; i += 1) {
+    const px = fx + nextRand() * Math.max(1, frameW - grainSize);
+    const py = fy + nextRand() * Math.max(1, frameH - grainSize);
+    const bright = nextRand() > 0.5;
+    const alpha = (alphaBase * (0.45 + nextRand() * 0.55)).toFixed(3);
+    ctx.fillStyle = bright ? `rgba(255, 250, 240, ${alpha})` : `rgba(12, 12, 16, ${alpha})`;
+    ctx.fillRect(px, py, grainSize, grainSize);
+  }
+
+  const label = `GRAIN ${presetTag} ${strength} ${temporal ? "T+U" : "U"}`;
+  ctx.font = "700 9px ui-monospace, monospace";
+  const pillW = Math.min(Math.max(48, frameW - 16), ctx.measureText(label).width + 10);
+  const pillX = fx + frameW - pillW - 8;
+  const pillY = fy + frameH - 23;
+  ctx.fillStyle = "rgba(20, 20, 22, 0.86)";
+  ctx.fillRect(pillX, pillY, pillW, 15);
+  ctx.strokeStyle = "rgba(230, 132, 66, 0.72)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(pillX + 0.5, pillY + 0.5, Math.max(1, pillW - 1), 14);
+  ctx.fillStyle = "#f4a46b";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillText(fitCanvasText(ctx, label, Math.max(16, pillW - 8)), pillX + 5, pillY + 3);
+  ctx.restore();
+  return true;
+}
+
 function drawTransparencyCheckerboard(ctx, x, y, w, h, tile = 10) {
   ctx.fillStyle = "#1f1f24";
   ctx.fillRect(x, y, w, h);
@@ -2456,6 +2511,10 @@ export function drawProgramMonitorCanvas(
   // Auto-Reframe & Social Aspect Ratio Crop overlay
   const reframeState = renderOpts && renderOpts.reframe ? renderOpts.reframe : null;
   drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeState);
+
+  // Film Grain (35mm / 16mm / Super 8) preview overlay
+  const filmGrainState = renderOpts && renderOpts.filmGrain ? renderOpts.filmGrain : null;
+  drawFilmGrainOverlayOnFrame(ctx, fx, fy, frameW, frameH, filmGrainState, playheadFrame);
 
   // Broadcast & Social Safe-Area Guides (Action 90%, Title 80%, Reels/TikTok HUD)
   drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState);

@@ -1746,6 +1746,39 @@
                 </div>
                 <div id="render-reframe-preview" class="code-box reframe-deliver-preview mono" aria-live="polite">(off)</div>
               </div>
+              <div id="deliver-film-grain-card" class="film-grain-deliver-card">
+                <div class="film-grain-deliver-head">
+                  <span class="film-grain-deliver-title" data-i18n="render.filmGrain.title">Film Grain (35mm / 16mm / Super 8)</span>
+                  <div class="film-grain-deliver-head-actions">
+                    <span id="render-film-grain-badge" class="nle-tag mono">OFF</span>
+                    <label class="check-label film-grain-toggle-label">
+                      <input type="checkbox" id="render-film-grain-enabled">
+                      <span data-i18n="render.filmGrain.toggle">Enable</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="film-grain-deliver-preset-row" role="group" aria-label="Film Grain Presets">
+                  <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="35mm_fine" aria-pressed="false" data-i18n="render.filmGrain.preset.35mm">35mm Fine</button>
+                  <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="16mm_organic" aria-pressed="false" data-i18n="render.filmGrain.preset.16mm">16mm Organic</button>
+                  <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="super8_heavy" aria-pressed="false" data-i18n="render.filmGrain.preset.super8">Super 8 Heavy</button>
+                </div>
+                <div class="film-grain-deliver-controls-row">
+                  <div class="form-row film-grain-deliver-slider-col">
+                    <label for="render-film-grain-strength" data-i18n="render.filmGrain.label.strength">Strength (0-60)</label>
+                    <div class="watermark-opacity-row">
+                      <input type="range" id="render-film-grain-strength" class="watermark-opacity-slider" min="0" max="60" step="1" value="12">
+                      <span id="render-film-grain-strength-value" class="mono watermark-opacity-val">12</span>
+                    </div>
+                  </div>
+                  <div class="form-row film-grain-deliver-temporal-col">
+                    <label class="check-label film-grain-temporal-label">
+                      <input type="checkbox" id="render-film-grain-temporal" checked>
+                      <span data-i18n="render.filmGrain.label.temporal">Temporal</span>
+                    </label>
+                  </div>
+                </div>
+                <div id="render-film-grain-preview" class="code-box film-grain-deliver-preview mono" aria-live="polite">(off)</div>
+              </div>
               <div class="form-row-three">
                 <div class="form-row">
                   <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>

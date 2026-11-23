@@ -26,6 +26,7 @@ from taktcut.render import (
     ClipRetimeParams,
     ClipVideoFadeParams,
     FairlightAudioParams,
+    FilmGrainParams,
     FramingParams,
     LowerThirdParams,
     ReframeParams,
@@ -42,6 +43,8 @@ from taktcut.render import (
     compile_dynamic_zoom_filter,
     compile_export_fps_filter,
     compile_fairlight_audio_filter,
+    compile_film_grain_filter,
+    compile_film_grain_filter_result,
     compile_framing_filter,
     compile_framing_filter_result,
     compile_loudness_preset_filter,
@@ -1816,3 +1819,95 @@ def test_reframe_params_validation_and_filter_compile(tmp_path: Path) -> None:
     assert probed.width < probed.height
     assert probed.width % 2 == 0
     assert probed.height % 2 == 0
+
+
+def test_film_grain_params_validation_and_filter_compile(tmp_path: Path) -> None:
+    from taktcut.render import FILM_GRAIN_PRESET_STRENGTHS
+
+    default_fg = FilmGrainParams()
+    assert default_fg.enabled is False
+    assert default_fg.preset == "35mm_fine"
+    assert default_fg.strength == 12
+    assert default_fg.temporal is True
+    assert default_fg.is_active() is False
+    assert default_fg.is_identity() is True
+    assert compile_film_grain_filter(default_fg) == ""
+
+    disabled_fg = FilmGrainParams(enabled=False, preset="16mm_organic", strength=22, temporal=False)
+    assert disabled_fg.is_active() is False
+    assert compile_film_grain_filter(disabled_fg) == ""
+
+    zero_fg = FilmGrainParams(enabled=True, preset="custom", strength=0, temporal=True)
+    assert zero_fg.is_active() is False
+    assert compile_film_grain_filter(zero_fg) == ""
+
+    assert FILM_GRAIN_PRESET_STRENGTHS["35mm_fine"] == 10
+    assert FILM_GRAIN_PRESET_STRENGTHS["16mm_organic"] == 22
+    assert FILM_GRAIN_PRESET_STRENGTHS["super8_heavy"] == 38
+
+    for preset_name, strength_val in (
+        ("35mm_fine", 10),
+        ("16mm_organic", 22),
+        ("super8_heavy", 38),
+        ("custom", 60),
+    ):
+        fg_t = FilmGrainParams(
+            enabled=True,
+            preset=preset_name,  # type: ignore[arg-type]
+            strength=strength_val,
+            temporal=True,
+        )
+        assert fg_t.is_active() is True
+        assert compile_film_grain_filter(fg_t) == f"noise=alls={strength_val}:allf=t+u"
+
+        fg_u = FilmGrainParams(
+            enabled=True,
+            preset=preset_name,  # type: ignore[arg-type]
+            strength=strength_val,
+            temporal=False,
+        )
+        assert compile_film_grain_filter(fg_u) == f"noise=alls={strength_val}:allf=u"
+
+    res = compile_film_grain_filter_result(
+        FilmGrainParams(enabled=True, preset="16mm_organic", strength=22, temporal=True)
+    )
+    assert res.is_active is True
+    assert res.is_identity is False
+    assert res.filtergraph == "noise=alls=22:allf=t+u"
+    assert res.ffmpeg_vf_args == ["-vf", "noise=alls=22:allf=t+u"]
+
+    for bad_kwargs in (
+        {"enabled": "yes"},
+        {"enabled": True, "preset": "65mm_imax"},
+        {"enabled": True, "preset": 35},
+        {"enabled": True, "strength": -1},
+        {"enabled": True, "strength": 61},
+        {"enabled": True, "strength": 12.5},
+        {"enabled": True, "strength": True},
+        {"enabled": True, "temporal": "yes"},
+        {"unknown_field": 1},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            FilmGrainParams(**bad_kwargs)  # type: ignore[arg-type]
+
+    src = tmp_path / "film_grain_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "film_grain_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        film_grain=FilmGrainParams(enabled=True, preset="16mm_organic", strength=22, temporal=True),
+        prefer_hw=False,
+    )
+    assert plan.film_grain_enabled is True
+    assert plan.film_grain_preset == "16mm_organic"
+    assert plan.film_grain_strength == 22
+    assert plan.film_grain_temporal is True
+    assert plan.video_filter is not None
+    assert "noise=alls=22:allf=t+u" in plan.video_filter
+
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0

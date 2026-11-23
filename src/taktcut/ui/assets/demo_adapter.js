@@ -721,6 +721,42 @@ function compileReframeClient(payload) {
   };
 }
 
+const FILM_GRAIN_ALLOWED_PRESETS_DEMO = new Set(["35mm_fine", "16mm_organic", "super8_heavy", "custom"]);
+
+function compileFilmGrainClient(payload) {
+  const src = payload && payload.film_grain ? payload.film_grain : payload || {};
+  const enabled = src.enabled !== undefined ? src.enabled : false;
+  if (typeof enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const rawPreset = src.preset !== undefined && src.preset !== null ? String(src.preset).trim().toLowerCase() : "35mm_fine";
+  if (!FILM_GRAIN_ALLOWED_PRESETS_DEMO.has(rawPreset)) {
+    throw new Error(`Unsupported film grain preset ${src.preset}`);
+  }
+  const rawStrength = src.strength !== undefined && src.strength !== null ? src.strength : 12;
+  if (typeof rawStrength === "boolean" || !Number.isInteger(rawStrength) || rawStrength < 0 || rawStrength > 60) {
+    throw new Error("strength must be an integer within [0, 60]");
+  }
+  const temporal = src.temporal !== undefined ? src.temporal : true;
+  if (typeof temporal !== "boolean") {
+    throw new Error("temporal must be a boolean");
+  }
+  const isActive = Boolean(enabled && rawStrength > 0);
+  const fg = isActive ? `noise=alls=${rawStrength}:allf=${temporal ? "t+u" : "u"}` : "";
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: fg ? ["-vf", fg] : [],
+    is_identity: !isActive,
+    is_active: isActive,
+    params: {
+      enabled,
+      preset: rawPreset,
+      strength: rawStrength,
+      temporal
+    }
+  };
+}
+
 const CAPTION_STYLE_SPECS = [
   {
     id: "clean_white",
@@ -1349,6 +1385,20 @@ export function createApiClient() {
             vfParts.push(compiledVideoFade.filtergraph);
           }
         }
+        let filmGrainEnabled = false;
+        let filmGrainPreset = "35mm_fine";
+        let filmGrainStrength = 12;
+        let filmGrainTemporal = true;
+        if (body.film_grain) {
+          const compiledFilmGrain = compileFilmGrainClient(body.film_grain);
+          if (compiledFilmGrain.is_active && compiledFilmGrain.filtergraph) {
+            vfParts.push(compiledFilmGrain.filtergraph);
+            filmGrainEnabled = true;
+            filmGrainPreset = compiledFilmGrain.params.preset;
+            filmGrainStrength = compiledFilmGrain.params.strength;
+            filmGrainTemporal = compiledFilmGrain.params.temporal;
+          }
+        }
         if (body.title_overlay) {
           const compiledTitle = compileTitleClient(body.title_overlay, { pix_fmt: pixFmt });
           if (compiledTitle.is_active && compiledTitle.filtergraph) {
@@ -1496,6 +1546,10 @@ export function createApiClient() {
               reframe_aspect_ratio: "source",
               reframe_pan_x: 0.0,
               reframe_pan_y: 0.0,
+              film_grain_enabled: false,
+              film_grain_preset: "35mm_fine",
+              film_grain_strength: 12,
+              film_grain_temporal: true,
               export_fps: rawExportFps,
               deinterlace,
               audio_only_format: rawAudioOnly,
@@ -1571,6 +1625,10 @@ export function createApiClient() {
             reframe_aspect_ratio: reframeAspectRatio,
             reframe_pan_x: reframePanX,
             reframe_pan_y: reframePanY,
+            film_grain_enabled: filmGrainEnabled,
+            film_grain_preset: filmGrainPreset,
+            film_grain_strength: filmGrainStrength,
+            film_grain_temporal: filmGrainTemporal,
             export_fps: rawExportFps,
             deinterlace,
             audio_only_format: "off",
@@ -1744,6 +1802,12 @@ export function createApiClient() {
         return compileReframeClient(payload);
       }
       return requestJson("/api/reframe/compile", { method: "POST", body: payload });
+    },
+    async compileFilmGrainFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileFilmGrainClient(payload);
+      }
+      return requestJson("/api/film-grain/compile", { method: "POST", body: payload });
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {

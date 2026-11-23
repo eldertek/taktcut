@@ -404,6 +404,14 @@ const state = {
   },
   reframeCompileSeq: 0,
   reframeCompileTimer: null,
+  filmGrain: {
+    enabled: false,
+    preset: "35mm_fine",
+    strength: 12,
+    temporal: true
+  },
+  filmGrainCompileSeq: 0,
+  filmGrainCompileTimer: null,
   subtitleTrack: {
     enabled: true,
     style: "clean_white",
@@ -745,7 +753,7 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(false),
       null,
       null,
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain } }
     );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
@@ -805,7 +813,7 @@ function redrawActiveCanvases() {
         beforeLabel: t("wipe.pill.before"),
         afterLabel: t("wipe.pill.after")
       },
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain } }
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -820,7 +828,7 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(true),
       null,
       null,
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain } }
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
@@ -2356,6 +2364,7 @@ function serializeFullProjectState() {
       lower_third: { ...state.lowerThird },
       retime: { ...state.deliverRetime },
       reframe: { ...state.reframe },
+      film_grain: { ...state.filmGrain },
       export_fps: txt("render-export-fps", "source") || "source",
       deinterlace: chk("render-deinterlace", false),
       audio_only_format: txt("render-audio-only-format", "off") || "off",
@@ -2593,6 +2602,20 @@ function applyFullProjectState(project, validation) {
     state.reframe = { enabled: false, aspect_ratio: "source", pan_x: 0.0, pan_y: 0.0 };
   }
   syncReframeControlsUI({ syncInputs: true });
+  if (del.film_grain && typeof del.film_grain === "object") {
+    const allowedPresets = new Set(["35mm_fine", "16mm_organic", "super8_heavy", "custom"]);
+    const rawPreset = String(del.film_grain.preset || "35mm_fine").trim().toLowerCase();
+    const rawStrength = Number(del.film_grain.strength);
+    state.filmGrain = {
+      enabled: Boolean(del.film_grain.enabled),
+      preset: allowedPresets.has(rawPreset) ? rawPreset : "35mm_fine",
+      strength: Number.isFinite(rawStrength) ? Math.min(60, Math.max(0, Math.round(rawStrength))) : 12,
+      temporal: del.film_grain.temporal !== undefined ? Boolean(del.film_grain.temporal) : true
+    };
+  } else {
+    state.filmGrain = { enabled: false, preset: "35mm_fine", strength: 12, temporal: true };
+  }
+  syncFilmGrainControlsUI({ syncInputs: true });
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -5399,6 +5422,103 @@ function scheduleReframeCompile() {
   }, 80);
 }
 
+const FILM_GRAIN_PRESET_STRENGTHS = {
+  "35mm_fine": 10,
+  "16mm_organic": 22,
+  "super8_heavy": 38
+};
+
+const FILM_GRAIN_BADGE_LABELS = {
+  "35mm_fine": "35MM",
+  "16mm_organic": "16MM",
+  "super8_heavy": "SUPER 8",
+  custom: "CUSTOM"
+};
+
+function getNormalizedFilmGrainPayload() {
+  const fg = state.filmGrain;
+  const allowed = new Set(["35mm_fine", "16mm_organic", "super8_heavy", "custom"]);
+  const rawPreset = String(fg.preset || "35mm_fine").trim().toLowerCase();
+  const preset = allowed.has(rawPreset) ? rawPreset : "35mm_fine";
+  const rawStrength = Number(fg.strength);
+  const strength = Number.isFinite(rawStrength) ? Math.min(60, Math.max(0, Math.round(rawStrength))) : 12;
+  return {
+    enabled: Boolean(fg.enabled),
+    preset,
+    strength,
+    temporal: fg.temporal !== undefined ? Boolean(fg.temporal) : true
+  };
+}
+
+function syncFilmGrainPresetButtons() {
+  const fg = getNormalizedFilmGrainPayload();
+  for (const btn of document.querySelectorAll(".film-grain-deliver-preset-btn[data-deliver-film-grain-preset]")) {
+    const btnPreset = String(btn.getAttribute("data-deliver-film-grain-preset") || "").trim().toLowerCase();
+    const isMatch = fg.preset === btnPreset;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function syncFilmGrainControlsUI(opts = {}) {
+  const fg = getNormalizedFilmGrainPayload();
+  const syncInputs = Boolean(opts.syncInputs);
+  const enabledEl = byId("render-film-grain-enabled");
+  if (enabledEl && enabledEl.checked !== fg.enabled) {
+    enabledEl.checked = fg.enabled;
+  }
+  const strengthEl = byId("render-film-grain-strength");
+  if (syncInputs && strengthEl) {
+    strengthEl.value = String(fg.strength);
+  }
+  const strengthValEl = byId("render-film-grain-strength-value");
+  if (strengthValEl) {
+    strengthValEl.textContent = String(fg.strength);
+  }
+  const temporalEl = byId("render-film-grain-temporal");
+  if (temporalEl && temporalEl.checked !== fg.temporal) {
+    temporalEl.checked = fg.temporal;
+  }
+  const badgeEl = byId("render-film-grain-badge");
+  if (badgeEl) {
+    if (!fg.enabled || fg.strength <= 0) {
+      badgeEl.textContent = "OFF";
+      badgeEl.className = "nle-tag mono";
+    } else {
+      const tag = FILM_GRAIN_BADGE_LABELS[fg.preset] || "CUSTOM";
+      badgeEl.textContent = `${tag} ${fg.strength}`;
+      badgeEl.className = "nle-tag is-active mono";
+    }
+  }
+  syncFilmGrainPresetButtons();
+  scheduleFilmGrainCompile();
+}
+
+function scheduleFilmGrainCompile() {
+  if (state.filmGrainCompileTimer) {
+    window.clearTimeout(state.filmGrainCompileTimer);
+  }
+  const seq = ++state.filmGrainCompileSeq;
+  state.filmGrainCompileTimer = window.setTimeout(async () => {
+    const previewEl = byId("render-film-grain-preview");
+    const payload = getNormalizedFilmGrainPayload();
+    if (!payload.enabled || payload.strength <= 0) {
+      if (previewEl) previewEl.textContent = "(off)";
+      return;
+    }
+    try {
+      const compiled = await api.compileFilmGrainFilter({ film_grain: payload });
+      if (seq !== state.filmGrainCompileSeq) return;
+      if (previewEl) {
+        previewEl.textContent = compiled.filtergraph ? `-vf ${compiled.filtergraph}` : "(off)";
+      }
+    } catch (err) {
+      if (seq !== state.filmGrainCompileSeq) return;
+      if (previewEl) previewEl.textContent = `Error: ${err.message}`;
+    }
+  }, 80);
+}
+
 function applyDeliveryPreset(presetId) {
   const presets = getDeliveryPresetsList();
   const preset = presets.find((p) => p.id === presetId);
@@ -5679,6 +5799,9 @@ async function buildOrExecuteRender(execute) {
     const reframePayload = getNormalizedReframePayload();
     const reframeActivePayload =
       reframePayload.enabled && reframePayload.aspect_ratio !== "source" ? reframePayload : null;
+    const filmGrainPayload = getNormalizedFilmGrainPayload();
+    const filmGrainActivePayload =
+      filmGrainPayload.enabled && filmGrainPayload.strength > 0 ? filmGrainPayload : null;
     const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
     const exportFpsEl = byId("render-export-fps");
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
@@ -5711,6 +5834,7 @@ async function buildOrExecuteRender(execute) {
         transform_params: transformParamsPayload,
         framing: framingPayload,
         reframe: reframeActivePayload,
+        film_grain: filmGrainActivePayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
         loudness_preset: fairlightPayload.loudness_preset,
@@ -5775,6 +5899,7 @@ async function buildOrExecuteRender(execute) {
       transform_params: transformParamsPayload,
       framing: framingPayload,
       reframe: reframeActivePayload,
+      film_grain: filmGrainActivePayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
       loudness_preset: fairlightPayload.loudness_preset,
@@ -5867,6 +5992,12 @@ async function buildOrExecuteRender(execute) {
         t("render.plan.reframe"),
         plan.reframe_enabled
           ? `${plan.reframe_aspect_ratio} (${Number(plan.reframe_pan_x ?? 0).toFixed(2)}, ${Number(plan.reframe_pan_y ?? 0).toFixed(2)})`
+          : "off"
+      ],
+      [
+        t("render.plan.filmGrain"),
+        plan.film_grain_enabled
+          ? `${plan.film_grain_preset} (${plan.film_grain_strength}, ${plan.film_grain_temporal ? "T+U" : "U"})`
           : "off"
       ],
       ["Video Filter", plan.video_filter || t("common.none")],
@@ -9900,6 +10031,51 @@ function wireEvents() {
     });
   }
   syncReframeControlsUI({ syncInputs: true });
+
+  const fgEnabledEl = byId("render-film-grain-enabled");
+  if (fgEnabledEl) {
+    fgEnabledEl.addEventListener("change", () => {
+      state.filmGrain.enabled = Boolean(fgEnabledEl.checked);
+      syncFilmGrainControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  for (const btn of document.querySelectorAll(".film-grain-deliver-preset-btn[data-deliver-film-grain-preset]")) {
+    btn.addEventListener("click", () => {
+      const preset = String(btn.getAttribute("data-deliver-film-grain-preset") || "35mm_fine").trim().toLowerCase();
+      state.filmGrain.preset = preset;
+      if (Object.prototype.hasOwnProperty.call(FILM_GRAIN_PRESET_STRENGTHS, preset)) {
+        state.filmGrain.strength = FILM_GRAIN_PRESET_STRENGTHS[preset];
+      }
+      state.filmGrain.enabled = true;
+      syncFilmGrainControlsUI({ syncInputs: true });
+      redrawActiveCanvases();
+    });
+  }
+  const fgStrengthEl = byId("render-film-grain-strength");
+  if (fgStrengthEl) {
+    const onStrengthChange = () => {
+      const val = Number.parseInt(fgStrengthEl.value, 10);
+      if (Number.isInteger(val) && val >= 0 && val <= 60) {
+        state.filmGrain.strength = val;
+        const matchedPreset = Object.entries(FILM_GRAIN_PRESET_STRENGTHS).find(([, s]) => s === val);
+        state.filmGrain.preset = matchedPreset ? matchedPreset[0] : "custom";
+        syncFilmGrainControlsUI();
+        redrawActiveCanvases();
+      }
+    };
+    fgStrengthEl.addEventListener("input", onStrengthChange);
+    fgStrengthEl.addEventListener("change", onStrengthChange);
+  }
+  const fgTemporalEl = byId("render-film-grain-temporal");
+  if (fgTemporalEl) {
+    fgTemporalEl.addEventListener("change", () => {
+      state.filmGrain.temporal = Boolean(fgTemporalEl.checked);
+      syncFilmGrainControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  syncFilmGrainControlsUI({ syncInputs: true });
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {

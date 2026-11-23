@@ -1053,3 +1053,43 @@ def test_project_delivery_reframe_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["reframe"][bad_key] = bad_val
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_film_grain_roundtrip(tmp_path: Path) -> None:
+    from taktcut.render import FilmGrainParams
+
+    proj = _build_full_test_project()
+    assert proj.delivery.film_grain.enabled is False
+    assert proj.delivery.film_grain.preset == "35mm_fine"
+    assert proj.delivery.film_grain.strength == 12
+    assert proj.delivery.film_grain.temporal is True
+
+    proj.delivery.film_grain = FilmGrainParams(
+        enabled=True, preset="16mm_organic", strength=22, temporal=False
+    )
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.film_grain.enabled is True
+    assert loaded.delivery.film_grain.preset == "16mm_organic"
+    assert loaded.delivery.film_grain.strength == 22
+    assert loaded.delivery.film_grain.temporal is False
+
+    proj_path = tmp_path / "film_grain_proj.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.film_grain.enabled is True
+    assert disk_loaded.delivery.film_grain.preset == "16mm_organic"
+    assert disk_loaded.delivery.film_grain.strength == 22
+    assert disk_loaded.delivery.film_grain.temporal is False
+
+    for bad_key, bad_val in (
+        ("preset", "8mm_invalid"),
+        ("strength", -1),
+        ("strength", 65),
+        ("strength", True),
+        ("temporal", "true"),
+    ):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["film_grain"][bad_key] = bad_val
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

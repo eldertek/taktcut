@@ -429,3 +429,28 @@ def test_remote_render_request_accepts_reframe() -> None:
             input_base64="AAAA",
             reframe={"enabled": True, "aspect_ratio": "9:16", "pan_x": 1.5},  # type: ignore[arg-type]
         )
+
+
+def test_remote_render_request_accepts_film_grain() -> None:
+    from taktcut.remote_render import RemoteRenderJobRequest
+
+    req = RemoteRenderJobRequest(
+        input_base64="AAAA",
+        film_grain={  # type: ignore[arg-type]
+            "enabled": True,
+            "preset": "super8_heavy",
+            "strength": 38,
+            "temporal": False,
+        },
+    )
+    assert req.film_grain is not None
+    assert req.film_grain.enabled is True
+    assert req.film_grain.preset == "super8_heavy"
+    assert req.film_grain.strength == 38
+    assert req.film_grain.temporal is False
+
+    with pytest.raises((ValueError, Exception)):
+        RemoteRenderJobRequest(
+            input_base64="AAAA",
+            film_grain={"enabled": True, "strength": 75},  # type: ignore[arg-type]
+        )

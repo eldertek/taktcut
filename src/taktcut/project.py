@@ -43,6 +43,7 @@ from taktcut.render import (
     AutoDuckParams,
     DeliveryPresetId,
     EncoderPresetId,
+    FilmGrainParams,
     FramingParams,
     LowerThirdParams,
     ReframeParams,
@@ -176,6 +177,7 @@ class ProjectDeliveryState(BaseModel):
     lower_third: LowerThirdParams = Field(default_factory=LowerThirdParams)
     retime: RetimeParams = Field(default_factory=RetimeParams)
     reframe: ReframeParams = Field(default_factory=ReframeParams)
+    film_grain: FilmGrainParams = Field(default_factory=FilmGrainParams)
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

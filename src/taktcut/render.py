@@ -26,9 +26,13 @@ from taktcut.models import (
     ALLOWED_AUDIO_ONLY_FORMATS,
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
     ALLOWED_EXPORT_FPS,
+    ALLOWED_FILM_GRAIN_PRESETS,
     ALLOWED_LOWER_THIRD_POSITIONS,
     ALLOWED_REFRAME_ASPECT_RATIOS,
     ALLOWED_TIMECODE_BURNIN,
+    FILM_GRAIN_STRENGTH_DEFAULT,
+    FILM_GRAIN_STRENGTH_MAX,
+    FILM_GRAIN_STRENGTH_MIN,
     LOWER_THIRD_BOX_OPACITY_DEFAULT,
     LOWER_THIRD_BOX_OPACITY_MAX,
     LOWER_THIRD_BOX_OPACITY_MIN,
@@ -48,6 +52,7 @@ from taktcut.models import (
     DialogueEqPresetId,
     DynamicZoomPresetId,
     ExportFpsOption,
+    FilmGrainPresetId,
     HardwareCapabilities,
     LoudnessPresetId,
     LowerThirdPosition,
@@ -1581,6 +1586,98 @@ def compile_reframe_filter_result(params: ReframeParams) -> ReframeCompileResult
     )
 
 
+_FILM_GRAIN_CANONICAL_MAP: dict[str, FilmGrainPresetId] = {
+    item: item for item in ALLOWED_FILM_GRAIN_PRESETS
+}
+FILM_GRAIN_PRESET_STRENGTHS: dict[FilmGrainPresetId, int] = {
+    "35mm_fine": 10,
+    "16mm_organic": 22,
+    "super8_heavy": 38,
+    "custom": FILM_GRAIN_STRENGTH_DEFAULT,
+}
+
+
+class FilmGrainParams(BaseModel):
+    """DaVinci Resolve Studio / Sapphire Film Grain (FFmpeg noise) parameters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    preset: FilmGrainPresetId = "35mm_fine"
+    strength: int = FILM_GRAIN_STRENGTH_DEFAULT
+    temporal: bool = True
+
+    @field_validator("enabled", "temporal", mode="before")
+    @classmethod
+    def _validate_bool_fields(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> FilmGrainPresetId:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        canonical = _FILM_GRAIN_CANONICAL_MAP.get(cleaned)
+        if canonical is None:
+            allowed = ", ".join(ALLOWED_FILM_GRAIN_PRESETS)
+            raise ValueError(
+                f"Unsupported film grain preset {raw!r}; expected one of: {allowed}"
+            )
+        return canonical
+
+    @field_validator("strength", mode="before")
+    @classmethod
+    def _validate_strength(cls, raw: Any) -> int:
+        return _validate_bounded_int(
+            raw,
+            "strength",
+            FILM_GRAIN_STRENGTH_MIN,
+            FILM_GRAIN_STRENGTH_MAX,
+        )
+
+    def is_active(self) -> bool:
+        """Return True when enabled and strength is strictly positive."""
+        return bool(self.enabled and self.strength > 0)
+
+    def is_identity(self) -> bool:
+        """Return True when disabled or strength is zero."""
+        return not self.is_active()
+
+
+class FilmGrainCompileResult(BaseModel):
+    """Compiled FFmpeg noise filtergraph for Film Grain."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_identity: bool
+    is_active: bool = False
+    params: FilmGrainParams
+
+
+def compile_film_grain_filter(params: FilmGrainParams) -> str:
+    """Compile validated FilmGrainParams into an FFmpeg noise filter string (or '')."""
+    if not params.is_active():
+        return ""
+    flags = "t+u" if params.temporal else "u"
+    return f"noise=alls={params.strength}:allf={flags}"
+
+
+def compile_film_grain_filter_result(params: FilmGrainParams) -> FilmGrainCompileResult:
+    """Compile Film Grain parameters into structured filtergraph and argv slice."""
+    fg = compile_film_grain_filter(params)
+    is_act = fg != ""
+    return FilmGrainCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_identity=not is_act,
+        is_active=is_act,
+        params=params,
+    )
+
+
 ALLOWED_TRANSFORM_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "yuv444p", "rgba", "rgb24"}
 )
@@ -1905,6 +2002,7 @@ def build_render_plan(
     lower_third: LowerThirdParams | None = None,
     retime: RetimeParams | None = None,
     reframe: ReframeParams | None = None,
+    film_grain: FilmGrainParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -2072,6 +2170,19 @@ def build_render_plan(
             reframe_pan_x = reframe.pan_x
             reframe_pan_y = reframe.pan_y
 
+    film_grain_vf = ""
+    film_grain_enabled = False
+    film_grain_preset: FilmGrainPresetId = "35mm_fine"
+    film_grain_strength = FILM_GRAIN_STRENGTH_DEFAULT
+    film_grain_temporal = True
+    if film_grain is not None and film_grain.is_active():
+        film_grain_vf = compile_film_grain_filter(film_grain)
+        if film_grain_vf:
+            film_grain_enabled = True
+            film_grain_preset = film_grain.preset
+            film_grain_strength = film_grain.strength
+            film_grain_temporal = film_grain.temporal
+
     transform_vf: str | None = None
     if transform_params is not None and not transform_params.is_identity():
         transform_vf = compile_transform_filter(
@@ -2143,6 +2254,8 @@ def build_render_plan(
         )
         if video_fade_vf is not None:
             vf_parts.append(video_fade_vf)
+    if film_grain_vf:
+        vf_parts.append(film_grain_vf)
     if title_overlay is not None and title_overlay.is_active():
         title_fg = compile_title_filter(title_overlay, pix_fmt=pix_fmt)
         if title_fg:
@@ -2238,6 +2351,10 @@ def build_render_plan(
             reframe_aspect_ratio="source",
             reframe_pan_x=0.0,
             reframe_pan_y=0.0,
+            film_grain_enabled=False,
+            film_grain_preset="35mm_fine",
+            film_grain_strength=FILM_GRAIN_STRENGTH_DEFAULT,
+            film_grain_temporal=True,
             export_fps=resolved_export_fps,
             deinterlace=resolved_deinterlace,
             audio_only_format=resolved_audio_only,
@@ -2345,6 +2462,10 @@ def build_render_plan(
         reframe_aspect_ratio=reframe_aspect_ratio,
         reframe_pan_x=reframe_pan_x,
         reframe_pan_y=reframe_pan_y,
+        film_grain_enabled=film_grain_enabled,
+        film_grain_preset=film_grain_preset,
+        film_grain_strength=film_grain_strength,
+        film_grain_temporal=film_grain_temporal,
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
         audio_only_format=resolved_audio_only,

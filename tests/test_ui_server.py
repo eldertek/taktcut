@@ -3656,6 +3656,65 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 rf_reset.click()
                 rf_chk.uncheck()
 
+                # Verify Deliver Film Grain (35mm / 16mm / Super 8) + Program Monitor live frame
+                fg_card = page.locator("#deliver-film-grain-card")
+                fg_chk = page.locator("#render-film-grain-enabled")
+                fg_strength = page.locator("#render-film-grain-strength")
+                fg_temporal = page.locator("#render-film-grain-temporal")
+                fg_35 = page.locator(
+                    '.film-grain-deliver-preset-btn[data-deliver-film-grain-preset="35mm_fine"]'
+                )
+                fg_16 = page.locator(
+                    '.film-grain-deliver-preset-btn[data-deliver-film-grain-preset="16mm_organic"]'
+                )
+                fg_s8 = page.locator(
+                    '.film-grain-deliver-preset-btn[data-deliver-film-grain-preset="super8_heavy"]'
+                )
+                assert fg_card.is_visible() is True
+                assert fg_chk.is_checked() is False
+                assert fg_temporal.is_checked() is True
+                if width <= 820:
+                    for fg_loc in (fg_strength, fg_35, fg_16, fg_s8):
+                        fg_box = fg_loc.bounding_box()
+                        assert fg_box is not None and fg_box["height"] >= 44
+                fg_16.click()
+                assert fg_chk.is_checked() is True
+                assert fg_16.get_attribute("aria-pressed") == "true"
+                page.wait_for_function(
+                    "() => (document.getElementById('render-film-grain-preview')"
+                    ".textContent || '').includes('noise=alls=22:allf=t+u')"
+                )
+                fg_temporal.uncheck()
+                fg_strength.fill("30")
+                fg_strength.dispatch_event("input")
+                page.wait_for_function(
+                    "() => (document.getElementById('render-film-grain-preview')"
+                    ".textContent || '').includes('noise=alls=30:allf=u')"
+                )
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('noise=alls=')"
+                )
+                fg_argv = page.locator("#render-argv-output").text_content() or ""
+                fg_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "noise=alls=30:allf=u" in fg_argv
+                assert "custom (30, U)" in fg_kv
+                fg_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert fg_overflow <= 0, (
+                    f"Deliver film grain overflow at {width}x{height}: {fg_overflow}px"
+                )
+                page.locator("#tab-timeline").click()
+                prog_with_fg = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                assert prog_with_fg != prog_without_lt
+                page.locator("#tab-render").click()
+                fg_temporal.check()
+                fg_chk.uncheck()
+
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
@@ -5477,3 +5536,136 @@ def test_ui_reframe_compile_and_render_plan_endpoints(
 
     canvas_text = (assets_dir / "canvas.js").read_text(encoding="utf-8")
     assert "drawReframeOverlayOnFrame" in canvas_text
+
+
+def test_ui_film_grain_compile_and_render_plan_endpoints(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    for preset_name, strength_val, temporal_val, expected_fg in (
+        ("35mm_fine", 10, True, "noise=alls=10:allf=t+u"),
+        ("16mm_organic", 22, True, "noise=alls=22:allf=t+u"),
+        ("super8_heavy", 38, False, "noise=alls=38:allf=u"),
+        ("custom", 45, False, "noise=alls=45:allf=u"),
+    ):
+        c_status, _, c_raw = _http_call(
+            f"{base_url}/api/film-grain/compile",
+            method="POST",
+            payload={
+                "enabled": True,
+                "preset": preset_name,
+                "strength": strength_val,
+                "temporal": temporal_val,
+            },
+        )
+        assert c_status == 200
+        compiled = json.loads(c_raw.decode("utf-8"))
+        assert compiled["is_active"] is True
+        assert compiled["is_identity"] is False
+        assert compiled["filtergraph"] == expected_fg
+        assert compiled["ffmpeg_vf_args"] == ["-vf", expected_fg]
+
+    for off_payload in (
+        {"enabled": False, "preset": "16mm_organic", "strength": 22, "temporal": True},
+        {"enabled": True, "preset": "custom", "strength": 0, "temporal": True},
+    ):
+        off_status, _, off_raw = _http_call(
+            f"{base_url}/api/film-grain/compile",
+            method="POST",
+            payload=off_payload,
+        )
+        assert off_status == 200
+        off_compiled = json.loads(off_raw.decode("utf-8"))
+        assert off_compiled["is_active"] is False
+        assert off_compiled["is_identity"] is True
+        assert off_compiled["filtergraph"] == ""
+        assert off_compiled["ffmpeg_vf_args"] == []
+
+    for bad_fg in (
+        {"enabled": True, "preset": "70mm_bad", "strength": 12},
+        {"enabled": True, "preset": "35mm_fine", "strength": -1},
+        {"enabled": True, "preset": "35mm_fine", "strength": 61},
+        {"enabled": True, "preset": "35mm_fine", "strength": 12.5},
+        {"enabled": "yes", "preset": "35mm_fine", "strength": 12},
+        {"enabled": True, "preset": "35mm_fine", "strength": 12, "temporal": "yes"},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/film-grain/compile",
+            method="POST",
+            payload=bad_fg,
+        )
+        assert bad_status == 400
+
+    rp_status, _, rp_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/film_grain_dryrun.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "film_grain": {
+                "enabled": True,
+                "preset": "16mm_organic",
+                "strength": 22,
+                "temporal": True,
+            },
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert rp_status == 200
+    plan = json.loads(rp_raw.decode("utf-8"))["plan"]
+    assert plan["film_grain_enabled"] is True
+    assert plan["film_grain_preset"] == "16mm_organic"
+    assert plan["film_grain_strength"] == 22
+    assert plan["film_grain_temporal"] is True
+    assert "noise=alls=22:allf=t+u" in plan["video_filter"]
+
+    bad_rp_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/film_grain_bad.mp4",
+            "film_grain": {"enabled": True, "preset": "35mm_fine", "strength": 99},
+            "execute": False,
+        },
+    )
+    assert bad_rp_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "deliver-film-grain-card",
+        "render-film-grain-enabled",
+        "render-film-grain-badge",
+        "render-film-grain-strength",
+        "render-film-grain-strength-value",
+        "render-film-grain-temporal",
+        "render-film-grain-preview",
+    ):
+        assert f'id="{elem_id}"' in html_text
+    for preset_attr in ("35mm_fine", "16mm_organic", "super8_heavy"):
+        assert f'data-deliver-film-grain-preset="{preset_attr}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.filmGrain.title",
+        "render.filmGrain.toggle",
+        "render.filmGrain.preset.35mm",
+        "render.filmGrain.preset.16mm",
+        "render.filmGrain.preset.super8",
+        "render.filmGrain.label.strength",
+        "render.filmGrain.label.temporal",
+        "render.plan.filmGrain",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    demo_text = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    assert "compileFilmGrainClient" in demo_text
+    assert "film_grain_enabled" in demo_text
+
+    canvas_text = (assets_dir / "canvas.js").read_text(encoding="utf-8")
+    assert "drawFilmGrainOverlayOnFrame" in canvas_text

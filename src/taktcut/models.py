@@ -188,6 +188,7 @@ DialogueEqPresetId = Literal["off", "voice_clarity", "podcast_warm", "derumble"]
 TimecodeBurnInPosition = Literal["off", "top_left", "bottom_center", "bottom_right"]
 LowerThirdPosition = Literal["bottom_left", "bottom_center", "top_left"]
 ReframeAspectRatio = Literal["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]
+FilmGrainPresetId = Literal["35mm_fine", "16mm_organic", "super8_heavy", "custom"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
 
@@ -210,6 +211,15 @@ ALLOWED_REFRAME_ASPECT_RATIOS: tuple[ReframeAspectRatio, ...] = (
     "1:1",
     "2.39:1",
 )
+ALLOWED_FILM_GRAIN_PRESETS: tuple[FilmGrainPresetId, ...] = (
+    "35mm_fine",
+    "16mm_organic",
+    "super8_heavy",
+    "custom",
+)
+FILM_GRAIN_STRENGTH_MIN: int = 0
+FILM_GRAIN_STRENGTH_MAX: int = 60
+FILM_GRAIN_STRENGTH_DEFAULT: int = 12
 ALLOWED_EXPORT_FPS: tuple[ExportFpsOption, ...] = ("source", "24", "25", "30", "60")
 ALLOWED_AUDIO_ONLY_FORMATS: tuple[AudioOnlyFormatId, ...] = (
     "off",
@@ -551,6 +561,10 @@ class RenderPlan(BaseModel):
     reframe_aspect_ratio: ReframeAspectRatio = "source"
     reframe_pan_x: float = 0.0
     reframe_pan_y: float = 0.0
+    film_grain_enabled: bool = False
+    film_grain_preset: FilmGrainPresetId = "35mm_fine"
+    film_grain_strength: int = FILM_GRAIN_STRENGTH_DEFAULT
+    film_grain_temporal: bool = True
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"
