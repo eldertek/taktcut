@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -97,7 +98,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.8"
+    assert health["version"] == "0.1.9"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -856,9 +857,13 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-fx-split-wipe",
         "fx-wipe-slider",
         "fx-wipe-label",
+        "btn-color-grab-still",
+        "btn-fx-grab-still",
+        "color-stills-gallery",
+        "fx-stills-gallery",
     ):
         assert elem_id in html_text
-    assert "v0.1.8" in html_text
+    assert "v0.1.9" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -893,6 +898,10 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Volet Avant/Après"' in i18n_text
     assert '"AVANT"' in i18n_text
     assert '"APRÈS"' in i18n_text
+    assert '"Capturer Image"' in i18n_text
+    assert '"Galerie d\'Images"' in i18n_text
+    assert '"Télécharger PNG"' in i18n_text
+    assert '"Capturer Image Fixe PNG (Couleur & FX)"' in i18n_text
     assert "innerHTML" not in i18n_text
     for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
         asset_text = _http_call(f"{base_url}{asset_path}")[2].decode("utf-8")
@@ -930,8 +939,11 @@ import {{
   SPLIT_WIPE_POS_DEFAULT,
   SPLIT_WIPE_POS_MAX,
   SPLIT_WIPE_POS_MIN,
+  STILLS_GALLERY_MAX,
   addMarkerInDocument,
+  appendStillBounded,
   buildAtempoStagesClient,
+  buildStillFilename,
   clampSplitWipePercent,
   collectSnapTargets,
   compileAudioFilterClient,
@@ -942,6 +954,7 @@ import {{
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
   computeSplitWipePercentFromPointer,
+  createStillRecord,
   deleteMarkerInDocument,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
@@ -958,6 +971,8 @@ import {{
   normalizeClipTransition,
   normalizeInOutRange,
   normalizeMarkerColor,
+  removeStillById,
+  sanitizeStillDataUrl,
   normalizeSplitWipeState,
   rippleDeleteClipInDocument,
   setInOutRange,
@@ -1451,6 +1466,61 @@ assert.equal(isPointerOnSplitWipeDivider(220, 110, wipeGeom, SPLIT_WIPE_HIT_RADI
 assert.equal(isPointerOnSplitWipeDivider(235, 50, wipeGeom, SPLIT_WIPE_HIT_RADIUS_PX), true);
 assert.equal(isPointerOnSplitWipeDivider(260, 110, wipeGeom, SPLIT_WIPE_HIT_RADIUS_PX), false);
 assert.equal(isPointerOnSplitWipeDivider(220, 250, wipeGeom, SPLIT_WIPE_HIT_RADIUS_PX), false);
+
+// DaVinci Gallery Still Grab & bounded Stills Gallery helpers
+assert.equal(STILLS_GALLERY_MAX, 8);
+const stillDate = new Date(2026, 10, 23, 1, 14, 9);
+assert.equal(buildStillFilename(stillDate), "taktcut-still-20261123-011409.png");
+assert.equal(sanitizeStillDataUrl("javascript:alert(1)"), "");
+assert.equal(sanitizeStillDataUrl("data:text/html,<script>alert(1)</script>"), "");
+const validPngData =
+  "data:image/png;base64," +
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+assert.equal(sanitizeStillDataUrl(validPngData), validPngData);
+
+const stillRec = createStillRecord({{
+  id: "s1",
+  source: "color",
+  dataUrl: validPngData,
+  preset: "Teal & Orange",
+  createdAt: stillDate,
+  width: 640,
+  height: 224,
+}});
+assert.equal(stillRec.filename, "taktcut-still-20261123-011409.png");
+assert.equal(stillRec.source, "color");
+assert.equal(stillRec.label, "COLOR");
+assert.equal(stillRec.preset, "Teal & Orange");
+assert.equal(stillRec.timestampLabel, "01:14:09");
+assert.equal(stillRec.dataUrl, validPngData);
+
+const xssStill = createStillRecord({{
+  id: "xss",
+  source: "unknown",
+  dataUrl: "javascript:alert(1)",
+  createdAt: stillDate,
+}});
+assert.equal(xssStill.source, "color");
+assert.equal(xssStill.dataUrl, "");
+
+let gallery = [];
+for (let idx = 1; idx <= 10; idx += 1) {{
+  const rec = createStillRecord({{
+    id: `still-${{idx}}`,
+    source: idx % 2 === 0 ? "fx" : "color",
+    dataUrl: validPngData,
+    createdAt: new Date(2026, 10, 23, 1, 14, idx),
+  }});
+  gallery = appendStillBounded(gallery, rec);
+}}
+assert.equal(gallery.length, 8);
+assert.equal(gallery[0].id, "still-10");
+assert.equal(gallery[7].id, "still-3");
+
+const afterDelete = removeStillById(gallery, "still-9");
+assert.equal(afterDelete.length, 7);
+assert.equal(afterDelete.some((s) => s.id === "still-9"), false);
+assert.equal(gallery.length, 8);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -2073,6 +2143,93 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert "colorbalance=" in fg_text
                     assert "eq=contrast=1.1400:saturation=1.1800" in fg_text
 
+                    # Verify DaVinci Gallery Still Grab (Color Monitor, no wipe line)
+                    page.locator('[data-grade-preset="noir_bw"]').click()
+                    assert page.locator("#color-stills-gallery .still-card").count() == 0
+                    page.locator("#btn-color-grab-still").click()
+                    assert page.locator("#color-stills-gallery .still-card").count() == 1
+                    # Grabbed PNG must be clean Noir B&W on both left & right halves
+                    clean_still_check = page.evaluate(
+                        """() => new Promise((resolve) => {
+                            const img = document.querySelector(
+                                '#color-stills-gallery .still-thumb'
+                            );
+                            const src = img ? img.getAttribute('src') : '';
+                            if (!src || !src.startsWith('data:image/png;base64,')) {
+                                resolve({ valid: false });
+                                return;
+                            }
+                            const probe = new Image();
+                            probe.onload = () => {
+                                const off = document.createElement('canvas');
+                                off.width = probe.naturalWidth;
+                                off.height = probe.naturalHeight;
+                                const ctx = off.getContext('2d');
+                                ctx.drawImage(probe, 0, 0);
+                                const y = Math.floor(off.height * 0.22);
+                                const lx = Math.floor(off.width * 0.25);
+                                const rx = Math.floor(off.width * 0.75);
+                                const lp = ctx.getImageData(lx, y, 1, 1).data;
+                                const rp = ctx.getImageData(rx, y, 1, 1).data;
+                                const leftGray =
+                                    Math.abs(lp[0] - lp[1]) <= 2
+                                    && Math.abs(lp[1] - lp[2]) <= 2;
+                                const rightGray =
+                                    Math.abs(rp[0] - rp[1]) <= 2
+                                    && Math.abs(rp[1] - rp[2]) <= 2;
+                                resolve({ valid: true, leftGray, rightGray });
+                            };
+                            probe.src = src;
+                        })"""
+                    )
+                    assert clean_still_check == {
+                        "valid": True,
+                        "leftGray": True,
+                        "rightGray": True,
+                    }
+
+                    # Shift+S shortcut grabs another still outside inputs, ignored inside inputs
+                    page.locator("#grade-contrast-num").focus()
+                    page.keyboard.press("Shift+S")
+                    assert page.locator("#color-stills-gallery .still-card").count() == 1
+                    page.locator("#grade-contrast-num").blur()
+                    page.keyboard.press("Shift+S")
+                    assert page.locator("#color-stills-gallery .still-card").count() == 2
+
+                    # Clicking a still downloads taktcut-still-YYYYMMDD-HHMMSS.png
+                    with page.expect_download() as dl_info:
+                        page.locator("#color-stills-gallery .still-download-btn").first.click()
+                    download = dl_info.value
+                    assert re.match(
+                        r"^taktcut-still-\d{8}-\d{6}\.png$",
+                        download.suggested_filename,
+                    )
+
+                    # Delete button removes one still cleanly
+                    page.locator("#color-stills-gallery .still-delete-btn").first.click()
+                    assert page.locator("#color-stills-gallery .still-card").count() == 1
+
+                    # Shortcuts dialog documents Shift+S
+                    page.keyboard.press("?")
+                    page.wait_for_selector("#nle-shortcuts-dialog[open]")
+                    dlg_text = page.locator("#nle-shortcuts-grid").text_content() or ""
+                    assert "Shift+S" in dlg_text
+                    page.keyboard.press("Escape")
+                else:
+                    # Mobile 375px check: Grab Still + touch target >= 44px + 0 horizontal overflow
+                    page.locator("#btn-color-grab-still").click()
+                    assert page.locator("#color-stills-gallery .still-card").count() == 1
+                    grab_box = page.locator("#btn-color-grab-still").bounding_box()
+                    del_loc = page.locator("#color-stills-gallery .still-delete-btn").first
+                    del_box = del_loc.bounding_box()
+                    assert grab_box is not None and grab_box["height"] >= 44
+                    assert del_box is not None
+                    assert del_box["width"] >= 44 and del_box["height"] >= 44
+                    color_still_overflow = page.evaluate(
+                        "() => document.documentElement.scrollWidth - window.innerWidth"
+                    )
+                    assert color_still_overflow <= 0
+
                 # Verify Titles & Lower-Thirds page responsiveness and compilation
                 page.locator("#tab-titles").click()
                 page.wait_for_selector("#panel-titles:not(.is-hidden)")
@@ -2175,6 +2332,18 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator("#btn-fx-matte-final").click()
                     assert (
                         page.locator("#btn-fx-matte-final").get_attribute("aria-pressed") == "true"
+                    )
+                    # Grab Still from FX Program Monitor (button & Shift+S)
+                    before_fx_stills = page.locator("#fx-stills-gallery .still-card").count()
+                    page.locator("#btn-fx-grab-still").click()
+                    assert (
+                        page.locator("#fx-stills-gallery .still-card").count()
+                        == before_fx_stills + 1
+                    )
+                    page.keyboard.press("Shift+S")
+                    assert (
+                        page.locator("#fx-stills-gallery .still-card").count()
+                        == before_fx_stills + 2
                     )
 
                 # Verify Deliver Quick-Export Preset Strip at all viewports (1440px and 375px)

@@ -650,6 +650,10 @@
                   <input type="range" id="fx-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="FX split wipe position">
                   <span id="fx-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
                 </div>
+                <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
+                  <span data-i18n="stills.btn.grab">Grab Still</span>
+                  <span class="kbd-chip mono">Shift+S</span>
+                </button>
                 <button type="button" id="btn-fx-bypass-all" class="btn btn-secondary" aria-pressed="false" data-i18n="fx.btn.bypassAll">Bypass FX (A/B)</button>
                 <button type="button" id="btn-fx-reset-all" class="btn btn-secondary" data-i18n="fx.btn.resetAll">Clear FX</button>
               </div>
@@ -666,6 +670,7 @@
                 <input type="range" id="fx-playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="25" aria-label="FX preview frame">
                 <span id="fx-program-tc" class="tc-readout mono">00:00:01:00</span>
               </div>
+              <div id="fx-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
           </section>
         </div>
@@ -1022,6 +1027,10 @@
                   <input type="range" id="cdl-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="Color split wipe position">
                   <span id="cdl-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
                 </div>
+                <button type="button" id="btn-color-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
+                  <span data-i18n="stills.btn.grab">Grab Still</span>
+                  <span class="kbd-chip mono">Shift+S</span>
+                </button>
                 <button type="button" id="btn-cdl-reset" class="btn btn-secondary" data-i18n="color.btn.reset">Reset All</button>
               </div>
             </div>
@@ -1036,6 +1045,7 @@
                 <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="film_warm" aria-pressed="false" data-i18n="color.preset.filmWarm">Film Warm</button>
                 <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="noir_bw" aria-pressed="false" data-i18n="color.preset.noirBw">Noir B&amp;W</button>
               </div>
+              <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
           </section>
 
@@ -1562,7 +1572,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | I/O: In/Out | Alt+X: Clear I/O | A/B: Select/Blade | N: Snap | M: Marker | ?: Shortcuts</span>
       </span>
-      <span id="version-badge">v0.1.8</span>
+      <span id="version-badge">v0.1.9</span>
     </footer>
   </div>
 

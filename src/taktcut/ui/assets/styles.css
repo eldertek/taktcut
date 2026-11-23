@@ -1696,6 +1696,169 @@ input[type="file"]::file-selector-button:hover {
   text-align: center;
 }
 
+.btn-grab-still {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stills-gallery-strip {
+  margin-top: 8px;
+  padding: 7px 9px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.stills-gallery-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stills-gallery-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.stills-gallery-empty {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.35;
+}
+
+.stills-gallery-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+
+.still-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.still-card:hover {
+  border-color: var(--accent-amber);
+}
+
+.still-download-btn {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  min-width: 0;
+}
+
+.still-download-btn:focus-visible,
+.still-delete-btn:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: -2px;
+}
+
+.still-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #141416;
+  border-bottom: 1px solid var(--border-inner);
+}
+
+.still-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+
+.still-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.still-source-pill {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--accent-amber-soft);
+  color: #ffd8a8;
+  border: 1px solid rgba(230, 132, 66, 0.45);
+}
+
+.still-source-pill.is-fx {
+  background: rgba(82, 139, 255, 0.16);
+  color: #b7d2ff;
+  border-color: rgba(82, 139, 255, 0.45);
+}
+
+.still-time {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.still-preset {
+  font-size: 10px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.still-delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  background: rgba(17, 17, 20, 0.86);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.still-delete-btn:hover {
+  background: rgba(229, 83, 75, 0.92);
+  border-color: #e5534b;
+  color: #ffffff;
+}
+
 .timeline-pane-header {
   gap: 8px 12px;
 }
@@ -2915,6 +3078,8 @@ input[type="range"] {
   .mixer-btn,
   .marker-jump-btn,
   .lang-btn,
+  .btn-grab-still,
+  .still-download-btn,
   .input-control,
   .input-select,
   .input-num {
@@ -2922,8 +3087,13 @@ input[type="range"] {
   }
   .mixer-btn,
   .btn-shortcuts-help,
+  .still-delete-btn,
   .audio-ctrl-row .btn-mini {
     min-width: 44px;
+    min-height: 44px;
+  }
+  .stills-gallery-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .shortcuts-grid {
     grid-template-columns: minmax(0, 1fr);

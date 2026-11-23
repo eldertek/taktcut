@@ -1956,3 +1956,89 @@ export function isPointerOnSplitWipeDivider(
   const inBoundsX = px >= x - r && px <= x + width + r;
   return inVertical && inBoundsX && Math.abs(px - geometry.dividerX) <= r;
 }
+
+export const STILLS_GALLERY_MAX = 8;
+
+const SAFE_STILL_DATA_URL_RE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+
+function normalizeStillDate(dateInput) {
+  if (dateInput instanceof Date && !Number.isNaN(dateInput.getTime())) {
+    return dateInput;
+  }
+  if (dateInput !== undefined && dateInput !== null && dateInput !== "") {
+    const parsed = new Date(dateInput);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  return new Date();
+}
+
+export function buildStillFilename(dateInput = new Date()) {
+  const d = normalizeStillDate(dateInput);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const ymd = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
+  const hms = `${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+  return `taktcut-still-${ymd}-${hms}.png`;
+}
+
+export function sanitizeStillDataUrl(rawUrl) {
+  if (typeof rawUrl !== "string") return "";
+  const trimmed = rawUrl.trim();
+  return SAFE_STILL_DATA_URL_RE.test(trimmed) ? trimmed : "";
+}
+
+export function createStillRecord(input = {}) {
+  const src = input && typeof input === "object" ? input : {};
+  const source = src.source === "fx" ? "fx" : "color";
+  const createdDate = normalizeStillDate(src.createdAt);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const timestampLabel = `${pad2(createdDate.getHours())}:${pad2(createdDate.getMinutes())}:${pad2(createdDate.getSeconds())}`;
+  const filename =
+    typeof src.filename === "string" && /^taktcut-still-\d{8}-\d{6}\.png$/.test(src.filename.trim())
+      ? src.filename.trim()
+      : buildStillFilename(createdDate);
+  const idRaw = typeof src.id === "string" ? src.id.trim() : "";
+  const id = idRaw || `still-${source}-${createdDate.getTime()}`;
+  const labelRaw = typeof src.label === "string" ? src.label.trim() : "";
+  const presetRaw = typeof src.preset === "string" ? src.preset.trim() : "";
+  const timecodeRaw = typeof src.timecode === "string" ? src.timecode.trim() : "";
+  const width = Math.max(0, Math.round(Number(src.width) || 0));
+  const height = Math.max(0, Math.round(Number(src.height) || 0));
+
+  return {
+    id,
+    source,
+    dataUrl: sanitizeStillDataUrl(src.dataUrl),
+    filename,
+    label: labelRaw || (source === "fx" ? "FX" : "COLOR"),
+    preset: presetRaw,
+    timecode: timecodeRaw,
+    createdAt: createdDate.toISOString(),
+    timestampLabel,
+    width,
+    height
+  };
+}
+
+export function appendStillBounded(stills, newStill, maxItems = STILLS_GALLERY_MAX) {
+  const list = Array.isArray(stills)
+    ? stills.filter((s) => s && typeof s === "object" && s.id)
+    : [];
+  const limitNum = Number(maxItems);
+  const limit = Number.isFinite(limitNum)
+    ? Math.max(1, Math.min(32, Math.floor(limitNum)))
+    : STILLS_GALLERY_MAX;
+  if (!newStill || typeof newStill !== "object" || !newStill.id) {
+    return list.slice(0, limit);
+  }
+  const deduped = list.filter((item) => item.id !== newStill.id);
+  return [newStill, ...deduped].slice(0, limit);
+}
+
+export function removeStillById(stills, stillId) {
+  const list = Array.isArray(stills) ? stills : [];
+  const targetId = typeof stillId === "string" ? stillId : String(stillId || "");
+  if (!targetId) return [...list];
+  return list.filter((item) => item && item.id !== targetId);
+}

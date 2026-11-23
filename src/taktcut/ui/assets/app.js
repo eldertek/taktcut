@@ -1,4 +1,6 @@
 import {
+  captureCleanColorStill,
+  captureCleanFxStill,
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
   drawFramesCanvas,
@@ -42,6 +44,7 @@ import {
   SNAP_THRESHOLD_PX,
   SPLIT_WIPE_HIT_RADIUS_PX,
   SPLIT_WIPE_POS_DEFAULT,
+  STILLS_GALLERY_MAX,
   TRANSFORM_OPACITY_DEFAULT,
   TRANSFORM_OPACITY_MAX,
   TRANSFORM_OPACITY_MIN,
@@ -58,6 +61,7 @@ import {
   TRANSITION_DURATION_MAX_S,
   TRANSITION_DURATION_MIN_S,
   addMarkerInDocument,
+  appendStillBounded,
   cloneTimelineDoc,
   collectSnapTargets,
   clampSplitWipePercent,
@@ -68,6 +72,7 @@ import {
   computeInOutRangeMetrics,
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
+  createStillRecord,
   deleteMarkerInDocument,
   evaluateTimelineAudioLevels,
   findAdjacentCutForClip,
@@ -92,7 +97,9 @@ import {
   normalizeClipTransition,
   normalizeInOutRange,
   normalizeMarkerColor,
+  removeStillById,
   rippleDeleteClipInDocument,
+  sanitizeStillDataUrl,
   setInOutRange,
   splitClipInDocument,
   splitClipsAtPlayhead,
@@ -319,6 +326,8 @@ const state = {
     isHovered: false,
     isDragging: false
   },
+  stillsGallery: [],
+  stillSeqCounter: 0,
   lastBakedCubePath: "",
   lastRenderCommand: "",
   lastRenderOutputPath: "",
@@ -460,9 +469,16 @@ function setLanguage(lang) {
     helpBtn.title = tip;
     helpBtn.setAttribute("aria-label", tip);
   }
+  for (const grabId of ["btn-color-grab-still", "btn-fx-grab-still"]) {
+    const grabBtn = byId(grabId);
+    if (grabBtn) {
+      grabBtn.title = t("stills.btn.grabTitle");
+    }
+  }
   updateTransportStatusUI();
   updateIoRangeUI();
   renderShortcutsDialog();
+  renderStillsGallery();
   renderUpdateButton();
   renderTimelineUI();
   renderFxStack();
@@ -3510,6 +3526,176 @@ function toggleActiveSplitWipe() {
   return false;
 }
 
+function dataUrlToPngBlob(dataUrl) {
+  const safe = sanitizeStillDataUrl(dataUrl);
+  if (!safe) return null;
+  const commaIdx = safe.indexOf(",");
+  if (commaIdx < 0) return null;
+  const b64 = safe.slice(commaIdx + 1);
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: "image/png" });
+}
+
+function downloadStillPng(still) {
+  if (!still) return;
+  const blob = dataUrlToPngBlob(still.dataUrl);
+  if (!blob) return;
+  triggerBlobDownload(blob, still.filename);
+  showBanner(t("stills.banner.downloaded").replace("{filename}", still.filename), "success");
+}
+
+function removeStillFromGallery(stillId) {
+  state.stillsGallery = removeStillById(state.stillsGallery, stillId);
+  renderStillsGallery();
+}
+
+function renderStillsGalleryContainer(container) {
+  if (!container) return;
+  const stills = Array.isArray(state.stillsGallery) ? state.stillsGallery : [];
+  const head = dom("div", "stills-gallery-head");
+  head.appendChild(dom("span", "stills-gallery-title", t("stills.gallery.title")));
+  head.appendChild(dom("span", "nle-tag mono", `${stills.length}/${STILLS_GALLERY_MAX}`));
+
+  if (stills.length === 0) {
+    const emptyMsg = dom("p", "stills-gallery-empty", t("stills.gallery.empty"));
+    container.replaceChildren(head, emptyMsg);
+    return;
+  }
+
+  const list = dom("div", "stills-gallery-list");
+  list.setAttribute("role", "list");
+  for (const still of stills) {
+    const safeUrl = sanitizeStillDataUrl(still.dataUrl);
+    if (!safeUrl) continue;
+
+    const card = dom("div", "still-card");
+    card.setAttribute("role", "listitem");
+    card.dataset.stillId = still.id;
+
+    const dlBtn = dom("button", "still-download-btn");
+    dlBtn.type = "button";
+    dlBtn.title = `${t("stills.action.download")}: ${still.filename}`;
+    dlBtn.setAttribute("aria-label", `${t("stills.action.download")} ${still.filename}`);
+    dlBtn.addEventListener("click", () => downloadStillPng(still));
+
+    const img = document.createElement("img");
+    img.className = "still-thumb";
+    img.src = safeUrl;
+    img.alt = `${still.label} ${still.preset || ""} ${still.timecode || still.timestampLabel}`.trim();
+    img.loading = "lazy";
+    dlBtn.appendChild(img);
+
+    const meta = dom("span", "still-meta");
+    const row = dom("span", "still-meta-row");
+    const srcPill = dom(
+      "span",
+      still.source === "fx" ? "still-source-pill is-fx mono" : "still-source-pill mono",
+      still.source === "fx" ? t("stills.source.fx") : t("stills.source.color")
+    );
+    row.appendChild(srcPill);
+    row.appendChild(dom("span", "still-time mono", still.timecode || still.timestampLabel));
+    meta.appendChild(row);
+    if (still.preset) {
+      meta.appendChild(dom("span", "still-preset", still.preset));
+    }
+    dlBtn.appendChild(meta);
+
+    const delBtn = dom("button", "still-delete-btn", "x");
+    delBtn.type = "button";
+    delBtn.title = t("stills.action.delete");
+    delBtn.setAttribute("aria-label", `${t("stills.action.delete")} ${still.filename}`);
+    delBtn.addEventListener("click", () => removeStillFromGallery(still.id));
+
+    card.appendChild(dlBtn);
+    card.appendChild(delBtn);
+    list.appendChild(card);
+  }
+  container.replaceChildren(head, list);
+}
+
+function renderStillsGallery() {
+  renderStillsGalleryContainer(byId("color-stills-gallery"));
+  renderStillsGalleryContainer(byId("fx-stills-gallery"));
+}
+
+function grabMonitorStill(target) {
+  const isFx = target === "fx";
+  const fps =
+    state.timelineDoc && state.timelineDoc.fps
+      ? Math.max(1, state.timelineDoc.fps.num / Math.max(1, state.timelineDoc.fps.den))
+      : 25;
+  const tc = framesToSmpte(state.playheadFrame || 0, fps);
+
+  let capture = null;
+  let presetLabel = "";
+  if (isFx) {
+    const canvas = byId("fx-program-canvas");
+    capture = captureCleanFxStill(
+      canvas,
+      state.timelineDoc,
+      state.playheadFrame,
+      state.colorGrade,
+      getEffectiveFxState(),
+      getEffectiveTitleState(false),
+      getEffectiveFramingState(),
+      getEffectiveSubtitleState(false),
+      getEffectiveChromaKeyState()
+    );
+    presetLabel =
+      state.fxActivePresetId ||
+      (state.fxStack.length > 0 ? `${state.fxStack.length} FX` : "Program");
+  } else {
+    const canvas = byId("color-preview-canvas");
+    capture = captureCleanColorStill(canvas, state.colorGrade);
+    const presetBadge = byId("color-preset-badge");
+    presetLabel =
+      (presetBadge && presetBadge.textContent ? presetBadge.textContent.trim() : "") ||
+      state.colorActivePresetId ||
+      "Rec.709";
+  }
+
+  if (!capture || !sanitizeStillDataUrl(capture.dataUrl)) {
+    return false;
+  }
+
+  state.stillSeqCounter += 1;
+  const now = new Date();
+  const still = createStillRecord({
+    id: `still-${isFx ? "fx" : "color"}-${now.getTime()}-${state.stillSeqCounter}`,
+    source: isFx ? "fx" : "color",
+    dataUrl: capture.dataUrl,
+    label: isFx ? "FX" : "COLOR",
+    preset: presetLabel,
+    timecode: isFx ? tc : "",
+    createdAt: now,
+    width: capture.width,
+    height: capture.height
+  });
+  state.stillsGallery = appendStillBounded(state.stillsGallery, still, STILLS_GALLERY_MAX);
+  renderStillsGallery();
+  showBanner(
+    t("stills.banner.grabbed")
+      .replace("{source}", isFx ? t("stills.source.fx") : t("stills.source.color"))
+      .replace("{filename}", still.filename),
+    "success"
+  );
+  return true;
+}
+
+function grabActiveMonitorStill() {
+  if (state.activeTab === "color") {
+    return grabMonitorStill("color");
+  }
+  if (state.activeTab === "fx") {
+    return grabMonitorStill("fx");
+  }
+  return false;
+}
+
 function wireColorInputs() {
   for (const b of COLOR_WHEEL_BINDINGS) {
     const rangeEl = byId(b.range);
@@ -5054,6 +5240,7 @@ const NLE_SHORTCUT_GROUPS = [
     titleKey: "shortcuts.group.studio",
     items: [
       { kbd: "W / Ctrl+W", descKey: "shortcuts.key.splitWipe" },
+      { kbd: "Shift+S", descKey: "shortcuts.key.grabStill" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -5187,6 +5374,19 @@ function handleTransportKeydown(ev) {
   ) {
     ev.preventDefault();
     toggleActiveSplitWipe();
+    return;
+  }
+
+  if (
+    !ev.ctrlKey &&
+    !ev.metaKey &&
+    !ev.altKey &&
+    ev.shiftKey &&
+    lower === "s" &&
+    (state.activeTab === "color" || state.activeTab === "fx")
+  ) {
+    ev.preventDefault();
+    grabActiveMonitorStill();
     return;
   }
 
@@ -7220,6 +7420,9 @@ function wireEvents() {
       if (eff) addFxNode(eff);
     });
   }
+  byId("btn-color-grab-still").addEventListener("click", () => grabMonitorStill("color"));
+  byId("btn-fx-grab-still").addEventListener("click", () => grabMonitorStill("fx"));
+
   byId("btn-fx-bypass-all").addEventListener("click", () => {
     state.fxBypassAll = !state.fxBypassAll;
     syncChromaKeyControlsFromState();
@@ -7965,6 +8168,7 @@ async function bootstrap() {
   syncColorInputsFromState();
   syncSplitWipeControls("color");
   syncSplitWipeControls("fx");
+  renderStillsGallery();
   compileColorNow();
   syncTitleInputsFromState();
   compileTitleNow();

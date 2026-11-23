@@ -254,11 +254,15 @@ export function framesToSmpte(frame, fpsNum, fpsDen) {
   return `${pad(hh)}:${pad(mm)}:${pad(ss)}:${pad(ff)}`;
 }
 
-function setupCanvas(canvas, cssHeight) {
-  const rect = canvas.parentElement
-    ? canvas.parentElement.getBoundingClientRect()
-    : canvas.getBoundingClientRect();
-  const width = Math.max(260, Math.floor(rect.width));
+function setupCanvas(canvas, cssHeight, explicitWidth = null) {
+  let rawWidth = Number(explicitWidth);
+  if (!Number.isFinite(rawWidth) || rawWidth <= 0) {
+    const rect = canvas.parentElement
+      ? canvas.parentElement.getBoundingClientRect()
+      : canvas.getBoundingClientRect();
+    rawWidth = rect.width;
+  }
+  const width = Math.max(260, Math.floor(rawWidth));
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.floor(width * dpr);
   canvas.height = Math.floor(cssHeight * dpr);
@@ -1176,9 +1180,12 @@ export function drawProgramMonitorCanvas(
   framingState = null,
   subtitleState = null,
   chromaKeyState = null,
-  splitWipeState = null
+  splitWipeState = null,
+  renderOpts = null
 ) {
-  const { ctx, width, height } = setupCanvas(canvas, 244);
+  const explicitW =
+    renderOpts && Number(renderOpts.explicitWidth) > 0 ? Number(renderOpts.explicitWidth) : null;
+  const { ctx, width, height } = setupCanvas(canvas, 244, explicitW);
   ctx.fillStyle = "#141416";
   ctx.fillRect(0, 0, width, height);
 
@@ -2894,6 +2901,76 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   if (gradedCtx) {
     renderColorPreviewScene(gradedCtx, scopeW, scopeH, cdl, true, false);
   }
+}
+
+function resolveCaptureCssWidth(sourceCanvas, fallbackWidth = 640) {
+  if (sourceCanvas) {
+    const parentRect = sourceCanvas.parentElement
+      ? sourceCanvas.parentElement.getBoundingClientRect()
+      : null;
+    const selfRect = sourceCanvas.getBoundingClientRect ? sourceCanvas.getBoundingClientRect() : null;
+    const candidate =
+      parentRect && parentRect.width > 0
+        ? parentRect.width
+        : selfRect && selfRect.width > 0
+          ? selfRect.width
+          : 0;
+    if (candidate > 0) {
+      return Math.max(320, Math.floor(candidate));
+    }
+  }
+  return fallbackWidth;
+}
+
+export function captureCleanColorStill(sourceCanvas, cdl) {
+  const cssW = resolveCaptureCssWidth(sourceCanvas, 640);
+  const cssH = 224;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const offscreen = document.createElement("canvas");
+  offscreen.width = Math.floor(cssW * dpr);
+  offscreen.height = Math.floor(cssH * dpr);
+  const ctx = offscreen.getContext("2d");
+  if (!ctx) return { dataUrl: "", width: 0, height: 0 };
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  renderColorPreviewScene(ctx, cssW, cssH, cdl, true, true);
+  return {
+    dataUrl: offscreen.toDataURL("image/png"),
+    width: offscreen.width,
+    height: offscreen.height
+  };
+}
+
+export function captureCleanFxStill(
+  sourceCanvas,
+  doc,
+  playheadFrame,
+  cdl,
+  fxState = null,
+  titleState = null,
+  framingState = null,
+  subtitleState = null,
+  chromaKeyState = null
+) {
+  const cssW = resolveCaptureCssWidth(sourceCanvas, 640);
+  const offscreen = document.createElement("canvas");
+  drawProgramMonitorCanvas(
+    offscreen,
+    doc,
+    playheadFrame,
+    cdl,
+    fxState,
+    titleState,
+    framingState,
+    subtitleState,
+    chromaKeyState,
+    { enabled: false },
+    { explicitWidth: cssW }
+  );
+  return {
+    dataUrl: offscreen.toDataURL("image/png"),
+    width: offscreen.width,
+    height: offscreen.height
+  };
 }
 
 let _scopeTraceCanvas = null;
