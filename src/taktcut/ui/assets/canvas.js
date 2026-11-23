@@ -1,6 +1,7 @@
 import {
   MARKER_COLOR_HEX,
   computeBpmBeatFrames,
+  computeInOutRangeMetrics,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
   getAspectRatioPreset,
@@ -1704,6 +1705,27 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.fillText(label, x + 4, 13);
     }
   }
+
+  // In/Out Range Highlight Band on Ruler
+  const ioMetrics = computeInOutRangeMetrics(
+    opts && opts.ioRange ? opts.ioRange : null,
+    doc.fps,
+    startFrame,
+    maxFrame
+  );
+  const ioInX = ioMetrics.hasIn ? frameToX(ioMetrics.in_frame) : null;
+  const ioOutX = ioMetrics.hasOut ? frameToX(ioMetrics.out_frame) : null;
+  if (ioMetrics.isActive) {
+    const rx0 = Math.max(timelineX, ioInX !== null ? ioInX : timelineX);
+    const rx1 = Math.min(timelineX + timelineW, ioOutX !== null ? ioOutX : timelineX + timelineW);
+    if (rx1 > rx0) {
+      ctx.fillStyle = ioMetrics.isComplete ? "rgba(57, 197, 207, 0.16)" : "rgba(57, 197, 207, 0.08)";
+      ctx.fillRect(rx0, 0, rx1 - rx0, rulerHeight);
+      ctx.fillStyle = ioMetrics.isComplete ? "#39c5cf" : "rgba(57, 197, 207, 0.6)";
+      ctx.fillRect(rx0, 0, rx1 - rx0, 2);
+      ctx.fillRect(rx0, rulerHeight - 2, rx1 - rx0, 2);
+    }
+  }
   ctx.restore();
 
   // Track lanes and clips
@@ -2215,6 +2237,52 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.strokeRect(ix, rowY + 3, clampedW, trackHeight - 6);
     }
   });
+
+  // In/Out Range Track Overlay & Ruler Brackets
+  if (ioMetrics.isActive) {
+    const rx0 = Math.max(timelineX, ioInX !== null ? ioInX : timelineX);
+    const rx1 = Math.min(timelineX + timelineW, ioOutX !== null ? ioOutX : timelineX + timelineW);
+    if (rx1 > rx0) {
+      ctx.fillStyle = ioMetrics.isComplete ? "rgba(57, 197, 207, 0.055)" : "rgba(57, 197, 207, 0.03)";
+      ctx.fillRect(rx0, rulerHeight, rx1 - rx0, Math.max(0, height - rulerHeight - padBottom));
+    }
+
+    const drawIoBracket = (bxRaw, isIn) => {
+      if (bxRaw === null || bxRaw < timelineX - 2 || bxRaw > timelineX + timelineW + 2) return;
+      const bx = Math.round(bxRaw) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = "rgba(94, 234, 212, 0.62)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(bx, rulerHeight);
+      ctx.lineTo(bx, Math.max(rulerHeight, height - padBottom));
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const dir = isIn ? 1 : -1;
+      ctx.strokeStyle = "#5eead4";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(bx + dir * 6, 3);
+      ctx.lineTo(bx, 3);
+      ctx.lineTo(bx, rulerHeight - 3);
+      ctx.lineTo(bx + dir * 6, rulerHeight - 3);
+      ctx.stroke();
+
+      ctx.fillStyle = "#5eead4";
+      ctx.font = "700 8.5px ui-monospace, monospace";
+      const tag = isIn ? "I" : "O";
+      const tagX = isIn ? bx + 3 : bx - 9;
+      if (tagX >= timelineX && tagX <= timelineX + timelineW - 8) {
+        ctx.fillText(tag, tagX, rulerHeight - 6);
+      }
+      ctx.restore();
+    };
+
+    drawIoBracket(ioInX, true);
+    drawIoBracket(ioOutX, false);
+  }
 
   // Markers
   (doc.markers || []).forEach((mk, mkIdx) => {

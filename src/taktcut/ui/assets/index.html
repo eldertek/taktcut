@@ -40,6 +40,7 @@
           <button type="button" id="lang-en" class="lang-btn is-active" data-lang="en">EN</button>
           <button type="button" id="lang-fr" class="lang-btn" data-lang="fr">FR</button>
         </div>
+        <button type="button" id="btn-shortcuts-help" class="btn btn-mini btn-shortcuts-help mono" title="Keyboard Shortcuts (?)" aria-label="Keyboard Shortcuts (?)" aria-haspopup="dialog" aria-controls="nle-shortcuts-dialog">?</button>
       </div>
     </header>
 
@@ -144,15 +145,38 @@
               <div class="viewer-well">
                 <canvas id="timeline-program-canvas" class="studio-canvas"></canvas>
               </div>
-              <div class="transport-bar">
-                <div class="btn-row">
-                  <button type="button" id="btn-tc-start" class="btn btn-mini mono" title="Start (Home)">|&lt;</button>
-                  <button type="button" id="btn-tc-prev" class="btn btn-mini mono" title="-1 frame (ArrowLeft)">&lt;</button>
-                  <button type="button" id="btn-tc-play" class="btn btn-mini mono" title="Play / Pause (Space / J-K-L)" aria-pressed="false" data-i18n="timeline.transport.play">Play</button>
-                  <button type="button" id="btn-tc-next" class="btn btn-mini mono" title="+1 frame (ArrowRight)">&gt;</button>
-                  <button type="button" id="btn-tc-end" class="btn btn-mini mono" title="End">&gt;|</button>
+              <div class="transport-bar transport-bar-stacked">
+                <div class="transport-main-row">
+                  <div class="btn-row transport-btn-group">
+                    <button type="button" id="btn-tc-start" class="btn btn-mini mono" title="Start (Home)">|&lt;</button>
+                    <button type="button" id="btn-tc-prev" class="btn btn-mini mono" title="-1 frame (ArrowLeft)">&lt;</button>
+                    <button type="button" id="btn-tc-shuttle-rev" class="btn btn-mini mono" title="Shuttle Reverse 1x/2x/4x (J)" aria-pressed="false">&lt;&lt; J</button>
+                    <button type="button" id="btn-tc-play" class="btn btn-mini mono" title="Play / Pause (Space / K)" aria-pressed="false" data-i18n="timeline.transport.play">Play</button>
+                    <button type="button" id="btn-tc-shuttle-fwd" class="btn btn-mini mono" title="Shuttle Forward 1x/2x/4x (L)" aria-pressed="false">L &gt;&gt;</button>
+                    <button type="button" id="btn-tc-next" class="btn btn-mini mono" title="+1 frame (ArrowRight)">&gt;</button>
+                    <button type="button" id="btn-tc-end" class="btn btn-mini mono" title="End (End)">&gt;|</button>
+                    <span id="timeline-shuttle-speed-pill" class="nle-tag mono shuttle-speed-pill" aria-live="polite" title="Live Shuttle Speed (J / K / L)">0x</span>
+                  </div>
+                  <input type="range" id="playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="0" aria-label="Timeline playhead">
                 </div>
-                <input type="range" id="playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="0" aria-label="Timeline playhead">
+                <div class="transport-io-row" role="group" aria-label="In and Out Range Controls">
+                  <div class="btn-row io-btn-group">
+                    <button type="button" id="btn-tc-mark-in" class="btn btn-mini io-btn" title="Set In Point (I)">
+                      <span data-i18n="timeline.io.in">In</span>
+                      <span class="kbd-chip mono">I</span>
+                    </button>
+                    <button type="button" id="btn-tc-mark-out" class="btn btn-mini io-btn" title="Set Out Point (O)">
+                      <span data-i18n="timeline.io.out">Out</span>
+                      <span class="kbd-chip mono">O</span>
+                    </button>
+                    <button type="button" id="btn-tc-clear-io" class="btn btn-mini io-btn" title="Clear In/Out (Alt+X)" disabled>
+                      <span data-i18n="timeline.io.clear">Clear</span>
+                      <span class="kbd-chip mono">Alt+X</span>
+                    </button>
+                    <button type="button" id="btn-tc-loop-io" class="btn btn-mini io-btn" title="Loop I/O Range" aria-pressed="false" disabled data-i18n="timeline.io.loop">Loop</button>
+                  </div>
+                  <span id="timeline-io-range-pill" class="nle-tag mono io-range-pill" aria-live="polite" data-i18n="timeline.io.none">I/O: --</span>
+                </div>
               </div>
 
               <div class="nle-telemetry-bar">
@@ -1405,11 +1429,22 @@
       <span id="runtime-mode-pill">LOCAL STUDIO</span>
       <span id="transport-shortcut-hint" class="statusbar-hint">
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
-        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | M: Marker | Ctrl+Z/Y: Undo/Redo | Ctrl+S: Save Project</span>
+        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | I/O: In/Out | Alt+X: Clear I/O | A/B: Select/Blade | N: Snap | M: Marker | ?: Shortcuts</span>
       </span>
       <span id="version-badge">v0.1.6</span>
     </footer>
   </div>
+
+  <dialog id="nle-shortcuts-dialog" class="nle-dialog" aria-labelledby="nle-shortcuts-title" aria-describedby="nle-shortcuts-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="nle-shortcuts-title" data-i18n="shortcuts.title">NLE Keyboard Shortcuts</h2>
+        <p id="nle-shortcuts-subtitle" class="nle-dialog-subtitle" data-i18n="shortcuts.subtitle">DaVinci Resolve / Premiere Pro transport, I/O range &amp; editing keys</p>
+      </div>
+      <button type="button" id="btn-close-shortcuts-dialog" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+    </div>
+    <div id="nle-shortcuts-grid" class="nle-dialog-body shortcuts-grid"></div>
+  </dialog>
 
   <script type="module" src="./app.js"></script>
 </body>

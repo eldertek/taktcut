@@ -36,6 +36,7 @@ import {
   compileAudioFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
+  computeInOutRangeMetrics,
   computeTimelineMaxFrame,
   deleteMarkerInDocument,
   findAdjacentCutForClip,
@@ -43,6 +44,7 @@ import {
   findMagneticSnap,
   findTrackAndClip,
   formatRetimeBadgeText,
+  formatShuttleSpeedLabel,
   getAspectRatioPreset,
   getClipTrimBounds,
   getTransitionPresetName,
@@ -51,9 +53,13 @@ import {
   normalizeClipAudio,
   normalizeClipRetime,
   normalizeClipTransition,
+  normalizeInOutRange,
   normalizeMarkerColor,
+  setInOutRange,
   splitClipInDocument,
   splitClipsAtPlayhead,
+  stepPlayheadInRange,
+  stepShuttleSpeed,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
@@ -230,6 +236,8 @@ const state = {
   timelineRedoStack: [],
   playheadFrame: 25,
   timelineMaxFrame: 500,
+  ioRange: { in_frame: null, out_frame: null },
+  ioLoopEnabled: false,
   playbackSpeed: 0,
   playbackRafId: null,
   playbackLastTs: 0,
@@ -376,7 +384,15 @@ function setLanguage(lang) {
     const key = node.getAttribute("data-i18n");
     if (key) node.textContent = t(key);
   }
+  const helpBtn = byId("btn-shortcuts-help");
+  if (helpBtn) {
+    const tip = t("shortcuts.helpTooltip");
+    helpBtn.title = tip;
+    helpBtn.setAttribute("aria-label", tip);
+  }
   updateTransportStatusUI();
+  updateIoRangeUI();
+  renderShortcutsDialog();
   renderUpdateButton();
   renderTimelineUI();
   renderFxStack();
@@ -586,7 +602,8 @@ function redrawActiveCanvases() {
         hoverFade: state.timelineHoverFade,
         activeFade: state.timelineActiveFade,
         hoverTransition: state.timelineHoverTransition,
-        fixedMaxFrame: state.timelineDragFixedMaxFrame
+        fixedMaxFrame: state.timelineDragFixedMaxFrame,
+        ioRange: state.ioRange
       }
     );
     state.timelineHitboxes = tlDraw.hitboxes;
@@ -656,6 +673,8 @@ function setTimelineData(payload) {
   state.timelineActiveFade = null;
   state.timelineHoverTransition = null;
   state.timelineDragFixedMaxFrame = null;
+  state.ioRange = { in_frame: null, out_frame: null };
+  state.ioLoopEnabled = false;
 
   const doc = state.timelineDoc;
   if (doc) {
@@ -686,6 +705,7 @@ function setTimelineData(payload) {
     byId("otio-workspace-out").value = `exports/${cleanStem}.${fmt}`;
   }
   updateTimelineToolbarUI();
+  updateIoRangeUI();
   renderTimelineUI();
 }
 
@@ -1648,6 +1668,7 @@ function applyFullProjectState(project, validation) {
   syncFramingControlsUI();
   renderDeliveryPresetStrip();
   updateTimelineToolbarUI();
+  updateIoRangeUI();
   renderTimelineUI();
   redrawActiveCanvases();
 
@@ -3954,6 +3975,12 @@ function commitTimelineMutation(nextDoc, nextSelected = null, preSnapshot = null
   state.timelineValidation = validateTimelineClient(nextDoc);
   state.timelineMaxFrame = computeTimelineMaxFrame(nextDoc);
   state.playheadFrame = Math.min(state.playheadFrame, state.timelineMaxFrame);
+  state.ioRange = normalizeInOutRange(
+    state.ioRange,
+    nextDoc ? nextDoc.start_frame || 0 : 0,
+    state.timelineMaxFrame
+  );
+  updateIoRangeUI();
   renderTimelineUI();
 }
 
@@ -3969,6 +3996,12 @@ function undoTimeline() {
   state.playheadFrame = Math.min(state.playheadFrame, state.timelineMaxFrame);
   state.timelineActiveSnapFrame = null;
   state.timelineBladePreview = null;
+  state.ioRange = normalizeInOutRange(
+    state.ioRange,
+    prevSnap.doc ? prevSnap.doc.start_frame || 0 : 0,
+    state.timelineMaxFrame
+  );
+  updateIoRangeUI();
   renderTimelineUI();
 }
 
@@ -3984,6 +4017,12 @@ function redoTimeline() {
   state.playheadFrame = Math.min(state.playheadFrame, state.timelineMaxFrame);
   state.timelineActiveSnapFrame = null;
   state.timelineBladePreview = null;
+  state.ioRange = normalizeInOutRange(
+    state.ioRange,
+    nextSnap.doc ? nextSnap.doc.start_frame || 0 : 0,
+    state.timelineMaxFrame
+  );
+  updateIoRangeUI();
   renderTimelineUI();
 }
 
@@ -4029,6 +4068,9 @@ function getTimelineFps() {
 
 function updateTransportStatusUI() {
   const playBtn = byId("btn-tc-play");
+  const shuttleRevBtn = byId("btn-tc-shuttle-rev");
+  const shuttleFwdBtn = byId("btn-tc-shuttle-fwd");
+  const speedPill = byId("timeline-shuttle-speed-pill");
   const fxPlayBtn = byId("btn-fx-play");
   const titlesPlayBtn = byId("btn-titles-play");
   const pill = byId("transport-state-pill");
@@ -4038,6 +4080,22 @@ function updateTransportStatusUI() {
     playBtn.textContent = isPlaying ? t("timeline.transport.pause") : t("timeline.transport.play");
     playBtn.setAttribute("aria-pressed", isPlaying ? "true" : "false");
     playBtn.classList.toggle("is-playing", isPlaying);
+  }
+  if (shuttleRevBtn) {
+    const revActive = state.playbackSpeed < 0;
+    shuttleRevBtn.setAttribute("aria-pressed", revActive ? "true" : "false");
+    shuttleRevBtn.classList.toggle("is-reverse", revActive);
+  }
+  if (shuttleFwdBtn) {
+    const fwdActive = state.playbackSpeed > 0;
+    shuttleFwdBtn.setAttribute("aria-pressed", fwdActive ? "true" : "false");
+    shuttleFwdBtn.classList.toggle("is-playing", fwdActive);
+  }
+  if (speedPill) {
+    speedPill.textContent = formatShuttleSpeedLabel(state.playbackSpeed);
+    speedPill.className = `nle-tag mono shuttle-speed-pill${
+      state.playbackSpeed > 0 ? " is-forward" : state.playbackSpeed < 0 ? " is-reverse" : ""
+    }`;
   }
   if (fxPlayBtn) {
     fxPlayBtn.textContent = isPlaying ? t("timeline.transport.pause") : t("timeline.transport.play");
@@ -4094,18 +4152,20 @@ function playbackTick(ts) {
 
   if (wholeDelta !== 0) {
     state.playbackAccumFrames -= wholeDelta;
-    const next = state.playheadFrame + wholeDelta;
-    if (next >= state.timelineMaxFrame) {
-      setPlayhead(state.timelineMaxFrame);
+    const minF = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
+    const step = stepPlayheadInRange(
+      state.playheadFrame,
+      wholeDelta,
+      minF,
+      state.timelineMaxFrame,
+      state.ioRange,
+      state.ioLoopEnabled
+    );
+    setPlayhead(step.frame);
+    if (step.stop) {
       stopPlayback();
       return;
     }
-    if (next <= 0) {
-      setPlayhead(0);
-      stopPlayback();
-      return;
-    }
-    setPlayhead(next);
   }
   state.playbackRafId = window.requestAnimationFrame(playbackTick);
 }
@@ -4115,10 +4175,21 @@ function startShuttle(speed) {
     stopPlayback();
     return;
   }
-  if (speed > 0 && state.playheadFrame >= state.timelineMaxFrame) {
-    setPlayhead(0);
-  } else if (speed < 0 && state.playheadFrame <= 0) {
-    setPlayhead(state.timelineMaxFrame);
+  const minF = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
+  const metrics = computeInOutRangeMetrics(
+    state.ioRange,
+    getTimelineFps(),
+    minF,
+    state.timelineMaxFrame
+  );
+  const useLoop = Boolean(state.ioLoopEnabled && metrics.isComplete && metrics.durationFrames > 0);
+  const lo = useLoop ? metrics.in_frame : minF;
+  const hi = useLoop ? metrics.out_frame : state.timelineMaxFrame;
+
+  if (speed > 0 && (state.playheadFrame >= hi || (useLoop && state.playheadFrame < lo))) {
+    setPlayhead(lo);
+  } else if (speed < 0 && (state.playheadFrame <= lo || (useLoop && state.playheadFrame > hi))) {
+    setPlayhead(hi);
   }
   state.playbackSpeed = speed;
   state.playbackLastTs = 0;
@@ -4130,20 +4201,235 @@ function startShuttle(speed) {
 }
 
 function togglePlayPause() {
-  if (state.playbackSpeed !== 0) {
-    stopPlayback();
-  } else {
-    startShuttle(1);
-  }
+  const next = stepShuttleSpeed(state.playbackSpeed, "toggle");
+  startShuttle(next);
 }
 
 function stepShuttle(direction) {
-  if (direction > 0) {
-    const next = state.playbackSpeed <= 0 ? 1 : Math.min(8, state.playbackSpeed * 2);
-    startShuttle(next);
+  const next = stepShuttleSpeed(state.playbackSpeed, direction > 0 ? "forward" : "reverse");
+  startShuttle(next);
+}
+
+function updateIoRangeUI() {
+  const doc = state.timelineDoc;
+  const minF = doc ? doc.start_frame || 0 : 0;
+  const fpsNum = doc && doc.fps ? doc.fps.num : 25;
+  const fpsDen = doc && doc.fps ? doc.fps.den : 1;
+  const fpsRate = Math.max(1, fpsNum / Math.max(1, fpsDen));
+  const metrics = computeInOutRangeMetrics(state.ioRange, fpsRate, minF, state.timelineMaxFrame);
+
+  const inBtn = byId("btn-tc-mark-in");
+  const outBtn = byId("btn-tc-mark-out");
+  const clearBtn = byId("btn-tc-clear-io");
+  const loopBtn = byId("btn-tc-loop-io");
+  const pill = byId("timeline-io-range-pill");
+
+  if (inBtn) {
+    inBtn.disabled = !doc;
+    inBtn.classList.toggle("is-active", metrics.hasIn);
+  }
+  if (outBtn) {
+    outBtn.disabled = !doc;
+    outBtn.classList.toggle("is-active", metrics.hasOut);
+  }
+  if (clearBtn) {
+    clearBtn.disabled = !doc || !metrics.isActive;
+  }
+  if (loopBtn) {
+    const canLoop = Boolean(doc && metrics.isComplete && metrics.durationFrames > 0);
+    if (!canLoop) state.ioLoopEnabled = false;
+    loopBtn.disabled = !canLoop;
+    loopBtn.classList.toggle("is-active", Boolean(canLoop && state.ioLoopEnabled));
+    loopBtn.setAttribute("aria-pressed", canLoop && state.ioLoopEnabled ? "true" : "false");
+  }
+  if (pill) {
+    if (!doc || !metrics.isActive) {
+      pill.textContent = t("timeline.io.none");
+      pill.className = "nle-tag mono io-range-pill";
+    } else if (metrics.isComplete) {
+      const inSmpte = framesToSmpte(metrics.in_frame, fpsNum, fpsDen);
+      const outSmpte = framesToSmpte(metrics.out_frame, fpsNum, fpsDen);
+      const durSmpte = framesToSmpte(metrics.durationFrames, fpsNum, fpsDen);
+      pill.textContent = `IN ${inSmpte} -> OUT ${outSmpte} | ${durSmpte} (${metrics.durationFrames}f / ${metrics.durationSeconds.toFixed(2)}s)`;
+      pill.className = "nle-tag mono io-range-pill is-active";
+    } else if (metrics.hasIn) {
+      const inSmpte = framesToSmpte(metrics.in_frame, fpsNum, fpsDen);
+      pill.textContent = `IN ${inSmpte} (${metrics.in_frame}f) -> OUT --`;
+      pill.className = "nle-tag mono io-range-pill is-active";
+    } else {
+      const outSmpte = framesToSmpte(metrics.out_frame, fpsNum, fpsDen);
+      pill.textContent = `IN -- -> OUT ${outSmpte} (${metrics.out_frame}f)`;
+      pill.className = "nle-tag mono io-range-pill is-active";
+    }
+  }
+}
+
+function setInPointAction() {
+  if (!state.timelineDoc) return false;
+  const minF = state.timelineDoc.start_frame || 0;
+  state.ioRange = setInOutRange(
+    state.ioRange,
+    "in",
+    state.playheadFrame,
+    minF,
+    state.timelineMaxFrame
+  );
+  updateIoRangeUI();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+  return true;
+}
+
+function setOutPointAction() {
+  if (!state.timelineDoc) return false;
+  const minF = state.timelineDoc.start_frame || 0;
+  state.ioRange = setInOutRange(
+    state.ioRange,
+    "out",
+    state.playheadFrame,
+    minF,
+    state.timelineMaxFrame
+  );
+  updateIoRangeUI();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+  return true;
+}
+
+function clearInOutAction() {
+  if (!state.timelineDoc) return false;
+  state.ioRange = setInOutRange(state.ioRange, "clear");
+  state.ioLoopEnabled = false;
+  updateIoRangeUI();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+  return true;
+}
+
+function jumpToInPointAction() {
+  const minF = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
+  const norm = normalizeInOutRange(state.ioRange, minF, state.timelineMaxFrame);
+  if (norm.in_frame === null) return false;
+  stopPlayback();
+  setPlayhead(norm.in_frame);
+  return true;
+}
+
+function jumpToOutPointAction() {
+  const minF = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
+  const norm = normalizeInOutRange(state.ioRange, minF, state.timelineMaxFrame);
+  if (norm.out_frame === null) return false;
+  stopPlayback();
+  setPlayhead(norm.out_frame);
+  return true;
+}
+
+function toggleIoLoopAction() {
+  if (!state.timelineDoc) return false;
+  const minF = state.timelineDoc.start_frame || 0;
+  const metrics = computeInOutRangeMetrics(
+    state.ioRange,
+    getTimelineFps(),
+    minF,
+    state.timelineMaxFrame
+  );
+  if (!metrics.isComplete || metrics.durationFrames <= 0) {
+    state.ioLoopEnabled = false;
+    updateIoRangeUI();
+    return false;
+  }
+  state.ioLoopEnabled = !state.ioLoopEnabled;
+  updateIoRangeUI();
+  return true;
+}
+
+const NLE_SHORTCUT_GROUPS = [
+  {
+    titleKey: "shortcuts.group.transport",
+    items: [
+      { kbd: "Space", descKey: "shortcuts.key.space" },
+      { kbd: "J", descKey: "shortcuts.key.j" },
+      { kbd: "K", descKey: "shortcuts.key.k" },
+      { kbd: "L", descKey: "shortcuts.key.l" },
+      { kbd: "Left / Right", descKey: "shortcuts.key.arrows" },
+      { kbd: "Home / End", descKey: "shortcuts.key.homeEnd" }
+    ]
+  },
+  {
+    titleKey: "shortcuts.group.range",
+    items: [
+      { kbd: "I", descKey: "shortcuts.key.markIn" },
+      { kbd: "O", descKey: "shortcuts.key.markOut" },
+      { kbd: "Alt+X", descKey: "shortcuts.key.clearIo" },
+      { kbd: "M", descKey: "shortcuts.key.marker" }
+    ]
+  },
+  {
+    titleKey: "shortcuts.group.tools",
+    items: [
+      { kbd: "A", descKey: "shortcuts.key.select" },
+      { kbd: "B", descKey: "shortcuts.key.blade" },
+      { kbd: "N", descKey: "shortcuts.key.snap" },
+      { kbd: "Ctrl+Z", descKey: "shortcuts.key.undo" },
+      { kbd: "Ctrl+Shift+Z / Y", descKey: "shortcuts.key.redo" }
+    ]
+  },
+  {
+    titleKey: "shortcuts.group.studio",
+    items: [
+      { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
+      { kbd: "?", descKey: "shortcuts.key.help" }
+    ]
+  }
+];
+
+function renderShortcutsDialog() {
+  const grid = byId("nle-shortcuts-grid");
+  if (!grid) return;
+  const sections = [];
+  for (const group of NLE_SHORTCUT_GROUPS) {
+    const sec = dom("section", "shortcut-group");
+    sec.appendChild(dom("h3", "shortcut-group-title", t(group.titleKey)));
+    const ul = dom("ul", "shortcut-list");
+    for (const item of group.items) {
+      const li = dom("li", "shortcut-row");
+      li.appendChild(dom("span", "shortcut-desc", t(item.descKey)));
+      li.appendChild(dom("kbd", "shortcut-kbd mono", item.kbd));
+      ul.appendChild(li);
+    }
+    sec.appendChild(ul);
+    sections.push(sec);
+  }
+  grid.replaceChildren(...sections);
+}
+
+function openShortcutsDialog() {
+  const dlg = byId("nle-shortcuts-dialog");
+  if (!dlg) return;
+  renderShortcutsDialog();
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") {
+      dlg.showModal();
+    } else {
+      dlg.setAttribute("open", "");
+    }
+  }
+}
+
+function closeShortcutsDialog() {
+  const dlg = byId("nle-shortcuts-dialog");
+  if (!dlg || !dlg.open) return;
+  if (typeof dlg.close === "function") {
+    dlg.close();
   } else {
-    const next = state.playbackSpeed >= 0 ? 1 : Math.min(8, Math.abs(state.playbackSpeed) * 2);
-    startShuttle(-next);
+    dlg.removeAttribute("open");
+  }
+}
+
+function toggleShortcutsDialog() {
+  const dlg = byId("nle-shortcuts-dialog");
+  if (!dlg) return;
+  if (dlg.open) {
+    closeShortcutsDialog();
+  } else {
+    openShortcutsDialog();
   }
 }
 
@@ -4165,12 +4451,30 @@ function isEditableTarget(target) {
 function handleTransportKeydown(ev) {
   if (ev.defaultPrevented) return;
   const lower = ev.key.toLowerCase();
+  const shortcutsDlg = byId("nle-shortcuts-dialog");
+  if (shortcutsDlg && shortcutsDlg.open) {
+    if (ev.key === "?" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      closeShortcutsDialog();
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeShortcutsDialog();
+    }
+    return;
+  }
+
   if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey && lower === "s") {
     ev.preventDefault();
     saveProjectAction();
     return;
   }
   if (isEditableTarget(ev.target)) return;
+
+  if (ev.key === "?" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    openShortcutsDialog();
+    return;
+  }
 
   if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
     if (state.activeTab === "timeline") {
@@ -4187,12 +4491,21 @@ function handleTransportKeydown(ev) {
     }
     return;
   }
-  if (ev.altKey) return;
-  if (
-    state.activeTab !== "timeline" &&
-    state.activeTab !== "fx" &&
-    state.activeTab !== "titles"
-  ) {
+
+  const onPlayheadTab =
+    state.activeTab === "timeline" ||
+    state.activeTab === "fx" ||
+    state.activeTab === "titles";
+
+  if (ev.altKey) {
+    if (onPlayheadTab && !ev.ctrlKey && !ev.metaKey && lower === "x") {
+      ev.preventDefault();
+      clearInOutAction();
+    }
+    return;
+  }
+
+  if (!onPlayheadTab) {
     return;
   }
 
@@ -4207,6 +4520,39 @@ function handleTransportKeydown(ev) {
     }
     ev.preventDefault();
     togglePlayPause();
+    return;
+  }
+
+  if (lower === "i" && !ev.shiftKey) {
+    ev.preventDefault();
+    setInPointAction();
+    return;
+  }
+  if (lower === "i" && ev.shiftKey) {
+    ev.preventDefault();
+    jumpToInPointAction();
+    return;
+  }
+  if (lower === "o" && !ev.shiftKey) {
+    ev.preventDefault();
+    setOutPointAction();
+    return;
+  }
+  if (lower === "o" && ev.shiftKey) {
+    ev.preventDefault();
+    jumpToOutPointAction();
+    return;
+  }
+  if (ev.key === "Home") {
+    ev.preventDefault();
+    stopPlayback();
+    setPlayhead(state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0);
+    return;
+  }
+  if (ev.key === "End") {
+    ev.preventDefault();
+    stopPlayback();
+    setPlayhead(state.timelineMaxFrame);
     return;
   }
 
@@ -5692,6 +6038,16 @@ function wireEvents() {
   }
   byId("lang-en").addEventListener("click", () => setLanguage("en"));
   byId("lang-fr").addEventListener("click", () => setLanguage("fr"));
+  const helpBtn = byId("btn-shortcuts-help");
+  if (helpBtn) helpBtn.addEventListener("click", toggleShortcutsDialog);
+  const closeHelpBtn = byId("btn-close-shortcuts-dialog");
+  if (closeHelpBtn) closeHelpBtn.addEventListener("click", closeShortcutsDialog);
+  const shortcutsDlg = byId("nle-shortcuts-dialog");
+  if (shortcutsDlg) {
+    shortcutsDlg.addEventListener("click", (ev) => {
+      if (ev.target === shortcutsDlg) closeShortcutsDialog();
+    });
+  }
 
   for (const tabBtn of document.querySelectorAll(".page-tab")) {
     tabBtn.addEventListener("click", () => switchTab(tabBtn.getAttribute("data-tab")));
@@ -5810,13 +6166,17 @@ function wireEvents() {
   });
   byId("btn-tc-start").addEventListener("click", () => {
     stopPlayback();
-    setPlayhead(0);
+    setPlayhead(state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0);
   });
   byId("btn-tc-prev").addEventListener("click", () => {
     stopPlayback();
     setPlayhead(state.playheadFrame - 1);
   });
+  const shuttleRevBtn = byId("btn-tc-shuttle-rev");
+  if (shuttleRevBtn) shuttleRevBtn.addEventListener("click", () => stepShuttle(-1));
   byId("btn-tc-play").addEventListener("click", togglePlayPause);
+  const shuttleFwdBtn = byId("btn-tc-shuttle-fwd");
+  if (shuttleFwdBtn) shuttleFwdBtn.addEventListener("click", () => stepShuttle(1));
   byId("btn-tc-next").addEventListener("click", () => {
     stopPlayback();
     setPlayhead(state.playheadFrame + 1);
@@ -5825,6 +6185,14 @@ function wireEvents() {
     stopPlayback();
     setPlayhead(state.timelineMaxFrame);
   });
+  const markInBtn = byId("btn-tc-mark-in");
+  if (markInBtn) markInBtn.addEventListener("click", setInPointAction);
+  const markOutBtn = byId("btn-tc-mark-out");
+  if (markOutBtn) markOutBtn.addEventListener("click", setOutPointAction);
+  const clearIoBtn = byId("btn-tc-clear-io");
+  if (clearIoBtn) clearIoBtn.addEventListener("click", clearInOutAction);
+  const loopIoBtn = byId("btn-tc-loop-io");
+  if (loopIoBtn) loopIoBtn.addEventListener("click", toggleIoLoopAction);
 
   bindTimelineCanvasScrub(byId("timeline-canvas"));
   wireClipAudioInspector();

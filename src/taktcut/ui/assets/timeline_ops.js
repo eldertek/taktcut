@@ -1231,3 +1231,161 @@ export function updateClipTransitionInDocument(doc, trackKind, trackIndex, clipI
   found.clip.transition_out = nextTrans;
   return { doc: nextDoc, clip: found.clip, changed: true };
 }
+
+export const SHUTTLE_SPEEDS = [-4, -2, -1, 0, 1, 2, 4];
+export const SHUTTLE_MAX_SPEED = 4;
+
+export function stepShuttleSpeed(currentSpeed, action) {
+  const cur = Number.isFinite(Number(currentSpeed)) ? Math.trunc(Number(currentSpeed)) : 0;
+  const act = typeof action === "string" ? action.trim().toLowerCase() : "";
+  if (act === "stop" || act === "k") {
+    return 0;
+  }
+  if (act === "toggle" || act === "space") {
+    return cur !== 0 ? 0 : 1;
+  }
+  if (act === "forward" || act === "l") {
+    if (cur <= 0) return 1;
+    return Math.min(SHUTTLE_MAX_SPEED, cur * 2);
+  }
+  if (act === "reverse" || act === "j") {
+    if (cur >= 0) return -1;
+    return -Math.min(SHUTTLE_MAX_SPEED, Math.abs(cur) * 2);
+  }
+  return cur;
+}
+
+export function formatShuttleSpeedLabel(speed) {
+  const s = Number.isFinite(Number(speed)) ? Math.trunc(Number(speed)) : 0;
+  if (s === 0) return "0x";
+  return `${s}x`;
+}
+
+export function normalizeInOutRange(range, minFrame = 0, maxFrame = Number.POSITIVE_INFINITY) {
+  const r = range && typeof range === "object" ? range : {};
+  const lo = Number.isFinite(Number(minFrame)) ? Math.round(Number(minFrame)) : 0;
+  const hi = Number.isFinite(Number(maxFrame))
+    ? Math.max(lo, Math.round(Number(maxFrame)))
+    : Number.POSITIVE_INFINITY;
+
+  const rawIn = r.in_frame !== undefined ? r.in_frame : r.inFrame;
+  const rawOut = r.out_frame !== undefined ? r.out_frame : r.outFrame;
+
+  const inFrame =
+    rawIn !== null && rawIn !== undefined && Number.isFinite(Number(rawIn))
+      ? Math.max(lo, Math.min(hi, Math.round(Number(rawIn))))
+      : null;
+  let outFrame =
+    rawOut !== null && rawOut !== undefined && Number.isFinite(Number(rawOut))
+      ? Math.max(lo, Math.min(hi, Math.round(Number(rawOut))))
+      : null;
+
+  if (inFrame !== null && outFrame !== null && inFrame > outFrame) {
+    outFrame = null;
+  }
+  return { in_frame: inFrame, out_frame: outFrame };
+}
+
+export function setInOutRange(
+  currentRange,
+  action,
+  frame = 0,
+  minFrame = 0,
+  maxFrame = Number.POSITIVE_INFINITY
+) {
+  const act = typeof action === "string" ? action.trim().toLowerCase() : "";
+  if (act === "clear" || act === "reset") {
+    return { in_frame: null, out_frame: null };
+  }
+  const lo = Number.isFinite(Number(minFrame)) ? Math.round(Number(minFrame)) : 0;
+  const hi = Number.isFinite(Number(maxFrame))
+    ? Math.max(lo, Math.round(Number(maxFrame)))
+    : Number.POSITIVE_INFINITY;
+  const norm = normalizeInOutRange(currentRange, lo, hi);
+  const rawF = Number(frame);
+  const target = Number.isFinite(rawF) ? Math.max(lo, Math.min(hi, Math.round(rawF))) : lo;
+
+  if (act === "in" || act === "i") {
+    const nextOut = norm.out_frame !== null && target > norm.out_frame ? null : norm.out_frame;
+    return { in_frame: target, out_frame: nextOut };
+  }
+  if (act === "out" || act === "o") {
+    const nextIn = norm.in_frame !== null && target < norm.in_frame ? null : norm.in_frame;
+    return { in_frame: nextIn, out_frame: target };
+  }
+  return norm;
+}
+
+export function computeInOutRangeMetrics(range, fps = 25, minFrame = 0, maxFrame = 0) {
+  const lo = Number.isFinite(Number(minFrame)) ? Math.round(Number(minFrame)) : 0;
+  const hi = Number.isFinite(Number(maxFrame)) ? Math.max(lo, Math.round(Number(maxFrame))) : lo;
+  const norm = normalizeInOutRange(range, lo, hi > lo ? hi : Number.POSITIVE_INFINITY);
+  const fpsRate =
+    fps && typeof fps === "object"
+      ? Math.max(1, Number(fps.num || 25) / Math.max(1, Number(fps.den || 1)))
+      : Math.max(1, Number.isFinite(Number(fps)) ? Number(fps) : 25);
+
+  const hasIn = norm.in_frame !== null;
+  const hasOut = norm.out_frame !== null;
+  const isActive = hasIn || hasOut;
+  const isComplete = hasIn && hasOut && norm.out_frame >= norm.in_frame;
+
+  const durationFrames = isComplete ? norm.out_frame - norm.in_frame : null;
+  const durationSeconds =
+    durationFrames !== null ? Number((durationFrames / fpsRate).toFixed(3)) : null;
+
+  const effectiveStart = hasIn ? norm.in_frame : lo;
+  const effectiveEnd = hasOut ? norm.out_frame : hi;
+  const effectiveDurationFrames = isActive ? Math.max(0, effectiveEnd - effectiveStart) : 0;
+  const effectiveDurationSeconds = Number((effectiveDurationFrames / fpsRate).toFixed(3));
+
+  return {
+    in_frame: norm.in_frame,
+    out_frame: norm.out_frame,
+    hasIn,
+    hasOut,
+    isActive,
+    isComplete,
+    durationFrames,
+    durationSeconds,
+    effectiveStart,
+    effectiveEnd,
+    effectiveDurationFrames,
+    effectiveDurationSeconds
+  };
+}
+
+export function stepPlayheadInRange(
+  currentFrame,
+  deltaFrames,
+  minFrame,
+  maxFrame,
+  ioRange = null,
+  loopIo = false
+) {
+  const lo = Math.round(minFrame);
+  const hi = Math.max(lo, Math.round(maxFrame));
+  const metrics = computeInOutRangeMetrics(ioRange, 25, lo, hi);
+  const useLoop = Boolean(loopIo && metrics.isComplete && metrics.durationFrames > 0);
+  const boundLo = useLoop ? metrics.in_frame : lo;
+  const boundHi = useLoop ? metrics.out_frame : hi;
+  const next = Math.round(currentFrame) + Math.round(deltaFrames);
+
+  if (useLoop) {
+    const span = boundHi - boundLo;
+    if (next > boundHi) {
+      const wrapped = boundLo + ((next - boundLo) % (span + 1));
+      return { frame: wrapped, stop: false };
+    }
+    if (next < boundLo) {
+      const offset = (boundLo - next) % (span + 1);
+      const wrapped = offset === 0 ? boundLo : boundHi - offset + 1;
+      return { frame: wrapped, stop: false };
+    }
+    return { frame: next, stop: false };
+  }
+
+  if (next >= boundHi) return { frame: boundHi, stop: true };
+  if (next <= boundLo) return { frame: boundLo, stop: true };
+  return { frame: next, stop: false };
+}

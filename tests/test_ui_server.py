@@ -831,6 +831,17 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-save-project",
         "btn-open-project",
         "project-file-input",
+        "btn-shortcuts-help",
+        "nle-shortcuts-dialog",
+        "nle-shortcuts-grid",
+        "btn-tc-shuttle-rev",
+        "btn-tc-shuttle-fwd",
+        "timeline-shuttle-speed-pill",
+        "btn-tc-mark-in",
+        "btn-tc-mark-out",
+        "btn-tc-clear-io",
+        "btn-tc-loop-io",
+        "timeline-io-range-pill",
     ):
         assert elem_id in html_text
     assert "v0.1.6" in html_text
@@ -863,6 +874,8 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"statusbar.shortcuts"' in i18n_text
     assert '"Sauver Projet"' in i18n_text
     assert '"Ouvrir Projet"' in i18n_text
+    assert '"NLE Keyboard Shortcuts"' in i18n_text
+    assert '"Raccourcis Clavier NLE"' in i18n_text
     assert "innerHTML" not in i18n_text
     for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
         asset_text = _http_call(f"{base_url}{asset_path}")[2].decode("utf-8")
@@ -894,6 +907,8 @@ import {{
   BPM_MIN,
   DELIVERY_PRESETS,
   MARKER_COLORS,
+  SHUTTLE_MAX_SPEED,
+  SHUTTLE_SPEEDS,
   addMarkerInDocument,
   buildAtempoStagesClient,
   collectSnapTargets,
@@ -902,21 +917,27 @@ import {{
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   computeBpmBeatFrames,
+  computeInOutRangeMetrics,
   deleteMarkerInDocument,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
   findAllCutJunctions,
   findMagneticSnap,
   formatRetimeBadgeText,
+  formatShuttleSpeedLabel,
   getDeliveryPresetClient,
   isTrackAudiblyMuted,
   normalizeBpmConfig,
   normalizeClipAudio,
   normalizeClipRetime,
   normalizeClipTransition,
+  normalizeInOutRange,
   normalizeMarkerColor,
+  setInOutRange,
   splitClipInDocument,
   splitClipsAtPlayhead,
+  stepPlayheadInRange,
+  stepShuttleSpeed,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
@@ -1190,6 +1211,82 @@ const uhdFraming = compileFramingFilterClient({{
 assert.equal(uhdFraming.target_width, 3840);
 assert.equal(uhdFraming.target_height, 2160);
 assert.ok(uhdFraming.filtergraph.includes("scale=w=3840:h=2160"));
+
+// J/K/L Shuttle Transport State Machine
+assert.equal(SHUTTLE_MAX_SPEED, 4);
+assert.deepEqual(SHUTTLE_SPEEDS, [-4, -2, -1, 0, 1, 2, 4]);
+let spd = 0;
+spd = stepShuttleSpeed(spd, "l");
+assert.equal(spd, 1);
+assert.equal(formatShuttleSpeedLabel(spd), "1x");
+spd = stepShuttleSpeed(spd, "l");
+assert.equal(spd, 2);
+assert.equal(formatShuttleSpeedLabel(spd), "2x");
+spd = stepShuttleSpeed(spd, "l");
+assert.equal(spd, 4);
+assert.equal(formatShuttleSpeedLabel(spd), "4x");
+spd = stepShuttleSpeed(spd, "l");
+assert.equal(spd, 4);
+spd = stepShuttleSpeed(spd, "j");
+assert.equal(spd, -1);
+assert.equal(formatShuttleSpeedLabel(spd), "-1x");
+spd = stepShuttleSpeed(spd, "j");
+assert.equal(spd, -2);
+assert.equal(formatShuttleSpeedLabel(spd), "-2x");
+spd = stepShuttleSpeed(spd, "j");
+assert.equal(spd, -4);
+assert.equal(formatShuttleSpeedLabel(spd), "-4x");
+spd = stepShuttleSpeed(spd, "j");
+assert.equal(spd, -4);
+spd = stepShuttleSpeed(spd, "k");
+assert.equal(spd, 0);
+assert.equal(formatShuttleSpeedLabel(spd), "0x");
+assert.equal(stepShuttleSpeed(-2, "l"), 1);
+assert.equal(stepShuttleSpeed(0, "toggle"), 1);
+assert.equal(stepShuttleSpeed(2, "toggle"), 0);
+
+// In/Out (I/O) Range Selection & Math
+let io = setInOutRange(null, "in", 25, 0, 200);
+assert.deepEqual(io, {{ in_frame: 25, out_frame: null }});
+io = setInOutRange(io, "out", 125, 0, 200);
+assert.deepEqual(io, {{ in_frame: 25, out_frame: 125 }});
+const ioMetrics = computeInOutRangeMetrics(io, doc.fps, 0, 200);
+assert.equal(ioMetrics.hasIn, true);
+assert.equal(ioMetrics.hasOut, true);
+assert.equal(ioMetrics.isActive, true);
+assert.equal(ioMetrics.isComplete, true);
+assert.equal(ioMetrics.durationFrames, 100);
+assert.equal(ioMetrics.durationSeconds, 4.0);
+
+// Setting In past Out clears Out; setting Out before In clears In
+const ioInPastOut = setInOutRange(io, "in", 150, 0, 200);
+assert.deepEqual(ioInPastOut, {{ in_frame: 150, out_frame: null }});
+const ioOutBeforeIn = setInOutRange(ioInPastOut, "out", 60, 0, 200);
+assert.deepEqual(ioOutBeforeIn, {{ in_frame: null, out_frame: 60 }});
+const partialMetrics = computeInOutRangeMetrics(ioOutBeforeIn, 25, 0, 200);
+assert.equal(partialMetrics.isActive, true);
+assert.equal(partialMetrics.isComplete, false);
+assert.equal(partialMetrics.durationFrames, null);
+assert.equal(partialMetrics.effectiveStart, 0);
+assert.equal(partialMetrics.effectiveEnd, 60);
+assert.equal(partialMetrics.effectiveDurationFrames, 60);
+
+// Alt+X Clear & normalize clamping
+assert.deepEqual(setInOutRange(io, "clear"), {{ in_frame: null, out_frame: null }});
+assert.deepEqual(normalizeInOutRange({{ in_frame: -10, out_frame: 999 }}, 0, 200), {{
+  in_frame: 0,
+  out_frame: 200
+}});
+assert.deepEqual(normalizeInOutRange({{ in_frame: 120, out_frame: 80 }}, 0, 200), {{
+  in_frame: 120,
+  out_frame: null
+}});
+
+// Loop & Bounds Playhead Stepping
+assert.deepEqual(stepPlayheadInRange(124, 2, 0, 200, io, true), {{ frame: 25, stop: false }});
+assert.deepEqual(stepPlayheadInRange(25, -1, 0, 200, io, true), {{ frame: 125, stop: false }});
+assert.deepEqual(stepPlayheadInRange(198, 5, 0, 200, io, false), {{ frame: 200, stop: true }});
+assert.deepEqual(stepPlayheadInRange(2, -5, 0, 200, io, false), {{ frame: 0, stop: true }});
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
