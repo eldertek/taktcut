@@ -82,9 +82,11 @@ import {
   findClipIndex,
   findMagneticSnap,
   findTrackAndClip,
+  formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
   formatTransformBadgeText,
+  formatYoutubeChaptersFromMarkers,
   getAspectRatioPreset,
   getClipTrimBounds,
   getTransformPresetClient,
@@ -109,6 +111,7 @@ import {
   splitClipsAtPlayhead,
   stepPlayheadInRange,
   stepShuttleSpeed,
+  timelineDocToChapterInputs,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
@@ -857,6 +860,7 @@ function renderTimelineUI() {
     const rippleBtn = byId("btn-clip-ripple-delete");
     if (rippleBtn) rippleBtn.disabled = true;
     byId("timeline-issues-list").replaceChildren();
+    renderDeliverChaptersPreview();
     return;
   }
 
@@ -896,6 +900,7 @@ function renderTimelineUI() {
   updateTimelineToolbarUI();
   renderTimelineSelection();
   renderTimelineIssues();
+  renderDeliverChaptersPreview();
   if (state.activeTab === "timeline") {
     redrawActiveCanvases();
   }
@@ -4553,6 +4558,68 @@ function applyDeliveryPreset(presetId) {
   renderDeliveryPresetStrip();
   redrawActiveCanvases();
   showBanner(`${getDeliveryPresetLabel(preset)} (${preset.width}x${preset.height}, ${preset.container.toUpperCase()})`, "info");
+}
+
+function renderDeliverChaptersPreview() {
+  const previewEl = byId("deliver-chapters-preview");
+  const countEl = byId("deliver-chapters-count");
+  const ytBtn = byId("btn-export-yt-chapters");
+  const ffBtn = byId("btn-export-ffmetadata");
+  if (!previewEl) return;
+
+  const { markers } = timelineDocToChapterInputs(state.timelineDoc);
+  const ytText = formatYoutubeChaptersFromMarkers(markers);
+  const hasChapters = markers.length > 0 && ytText.length > 0;
+  const lineCount = hasChapters ? ytText.split("\n").length : 0;
+
+  previewEl.textContent = hasChapters ? ytText : t("render.chapters.empty");
+  previewEl.classList.toggle("is-empty", !hasChapters);
+  if (countEl) {
+    countEl.textContent = `${lineCount} CHP`;
+    countEl.className = hasChapters ? "nle-tag is-active mono" : "nle-tag mono";
+  }
+  if (ytBtn) ytBtn.disabled = !hasChapters;
+  if (ffBtn) ffBtn.disabled = !hasChapters;
+}
+
+function getSafeTimelineStem() {
+  const raw = state.timelineDoc && state.timelineDoc.name ? state.timelineDoc.name : "timeline";
+  return raw.replace(/[^A-Za-z0-9._-]/g, "_") || "timeline";
+}
+
+function exportYoutubeChapters() {
+  const { markers } = timelineDocToChapterInputs(state.timelineDoc);
+  const content = formatYoutubeChaptersFromMarkers(markers);
+  if (!content) {
+    showBanner(t("render.chapters.empty"), "error");
+    return;
+  }
+  const filename = `${getSafeTimelineStem()}_youtube_chapters.txt`;
+  triggerBlobDownload(new Blob([content], { type: "text/plain; charset=utf-8" }), filename);
+  const lineCount = content.split("\n").length;
+  const msg = t("render.chapters.exportedYt")
+    .replace("{filename}", filename)
+    .replace("{count}", String(lineCount));
+  const feedbackEl = byId("deliver-chapters-feedback");
+  if (feedbackEl) feedbackEl.textContent = msg;
+  showBanner(msg, "success");
+}
+
+function exportFfmetadataChapters() {
+  const { markers, totalDurationS } = timelineDocToChapterInputs(state.timelineDoc);
+  if (markers.length === 0) {
+    showBanner(t("render.chapters.empty"), "error");
+    return;
+  }
+  const content = formatFfmetadataFromMarkers(markers, totalDurationS);
+  const filename = `${getSafeTimelineStem()}_ffmetadata.txt`;
+  triggerBlobDownload(new Blob([content], { type: "text/plain; charset=utf-8" }), filename);
+  const msg = t("render.chapters.exportedFfmeta")
+    .replace("{filename}", filename)
+    .replace("{count}", String(markers.length));
+  const feedbackEl = byId("deliver-chapters-feedback");
+  if (feedbackEl) feedbackEl.textContent = msg;
+  showBanner(msg, "success");
 }
 
 async function buildOrExecuteRender(execute) {
@@ -8486,6 +8553,10 @@ function wireEvents() {
     switchTab("qa");
     runBroadcastQa();
   });
+  const exportYtBtn = byId("btn-export-yt-chapters");
+  if (exportYtBtn) exportYtBtn.addEventListener("click", exportYoutubeChapters);
+  const exportFfmetaBtn = byId("btn-export-ffmetadata");
+  if (exportFfmetaBtn) exportFfmetaBtn.addEventListener("click", exportFfmetadataChapters);
 
   // QA page events
   byId("qa-media-select").addEventListener("change", () => {

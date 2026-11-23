@@ -2198,3 +2198,109 @@ export function removeStillById(stills, stillId) {
   if (!targetId) return [...list];
   return list.filter((item) => item && item.id !== targetId);
 }
+
+function normalizeChapterMarkers(markers) {
+  if (!Array.isArray(markers)) return [];
+  const valid = [];
+  markers.forEach((m, idx) => {
+    if (!m || typeof m !== "object") return;
+    if (m.time_s === undefined || m.time_s === null || m.time_s === "") return;
+    const rawTime = Number(m.time_s);
+    if (!Number.isFinite(rawTime)) return;
+    const rawLabel =
+      typeof m.label === "string"
+        ? m.label
+        : typeof m.name === "string"
+          ? m.name
+          : "";
+    valid.push({
+      time_s: Math.max(0, rawTime),
+      rawLabel,
+      idx
+    });
+  });
+  valid.sort((a, b) => a.time_s - b.time_s || a.idx - b.idx);
+  return valid;
+}
+
+function formatChapterTimestamp(timeS) {
+  const totalSec = Math.max(0, Math.floor(Number(timeS) + 1e-6));
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+  const pad2 = (n) => String(n).padStart(2, "0");
+  if (hours > 0) {
+    return `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}`;
+  }
+  return `${pad2(minutes)}:${pad2(seconds)}`;
+}
+
+export function formatYoutubeChaptersFromMarkers(markers) {
+  const sorted = normalizeChapterMarkers(markers);
+  if (sorted.length === 0) return "";
+  const entries = sorted.map((item) => ({
+    time_s: item.time_s,
+    label: item.rawLabel.replace(/[\r\n]+/g, " ").trim() || "Chapter"
+  }));
+  if (Math.floor(entries[0].time_s + 1e-6) > 0) {
+    entries.unshift({ time_s: 0, label: "Intro" });
+  }
+  return entries
+    .map((entry) => `${formatChapterTimestamp(entry.time_s)} ${entry.label}`)
+    .join("\n");
+}
+
+export function escapeFfmetadataValue(raw) {
+  return String(raw ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\\/g, "\\\\")
+    .replace(/=/g, "\\=")
+    .replace(/;/g, "\\;")
+    .replace(/#/g, "\\#")
+    .replace(/\n/g, "\\\n");
+}
+
+export function formatFfmetadataFromMarkers(markers, totalDurationS) {
+  const sorted = normalizeChapterMarkers(markers);
+  const lines = [";FFMETADATA1"];
+  if (sorted.length === 0) {
+    return `${lines[0]}\n`;
+  }
+  const durS = Number(totalDurationS);
+  const totalMs = Number.isFinite(durS) && durS > 0 ? Math.round(durS * 1000) : 0;
+  for (let i = 0; i < sorted.length; i += 1) {
+    const startMs = Math.round(sorted[i].time_s * 1000);
+    const rawEndMs =
+      i < sorted.length - 1 ? Math.round(sorted[i + 1].time_s * 1000) : totalMs;
+    const endMs = Math.max(startMs, rawEndMs);
+    const titleRaw = sorted[i].rawLabel.trim() || "Chapter";
+    lines.push("[CHAPTER]");
+    lines.push("TIMEBASE=1/1000");
+    lines.push(`START=${startMs}`);
+    lines.push(`END=${endMs}`);
+    lines.push(`title=${escapeFfmetadataValue(titleRaw)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function timelineDocToChapterInputs(doc) {
+  if (!doc || !Array.isArray(doc.markers)) {
+    return { markers: [], totalDurationS: 0 };
+  }
+  const fpsObj = doc.fps && typeof doc.fps === "object" ? doc.fps : { num: 25, den: 1 };
+  const fpsRate = Math.max(1, Number(fpsObj.num || 25) / Math.max(1, Number(fpsObj.den || 1)));
+  const startFrame = Number.isFinite(Number(doc.start_frame)) ? Number(doc.start_frame) : 0;
+  const maxFrame = computeTimelineMaxFrame(doc);
+  const totalDurationS = Math.max(0, (maxFrame - startFrame) / fpsRate);
+  const markers = doc.markers.map((mk) => ({
+    time_s: Math.max(0, (Number(mk && mk.frame ? mk.frame : 0) - startFrame) / fpsRate),
+    label:
+      mk && typeof mk.name === "string" && mk.name.trim()
+        ? mk.name.trim()
+        : mk && typeof mk.label === "string"
+          ? mk.label.trim()
+          : ""
+  }));
+  return { markers, totalDurationS };
+}

@@ -1560,24 +1560,44 @@
             </div>
           </section>
 
-          <section class="nle-pane">
-            <div class="pane-header">
-              <h2 data-i18n="render.plan.title">Compiled Render Plan &amp; Queue Telemetry</h2>
-              <span id="render-encoder-badge" class="nle-tag mono">--</span>
-            </div>
-            <div class="pane-body">
-              <div id="render-plan-kv" class="kv-grid mono"></div>
-              <div class="pane-subheader"><span data-i18n="render.plan.argv">FFmpeg Command Line</span></div>
-              <pre id="render-argv-output" class="code-box mono"></pre>
-              <div id="render-exec-result" class="exec-result is-hidden">
-                <div class="pane-subheader">
-                  <span data-i18n="render.exec.title">Execution Result</span>
-                  <button type="button" id="btn-send-render-qa" class="btn btn-primary" data-i18n="render.btn.sendQa">Send to QA Gate</button>
-                </div>
-                <pre id="render-exec-output" class="code-box mono"></pre>
+          <div class="deliver-side-stack">
+            <section class="nle-pane">
+              <div class="pane-header">
+                <h2 data-i18n="render.plan.title">Compiled Render Plan &amp; Queue Telemetry</h2>
+                <span id="render-encoder-badge" class="nle-tag mono">--</span>
               </div>
-            </div>
-          </section>
+              <div class="pane-body">
+                <div id="render-plan-kv" class="kv-grid mono"></div>
+                <div class="pane-subheader"><span data-i18n="render.plan.argv">FFmpeg Command Line</span></div>
+                <pre id="render-argv-output" class="code-box mono"></pre>
+                <div id="render-exec-result" class="exec-result is-hidden">
+                  <div class="pane-subheader">
+                    <span data-i18n="render.exec.title">Execution Result</span>
+                    <button type="button" id="btn-send-render-qa" class="btn btn-primary" data-i18n="render.btn.sendQa">Send to QA Gate</button>
+                  </div>
+                  <pre id="render-exec-output" class="code-box mono"></pre>
+                </div>
+              </div>
+            </section>
+
+            <section class="nle-pane deliver-chapters-pane">
+              <div class="pane-header">
+                <h2 data-i18n="render.chapters.title">Timeline Chapters &amp; Metadata Export</h2>
+                <span id="deliver-chapters-count" class="nle-tag mono">0 CHP</span>
+              </div>
+              <div class="pane-body">
+                <div class="pane-subheader">
+                  <span data-i18n="render.chapters.previewLabel">Live YouTube Chapters Preview (from Timeline Markers M)</span>
+                </div>
+                <pre id="deliver-chapters-preview" class="code-box deliver-chapters-preview mono" aria-live="polite"></pre>
+                <div class="btn-row deliver-chapters-actions">
+                  <button type="button" id="btn-export-yt-chapters" class="btn btn-secondary" data-i18n="render.chapters.exportYt">Export YouTube Chapters (.txt)</button>
+                  <button type="button" id="btn-export-ffmetadata" class="btn btn-secondary" data-i18n="render.chapters.exportFfmeta">Export FFMETADATA</button>
+                </div>
+                <div id="deliver-chapters-feedback" class="telemetry-note mono" aria-live="polite"></div>
+              </div>
+            </section>
+          </div>
         </div>
       </section>
 

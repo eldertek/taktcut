@@ -959,12 +959,15 @@ import {{
   computeSplitWipePercentFromPointer,
   createStillRecord,
   deleteMarkerInDocument,
+  escapeFfmetadataValue,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
   findAllCutJunctions,
   findMagneticSnap,
+  formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
+  formatYoutubeChaptersFromMarkers,
   getDeliveryPresetClient,
   isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
@@ -984,6 +987,7 @@ import {{
   splitClipsAtPlayhead,
   stepPlayheadInRange,
   stepShuttleSpeed,
+  timelineDocToChapterInputs,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
@@ -1551,6 +1555,80 @@ const afterDelete = removeStillById(gallery, "still-9");
 assert.equal(afterDelete.length, 7);
 assert.equal(afterDelete.some((s) => s.id === "still-9"), false);
 assert.equal(gallery.length, 8);
+
+// YouTube Chapters & FFMETADATA export helpers
+assert.equal(formatYoutubeChaptersFromMarkers([]), "");
+assert.equal(formatYoutubeChaptersFromMarkers(null), "");
+assert.equal(
+  formatYoutubeChaptersFromMarkers([
+    {{ time_s: 45, label: "Chorus Drop" }},
+    {{ time_s: 12, label: "Verse\\nOne" }}
+  ]),
+  "00:00 Intro\\n00:12 Verse One\\n00:45 Chorus Drop"
+);
+assert.equal(
+  formatYoutubeChaptersFromMarkers([
+    {{ time_s: 0, label: "Cold Open" }},
+    {{ time_s: 3665, label: "Encore Finale" }}
+  ]),
+  "00:00 Cold Open\\n01:01:05 Encore Finale"
+);
+assert.equal(
+  formatYoutubeChaptersFromMarkers([{{ time_s: -3, label: "" }}]),
+  "00:00 Chapter"
+);
+
+assert.equal(formatFfmetadataFromMarkers([], 20), ";FFMETADATA1\\n");
+assert.equal(
+  escapeFfmetadataValue("A=B;C#D\\\\E\\nF"),
+  "A\\\\=B\\\\;C\\\\#D\\\\\\\\E\\\\\\nF"
+);
+const ffmetaOut = formatFfmetadataFromMarkers(
+  [
+    {{ time_s: 15, label: "Part=2;Peak#1\\\\Mix\\nEnd" }},
+    {{ time_s: 0, label: "Intro" }}
+  ],
+  40
+);
+assert.equal(
+  ffmetaOut,
+  [
+    ";FFMETADATA1",
+    "[CHAPTER]",
+    "TIMEBASE=1/1000",
+    "START=0",
+    "END=15000",
+    "title=Intro",
+    "[CHAPTER]",
+    "TIMEBASE=1/1000",
+    "START=15000",
+    "END=40000",
+    "title=Part\\\\=2\\\\;Peak\\\\#1\\\\\\\\Mix\\\\\\nEnd",
+    ""
+  ].join("\\n")
+);
+
+const chapterDocInputs = timelineDocToChapterInputs({{
+  fps: {{ num: 25, den: 1 }},
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [{{ start_frame: 0, duration_frames: 500 }}]
+    }}
+  ],
+  markers: [
+    {{ name: "Grade Reference", frame: 225, duration_frames: 1, color: "Gold" }},
+    {{ name: "Intro Title Cue", frame: 25, duration_frames: 1, color: "Cyan" }}
+  ]
+}});
+assert.equal(chapterDocInputs.totalDurationS, 20);
+assert.equal(
+  formatYoutubeChaptersFromMarkers(chapterDocInputs.markers),
+  "00:00 Intro\\n00:01 Intro Title Cue\\n00:09 Grade Reference"
+);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -2503,6 +2581,50 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert deint_render_overflow <= 0, (
                     f"Deliver export_fps/deinterlace overflow at {width}x{height}: "
                     f"{deint_render_overflow}px"
+                )
+
+                # Verify Deliver Timeline Chapters preview & 1-click YouTube/FFMETADATA exports
+                chapters_preview = page.locator("#deliver-chapters-preview")
+                btn_yt = page.locator("#btn-export-yt-chapters")
+                btn_ff = page.locator("#btn-export-ffmetadata")
+                assert chapters_preview.is_visible() is True
+                assert btn_yt.is_visible() is True
+                assert btn_ff.is_visible() is True
+                chapters_text = chapters_preview.text_content() or ""
+                assert "00:00 Intro" in chapters_text
+                assert "00:01 Intro Title Cue" in chapters_text
+                assert (page.locator("#deliver-chapters-count").text_content() or "") == "4 CHP"
+                if width <= 820:
+                    for chp_btn in (btn_yt, btn_ff):
+                        chp_box = chp_btn.bounding_box()
+                        assert chp_box is not None and chp_box["height"] >= 44
+
+                with page.expect_download() as yt_dl_info:
+                    btn_yt.click()
+                yt_dl = yt_dl_info.value
+                assert yt_dl.suggested_filename.endswith("_youtube_chapters.txt")
+                yt_dl_path = yt_dl.path()
+                assert yt_dl_path is not None
+                yt_dl_content = Path(yt_dl_path).read_text(encoding="utf-8")
+                assert "00:00 Intro\n00:01 Intro Title Cue" in yt_dl_content
+
+                with page.expect_download() as ff_dl_info:
+                    btn_ff.click()
+                ff_dl = ff_dl_info.value
+                assert ff_dl.suggested_filename.endswith("_ffmetadata.txt")
+                ff_dl_path = ff_dl.path()
+                assert ff_dl_path is not None
+                ff_dl_content = Path(ff_dl_path).read_text(encoding="utf-8")
+                assert ff_dl_content.startswith(";FFMETADATA1\n")
+                assert "[CHAPTER]" in ff_dl_content
+                assert "TIMEBASE=1/1000" in ff_dl_content
+                assert "title=Intro Title Cue" in ff_dl_content
+
+                chapters_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert chapters_overflow <= 0, (
+                    f"Deliver chapters overflow at {width}x{height}: {chapters_overflow}px"
                 )
 
                 # Verify Save Project / Open Project controls and round-trip in top bar
@@ -3669,6 +3791,39 @@ def test_ui_render_plan_export_fps_and_deinterlace_endpoint_and_assets(
         "render.plan.exportFps",
         "render.check.deinterlace",
         "render.plan.deinterlace",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    for asset_file in assets_dir.iterdir():
+        if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:
+            content = asset_file.read_text(encoding="utf-8")
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_file.name}"
+            assert "\u2013" not in content and "\u2014" not in content, (
+                f"En/em dash found in {asset_file.name}"
+            )
+
+
+def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "deliver-chapters-preview",
+        "deliver-chapters-count",
+        "deliver-chapters-feedback",
+        "btn-export-yt-chapters",
+        "btn-export-ffmetadata",
+    ):
+        assert f'id="{elem_id}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.chapters.title",
+        "render.chapters.previewLabel",
+        "render.chapters.exportYt",
+        "render.chapters.exportFfmeta",
+        "render.chapters.empty",
+        "render.chapters.exportedYt",
+        "render.chapters.exportedFfmeta",
     ):
         assert i18n_text.count(f'"{key}"') == 2
 

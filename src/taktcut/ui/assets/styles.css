@@ -3100,6 +3100,40 @@ input[type="range"] {
   color: var(--text-primary);
 }
 
+/* DELIVER TIMELINE CHAPTERS & FFMETADATA EXPORT */
+.deliver-side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-hairline);
+  min-width: 0;
+}
+
+.deliver-side-stack > .nle-pane:last-child {
+  flex: 1 1 auto;
+}
+
+.deliver-chapters-pane .pane-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.deliver-chapters-preview {
+  max-height: 150px;
+  min-height: 68px;
+}
+
+.deliver-chapters-preview.is-empty {
+  color: var(--text-muted);
+}
+
+.deliver-chapters-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* RESPONSIVE BREAKPOINTS */
 @media (max-width: 1180px) {
   .deliver-preset-strip {
