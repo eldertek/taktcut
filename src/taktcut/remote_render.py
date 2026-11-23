@@ -52,6 +52,7 @@ from taktcut.render import (
     ClipVideoFadeParams,
     FramingParams,
     LowerThirdParams,
+    ReframeParams,
     RetimeParams,
     build_render_plan,
     execute_render_plan,
@@ -260,6 +261,7 @@ class RemoteRenderJobRequest(BaseModel):
     retime_params: ClipRetimeParams | None = None
     transform_params: ClipTransformParams | None = None
     framing: FramingParams | None = None
+    reframe: ReframeParams | None = None
     clip_duration_s: float | None = None
 
     @field_validator("loudness_preset", mode="before")
@@ -581,6 +583,7 @@ class RemoteRenderState:
             retime_params=req.retime_params,
             transform_params=req.transform_params,
             framing=req.framing,
+            reframe=req.reframe,
             clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,
             loudness_preset=req.loudness_preset,

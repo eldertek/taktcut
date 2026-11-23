@@ -667,6 +667,60 @@ function compileDeliverRetimeClient(payload) {
   };
 }
 
+const REFRAME_RATIO_MAP_DEMO = {
+  "16:9": [16, 9],
+  "9:16": [9, 16],
+  "4:5": [4, 5],
+  "1:1": [1, 1],
+  "2.39:1": [239, 100]
+};
+
+function compileReframeClient(payload) {
+  const src = payload && payload.reframe ? payload.reframe : payload || {};
+  const enabled = src.enabled !== undefined ? Boolean(src.enabled) : false;
+  if (src.enabled !== undefined && typeof src.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const rawRatio = src.aspect_ratio !== undefined && src.aspect_ratio !== null ? String(src.aspect_ratio).trim().toLowerCase() : "source";
+  if (rawRatio !== "source" && !Object.prototype.hasOwnProperty.call(REFRAME_RATIO_MAP_DEMO, rawRatio)) {
+    throw new Error(`Unsupported reframe aspect_ratio ${src.aspect_ratio}`);
+  }
+  const panX = src.pan_x !== undefined && src.pan_x !== null ? Number(src.pan_x) : 0.0;
+  if (typeof src.pan_x === "boolean" || !Number.isFinite(panX) || panX < -1.0 || panX > 1.0) {
+    throw new Error("pan_x must be within [-1.0, 1.0]");
+  }
+  const panY = src.pan_y !== undefined && src.pan_y !== null ? Number(src.pan_y) : 0.0;
+  if (typeof src.pan_y === "boolean" || !Number.isFinite(panY) || panY < -1.0 || panY > 1.0) {
+    throw new Error("pan_y must be within [-1.0, 1.0]");
+  }
+  const isActive = Boolean(enabled && rawRatio !== "source");
+  let fg = "";
+  if (isActive) {
+    const [num, den] = REFRAME_RATIO_MAP_DEMO[rawRatio];
+    const wExpr = `min(iw,if(gt(iw*${den},ih*${num}),trunc(ih*${num}/${den}/2)*2,trunc(iw/2)*2))`;
+    const hExpr = `min(ih,if(gt(iw*${den},ih*${num}),trunc(ih/2)*2,trunc(iw*${den}/${num}/2)*2))`;
+    const xExpr = Math.abs(panX) <= 1e-6
+      ? "(iw-ow)/2"
+      : `max(0,min(iw-ow,(iw-ow)/2*(1+(${panX.toFixed(4)}))))`;
+    const yExpr = Math.abs(panY) <= 1e-6
+      ? "(ih-oh)/2"
+      : `max(0,min(ih-oh,(ih-oh)/2*(1+(${panY.toFixed(4)}))))`;
+    fg = `crop=w='${wExpr}':h='${hExpr}':x='${xExpr}':y='${yExpr}'`;
+  }
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: fg ? ["-vf", fg] : [],
+    is_identity: !isActive,
+    is_active: isActive,
+    params: {
+      enabled,
+      aspect_ratio: rawRatio,
+      pan_x: panX,
+      pan_y: panY
+    }
+  };
+}
+
 const CAPTION_STYLE_SPECS = [
   {
     id: "clean_white",
@@ -1212,6 +1266,20 @@ export function createApiClient() {
         if (rawExportFps !== "source") {
           vfParts.push(`fps=${rawExportFps}`);
         }
+        let reframeEnabled = false;
+        let reframeAspectRatio = "source";
+        let reframePanX = 0.0;
+        let reframePanY = 0.0;
+        if (body.reframe) {
+          const compiledReframe = compileReframeClient(body.reframe);
+          if (compiledReframe.is_active && compiledReframe.filtergraph) {
+            vfParts.push(compiledReframe.filtergraph);
+            reframeEnabled = true;
+            reframeAspectRatio = compiledReframe.params.aspect_ratio;
+            reframePanX = compiledReframe.params.pan_x;
+            reframePanY = compiledReframe.params.pan_y;
+          }
+        }
         const effectiveFraming =
           body.framing ||
           (presetObj
@@ -1424,6 +1492,10 @@ export function createApiClient() {
               retime_enabled: retimeEnabled,
               retime_speed: retimeSpeed,
               retime_reverse: retimeReverse,
+              reframe_enabled: false,
+              reframe_aspect_ratio: "source",
+              reframe_pan_x: 0.0,
+              reframe_pan_y: 0.0,
               export_fps: rawExportFps,
               deinterlace,
               audio_only_format: rawAudioOnly,
@@ -1495,6 +1567,10 @@ export function createApiClient() {
             retime_enabled: retimeEnabled,
             retime_speed: retimeSpeed,
             retime_reverse: retimeReverse,
+            reframe_enabled: reframeEnabled,
+            reframe_aspect_ratio: reframeAspectRatio,
+            reframe_pan_x: reframePanX,
+            reframe_pan_y: reframePanY,
             export_fps: rawExportFps,
             deinterlace,
             audio_only_format: "off",
@@ -1662,6 +1738,12 @@ export function createApiClient() {
         return compileFramingFilterClient(payload.framing || payload);
       }
       return requestJson("/api/framing/compile", { method: "POST", body: payload });
+    },
+    async compileReframeFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileReframeClient(payload);
+      }
+      return requestJson("/api/reframe/compile", { method: "POST", body: payload });
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {

@@ -28,6 +28,7 @@ from taktcut.render import (
     FairlightAudioParams,
     FramingParams,
     LowerThirdParams,
+    ReframeParams,
     RetimeParams,
     build_atempo_stages,
     build_render_plan,
@@ -46,6 +47,8 @@ from taktcut.render import (
     compile_loudness_preset_filter,
     compile_lower_third_filter,
     compile_lower_third_filter_result,
+    compile_reframe_filter,
+    compile_reframe_filter_result,
     compile_retime_filter,
     compile_retime_filter_result,
     compile_review_watermark_filter,
@@ -1728,3 +1731,88 @@ def test_retime_params_validation_and_filter_compile(tmp_path: Path) -> None:
     result = execute_render_plan(plan)
     assert result.success is True, result.stderr_tail
     assert result.bytes_written > 0
+
+
+def test_reframe_params_validation_and_filter_compile(tmp_path: Path) -> None:
+    default_rf = ReframeParams()
+    assert default_rf.enabled is False
+    assert default_rf.aspect_ratio == "source"
+    assert default_rf.pan_x == 0.0
+    assert default_rf.pan_y == 0.0
+    assert default_rf.is_active() is False
+    assert default_rf.is_identity() is True
+    assert compile_reframe_filter(default_rf) is None
+
+    disabled_rf = ReframeParams(enabled=False, aspect_ratio="9:16", pan_x=0.5, pan_y=-0.5)
+    assert disabled_rf.is_active() is False
+    assert compile_reframe_filter(disabled_rf) is None
+
+    source_enabled = ReframeParams(enabled=True, aspect_ratio="source")
+    assert source_enabled.is_active() is False
+    assert compile_reframe_filter(source_enabled) is None
+
+    for ratio, expected_num, expected_den in (
+        ("16:9", "16", "9"),
+        ("9:16", "9", "16"),
+        ("4:5", "4", "5"),
+        ("1:1", "1", "1"),
+        ("2.39:1", "239", "100"),
+    ):
+        rf = ReframeParams(enabled=True, aspect_ratio=ratio)  # type: ignore[arg-type]
+        assert rf.is_active() is True
+        fg = compile_reframe_filter(rf)
+        assert fg is not None
+        assert fg.startswith("crop=w='min(iw,")
+        assert f"ih*{expected_num}/{expected_den}" in fg
+        assert "x='(iw-ow)/2':y='(ih-oh)/2'" in fg
+
+    panned = compile_reframe_filter_result(
+        ReframeParams(enabled=True, aspect_ratio="9:16", pan_x=-0.75, pan_y=0.5)
+    )
+    assert panned.is_active is True
+    assert panned.is_identity is False
+    assert panned.ffmpeg_vf_args == ["-vf", panned.filtergraph]
+    assert "max(0,min(iw-ow,(iw-ow)/2*(1+(-0.7500))))" in panned.filtergraph
+    assert "max(0,min(ih-oh,(ih-oh)/2*(1+(0.5000))))" in panned.filtergraph
+
+    for bad_kwargs in (
+        {"enabled": "yes"},
+        {"enabled": True, "aspect_ratio": "21:9"},
+        {"enabled": True, "aspect_ratio": 16},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_x": -1.01},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_x": 1.01},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_y": True},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_y": math.nan},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_x": math.inf},
+        {"unknown_field": 1},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            ReframeParams(**bad_kwargs)  # type: ignore[arg-type]
+
+    src = tmp_path / "reframe_params_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "reframe_params_9_16_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        reframe=ReframeParams(enabled=True, aspect_ratio="9:16", pan_x=1.0, pan_y=-1.0),
+        prefer_hw=False,
+    )
+    assert plan.reframe_enabled is True
+    assert plan.reframe_aspect_ratio == "9:16"
+    assert plan.reframe_pan_x == pytest.approx(1.0)
+    assert plan.reframe_pan_y == pytest.approx(-1.0)
+    assert plan.video_filter is not None
+    assert "crop=w='min(iw," in plan.video_filter
+    assert "1+(1.0000)" in plan.video_filter
+    assert "1+(-1.0000)" in plan.video_filter
+
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0
+    probed = probe_media(out)
+    assert probed.width < probed.height
+    assert probed.width % 2 == 0
+    assert probed.height % 2 == 0

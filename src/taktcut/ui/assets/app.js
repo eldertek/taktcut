@@ -396,6 +396,14 @@ const state = {
   },
   deliverRetimeCompileSeq: 0,
   deliverRetimeCompileTimer: null,
+  reframe: {
+    enabled: false,
+    aspect_ratio: "source",
+    pan_x: 0.0,
+    pan_y: 0.0
+  },
+  reframeCompileSeq: 0,
+  reframeCompileTimer: null,
   subtitleTrack: {
     enabled: true,
     style: "clean_white",
@@ -737,7 +745,7 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(false),
       null,
       null,
-      { lowerThird: { ...state.lowerThird } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe } }
     );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
@@ -797,7 +805,7 @@ function redrawActiveCanvases() {
         beforeLabel: t("wipe.pill.before"),
         afterLabel: t("wipe.pill.after")
       },
-      { lowerThird: { ...state.lowerThird } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe } }
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -812,7 +820,7 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(true),
       null,
       null,
-      { lowerThird: { ...state.lowerThird } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe } }
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
@@ -2347,6 +2355,7 @@ function serializeFullProjectState() {
       review_watermark_opacity: Number(byId("render-watermark-opacity")?.value ?? 0.35),
       lower_third: { ...state.lowerThird },
       retime: { ...state.deliverRetime },
+      reframe: { ...state.reframe },
       export_fps: txt("render-export-fps", "source") || "source",
       deinterlace: chk("render-deinterlace", false),
       audio_only_format: txt("render-audio-only-format", "off") || "off",
@@ -2569,6 +2578,21 @@ function applyFullProjectState(project, validation) {
     state.deliverRetime = { enabled: false, speed: 1.0, reverse: false };
   }
   syncDeliverRetimeControlsUI({ syncInputs: true });
+  if (del.reframe && typeof del.reframe === "object") {
+    const allowedRatios = new Set(["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]);
+    const rawRatio = String(del.reframe.aspect_ratio || "source").trim().toLowerCase();
+    const rawPx = Number(del.reframe.pan_x);
+    const rawPy = Number(del.reframe.pan_y);
+    state.reframe = {
+      enabled: Boolean(del.reframe.enabled),
+      aspect_ratio: allowedRatios.has(rawRatio) ? rawRatio : "source",
+      pan_x: Number.isFinite(rawPx) ? Math.min(1, Math.max(-1, rawPx)) : 0.0,
+      pan_y: Number.isFinite(rawPy) ? Math.min(1, Math.max(-1, rawPy)) : 0.0
+    };
+  } else {
+    state.reframe = { enabled: false, aspect_ratio: "source", pan_x: 0.0, pan_y: 0.0 };
+  }
+  syncReframeControlsUI({ syncInputs: true });
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -5287,6 +5311,94 @@ function scheduleDeliverRetimeCompile() {
   }, 80);
 }
 
+function getNormalizedReframePayload() {
+  const rf = state.reframe;
+  const allowed = new Set(["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]);
+  const rawRatio = String(rf.aspect_ratio || "source").trim().toLowerCase();
+  const ratio = allowed.has(rawRatio) ? rawRatio : "source";
+  const rawPx = Number(rf.pan_x);
+  const rawPy = Number(rf.pan_y);
+  return {
+    enabled: Boolean(rf.enabled),
+    aspect_ratio: ratio,
+    pan_x: Number.isFinite(rawPx) ? Math.min(1.0, Math.max(-1.0, rawPx)) : 0.0,
+    pan_y: Number.isFinite(rawPy) ? Math.min(1.0, Math.max(-1.0, rawPy)) : 0.0
+  };
+}
+
+function syncReframePresetButtons() {
+  const rf = getNormalizedReframePayload();
+  for (const btn of document.querySelectorAll(".reframe-deliver-preset-btn[data-deliver-reframe-ratio]")) {
+    const btnRatio = String(btn.getAttribute("data-deliver-reframe-ratio") || "").trim().toLowerCase();
+    const isMatch = rf.aspect_ratio === btnRatio;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function syncReframeControlsUI(opts = {}) {
+  const rf = getNormalizedReframePayload();
+  const syncInputs = Boolean(opts.syncInputs);
+  const enabledEl = byId("render-reframe-enabled");
+  if (enabledEl && enabledEl.checked !== rf.enabled) {
+    enabledEl.checked = rf.enabled;
+  }
+  const panXEl = byId("render-reframe-pan-x");
+  if (syncInputs && panXEl) {
+    panXEl.value = rf.pan_x.toFixed(2);
+  }
+  const panXValEl = byId("render-reframe-pan-x-value");
+  if (panXValEl) {
+    panXValEl.textContent = rf.pan_x.toFixed(2);
+  }
+  const panYEl = byId("render-reframe-pan-y");
+  if (syncInputs && panYEl) {
+    panYEl.value = rf.pan_y.toFixed(2);
+  }
+  const panYValEl = byId("render-reframe-pan-y-value");
+  if (panYValEl) {
+    panYValEl.textContent = rf.pan_y.toFixed(2);
+  }
+  const badgeEl = byId("render-reframe-badge");
+  if (badgeEl) {
+    const isActive = rf.enabled && rf.aspect_ratio !== "source";
+    if (!rf.enabled || rf.aspect_ratio === "source") {
+      badgeEl.textContent = "OFF";
+      badgeEl.className = "nle-tag mono";
+    } else if (isActive) {
+      badgeEl.textContent = rf.aspect_ratio.toUpperCase();
+      badgeEl.className = "nle-tag is-active mono";
+    }
+  }
+  syncReframePresetButtons();
+  scheduleReframeCompile();
+}
+
+function scheduleReframeCompile() {
+  if (state.reframeCompileTimer) {
+    window.clearTimeout(state.reframeCompileTimer);
+  }
+  const seq = ++state.reframeCompileSeq;
+  state.reframeCompileTimer = window.setTimeout(async () => {
+    const previewEl = byId("render-reframe-preview");
+    const payload = getNormalizedReframePayload();
+    if (!payload.enabled || payload.aspect_ratio === "source") {
+      if (previewEl) previewEl.textContent = "(off)";
+      return;
+    }
+    try {
+      const compiled = await api.compileReframeFilter({ reframe: payload });
+      if (seq !== state.reframeCompileSeq) return;
+      if (previewEl) {
+        previewEl.textContent = compiled.filtergraph ? `-vf ${compiled.filtergraph}` : "(off)";
+      }
+    } catch (err) {
+      if (seq !== state.reframeCompileSeq) return;
+      if (previewEl) previewEl.textContent = `Error: ${err.message}`;
+    }
+  }, 80);
+}
+
 function applyDeliveryPreset(presetId) {
   const presets = getDeliveryPresetsList();
   const preset = presets.find((p) => p.id === presetId);
@@ -5564,6 +5676,9 @@ async function buildOrExecuteRender(execute) {
     const reviewWatermarkOpacity = wmOpacityEl ? Number(wmOpacityEl.value) : 0.35;
     const lowerThirdPayload = getNormalizedLowerThirdPayload();
     const deliverRetimePayload = getNormalizedDeliverRetimePayload();
+    const reframePayload = getNormalizedReframePayload();
+    const reframeActivePayload =
+      reframePayload.enabled && reframePayload.aspect_ratio !== "source" ? reframePayload : null;
     const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
     const exportFpsEl = byId("render-export-fps");
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
@@ -5595,6 +5710,7 @@ async function buildOrExecuteRender(execute) {
         retime_params: effectiveRetimeParamsPayload,
         transform_params: transformParamsPayload,
         framing: framingPayload,
+        reframe: reframeActivePayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
         loudness_preset: fairlightPayload.loudness_preset,
@@ -5658,6 +5774,7 @@ async function buildOrExecuteRender(execute) {
       retime_params: effectiveRetimeParamsPayload,
       transform_params: transformParamsPayload,
       framing: framingPayload,
+      reframe: reframeActivePayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
       loudness_preset: fairlightPayload.loudness_preset,
@@ -5744,6 +5861,12 @@ async function buildOrExecuteRender(execute) {
         t("render.plan.retime"),
         plan.retime_enabled
           ? `${Number(plan.retime_speed ?? 1).toFixed(2)}x${plan.retime_reverse ? " REV" : ""}`
+          : "off"
+      ],
+      [
+        t("render.plan.reframe"),
+        plan.reframe_enabled
+          ? `${plan.reframe_aspect_ratio} (${Number(plan.reframe_pan_x ?? 0).toFixed(2)}, ${Number(plan.reframe_pan_y ?? 0).toFixed(2)})`
           : "off"
       ],
       ["Video Filter", plan.video_filter || t("common.none")],
@@ -9718,6 +9841,65 @@ function wireEvents() {
     });
   }
   syncDeliverRetimeControlsUI({ syncInputs: true });
+
+  const rfEnabledEl = byId("render-reframe-enabled");
+  if (rfEnabledEl) {
+    rfEnabledEl.addEventListener("change", () => {
+      state.reframe.enabled = Boolean(rfEnabledEl.checked);
+      if (state.reframe.enabled && state.reframe.aspect_ratio === "source") {
+        state.reframe.aspect_ratio = "9:16";
+      }
+      syncReframeControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  for (const btn of document.querySelectorAll(".reframe-deliver-preset-btn[data-deliver-reframe-ratio]")) {
+    btn.addEventListener("click", () => {
+      const ratio = String(btn.getAttribute("data-deliver-reframe-ratio") || "source").trim().toLowerCase();
+      state.reframe.aspect_ratio = ratio;
+      if (ratio !== "source") {
+        state.reframe.enabled = true;
+      }
+      syncReframeControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const rfPanXEl = byId("render-reframe-pan-x");
+  if (rfPanXEl) {
+    const onPanXChange = () => {
+      const val = Number.parseFloat(rfPanXEl.value);
+      if (Number.isFinite(val) && val >= -1 && val <= 1) {
+        state.reframe.pan_x = Number(val.toFixed(2));
+        syncReframeControlsUI();
+        redrawActiveCanvases();
+      }
+    };
+    rfPanXEl.addEventListener("input", onPanXChange);
+    rfPanXEl.addEventListener("change", onPanXChange);
+  }
+  const rfPanYEl = byId("render-reframe-pan-y");
+  if (rfPanYEl) {
+    const onPanYChange = () => {
+      const val = Number.parseFloat(rfPanYEl.value);
+      if (Number.isFinite(val) && val >= -1 && val <= 1) {
+        state.reframe.pan_y = Number(val.toFixed(2));
+        syncReframeControlsUI();
+        redrawActiveCanvases();
+      }
+    };
+    rfPanYEl.addEventListener("input", onPanYChange);
+    rfPanYEl.addEventListener("change", onPanYChange);
+  }
+  const rfResetBtn = byId("render-reframe-reset");
+  if (rfResetBtn) {
+    rfResetBtn.addEventListener("click", () => {
+      state.reframe.pan_x = 0.0;
+      state.reframe.pan_y = 0.0;
+      syncReframeControlsUI({ syncInputs: true });
+      redrawActiveCanvases();
+    });
+  }
+  syncReframeControlsUI({ syncInputs: true });
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {

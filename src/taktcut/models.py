@@ -187,6 +187,7 @@ LoudnessPresetId = Literal["off", "youtube_14", "reels_16", "broadcast_23"]
 DialogueEqPresetId = Literal["off", "voice_clarity", "podcast_warm", "derumble"]
 TimecodeBurnInPosition = Literal["off", "top_left", "bottom_center", "bottom_right"]
 LowerThirdPosition = Literal["bottom_left", "bottom_center", "top_left"]
+ReframeAspectRatio = Literal["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
 
@@ -200,6 +201,14 @@ ALLOWED_LOWER_THIRD_POSITIONS: tuple[LowerThirdPosition, ...] = (
     "bottom_left",
     "bottom_center",
     "top_left",
+)
+ALLOWED_REFRAME_ASPECT_RATIOS: tuple[ReframeAspectRatio, ...] = (
+    "source",
+    "16:9",
+    "9:16",
+    "4:5",
+    "1:1",
+    "2.39:1",
 )
 ALLOWED_EXPORT_FPS: tuple[ExportFpsOption, ...] = ("source", "24", "25", "30", "60")
 ALLOWED_AUDIO_ONLY_FORMATS: tuple[AudioOnlyFormatId, ...] = (
@@ -538,6 +547,10 @@ class RenderPlan(BaseModel):
     retime_enabled: bool = False
     retime_speed: float = 1.0
     retime_reverse: bool = False
+    reframe_enabled: bool = False
+    reframe_aspect_ratio: ReframeAspectRatio = "source"
+    reframe_pan_x: float = 0.0
+    reframe_pan_y: float = 0.0
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

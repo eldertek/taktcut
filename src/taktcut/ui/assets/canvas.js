@@ -1013,6 +1013,107 @@ export function drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState) {
   ctx.restore();
 }
 
+const REFRAME_ASPECT_MAP = {
+  "16:9": 16 / 9,
+  "9:16": 9 / 16,
+  "4:5": 4 / 5,
+  "1:1": 1,
+  "2.39:1": 2.39
+};
+
+export function drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeState) {
+  if (!reframeState || !reframeState.enabled) return false;
+  const ratioKey = String(reframeState.aspect_ratio || "source").trim().toLowerCase();
+  const targetRatio = REFRAME_ASPECT_MAP[ratioKey];
+  if (!targetRatio || !Number.isFinite(targetRatio) || targetRatio <= 0) return false;
+
+  const panX = Math.max(-1, Math.min(1, Number(reframeState.pan_x ?? 0) || 0));
+  const panY = Math.max(-1, Math.min(1, Number(reframeState.pan_y ?? 0) || 0));
+
+  const frameAspect = frameW / Math.max(1, frameH);
+  let cropW = frameW;
+  let cropH = frameH;
+  if (frameAspect > targetRatio) {
+    cropH = frameH;
+    cropW = Math.min(frameW, frameH * targetRatio);
+  } else {
+    cropW = frameW;
+    cropH = Math.min(frameH, frameW / targetRatio);
+  }
+  const slackX = Math.max(0, frameW - cropW);
+  const slackY = Math.max(0, frameH - cropH);
+  const cropX = Math.max(fx, Math.min(fx + slackX, fx + slackX * 0.5 * (1 + panX)));
+  const cropY = Math.max(fy, Math.min(fy + slackY, fy + slackY * 0.5 * (1 + panY)));
+
+  ctx.save();
+  // Semi-transparent outer crop mask
+  ctx.fillStyle = "rgba(10, 10, 14, 0.58)";
+  if (cropY > fy + 0.5) {
+    ctx.fillRect(fx, fy, frameW, cropY - fy);
+  }
+  if (cropY + cropH < fy + frameH - 0.5) {
+    ctx.fillRect(fx, cropY + cropH, frameW, fy + frameH - (cropY + cropH));
+  }
+  if (cropX > fx + 0.5) {
+    ctx.fillRect(fx, cropY, cropX - fx, cropH);
+  }
+  if (cropX + cropW < fx + frameW - 0.5) {
+    ctx.fillRect(cropX + cropW, cropY, fx + frameW - (cropX + cropW), cropH);
+  }
+
+  // Rule of thirds subtle guides inside crop region
+  ctx.strokeStyle = "rgba(230, 132, 66, 0.34)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(cropX + cropW / 3, cropY);
+  ctx.lineTo(cropX + cropW / 3, cropY + cropH);
+  ctx.moveTo(cropX + (cropW * 2) / 3, cropY);
+  ctx.lineTo(cropX + (cropW * 2) / 3, cropY + cropH);
+  ctx.moveTo(cropX, cropY + cropH / 3);
+  ctx.lineTo(cropX + cropW, cropY + cropH / 3);
+  ctx.moveTo(cropX, cropY + (cropH * 2) / 3);
+  ctx.lineTo(cropX + cropW, cropY + (cropH * 2) / 3);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Crisp amber reframe box + corner brackets
+  ctx.strokeStyle = "rgba(230, 132, 66, 0.95)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(cropX + 0.75, cropY + 0.75, Math.max(2, cropW - 1.5), Math.max(2, cropH - 1.5));
+
+  const brk = Math.max(6, Math.min(12, Math.min(cropW, cropH) * 0.14));
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(cropX, cropY + brk);
+  ctx.lineTo(cropX, cropY);
+  ctx.lineTo(cropX + brk, cropY);
+  ctx.moveTo(cropX + cropW - brk, cropY);
+  ctx.lineTo(cropX + cropW, cropY);
+  ctx.lineTo(cropX + cropW, cropY + brk);
+  ctx.moveTo(cropX, cropY + cropH - brk);
+  ctx.lineTo(cropX, cropY + cropH);
+  ctx.lineTo(cropX + brk, cropY + cropH);
+  ctx.moveTo(cropX + cropW - brk, cropY + cropH);
+  ctx.lineTo(cropX + cropW, cropY + cropH);
+  ctx.lineTo(cropX + cropW, cropY + cropH - brk);
+  ctx.stroke();
+
+  // Ratio pill inside crop region
+  const pillText = `REFRAME ${ratioKey.toUpperCase()}`;
+  ctx.font = "700 9px ui-monospace, monospace";
+  const pillW = Math.min(Math.max(36, cropW - 8), ctx.measureText(pillText).width + 10);
+  ctx.fillStyle = "rgba(230, 132, 66, 0.92)";
+  ctx.fillRect(cropX + 4, cropY + 4, pillW, 15);
+  ctx.fillStyle = "#111114";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillText(fitCanvasText(ctx, pillText, Math.max(16, pillW - 8)), cropX + 8, cropY + 7);
+
+  ctx.restore();
+  return true;
+}
+
 function drawTransparencyCheckerboard(ctx, x, y, w, h, tile = 10) {
   ctx.fillStyle = "#1f1f24";
   ctx.fillRect(x, y, w, h);
@@ -2351,6 +2452,10 @@ export function drawProgramMonitorCanvas(
     ctx.fillStyle = bypassAll || parts.length === 0 ? "#a4a4ae" : "#111114";
     ctx.fillText(label, fx + frameW - tw - 2, fxPillY + 12);
   }
+
+  // Auto-Reframe & Social Aspect Ratio Crop overlay
+  const reframeState = renderOpts && renderOpts.reframe ? renderOpts.reframe : null;
+  drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeState);
 
   // Broadcast & Social Safe-Area Guides (Action 90%, Title 80%, Reels/TikTok HUD)
   drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState);

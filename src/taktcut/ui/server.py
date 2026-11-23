@@ -106,12 +106,14 @@ from taktcut.render import (
     FairlightAudioParams,
     FramingParams,
     LowerThirdParams,
+    ReframeParams,
     RetimeParams,
     build_render_plan,
     compile_audio_filter_result,
     compile_auto_duck_filter_result,
     compile_framing_filter_result,
     compile_lower_third_filter_result,
+    compile_reframe_filter_result,
     compile_retime_filter_result,
     compile_transform_filter_result,
     compile_video_fade_filter_result,
@@ -536,6 +538,25 @@ def _build_retime_from_payload(
         allowed_keys = ("enabled", "speed", "reverse")
         subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
         return RetimeParams.model_validate(subset)
+    return None
+
+
+def _build_reframe_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> ReframeParams | None:
+    if "reframe" in payload:
+        raw_rf = payload.get("reframe")
+        if raw_rf is None:
+            return None
+        if not isinstance(raw_rf, dict):
+            raise ValueError("'reframe' must be a JSON object")
+        return ReframeParams.model_validate(raw_rf)
+    if allow_top_level:
+        allowed_keys = ("enabled", "aspect_ratio", "pan_x", "pan_y")
+        subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
+        return ReframeParams.model_validate(subset)
     return None
 
 
@@ -1662,6 +1683,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
+            reframe_obj = _build_reframe_from_payload(payload)
 
             title_overlay_obj: TitleOverlayParams | None = None
             raw_title_overlay = payload.get("title_overlay")
@@ -1701,6 +1723,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 retime_params=retime_params,
                 transform_params=transform_params,
                 framing=framing_params,
+                reframe=reframe_obj,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
                 loudness_preset=loudness_preset,
@@ -1928,6 +1951,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, compiled_framing.model_dump(mode="json"))
             return
 
+        if route == "/api/reframe/compile":
+            reframe_obj = _build_reframe_from_payload(payload, allow_top_level=True)
+            assert reframe_obj is not None
+            compiled_reframe = compile_reframe_filter_result(reframe_obj)
+            self._send_json(HTTPStatus.OK, compiled_reframe.model_dump(mode="json"))
+            return
+
         if route == "/api/transitions/compile":
             trans_params = _build_transition_params_from_payload(payload)
             raw_dur_a = payload.get("clip_a_duration_s")
@@ -2153,6 +2183,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
+            reframe_obj = _build_reframe_from_payload(payload)
             title_overlay_remote: TitleOverlayParams | None = None
             if isinstance(payload.get("title_overlay"), dict):
                 title_overlay_remote = _build_title_overlay_from_payload(
@@ -2187,6 +2218,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 retime_params=retime_params,
                 transform_params=transform_params,
                 framing=framing_params,
+                reframe=reframe_obj,
                 clip_duration_s=clip_duration_s,
                 loudness_preset=loudness_preset or "off",
                 dialogue_eq=dialogue_eq or "off",

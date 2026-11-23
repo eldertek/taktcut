@@ -404,3 +404,28 @@ def test_remote_render_request_accepts_retime() -> None:
             input_base64="AAAA",
             retime={"enabled": True, "speed": 6.0},  # type: ignore[arg-type]
         )
+
+
+def test_remote_render_request_accepts_reframe() -> None:
+    from taktcut.remote_render import RemoteRenderJobRequest
+
+    req = RemoteRenderJobRequest(
+        input_base64="AAAA",
+        reframe={  # type: ignore[arg-type]
+            "enabled": True,
+            "aspect_ratio": "9:16",
+            "pan_x": 0.4,
+            "pan_y": -0.2,
+        },
+    )
+    assert req.reframe is not None
+    assert req.reframe.enabled is True
+    assert req.reframe.aspect_ratio == "9:16"
+    assert req.reframe.pan_x == pytest.approx(0.4)
+    assert req.reframe.pan_y == pytest.approx(-0.2)
+
+    with pytest.raises((ValueError, Exception)):
+        RemoteRenderJobRequest(
+            input_base64="AAAA",
+            reframe={"enabled": True, "aspect_ratio": "9:16", "pan_x": 1.5},  # type: ignore[arg-type]
+        )

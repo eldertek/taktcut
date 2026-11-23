@@ -27,6 +27,7 @@ from taktcut.models import (
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
     ALLOWED_EXPORT_FPS,
     ALLOWED_LOWER_THIRD_POSITIONS,
+    ALLOWED_REFRAME_ASPECT_RATIOS,
     ALLOWED_TIMECODE_BURNIN,
     LOWER_THIRD_BOX_OPACITY_DEFAULT,
     LOWER_THIRD_BOX_OPACITY_MAX,
@@ -51,6 +52,7 @@ from taktcut.models import (
     LoudnessPresetId,
     LowerThirdPosition,
     RationalFrameRate,
+    ReframeAspectRatio,
     RenderPlan,
     RenderProfile,
     RenderResult,
@@ -1479,6 +1481,106 @@ def compile_framing_filter_result(params: FramingParams) -> FramingCompileResult
     )
 
 
+_REFRAME_CANONICAL_MAP: dict[str, ReframeAspectRatio] = {
+    item: item for item in ALLOWED_REFRAME_ASPECT_RATIOS
+}
+_REFRAME_RATIO_MAP: dict[str, tuple[int, int]] = {
+    "16:9": (16, 9),
+    "9:16": (9, 16),
+    "4:5": (4, 5),
+    "1:1": (1, 1),
+    "2.39:1": (239, 100),
+}
+
+
+class ReframeParams(BaseModel):
+    """Auto-Reframe & Social Aspect Ratio Crop parameters with strict bounds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    aspect_ratio: ReframeAspectRatio = "source"
+    pan_x: float = 0.0
+    pan_y: float = 0.0
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"enabled must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("aspect_ratio", mode="before")
+    @classmethod
+    def _validate_aspect_ratio(cls, raw: Any) -> ReframeAspectRatio:
+        if not isinstance(raw, str):
+            raise ValueError(f"aspect_ratio must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        canonical = _REFRAME_CANONICAL_MAP.get(cleaned)
+        if canonical is None:
+            allowed = ", ".join(ALLOWED_REFRAME_ASPECT_RATIOS)
+            raise ValueError(
+                f"Unsupported reframe aspect_ratio {raw!r}; expected one of: {allowed}"
+            )
+        return canonical
+
+    @field_validator("pan_x", "pan_y", mode="before")
+    @classmethod
+    def _validate_pan(cls, raw: Any, info: Any) -> float:
+        return _validate_bounded_float(raw, str(info.field_name), -1.0, 1.0)
+
+    def is_active(self) -> bool:
+        """Return True when enabled and aspect_ratio differs from 'source'."""
+        return bool(self.enabled and self.aspect_ratio != "source")
+
+    def is_identity(self) -> bool:
+        """Return True when disabled or aspect_ratio is 'source'."""
+        return not self.is_active()
+
+
+class ReframeCompileResult(BaseModel):
+    """Compiled FFmpeg crop filtergraph for Auto-Reframe & Social Aspect Ratio Crop."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_identity: bool
+    is_active: bool = False
+    params: ReframeParams
+
+
+def compile_reframe_filter(params: ReframeParams) -> str | None:
+    """Compile validated ReframeParams into an exact bounded FFmpeg crop filter string."""
+    if not params.is_active():
+        return None
+    num, den = _REFRAME_RATIO_MAP[params.aspect_ratio]
+    w_expr = f"min(iw,if(gt(iw*{den},ih*{num}),trunc(ih*{num}/{den}/2)*2,trunc(iw/2)*2))"
+    h_expr = f"min(ih,if(gt(iw*{den},ih*{num}),trunc(ih/2)*2,trunc(iw*{den}/{num}/2)*2))"
+    x_expr = (
+        "(iw-ow)/2"
+        if math.isclose(params.pan_x, 0.0, abs_tol=1e-6)
+        else f"max(0,min(iw-ow,(iw-ow)/2*(1+({params.pan_x:.4f}))))"
+    )
+    y_expr = (
+        "(ih-oh)/2"
+        if math.isclose(params.pan_y, 0.0, abs_tol=1e-6)
+        else f"max(0,min(ih-oh,(ih-oh)/2*(1+({params.pan_y:.4f}))))"
+    )
+    return f"crop=w='{w_expr}':h='{h_expr}':x='{x_expr}':y='{y_expr}'"
+
+
+def compile_reframe_filter_result(params: ReframeParams) -> ReframeCompileResult:
+    """Compile Auto-Reframe parameters into structured filtergraph and argv slice."""
+    fg = compile_reframe_filter(params) or ""
+    is_act = fg != ""
+    return ReframeCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_identity=not is_act,
+        is_active=is_act,
+        params=params,
+    )
+
+
 ALLOWED_TRANSFORM_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "yuv444p", "rgba", "rgb24"}
 )
@@ -1802,6 +1904,7 @@ def build_render_plan(
     video_fade: ClipVideoFadeParams | None = None,
     lower_third: LowerThirdParams | None = None,
     retime: RetimeParams | None = None,
+    reframe: ReframeParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1956,6 +2059,19 @@ def build_render_plan(
             target_width, target_height = effective_framing.target_dimensions()
             framing_mode = effective_framing.mode
 
+    reframe_vf: str | None = None
+    reframe_enabled = False
+    reframe_aspect_ratio: ReframeAspectRatio = "source"
+    reframe_pan_x = 0.0
+    reframe_pan_y = 0.0
+    if reframe is not None and reframe.is_active():
+        reframe_vf = compile_reframe_filter(reframe)
+        if reframe_vf is not None:
+            reframe_enabled = True
+            reframe_aspect_ratio = reframe.aspect_ratio
+            reframe_pan_x = reframe.pan_x
+            reframe_pan_y = reframe.pan_y
+
     transform_vf: str | None = None
     if transform_params is not None and not transform_params.is_identity():
         transform_vf = compile_transform_filter(
@@ -2000,6 +2116,8 @@ def build_render_plan(
     export_fps_vf = compile_export_fps_filter(resolved_export_fps)
     if export_fps_vf is not None:
         vf_parts.append(export_fps_vf)
+    if reframe_vf is not None:
+        vf_parts.append(reframe_vf)
     if framing_vf is not None:
         vf_parts.append(framing_vf)
     if transform_vf is not None:
@@ -2116,6 +2234,10 @@ def build_render_plan(
             retime_enabled=retime_enabled,
             retime_speed=retime_speed,
             retime_reverse=retime_reverse,
+            reframe_enabled=False,
+            reframe_aspect_ratio="source",
+            reframe_pan_x=0.0,
+            reframe_pan_y=0.0,
             export_fps=resolved_export_fps,
             deinterlace=resolved_deinterlace,
             audio_only_format=resolved_audio_only,
@@ -2219,6 +2341,10 @@ def build_render_plan(
         retime_enabled=retime_enabled,
         retime_speed=retime_speed,
         retime_reverse=retime_reverse,
+        reframe_enabled=reframe_enabled,
+        reframe_aspect_ratio=reframe_aspect_ratio,
+        reframe_pan_x=reframe_pan_x,
+        reframe_pan_y=reframe_pan_y,
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
         audio_only_format=resolved_audio_only,

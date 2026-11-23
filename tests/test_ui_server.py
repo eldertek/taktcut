@@ -3592,6 +3592,67 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 rt_rev.click()
                 rt_chk.uncheck()
 
+                # Verify Deliver Auto-Reframe & Social Crop + Program Monitor live frame
+                rf_card = page.locator("#deliver-reframe-card")
+                rf_chk = page.locator("#render-reframe-enabled")
+                rf_pan_x = page.locator("#render-reframe-pan-x")
+                rf_pan_y = page.locator("#render-reframe-pan-y")
+                rf_reset = page.locator("#render-reframe-reset")
+                rf_9_16 = page.locator(
+                    '.reframe-deliver-preset-btn[data-deliver-reframe-ratio="9:16"]'
+                )
+                rf_4_5 = page.locator(
+                    '.reframe-deliver-preset-btn[data-deliver-reframe-ratio="4:5"]'
+                )
+                rf_1_1 = page.locator(
+                    '.reframe-deliver-preset-btn[data-deliver-reframe-ratio="1:1"]'
+                )
+                rf_scope = page.locator(
+                    '.reframe-deliver-preset-btn[data-deliver-reframe-ratio="2.39:1"]'
+                )
+                assert rf_card.is_visible() is True
+                assert rf_chk.is_checked() is False
+                if width <= 820:
+                    for rf_loc in (rf_pan_x, rf_pan_y, rf_reset, rf_9_16, rf_4_5, rf_1_1, rf_scope):
+                        rf_box = rf_loc.bounding_box()
+                        assert rf_box is not None and rf_box["height"] >= 44
+                rf_9_16.click()
+                assert rf_chk.is_checked() is True
+                assert rf_9_16.get_attribute("aria-pressed") == "true"
+                rf_pan_x.fill("0.40")
+                rf_pan_x.dispatch_event("input")
+                rf_pan_y.fill("-0.25")
+                rf_pan_y.dispatch_event("input")
+                page.wait_for_function(
+                    "() => (document.getElementById('render-reframe-preview')"
+                    ".textContent || '').includes('crop=w=')"
+                )
+                rf_preview = page.locator("#render-reframe-preview").text_content() or ""
+                assert "ih*9/16" in rf_preview
+                assert "1+(0.4000)" in rf_preview
+                assert "1+(-0.2500)" in rf_preview
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('crop=w=')"
+                )
+                rf_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "9:16 (0.40, -0.25)" in rf_kv
+                rf_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert rf_overflow <= 0, (
+                    f"Deliver reframe overflow at {width}x{height}: {rf_overflow}px"
+                )
+                page.locator("#tab-timeline").click()
+                prog_with_rf = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                assert prog_with_rf != prog_without_lt
+                page.locator("#tab-render").click()
+                rf_reset.click()
+                rf_chk.uncheck()
+
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
@@ -5281,3 +5342,135 @@ def test_ui_retime_params_compile_and_render_plan_endpoints(
     demo_text = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
     assert "compileDeliverRetimeClient" in demo_text
     assert "retime_enabled" in demo_text
+
+
+def test_ui_reframe_compile_and_render_plan_endpoints(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    for ratio, expected_expr in (
+        ("16:9", "ih*16/9"),
+        ("9:16", "ih*9/16"),
+        ("4:5", "ih*4/5"),
+        ("1:1", "ih*1/1"),
+        ("2.39:1", "ih*239/100"),
+    ):
+        c_status, _, c_raw = _http_call(
+            f"{base_url}/api/reframe/compile",
+            method="POST",
+            payload={
+                "enabled": True,
+                "aspect_ratio": ratio,
+                "pan_x": 0.25,
+                "pan_y": -0.5,
+            },
+        )
+        assert c_status == 200
+        compiled = json.loads(c_raw.decode("utf-8"))
+        assert compiled["is_active"] is True
+        assert compiled["is_identity"] is False
+        assert expected_expr in compiled["filtergraph"]
+        assert "1+(0.2500)" in compiled["filtergraph"]
+        assert "1+(-0.5000)" in compiled["filtergraph"]
+        assert compiled["ffmpeg_vf_args"] == ["-vf", compiled["filtergraph"]]
+
+    off_status, _, off_raw = _http_call(
+        f"{base_url}/api/reframe/compile",
+        method="POST",
+        payload={"enabled": False, "aspect_ratio": "9:16", "pan_x": 0.5},
+    )
+    assert off_status == 200
+    off_compiled = json.loads(off_raw.decode("utf-8"))
+    assert off_compiled["is_active"] is False
+    assert off_compiled["is_identity"] is True
+    assert off_compiled["filtergraph"] == ""
+    assert off_compiled["ffmpeg_vf_args"] == []
+
+    for bad_rf in (
+        {"enabled": True, "aspect_ratio": "21:9"},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_x": 1.2},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_y": -1.2},
+        {"enabled": "yes", "aspect_ratio": "9:16"},
+        {"enabled": True, "aspect_ratio": "9:16", "pan_x": True},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/reframe/compile",
+            method="POST",
+            payload=bad_rf,
+        )
+        assert bad_status == 400
+
+    rp_status, _, rp_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/reframe_dryrun.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "reframe": {
+                "enabled": True,
+                "aspect_ratio": "4:5",
+                "pan_x": -0.4,
+                "pan_y": 0.2,
+            },
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert rp_status == 200
+    plan = json.loads(rp_raw.decode("utf-8"))["plan"]
+    assert plan["reframe_enabled"] is True
+    assert plan["reframe_aspect_ratio"] == "4:5"
+    assert plan["reframe_pan_x"] == pytest.approx(-0.4)
+    assert plan["reframe_pan_y"] == pytest.approx(0.2)
+    assert "crop=w=" in plan["video_filter"]
+    assert "ih*4/5" in plan["video_filter"]
+
+    bad_rp_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/reframe_bad.mp4",
+            "reframe": {"enabled": True, "aspect_ratio": "9:16", "pan_x": 2.0},
+            "execute": False,
+        },
+    )
+    assert bad_rp_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "deliver-reframe-card",
+        "render-reframe-enabled",
+        "render-reframe-badge",
+        "render-reframe-pan-x",
+        "render-reframe-pan-x-value",
+        "render-reframe-pan-y",
+        "render-reframe-pan-y-value",
+        "render-reframe-reset",
+        "render-reframe-preview",
+    ):
+        assert f'id="{elem_id}"' in html_text
+    for ratio_attr in ("16:9", "9:16", "4:5", "1:1", "2.39:1"):
+        assert f'data-deliver-reframe-ratio="{ratio_attr}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.reframe.title",
+        "render.reframe.toggle",
+        "render.reframe.label.panX",
+        "render.reframe.label.panY",
+        "render.reframe.reset",
+        "render.plan.reframe",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    demo_text = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    assert "compileReframeClient" in demo_text
+    assert "reframe_enabled" in demo_text
+
+    canvas_text = (assets_dir / "canvas.js").read_text(encoding="utf-8")
+    assert "drawReframeOverlayOnFrame" in canvas_text

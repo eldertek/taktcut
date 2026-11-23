@@ -1014,3 +1014,42 @@ def test_project_delivery_retime_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["retime"]["speed"] = bad_speed
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_reframe_roundtrip(tmp_path: Path) -> None:
+    from taktcut.render import ReframeParams
+
+    proj = _build_full_test_project()
+    assert proj.delivery.reframe.enabled is False
+    assert proj.delivery.reframe.aspect_ratio == "source"
+    assert proj.delivery.reframe.pan_x == pytest.approx(0.0)
+    assert proj.delivery.reframe.pan_y == pytest.approx(0.0)
+
+    proj.delivery.reframe = ReframeParams(
+        enabled=True, aspect_ratio="4:5", pan_x=-0.35, pan_y=0.25
+    )
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.reframe.enabled is True
+    assert loaded.delivery.reframe.aspect_ratio == "4:5"
+    assert loaded.delivery.reframe.pan_x == pytest.approx(-0.35)
+    assert loaded.delivery.reframe.pan_y == pytest.approx(0.25)
+
+    proj_path = tmp_path / "reframe_proj.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.reframe.enabled is True
+    assert disk_loaded.delivery.reframe.aspect_ratio == "4:5"
+    assert disk_loaded.delivery.reframe.pan_x == pytest.approx(-0.35)
+    assert disk_loaded.delivery.reframe.pan_y == pytest.approx(0.25)
+
+    for bad_key, bad_val in (
+        ("aspect_ratio", "21:9"),
+        ("pan_x", -1.5),
+        ("pan_y", 1.5),
+        ("pan_x", True),
+    ):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["reframe"][bad_key] = bad_val
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
