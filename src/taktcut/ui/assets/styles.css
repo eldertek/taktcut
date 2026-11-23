@@ -1460,6 +1460,178 @@ body {
   padding: 4px 0 0;
 }
 
+/* 2D PLANAR TRACKER, CORNER-PIN & MOTION STABILIZER */
+.tracker-subtabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--bg-hairline);
+  border: 1px solid var(--border-inner);
+  margin-bottom: 8px;
+}
+
+.tracker-subtab-btn {
+  appearance: none;
+  border: 0;
+  background: var(--bg-workbench);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 7px 8px;
+  cursor: pointer;
+  min-width: 0;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tracker-subtab-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tracker-subtab-btn.is-active {
+  background: var(--bg-pane);
+  color: var(--accent-amber);
+  box-shadow: inset 0 -2px 0 var(--accent-amber);
+}
+
+.tracker-subtab-btn:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+
+.tracker-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tracker-tabpanel.is-hidden {
+  display: none;
+}
+
+.tracker-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stab-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tracker-mode-row,
+.stab-select-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.stab-select-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tracker-field-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tracker-field-col label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tracker-analyze-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.tracker-analyze-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.tracker-track-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tracker-pins-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tracker-pins-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.tracker-pin-card {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.tracker-pin-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-amber);
+  text-align: center;
+}
+
+.tracker-pin-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.tracker-pin-field .input-num {
+  width: 100%;
+  min-width: 0;
+}
+
+.stab-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+}
+
 .fx-preset-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6156,8 +6328,23 @@ input[type="range"] {
   }
   .fx-preset-grid,
   .keyer-preset-grid,
+  .tracker-preset-grid,
+  .stab-preset-grid,
   .deliver-preset-strip {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .tracker-mode-row,
+  .stab-select-row,
+  .tracker-pins-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tracker-subtab-btn,
+  .tracker-analyze-btns .btn,
+  #btn-fx-tracker-reset-pins,
+  #btn-fx-stab-reset,
+  #btn-fx-tracker-overlay,
+  #btn-fx-tracker-toggle {
+    min-height: 45px;
   }
   .deliver-subtabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));

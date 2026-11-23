@@ -14,7 +14,8 @@ import {
   drawTimelineOverviewCanvas,
   drawTransformGraphCanvas,
   findActiveSubtitleCue,
-  framesToSmpte
+  framesToSmpte,
+  trackPointSequenceCanvas
 } from "./canvas.js";
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
 import { createApiClient } from "./demo_adapter.js";
@@ -49,11 +50,13 @@ import {
   MARKER_COLOR_HEX,
   MAX_COLOR_NODES,
   MAX_CURVE_POINTS,
+  PLANAR_TRACKER_PRESETS_CLIENT,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
   SPLIT_WIPE_HIT_RADIUS_PX,
   SPLIT_WIPE_POS_DEFAULT,
+  STABILIZER_PRESETS_CLIENT,
   STILLS_GALLERY_MAX,
   TRACK_PAN_MAX,
   TRACK_PAN_MIN,
@@ -109,9 +112,11 @@ import {
   deserializeColorNodeFromApi,
   estimateRenderFileSize,
   evaluateClipTransformAtTime,
+  evaluateCornerPinsClient,
   evaluateCurvePchipClient,
   evaluatePowerWindowMask,
   evaluateRetimeSpeedAt,
+  evaluateTrackPointClient,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
   filterMediaPoolEntries,
@@ -158,6 +163,8 @@ import {
   normalizeCurvePoints,
   normalizeFairlightAudioParams,
   normalizeInOutRange,
+  normalizePlanarTrackerClient,
+  normalizeStabilizerClient,
   normalizeMarkerColor,
   normalizeMasterBusState,
   normalizePowerWindow,
@@ -468,6 +475,43 @@ const state = {
     matteView: "final"
   },
   chromaKeyPresetsCatalog: null,
+  planarTrackerTab: "planar",
+  planarTrackerOverlay: true,
+  planarTrackerDrag: null,
+  planarTracker: {
+    enabled: false,
+    preset: "screen_insert",
+    mode: "corner_pin",
+    interpolation: "cubic",
+    tl_x: 0.14,
+    tl_y: 0.14,
+    tr_x: 0.84,
+    tr_y: 0.18,
+    bl_x: 0.10,
+    bl_y: 0.84,
+    br_x: 0.86,
+    br_y: 0.88,
+    track_anchor_x: 0.50,
+    track_anchor_y: 0.45,
+    track_box_pct: 0.12,
+    follow_track: true,
+    track_keyframes: []
+  },
+  stabilizer: {
+    enabled: false,
+    preset: "smooth_gimbal",
+    rx: 16,
+    ry: 16,
+    edge: "mirror",
+    blocksize: 8,
+    contrast: 125,
+    search: "exhaustive",
+    auto_zoom_pct: 106.0
+  },
+  colorPowerWindowTrack: {
+    linked: false,
+    keyframes: []
+  },
   titleOverlay: cloneTitleParams(TITLE_PRESETS_FALLBACK.broadcast_lower_third.params),
   titlePresetsCatalog: null,
   titleLastCompile: null,
@@ -852,7 +896,9 @@ function syncDeliverTabIndicators() {
 function getEffectiveFxState() {
   return {
     bypassAll: state.fxBypassAll,
-    nodes: state.fxStack
+    nodes: state.fxStack,
+    stabilizer: { ...state.stabilizer },
+    planarTracker: { ...state.planarTracker }
   };
 }
 
@@ -972,7 +1018,13 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(false),
       null,
       null,
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain }, vignette: { ...state.vignette } }
+      {
+        lowerThird: { ...state.lowerThird },
+        reframe: { ...state.reframe },
+        filmGrain: { ...state.filmGrain },
+        vignette: { ...state.vignette },
+        showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay)
+      }
     );
     const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
     const zoomVp = computeTimelineZoomViewport(
@@ -1052,7 +1104,13 @@ function redrawActiveCanvases() {
         beforeLabel: t("wipe.pill.before"),
         afterLabel: t("wipe.pill.after")
       },
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain }, vignette: { ...state.vignette } }
+      {
+        lowerThird: { ...state.lowerThird },
+        reframe: { ...state.reframe },
+        filmGrain: { ...state.filmGrain },
+        vignette: { ...state.vignette },
+        showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay)
+      }
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -1067,7 +1125,13 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(true),
       null,
       null,
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain }, vignette: { ...state.vignette } }
+      {
+        lowerThird: { ...state.lowerThird },
+        reframe: { ...state.reframe },
+        filmGrain: { ...state.filmGrain },
+        vignette: { ...state.vignette },
+        showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay)
+      }
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
@@ -4537,11 +4601,330 @@ function applyChromaKeyPreset(presetId) {
   compileFxNow();
 }
 
+function serializeStabilizerForApi(bypassAll = false) {
+  const s = normalizeStabilizerClient(state.stabilizer);
+  return {
+    ...s,
+    enabled: bypassAll ? false : Boolean(s.enabled)
+  };
+}
+
+function serializePlanarTrackerForApi(bypassAll = false) {
+  const p = normalizePlanarTrackerClient(state.planarTracker);
+  return {
+    ...p,
+    enabled: bypassAll ? false : Boolean(p.enabled)
+  };
+}
+
+function syncPlanarTrackerAndStabilizerUi() {
+  const trk = normalizePlanarTrackerClient(state.planarTracker);
+  const stab = normalizeStabilizerClient(state.stabilizer);
+  const anyOn = Boolean(trk.enabled || stab.enabled);
+
+  const badge = byId("fx-tracker-badge");
+  if (badge) {
+    if (state.fxBypassAll) {
+      badge.textContent = "BYPASS";
+      badge.className = "nle-tag mono is-warn";
+    } else if (trk.enabled && stab.enabled) {
+      badge.textContent = `TRK+STB ${Math.round(stab.auto_zoom_pct)}%`;
+      badge.className = "nle-tag mono is-active";
+    } else if (trk.enabled) {
+      badge.textContent =
+        trk.mode === "point_track_only"
+          ? `TRK ${trk.track_keyframes.length}KF`
+          : trk.mode === "rectify_perspective"
+            ? "RECTIFY"
+            : "CORNER-PIN";
+      badge.className = "nle-tag mono is-active";
+    } else if (stab.enabled) {
+      badge.textContent = `STAB ${Math.round(stab.auto_zoom_pct)}%`;
+      badge.className = "nle-tag mono is-active";
+    } else {
+      badge.textContent = "OFF";
+      badge.className = "nle-tag mono";
+    }
+  }
+
+  const toggleBtn = byId("btn-fx-tracker-toggle");
+  if (toggleBtn) {
+    toggleBtn.setAttribute("aria-pressed", trk.enabled ? "true" : "false");
+    toggleBtn.classList.toggle("is-active", trk.enabled && !state.fxBypassAll);
+  }
+  const ovBtn = byId("btn-fx-tracker-overlay");
+  if (ovBtn) {
+    ovBtn.setAttribute("aria-pressed", state.planarTrackerOverlay ? "true" : "false");
+    ovBtn.classList.toggle("is-active", Boolean(state.planarTrackerOverlay));
+  }
+
+  for (const tabBtn of document.querySelectorAll("[data-tracker-tab]")) {
+    const tabId = tabBtn.getAttribute("data-tracker-tab");
+    const isSel = tabId === state.planarTrackerTab;
+    tabBtn.classList.toggle("is-active", isSel);
+    tabBtn.setAttribute("aria-selected", isSel ? "true" : "false");
+    tabBtn.tabIndex = isSel ? 0 : -1;
+  }
+  const planarPanel = byId("fx-tracker-panel-planar");
+  const stabPanel = byId("fx-tracker-panel-stabilizer");
+  if (planarPanel) {
+    const hide = state.planarTrackerTab !== "planar";
+    planarPanel.classList.toggle("is-hidden", hide);
+    planarPanel.hidden = hide;
+  }
+  if (stabPanel) {
+    const hide = state.planarTrackerTab !== "stabilizer";
+    stabPanel.classList.toggle("is-hidden", hide);
+    stabPanel.hidden = hide;
+  }
+
+  for (const btn of document.querySelectorAll("[data-tracker-preset]")) {
+    const pid = btn.getAttribute("data-tracker-preset");
+    const match = pid === trk.preset;
+    btn.classList.toggle("is-active", match);
+    btn.setAttribute("aria-pressed", match ? "true" : "false");
+  }
+  for (const btn of document.querySelectorAll("[data-stab-preset]")) {
+    const pid = btn.getAttribute("data-stab-preset");
+    const match = pid === stab.preset;
+    btn.classList.toggle("is-active", match);
+    btn.setAttribute("aria-pressed", match ? "true" : "false");
+  }
+
+  const modeEl = byId("fx-tracker-mode");
+  if (modeEl) modeEl.value = trk.mode;
+  const interpEl = byId("fx-tracker-interp");
+  if (interpEl) interpEl.value = trk.interpolation;
+  const followEl = byId("fx-tracker-follow-track");
+  if (followEl) followEl.checked = Boolean(trk.follow_track);
+
+  const pinPairs = [
+    ["fx-pin-tl-x", trk.tl_x],
+    ["fx-pin-tl-y", trk.tl_y],
+    ["fx-pin-tr-x", trk.tr_x],
+    ["fx-pin-tr-y", trk.tr_y],
+    ["fx-pin-bl-x", trk.bl_x],
+    ["fx-pin-bl-y", trk.bl_y],
+    ["fx-pin-br-x", trk.br_x],
+    ["fx-pin-br-y", trk.br_y]
+  ];
+  for (const [id, val] of pinPairs) {
+    const el = byId(id);
+    if (el && (state.planarTrackerDrag !== null || document.activeElement !== el)) {
+      el.value = (val * 100).toFixed(1);
+    }
+  }
+
+  const kfs = trk.track_keyframes || [];
+  const clrBtn = byId("btn-fx-track-clear");
+  if (clrBtn) clrBtn.disabled = kfs.length === 0;
+  const linkBtn = byId("btn-fx-track-link-pw");
+  if (linkBtn) {
+    linkBtn.disabled = kfs.length === 0;
+    linkBtn.classList.toggle("is-active", Boolean(state.colorPowerWindowTrack.linked));
+  }
+  const readout = byId("fx-tracker-track-readout");
+  if (readout) {
+    const curPt = evaluateTrackPointClient(trk, state.playheadFrame);
+    const avgConf =
+      kfs.length > 0
+        ? Math.round((kfs.reduce((acc, item) => acc + item.confidence, 0) / kfs.length) * 100)
+        : 100;
+    readout.textContent = kfs.length > 0
+      ? `${kfs.length} KF | ${Math.round(curPt.x * 100)}%, ${Math.round(curPt.y * 100)}% (${avgConf}%)`
+      : `0 KF | Anchor ${Math.round(trk.track_anchor_x * 100)}%, ${Math.round(trk.track_anchor_y * 100)}%`;
+  }
+
+  const stabEn = byId("fx-stab-enabled");
+  if (stabEn) stabEn.checked = Boolean(stab.enabled);
+  const rxR = byId("fx-stab-rx-range");
+  const rxN = byId("fx-stab-rx-num");
+  if (rxR) rxR.value = String(stab.rx);
+  if (rxN && document.activeElement !== rxN) rxN.value = String(stab.rx);
+  const ryR = byId("fx-stab-ry-range");
+  const ryN = byId("fx-stab-ry-num");
+  if (ryR) ryR.value = String(stab.ry);
+  if (ryN && document.activeElement !== ryN) ryN.value = String(stab.ry);
+  const zoomR = byId("fx-stab-zoom-range");
+  const zoomN = byId("fx-stab-zoom-num");
+  if (zoomR) zoomR.value = String(stab.auto_zoom_pct);
+  if (zoomN && document.activeElement !== zoomN) zoomN.value = stab.auto_zoom_pct.toFixed(1);
+  const edgeEl = byId("fx-stab-edge");
+  if (edgeEl) edgeEl.value = stab.edge;
+  const searchEl = byId("fx-stab-search");
+  if (searchEl) searchEl.value = stab.search;
+  const blkEl = byId("fx-stab-blocksize");
+  if (blkEl && document.activeElement !== blkEl) blkEl.value = String(stab.blocksize);
+
+  const pwBadge = byId("pw-track-link-badge");
+  const pwUnlink = byId("btn-pw-unlink-track");
+  if (pwBadge) {
+    const isLinked = Boolean(state.colorPowerWindowTrack.linked && state.colorPowerWindowTrack.keyframes.length > 0);
+    pwBadge.classList.toggle("is-hidden", !isLinked);
+    if (isLinked) {
+      pwBadge.textContent = `TRACKED (${state.colorPowerWindowTrack.keyframes.length} KF)`;
+    }
+  }
+  if (pwUnlink) {
+    pwUnlink.classList.toggle(
+      "is-hidden",
+      !(state.colorPowerWindowTrack.linked && state.colorPowerWindowTrack.keyframes.length > 0)
+    );
+  }
+  void anyOn;
+}
+
+function applyPlanarTrackerPresetClient(presetId) {
+  const preset = PLANAR_TRACKER_PRESETS_CLIENT[presetId];
+  if (!preset) return;
+  state.planarTracker = {
+    ...state.planarTracker,
+    enabled: true,
+    preset: preset.id,
+    mode: preset.mode,
+    interpolation: preset.interpolation,
+    tl_x: preset.tl_x,
+    tl_y: preset.tl_y,
+    tr_x: preset.tr_x,
+    tr_y: preset.tr_y,
+    bl_x: preset.bl_x,
+    bl_y: preset.bl_y,
+    br_x: preset.br_x,
+    br_y: preset.br_y
+  };
+  state.fxBypassAll = false;
+  syncPlanarTrackerAndStabilizerUi();
+  updateFxBadges();
+  redrawActiveCanvases();
+  compileFxNow();
+}
+
+function applyStabilizerPresetClient(presetId) {
+  const preset = STABILIZER_PRESETS_CLIENT[presetId];
+  if (!preset) return;
+  state.stabilizer = {
+    ...state.stabilizer,
+    enabled: true,
+    preset: preset.id,
+    rx: preset.rx,
+    ry: preset.ry,
+    edge: preset.edge,
+    blocksize: preset.blocksize,
+    contrast: preset.contrast,
+    search: preset.search,
+    auto_zoom_pct: preset.auto_zoom_pct
+  };
+  state.fxBypassAll = false;
+  syncPlanarTrackerAndStabilizerUi();
+  updateFxBadges();
+  redrawActiveCanvases();
+  compileFxNow();
+}
+
+function runPlanarPointTrack(direction) {
+  const doc = state.timelineDoc;
+  const maxF = Math.max(25, state.timelineMaxFrame || 500);
+  const startF = Math.max(0, Math.min(maxF, Math.round(state.playheadFrame || 0)));
+  let frameList = [];
+  if (direction === "back") {
+    const endF = Math.max(0, startF - 24);
+    for (let f = startF; f >= endF; f -= 1) frameList.push(f);
+  } else if (direction === "analyze") {
+    const lo = Math.max(0, startF - 25);
+    const hi = Math.min(maxF, lo + 49);
+    for (let f = lo; f <= hi; f += 1) frameList.push(f);
+  } else {
+    const endF = Math.min(maxF, startF + 24);
+    for (let f = startF; f <= endF; f += 1) frameList.push(f);
+  }
+  if (frameList.length === 0) frameList = [startF];
+
+  const tracked = trackPointSequenceCanvas(
+    doc,
+    getActiveColorChainState(),
+    getEffectiveFramingState(),
+    state.planarTracker.track_anchor_x,
+    state.planarTracker.track_anchor_y,
+    state.planarTracker.track_box_pct,
+    frameList
+  );
+  const mergedMap = new Map();
+  for (const kf of state.planarTracker.track_keyframes || []) {
+    mergedMap.set(kf.frame, kf);
+  }
+  for (const kf of tracked) {
+    mergedMap.set(kf.frame, kf);
+  }
+  const merged = Array.from(mergedMap.values()).sort((a, b) => a.frame - b.frame);
+  state.planarTracker.track_keyframes = merged;
+  state.planarTracker.enabled = true;
+  state.fxBypassAll = false;
+  if (state.colorPowerWindowTrack.linked) {
+    state.colorPowerWindowTrack.keyframes = merged.map((k) => ({ ...k }));
+    syncLinkedPowerWindowAtPlayhead();
+  }
+  syncPlanarTrackerAndStabilizerUi();
+  updateFxBadges();
+  redrawActiveCanvases();
+  compileFxNow();
+  showBanner(`Tracked ${tracked.length} frames (${merged.length} keyframes total)`, "success");
+}
+
+function syncLinkedPowerWindowAtPlayhead() {
+  if (!state.colorPowerWindowTrack.linked) return false;
+  const kfs = state.colorPowerWindowTrack.keyframes || [];
+  if (!kfs.length) return false;
+  const pt = evaluateTrackPointClient(
+    { ...state.planarTracker, track_keyframes: kfs },
+    state.playheadFrame
+  );
+  const active = syncActiveColorGradeFromTree();
+  if (!active) return false;
+  const nextShape =
+    active.power_window && active.power_window.shape !== "off"
+      ? active.power_window.shape
+      : "circle";
+  updateActivePowerWindow(
+    {
+      shape: nextShape,
+      center_x: Number(Math.max(0, Math.min(1, pt.x)).toFixed(4)),
+      center_y: Number(Math.max(0, Math.min(1, pt.y)).toFixed(4))
+    },
+    false
+  );
+  return true;
+}
+
+function linkPlanarTrackToPowerWindow() {
+  const kfs = state.planarTracker.track_keyframes || [];
+  if (!kfs.length) {
+    showBanner("Track at least 1 frame before linking to Power Window", "info");
+    return;
+  }
+  state.colorPowerWindowTrack = {
+    linked: true,
+    keyframes: kfs.map((k) => ({ ...k }))
+  };
+  syncLinkedPowerWindowAtPlayhead();
+  syncPlanarTrackerAndStabilizerUi();
+  scheduleColorCompile();
+  showBanner(`Linked ${kfs.length} tracked keyframes to Color Power Window`, "success");
+}
+
+function unlinkPlanarTrackFromPowerWindow() {
+  state.colorPowerWindowTrack = { linked: false, keyframes: [] };
+  syncPlanarTrackerAndStabilizerUi();
+}
+
 function updateFxBadges() {
   const total = state.fxStack.length;
   const fxActiveCount = state.fxStack.filter((n) => n.enabled).length;
   const ckActiveCount = state.chromaKey.enabled ? 1 : 0;
-  const activeCount = state.fxBypassAll ? 0 : fxActiveCount + ckActiveCount;
+  const stabActiveCount = state.stabilizer.enabled ? 1 : 0;
+  const trkActiveCount = state.planarTracker.enabled ? 1 : 0;
+  const activeCount = state.fxBypassAll
+    ? 0
+    : fxActiveCount + ckActiveCount + stabActiveCount + trkActiveCount;
   const activeBadge = byId("fx-active-badge");
   const stackBadge = byId("fx-stack-count");
   const bypassBtn = byId("btn-fx-bypass-all");
@@ -4594,6 +4977,8 @@ function renderFxCompileResult(res) {
     ? ` | KF: ${res.keyframed_effects.join(", ")}`
     : "";
   const activeLabels = [
+    ...(res.stabilizer_active ? ["stabilizer"] : []),
+    ...(res.planar_tracker_active ? ["planar_tracker"] : []),
     ...(res.chroma_key_active ? ["chroma_key"] : []),
     ...(Array.isArray(res.active_effects) ? res.active_effects : [])
   ];
@@ -4618,10 +5003,14 @@ async function compileFxNow() {
 
     const nodesPayload = serializeFxStackForApi(state.fxBypassAll);
     const ckPayload = state.chromaKey.enabled ? serializeChromaKeyForApi(state.fxBypassAll) : null;
+    const stabPayload = state.stabilizer.enabled ? serializeStabilizerForApi(state.fxBypassAll) : null;
+    const trkPayload = state.planarTracker.enabled ? serializePlanarTrackerForApi(state.fxBypassAll) : null;
 
     const compiled = await api.compileFx({
       nodes: nodesPayload,
       chroma_key: ckPayload,
+      stabilizer: stabPayload,
+      planar_tracker: trkPayload,
       duration_seconds,
       width,
       height,
@@ -6682,6 +7071,108 @@ function wireColorInputs() {
     colorPreviewCanvas.addEventListener("pointercancel", endPwDrag);
   }
 
+  const fxCanvas = byId("fx-program-canvas");
+  if (fxCanvas) {
+    const toFxPoint = (ev) => {
+      const geom = fxCanvas._planarTrackerGeom;
+      if (!geom) return null;
+      const rect = fxCanvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const logicalW = geom.canvasWidth || rect.width;
+      const logicalH = geom.canvasHeight || rect.height;
+      const containScale = Math.min(rect.width / logicalW, rect.height / logicalH);
+      const drawnW = logicalW * containScale;
+      const drawnH = logicalH * containScale;
+      const offsetX = (rect.width - drawnW) * 0.5;
+      const offsetY = (rect.height - drawnH) * 0.5;
+      return {
+        geom,
+        x: (ev.clientX - rect.left - offsetX) / containScale,
+        y: (ev.clientY - rect.top - offsetY) / containScale
+      };
+    };
+
+    fxCanvas.addEventListener("pointerdown", (ev) => {
+      if (state.fxSplitWipe.isDragging || !state.planarTracker.enabled || !state.planarTrackerOverlay) return;
+      const pt = toFxPoint(ev);
+      if (!pt || !pt.geom || !pt.geom.handles) return;
+      const hitOrder = pt.geom.mode === "point_track_only" ? ["anchor"] : ["tl", "tr", "bl", "br", "anchor"];
+      let hitKey = null;
+      let bestDist = 16;
+      for (const key of hitOrder) {
+        const h = pt.geom.handles[key];
+        if (!h) continue;
+        const d = Math.hypot(pt.x - h.x, pt.y - h.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          hitKey = key;
+        }
+      }
+      if (!hitKey) return;
+      ev.preventDefault();
+      if (document.activeElement && document.activeElement !== fxCanvas && typeof document.activeElement.blur === "function") {
+        document.activeElement.blur();
+      }
+      state.planarTrackerDrag = { key: hitKey };
+      if (typeof fxCanvas.setPointerCapture === "function") {
+        try {
+          fxCanvas.setPointerCapture(ev.pointerId);
+        } catch {
+          // Ignore synthetic pointer capture error
+        }
+      }
+    });
+
+    fxCanvas.addEventListener("pointermove", (ev) => {
+      if (!state.planarTrackerDrag) return;
+      const pt = toFxPoint(ev);
+      if (!pt || !pt.geom) return;
+      ev.preventDefault();
+      const { geom, x, y } = pt;
+      const normX = (x - geom.fx) / Math.max(1, geom.frameW);
+      const normY = (y - geom.fy) / Math.max(1, geom.frameH);
+      const key = state.planarTrackerDrag.key;
+      if (key === "anchor") {
+        state.planarTracker.track_anchor_x = Number(Math.max(0.02, Math.min(0.98, normX)).toFixed(4));
+        state.planarTracker.track_anchor_y = Number(Math.max(0.02, Math.min(0.98, normY)).toFixed(4));
+      } else {
+        let dx = 0;
+        let dy = 0;
+        if (state.planarTracker.follow_track && state.planarTracker.track_keyframes.length >= 1) {
+          const ref = state.planarTracker.track_keyframes[0];
+          const cur = evaluateTrackPointClient(state.planarTracker, state.playheadFrame);
+          dx = cur.x - ref.x;
+          dy = cur.y - ref.y;
+        }
+        const cx = Number(Math.max(-0.25, Math.min(1.25, normX - dx)).toFixed(4));
+        const cy = Number(Math.max(-0.25, Math.min(1.25, normY - dy)).toFixed(4));
+        state.planarTracker[`${key}_x`] = cx;
+        state.planarTracker[`${key}_y`] = cy;
+        state.planarTracker.preset = "custom";
+      }
+      syncPlanarTrackerAndStabilizerUi();
+      redrawActiveCanvases();
+      scheduleFxCompile();
+    });
+
+    const endTrkDrag = (ev) => {
+      if (!state.planarTrackerDrag) return;
+      state.planarTrackerDrag = null;
+      if (ev && typeof fxCanvas.releasePointerCapture === "function") {
+        try {
+          if (fxCanvas.hasPointerCapture && fxCanvas.hasPointerCapture(ev.pointerId)) {
+            fxCanvas.releasePointerCapture(ev.pointerId);
+          }
+        } catch {
+          // Ignore pointer release errors
+        }
+      }
+      compileFxNow();
+    };
+    fxCanvas.addEventListener("pointerup", endTrkDrag);
+    fxCanvas.addEventListener("pointercancel", endTrkDrag);
+  }
+
   for (const btn of document.querySelectorAll("[data-grade-preset]")) {
     btn.addEventListener("click", () => {
       const pid = btn.getAttribute("data-grade-preset");
@@ -8104,6 +8595,14 @@ async function buildOrExecuteRender(execute) {
       useStudioFx && !state.fxBypassAll && state.chromaKey.enabled
         ? serializeChromaKeyForApi(false)
         : null;
+    const stabilizerPayload =
+      useStudioFx && !state.fxBypassAll && state.stabilizer.enabled
+        ? serializeStabilizerForApi(false)
+        : null;
+    const planarTrackerPayload =
+      useStudioFx && !state.fxBypassAll && state.planarTracker.enabled
+        ? serializePlanarTrackerForApi(false)
+        : null;
     const titlePayload =
       useStudioTitle &&
       state.titleOverlay.enabled &&
@@ -8196,6 +8695,8 @@ async function buildOrExecuteRender(execute) {
         color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
         color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
         chroma_key: chromaKeyPayload,
+        stabilizer: stabilizerPayload,
+        planar_tracker: planarTrackerPayload,
         fx_stack: fxPayload,
         title_overlay: titlePayload,
         lower_third: lowerThirdPayload.enabled ? lowerThirdPayload : null,
@@ -8264,6 +8765,8 @@ async function buildOrExecuteRender(execute) {
       color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
       color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
       chroma_key: chromaKeyPayload,
+      stabilizer: stabilizerPayload,
+      planar_tracker: planarTrackerPayload,
       fx_stack: fxPayload,
       title_overlay: titlePayload,
       lower_third: lowerThirdPayload.enabled ? lowerThirdPayload : null,
@@ -8838,6 +9341,12 @@ function setPlayhead(frame) {
   updateTimelineToolbarUI();
   if (state.mediaPoolSourceTape) {
     syncSourceTapeScrubToPlayhead();
+  }
+  if (state.colorPowerWindowTrack.linked) {
+    syncLinkedPowerWindowAtPlayhead();
+  }
+  if (state.activeTab === "fx") {
+    syncPlanarTrackerAndStabilizerUi();
   }
   if (
     state.activeTab === "timeline" ||
@@ -12365,6 +12874,8 @@ function wireEvents() {
   byId("btn-fx-bypass-all").addEventListener("click", () => {
     state.fxBypassAll = !state.fxBypassAll;
     syncChromaKeyControlsFromState();
+    syncPlanarTrackerAndStabilizerUi();
+    updateFxBadges();
     renderFxStack();
     redrawActiveCanvases();
     compileFxNow();
@@ -12373,9 +12884,14 @@ function wireEvents() {
     state.fxStack = [];
     state.chromaKey.enabled = false;
     state.chromaKey.matteView = "final";
+    state.planarTracker.enabled = false;
+    state.planarTracker.track_keyframes = [];
+    state.stabilizer.enabled = false;
     state.fxBypassAll = false;
     state.fxActivePresetId = "";
     syncChromaKeyControlsFromState();
+    syncPlanarTrackerAndStabilizerUi();
+    updateFxBadges();
     renderFxStack();
     redrawActiveCanvases();
     compileFxNow();
@@ -12495,6 +13011,263 @@ function wireEvents() {
   };
   bindKeyerNumericPair("fx-keyer-similarity-range", "fx-keyer-similarity-num", "similarity", 0.01, 0.8);
   bindKeyerNumericPair("fx-keyer-blend-range", "fx-keyer-blend-num", "blend", 0.0, 0.5);
+
+  const btnPwUnlink = byId("btn-pw-unlink-track");
+  if (btnPwUnlink) {
+    btnPwUnlink.addEventListener("click", unlinkPlanarTrackFromPowerWindow);
+  }
+  const btnTrkToggle = byId("btn-fx-tracker-toggle");
+  if (btnTrkToggle) {
+    btnTrkToggle.addEventListener("click", () => {
+      state.planarTracker.enabled = !state.planarTracker.enabled;
+      state.fxBypassAll = false;
+      syncPlanarTrackerAndStabilizerUi();
+      updateFxBadges();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+  const btnTrkOverlay = byId("btn-fx-tracker-overlay");
+  if (btnTrkOverlay) {
+    btnTrkOverlay.addEventListener("click", () => {
+      state.planarTrackerOverlay = !state.planarTrackerOverlay;
+      syncPlanarTrackerAndStabilizerUi();
+      redrawActiveCanvases();
+    });
+  }
+  for (const tabBtn of document.querySelectorAll("[data-tracker-tab]")) {
+    tabBtn.addEventListener("click", () => {
+      const tabId = tabBtn.getAttribute("data-tracker-tab");
+      state.planarTrackerTab = tabId === "stabilizer" ? "stabilizer" : "planar";
+      syncPlanarTrackerAndStabilizerUi();
+    });
+  }
+  for (const btn of document.querySelectorAll("[data-tracker-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-tracker-preset");
+      if (pid) applyPlanarTrackerPresetClient(pid);
+    });
+  }
+  const trkModeEl = byId("fx-tracker-mode");
+  if (trkModeEl) {
+    trkModeEl.addEventListener("change", () => {
+      state.planarTracker.mode = trkModeEl.value;
+      state.planarTracker.enabled = true;
+      state.fxBypassAll = false;
+      syncPlanarTrackerAndStabilizerUi();
+      updateFxBadges();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+  const trkInterpEl = byId("fx-tracker-interp");
+  if (trkInterpEl) {
+    trkInterpEl.addEventListener("change", () => {
+      state.planarTracker.interpolation = trkInterpEl.value === "linear" ? "linear" : "cubic";
+      compileFxNow();
+    });
+  }
+  const trkFollowEl = byId("fx-tracker-follow-track");
+  if (trkFollowEl) {
+    trkFollowEl.addEventListener("change", () => {
+      state.planarTracker.follow_track = Boolean(trkFollowEl.checked);
+      syncPlanarTrackerAndStabilizerUi();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+  const btnTrackBack = byId("btn-fx-track-back");
+  if (btnTrackBack) btnTrackBack.addEventListener("click", () => runPlanarPointTrack("back"));
+  const btnTrackFwd = byId("btn-fx-track-fwd");
+  if (btnTrackFwd) btnTrackFwd.addEventListener("click", () => runPlanarPointTrack("fwd"));
+  const btnTrackAnalyze = byId("btn-fx-track-analyze");
+  if (btnTrackAnalyze) btnTrackAnalyze.addEventListener("click", () => runPlanarPointTrack("analyze"));
+  const btnTrackClear = byId("btn-fx-track-clear");
+  if (btnTrackClear) {
+    btnTrackClear.addEventListener("click", () => {
+      state.planarTracker.track_keyframes = [];
+      if (state.colorPowerWindowTrack.linked) {
+        unlinkPlanarTrackFromPowerWindow();
+      }
+      syncPlanarTrackerAndStabilizerUi();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+  const btnTrackLinkPw = byId("btn-fx-track-link-pw");
+  if (btnTrackLinkPw) btnTrackLinkPw.addEventListener("click", linkPlanarTrackToPowerWindow);
+  const btnResetPins = byId("btn-fx-tracker-reset-pins");
+  if (btnResetPins) {
+    btnResetPins.addEventListener("click", () => {
+      state.planarTracker.tl_x = 0.0;
+      state.planarTracker.tl_y = 0.0;
+      state.planarTracker.tr_x = 1.0;
+      state.planarTracker.tr_y = 0.0;
+      state.planarTracker.bl_x = 0.0;
+      state.planarTracker.bl_y = 1.0;
+      state.planarTracker.br_x = 1.0;
+      state.planarTracker.br_y = 1.0;
+      state.planarTracker.preset = "custom";
+      syncPlanarTrackerAndStabilizerUi();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+  const pinInputMap = [
+    ["fx-pin-tl-x", "tl_x"],
+    ["fx-pin-tl-y", "tl_y"],
+    ["fx-pin-tr-x", "tr_x"],
+    ["fx-pin-tr-y", "tr_y"],
+    ["fx-pin-bl-x", "bl_x"],
+    ["fx-pin-bl-y", "bl_y"],
+    ["fx-pin-br-x", "br_x"],
+    ["fx-pin-br-y", "br_y"]
+  ];
+  for (const [id, field] of pinInputMap) {
+    const el = byId(id);
+    if (!el) continue;
+    el.addEventListener("input", () => {
+      const pct = Number.parseFloat(el.value);
+      if (Number.isFinite(pct) && pct >= -25 && pct <= 125) {
+        state.planarTracker[field] = Number((pct / 100).toFixed(4));
+        state.planarTracker.preset = "custom";
+        state.planarTracker.enabled = true;
+        state.fxBypassAll = false;
+        syncPlanarTrackerAndStabilizerUi();
+        updateFxBadges();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      }
+    });
+    el.addEventListener("change", () => {
+      const parsed = Number.parseFloat(el.value);
+      const clampedPct = Number.isFinite(parsed)
+        ? Math.max(-25, Math.min(125, parsed))
+        : state.planarTracker[field] * 100;
+      state.planarTracker[field] = Number((clampedPct / 100).toFixed(4));
+      el.value = clampedPct.toFixed(1);
+      syncPlanarTrackerAndStabilizerUi();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+
+  const stabEnabledEl = byId("fx-stab-enabled");
+  if (stabEnabledEl) {
+    stabEnabledEl.addEventListener("change", () => {
+      state.stabilizer.enabled = Boolean(stabEnabledEl.checked);
+      state.fxBypassAll = false;
+      syncPlanarTrackerAndStabilizerUi();
+      updateFxBadges();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+  const btnStabReset = byId("btn-fx-stab-reset");
+  if (btnStabReset) {
+    btnStabReset.addEventListener("click", () => {
+      state.stabilizer = {
+        enabled: false,
+        preset: "smooth_gimbal",
+        rx: 16,
+        ry: 16,
+        edge: "mirror",
+        blocksize: 8,
+        contrast: 125,
+        search: "exhaustive",
+        auto_zoom_pct: 106.0
+      };
+      syncPlanarTrackerAndStabilizerUi();
+      updateFxBadges();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  }
+  for (const btn of document.querySelectorAll("[data-stab-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-stab-preset");
+      if (pid) applyStabilizerPresetClient(pid);
+    });
+  }
+  const bindStabNumericPair = (rangeId, numId, field, minVal, maxVal, isFloat = false) => {
+    const rEl = byId(rangeId);
+    const nEl = byId(numId);
+    if (!rEl || !nEl) return;
+    rEl.addEventListener("input", () => {
+      const val = Number.parseFloat(rEl.value);
+      if (Number.isFinite(val)) {
+        state.stabilizer[field] = isFloat ? val : Math.round(val);
+        state.stabilizer.preset = "custom";
+        state.stabilizer.enabled = true;
+        state.fxBypassAll = false;
+        nEl.value = isFloat ? val.toFixed(1) : String(Math.round(val));
+        syncPlanarTrackerAndStabilizerUi();
+        updateFxBadges();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      }
+    });
+    nEl.addEventListener("input", () => {
+      const val = Number.parseFloat(nEl.value);
+      if (Number.isFinite(val) && val >= minVal && val <= maxVal) {
+        state.stabilizer[field] = isFloat ? val : Math.round(val);
+        state.stabilizer.preset = "custom";
+        state.stabilizer.enabled = true;
+        state.fxBypassAll = false;
+        rEl.value = String(val);
+        syncPlanarTrackerAndStabilizerUi();
+        updateFxBadges();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      }
+    });
+    nEl.addEventListener("change", () => {
+      const parsed = Number.parseFloat(nEl.value);
+      const clamped = Number.isFinite(parsed)
+        ? Math.min(maxVal, Math.max(minVal, parsed))
+        : state.stabilizer[field];
+      const norm = isFloat ? Number(clamped.toFixed(1)) : Math.round(clamped);
+      state.stabilizer[field] = norm;
+      rEl.value = String(norm);
+      nEl.value = isFloat ? norm.toFixed(1) : String(norm);
+      syncPlanarTrackerAndStabilizerUi();
+      redrawActiveCanvases();
+      compileFxNow();
+    });
+  };
+  bindStabNumericPair("fx-stab-rx-range", "fx-stab-rx-num", "rx", 0, 64, false);
+  bindStabNumericPair("fx-stab-ry-range", "fx-stab-ry-num", "ry", 0, 64, false);
+  bindStabNumericPair("fx-stab-zoom-range", "fx-stab-zoom-num", "auto_zoom_pct", 100, 135, true);
+  const stabEdgeEl = byId("fx-stab-edge");
+  if (stabEdgeEl) {
+    stabEdgeEl.addEventListener("change", () => {
+      state.stabilizer.edge = stabEdgeEl.value;
+      state.stabilizer.preset = "custom";
+      syncPlanarTrackerAndStabilizerUi();
+      compileFxNow();
+    });
+  }
+  const stabSearchEl = byId("fx-stab-search");
+  if (stabSearchEl) {
+    stabSearchEl.addEventListener("change", () => {
+      state.stabilizer.search = stabSearchEl.value === "less" ? "less" : "exhaustive";
+      state.stabilizer.preset = "custom";
+      syncPlanarTrackerAndStabilizerUi();
+      compileFxNow();
+    });
+  }
+  const stabBlkEl = byId("fx-stab-blocksize");
+  if (stabBlkEl) {
+    stabBlkEl.addEventListener("change", () => {
+      const parsed = Number.parseInt(stabBlkEl.value, 10);
+      const clamped = Number.isFinite(parsed) ? Math.max(4, Math.min(64, parsed)) : 8;
+      state.stabilizer.blocksize = clamped;
+      state.stabilizer.preset = "custom";
+      stabBlkEl.value = String(clamped);
+      syncPlanarTrackerAndStabilizerUi();
+      compileFxNow();
+    });
+  }
   byId("btn-fx-play").addEventListener("click", togglePlayPause);
   byId("btn-fx-step").addEventListener("click", () => {
     stopPlayback();
@@ -13942,6 +14715,7 @@ async function bootstrap() {
   syncSubtitleControlsFromState();
   compileSubtitlesNow();
   syncChromaKeyControlsFromState();
+  syncPlanarTrackerAndStabilizerUi();
   renderFxStack();
   renderFxCompileResult(null);
 

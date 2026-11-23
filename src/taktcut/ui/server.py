@@ -59,12 +59,20 @@ from taktcut.fx import (
     FX_PARAM_SPECS,
     ChromaKeyParams,
     FxNode,
+    PlanarTrackerParams,
+    StabilizerParams,
     apply_chroma_key_preset,
+    apply_planar_tracker_preset,
+    apply_stabilizer_preset,
     compile_chroma_key,
     compile_fx_filtergraph,
+    compile_planar_tracker,
+    compile_stabilizer,
     get_fx_preset,
     list_chroma_key_presets,
     list_fx_presets,
+    list_planar_tracker_presets,
+    list_stabilizer_presets,
 )
 from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
@@ -926,6 +934,102 @@ def _build_chroma_key_from_payload(payload: dict[str, Any]) -> ChromaKeyParams:
     )
 
 
+def _build_stabilizer_from_payload(payload: dict[str, Any]) -> StabilizerParams:
+    raw_stab = payload.get("stabilizer")
+    if raw_stab is not None and not isinstance(raw_stab, dict):
+        raise ValueError("'stabilizer' must be a JSON object")
+    source: dict[str, Any] = raw_stab if isinstance(raw_stab, dict) else payload
+    preset_val = source.get("preset", "smooth_gimbal")
+    valid_presets = {"smooth_gimbal", "locked_tripod", "handheld_rescue"}
+    if (
+        isinstance(preset_val, str)
+        and preset_val.strip().lower() in valid_presets
+        and all(
+            k not in source
+            for k in ("rx", "ry", "edge", "blocksize", "contrast", "search", "auto_zoom_pct")
+        )
+    ):
+        enabled_flag = bool(source.get("enabled", True))
+        return apply_stabilizer_preset(preset_val, enabled=enabled_flag)
+    base = (
+        apply_stabilizer_preset(preset_val, enabled=bool(source.get("enabled", False)))
+        if isinstance(preset_val, str) and preset_val.strip().lower() in valid_presets
+        else StabilizerParams()
+    )
+    return StabilizerParams.model_validate(
+        {
+            "enabled": source.get("enabled", base.enabled),
+            "preset": source.get("preset", base.preset),
+            "rx": source.get("rx", base.rx),
+            "ry": source.get("ry", base.ry),
+            "edge": source.get("edge", base.edge),
+            "blocksize": source.get("blocksize", base.blocksize),
+            "contrast": source.get("contrast", base.contrast),
+            "search": source.get("search", base.search),
+            "auto_zoom_pct": source.get("auto_zoom_pct", base.auto_zoom_pct),
+        }
+    )
+
+
+def _build_planar_tracker_from_payload(payload: dict[str, Any]) -> PlanarTrackerParams:
+    raw_trk = payload.get("planar_tracker")
+    if raw_trk is not None and not isinstance(raw_trk, dict):
+        raise ValueError("'planar_tracker' must be a JSON object")
+    source: dict[str, Any] = raw_trk if isinstance(raw_trk, dict) else payload
+    preset_val = source.get("preset", "screen_insert")
+    valid_presets = {"screen_insert", "anamorphic_skew", "deskew_rectify", "point_follow"}
+    coord_keys = (
+        "mode",
+        "interpolation",
+        "tl_x",
+        "tl_y",
+        "tr_x",
+        "tr_y",
+        "bl_x",
+        "bl_y",
+        "br_x",
+        "br_y",
+        "track_anchor_x",
+        "track_anchor_y",
+        "track_box_pct",
+        "follow_track",
+        "track_keyframes",
+    )
+    if (
+        isinstance(preset_val, str)
+        and preset_val.strip().lower() in valid_presets
+        and all(k not in source for k in coord_keys)
+    ):
+        enabled_flag = bool(source.get("enabled", True))
+        return apply_planar_tracker_preset(preset_val, enabled=enabled_flag)
+    base = (
+        apply_planar_tracker_preset(preset_val, enabled=bool(source.get("enabled", False)))
+        if isinstance(preset_val, str) and preset_val.strip().lower() in valid_presets
+        else PlanarTrackerParams()
+    )
+    return PlanarTrackerParams.model_validate(
+        {
+            "enabled": source.get("enabled", base.enabled),
+            "preset": source.get("preset", base.preset),
+            "mode": source.get("mode", base.mode),
+            "interpolation": source.get("interpolation", base.interpolation),
+            "tl_x": source.get("tl_x", base.tl_x),
+            "tl_y": source.get("tl_y", base.tl_y),
+            "tr_x": source.get("tr_x", base.tr_x),
+            "tr_y": source.get("tr_y", base.tr_y),
+            "bl_x": source.get("bl_x", base.bl_x),
+            "bl_y": source.get("bl_y", base.bl_y),
+            "br_x": source.get("br_x", base.br_x),
+            "br_y": source.get("br_y", base.br_y),
+            "track_anchor_x": source.get("track_anchor_x", base.track_anchor_x),
+            "track_anchor_y": source.get("track_anchor_y", base.track_anchor_y),
+            "track_box_pct": source.get("track_box_pct", base.track_box_pct),
+            "follow_track": source.get("follow_track", base.follow_track),
+            "track_keyframes": source.get("track_keyframes", base.track_keyframes),
+        }
+    )
+
+
 def _build_transition_params_from_payload(payload: dict[str, Any]) -> TransitionParams:
     raw_trans = payload.get("transition")
     if raw_trans is not None and not isinstance(raw_trans, dict):
@@ -1181,6 +1285,12 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     },
                     "chroma_key_presets": [
                         p.model_dump(mode="json") for p in list_chroma_key_presets()
+                    ],
+                    "stabilizer_presets": [
+                        p.model_dump(mode="json") for p in list_stabilizer_presets()
+                    ],
+                    "planar_tracker_presets": [
+                        p.model_dump(mode="json") for p in list_planar_tracker_presets()
                     ],
                 },
             )
@@ -1866,6 +1976,22 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("'chroma_key' must be a JSON object")
                 chroma_key_obj = _build_chroma_key_from_payload({"chroma_key": raw_chroma_key})
 
+            stabilizer_obj: StabilizerParams | None = None
+            raw_stabilizer = payload.get("stabilizer")
+            if raw_stabilizer is not None:
+                if not isinstance(raw_stabilizer, dict):
+                    raise ValueError("'stabilizer' must be a JSON object")
+                stabilizer_obj = _build_stabilizer_from_payload({"stabilizer": raw_stabilizer})
+
+            planar_tracker_obj: PlanarTrackerParams | None = None
+            raw_planar_tracker = payload.get("planar_tracker")
+            if raw_planar_tracker is not None:
+                if not isinstance(raw_planar_tracker, dict):
+                    raise ValueError("'planar_tracker' must be a JSON object")
+                planar_tracker_obj = _build_planar_tracker_from_payload(
+                    {"planar_tracker": raw_planar_tracker}
+                )
+
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             video_fade = _build_video_fade_from_payload(
                 payload, allow_top_level=(audio_params is None)
@@ -1917,6 +2043,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 color_grade=color_grade_obj,
                 color_nodes=color_nodes_obj,
                 chroma_key=chroma_key_obj,
+                stabilizer=stabilizer_obj,
+                planar_tracker=planar_tracker_obj,
                 fx_filtergraph=fx_filtergraph,
                 title_overlay=title_overlay_obj,
                 lower_third=lower_third_obj,
@@ -2251,6 +2379,31 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, compiled_ck.model_dump(mode="json"))
             return
 
+        if route == "/api/fx/stabilize/compile":
+            stab_params = _build_stabilizer_from_payload(payload)
+            raw_pix_fmt = payload.get("pix_fmt")
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            raw_w = payload.get("width")
+            raw_h = payload.get("height")
+            w_val = int(raw_w) if raw_w is not None else None
+            h_val = int(raw_h) if raw_h is not None else None
+            compiled_stab = compile_stabilizer(
+                stab_params,
+                width=w_val,
+                height=h_val,
+                pix_fmt=pix_fmt,
+            )
+            self._send_json(HTTPStatus.OK, compiled_stab.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/tracker/compile":
+            trk_params = _build_planar_tracker_from_payload(payload)
+            raw_pix_fmt = payload.get("pix_fmt")
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            compiled_trk = compile_planar_tracker(trk_params, pix_fmt=pix_fmt)
+            self._send_json(HTTPStatus.OK, compiled_trk.model_dump(mode="json"))
+            return
+
         if route == "/api/fx/compile":
             preset_id = payload.get("preset") or payload.get("preset_id")
             if preset_id is not None:
@@ -2274,6 +2427,22 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("'chroma_key' must be a JSON object")
                 chroma_key_compile = _build_chroma_key_from_payload({"chroma_key": raw_ck})
 
+            stabilizer_compile: StabilizerParams | None = None
+            raw_stab = payload.get("stabilizer")
+            if raw_stab is not None:
+                if not isinstance(raw_stab, dict):
+                    raise ValueError("'stabilizer' must be a JSON object")
+                stabilizer_compile = _build_stabilizer_from_payload({"stabilizer": raw_stab})
+
+            planar_tracker_compile: PlanarTrackerParams | None = None
+            raw_trk = payload.get("planar_tracker")
+            if raw_trk is not None:
+                if not isinstance(raw_trk, dict):
+                    raise ValueError("'planar_tracker' must be a JSON object")
+                planar_tracker_compile = _build_planar_tracker_from_payload(
+                    {"planar_tracker": raw_trk}
+                )
+
             duration_s = float(payload.get("duration_seconds", 10.0))
             width_px = int(payload.get("width", 1920))
             height_px = int(payload.get("height", 1080))
@@ -2290,6 +2459,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 pix_fmt=pix_fmt,
                 use_gpu=use_gpu,
                 chroma_key=chroma_key_compile,
+                stabilizer=stabilizer_compile,
+                planar_tracker=planar_tracker_compile,
             )
             self._send_json(HTTPStatus.OK, compiled.model_dump(mode="json"))
             return

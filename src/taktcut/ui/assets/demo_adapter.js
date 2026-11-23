@@ -4,6 +4,8 @@ import {
   COLOR_CURVE_PRESETS,
   DELIVERY_PRESETS,
   LOUDNESS_PRESET_LUFS,
+  PLANAR_TRACKER_PRESETS_CLIENT,
+  STABILIZER_PRESETS_CLIENT,
   TRANSITION_PRESETS,
   bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
@@ -14,8 +16,10 @@ import {
   compileFairlightMixerClient,
   compileFramingFilterClient,
   compileMinterpolateFilterClient,
+  compilePlanarTrackerFilterClient,
   compileRetimeFilterClient,
   compileRetimeRampSetptsClient,
+  compileStabilizerFilterClient,
   compileTransformFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
@@ -322,13 +326,19 @@ function compileFxClient(nodes, opts = {}) {
   const ckRaw = opts.chroma_key || null;
   const ckCompiled = ckRaw ? compileChromaKeyClient(ckRaw, { pix_fmt: null }) : null;
   const ckActive = Boolean(ckCompiled && ckCompiled.is_active);
-  if (active.length === 0 && !ckActive) {
+  const stabCompiled = opts.stabilizer ? compileStabilizerFilterClient(opts.stabilizer, opts) : null;
+  const stabActive = Boolean(stabCompiled && stabCompiled.is_active);
+  const trkCompiled = opts.planar_tracker ? compilePlanarTrackerFilterClient(opts.planar_tracker) : null;
+  const trkActive = Boolean(trkCompiled && trkCompiled.is_active);
+  if (active.length === 0 && !ckActive && !stabActive && !trkActive) {
     return {
       filtergraph: "",
       ffmpeg_vf_args: [],
       active_effects: [],
       keyframed_effects: [],
       chroma_key_active: false,
+      stabilizer_active: false,
+      planar_tracker_active: false,
       bypassed_count: (nodes || []).length,
       normalized_nodes: nodes || [],
       estimated_render_seconds: 0,
@@ -342,6 +352,14 @@ function compileFxClient(nodes, opts = {}) {
   const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split", "halation"].includes(n.effect));
   const segs = [];
   let totalWeight = 0;
+  if (stabActive && stabCompiled) {
+    segs.push(stabCompiled.filtergraph);
+    totalWeight += 0.90;
+  }
+  if (trkActive && trkCompiled) {
+    segs.push(trkCompiled.filtergraph);
+    totalWeight += 0.85;
+  }
   if (ckActive && ckCompiled) {
     segs.push(ckCompiled.filtergraph);
     totalWeight += 0.75;
@@ -461,6 +479,8 @@ function compileFxClient(nodes, opts = {}) {
     active_effects: active.map((n) => n.effect),
     keyframed_effects: keyframedEffects,
     chroma_key_active: ckActive,
+    stabilizer_active: stabActive,
+    planar_tracker_active: trkActive,
     bypassed_count: (nodes || []).length - active.length,
     normalized_nodes: nodes || [],
     estimated_render_seconds: est,
@@ -1533,6 +1553,18 @@ export function createApiClient() {
             framingMode = compiledFraming.params.mode;
           }
         }
+        let stabilizerEnabled = false;
+        if (body.stabilizer) {
+          const compiledStab = compileStabilizerFilterClient(body.stabilizer, {
+            width: targetWidth,
+            height: targetHeight,
+            pix_fmt: pixFmt
+          });
+          if (compiledStab.is_active && compiledStab.filtergraph) {
+            vfParts.push(compiledStab.filtergraph);
+            stabilizerEnabled = true;
+          }
+        }
         if (body.transform_params) {
           const compiledTransform = compileTransformFilterClient(
             body.transform_params,
@@ -1541,6 +1573,16 @@ export function createApiClient() {
           );
           if (!compiledTransform.is_identity && compiledTransform.filtergraph) {
             vfParts.push(compiledTransform.filtergraph);
+          }
+        }
+        let planarTrackerEnabled = false;
+        if (body.planar_tracker) {
+          const compiledTrk = compilePlanarTrackerFilterClient(body.planar_tracker, {
+            pix_fmt: pixFmt
+          });
+          if (compiledTrk.is_active && compiledTrk.filtergraph) {
+            vfParts.push(compiledTrk.filtergraph);
+            planarTrackerEnabled = true;
           }
         }
         if (body.chroma_key) {
@@ -1900,6 +1942,8 @@ export function createApiClient() {
             target_width: targetWidth,
             target_height: targetHeight,
             framing_mode: framingMode,
+            stabilizer_enabled: stabilizerEnabled,
+            planar_tracker_enabled: planarTrackerEnabled,
             lut_path: body.lut_path || null,
             video_filter: vf,
             audio_filter: af,
@@ -2114,7 +2158,13 @@ export function createApiClient() {
     },
     async getFxPresets() {
       if (resolvedMode === "static-demo") {
-        return { presets: [], specs: {}, chroma_key_presets: CHROMA_KEY_PRESETS_DEMO };
+        return {
+          presets: [],
+          specs: {},
+          chroma_key_presets: CHROMA_KEY_PRESETS_DEMO,
+          stabilizer_presets: Object.values(STABILIZER_PRESETS_CLIENT),
+          planar_tracker_presets: Object.values(PLANAR_TRACKER_PRESETS_CLIENT)
+        };
       }
       return requestJson("/api/fx/presets");
     },
@@ -2123,6 +2173,18 @@ export function createApiClient() {
         return compileFxClient(payload.nodes || [], payload);
       }
       return requestJson("/api/fx/compile", { method: "POST", body: payload });
+    },
+    async compileStabilizer(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileStabilizerFilterClient(payload.stabilizer || payload, payload);
+      }
+      return requestJson("/api/fx/stabilize/compile", { method: "POST", body: payload });
+    },
+    async compilePlanarTracker(payload) {
+      if (resolvedMode === "static-demo") {
+        return compilePlanarTrackerFilterClient(payload.planar_tracker || payload, payload);
+      }
+      return requestJson("/api/fx/tracker/compile", { method: "POST", body: payload });
     },
     async getChromaKeyPresets() {
       if (resolvedMode === "static-demo") {

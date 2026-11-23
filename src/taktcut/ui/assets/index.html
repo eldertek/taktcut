@@ -1150,6 +1150,172 @@
               </div>
             </section>
 
+            <!-- 2D PLANAR TRACKER / 4-CORNER PIN & MOTION STABILIZER (MOCHA / FUSION / DESHAKE) -->
+            <section id="fx-tracker-pane" class="nle-pane">
+              <div class="pane-header">
+                <h2 data-i18n="fx.tracker.title">Planar Tracker, Corner-Pin &amp; Stabilizer</h2>
+                <div class="viewer-controls">
+                  <span id="fx-tracker-badge" class="nle-tag mono">OFF</span>
+                  <button type="button" id="btn-fx-tracker-overlay" class="btn btn-mini is-active" aria-pressed="true" data-i18n="fx.tracker.overlay">HUD</button>
+                  <button type="button" id="btn-fx-tracker-toggle" class="fx-bypass-btn mono" aria-pressed="false" aria-label="Toggle Planar Tracker and Corner-Pin">TRK</button>
+                </div>
+              </div>
+              <div class="pane-body">
+                <div id="fx-tracker-subtabs" class="tracker-subtabs" role="tablist" aria-label="Tracker and Stabilizer Modules">
+                  <button type="button" role="tab" id="fx-tracker-tab-planar" class="tracker-subtab-btn is-active" data-tracker-tab="planar" aria-selected="true" aria-controls="fx-tracker-panel-planar" tabindex="0" data-i18n="fx.tracker.tabPlanar">2D Planar &amp; Corner-Pin</button>
+                  <button type="button" role="tab" id="fx-tracker-tab-stabilizer" class="tracker-subtab-btn" data-tracker-tab="stabilizer" aria-selected="false" aria-controls="fx-tracker-panel-stabilizer" tabindex="-1" data-i18n="fx.tracker.tabStabilizer">Motion Stabilizer</button>
+                </div>
+
+                <div id="fx-tracker-panel-planar" class="tracker-tabpanel" role="tabpanel" aria-labelledby="fx-tracker-tab-planar">
+                  <div id="fx-tracker-preset-grid" class="tracker-preset-grid" role="group" aria-label="Planar Tracker and Corner-Pin Presets">
+                    <button type="button" class="btn fx-preset-btn is-active" data-tracker-preset="screen_insert" aria-pressed="true">
+                      <span class="fx-preset-name" data-i18n="fx.tracker.presetScreen">Screen Insert</span>
+                      <span class="fx-preset-meta mono">perspective dest</span>
+                    </button>
+                    <button type="button" class="btn fx-preset-btn" data-tracker-preset="anamorphic_skew" aria-pressed="false">
+                      <span class="fx-preset-name" data-i18n="fx.tracker.presetSkew">Anamorphic Skew</span>
+                      <span class="fx-preset-meta mono">4-pin parallax</span>
+                    </button>
+                    <button type="button" class="btn fx-preset-btn" data-tracker-preset="deskew_rectify" aria-pressed="false">
+                      <span class="fx-preset-name" data-i18n="fx.tracker.presetDeskew">Deskew / Rectify</span>
+                      <span class="fx-preset-meta mono">perspective src</span>
+                    </button>
+                    <button type="button" class="btn fx-preset-btn" data-tracker-preset="point_follow" aria-pressed="false">
+                      <span class="fx-preset-name" data-i18n="fx.tracker.presetPoint">2D Point Follow</span>
+                      <span class="fx-preset-meta mono">PW / Track Only</span>
+                    </button>
+                  </div>
+
+                  <div class="tracker-mode-row">
+                    <div class="tracker-field-col">
+                      <label for="fx-tracker-mode" data-i18n="fx.tracker.mode">Mode</label>
+                      <select id="fx-tracker-mode" class="input-control mono" aria-label="Planar tracker corner-pin mode">
+                        <option value="corner_pin" selected data-i18n="fx.tracker.modeCornerPin">Corner-Pin Warp (Dest)</option>
+                        <option value="rectify_perspective" data-i18n="fx.tracker.modeRectify">Rectify Plane (Source)</option>
+                        <option value="point_track_only" data-i18n="fx.tracker.modePointOnly">2D Point Track Only</option>
+                      </select>
+                    </div>
+                    <div class="tracker-field-col">
+                      <label for="fx-tracker-interp" data-i18n="fx.tracker.interp">Filter</label>
+                      <select id="fx-tracker-interp" class="input-control mono" aria-label="Perspective interpolation filter">
+                        <option value="cubic" selected data-i18n="fx.tracker.interpCubic">Cubic (Smooth)</option>
+                        <option value="linear" data-i18n="fx.tracker.interpLinear">Bilinear (Fast)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="tracker-analyze-bar" role="group" aria-label="2D Point Tracking Transport">
+                    <div class="tracker-analyze-btns">
+                      <button type="button" id="btn-fx-track-back" class="btn btn-mini" title="Track backward 25 frames" data-i18n="fx.tracker.trackBack">&lt; Track</button>
+                      <button type="button" id="btn-fx-track-fwd" class="btn btn-mini btn-primary" title="Track forward 25 frames" data-i18n="fx.tracker.trackFwd">Track &gt;</button>
+                      <button type="button" id="btn-fx-track-analyze" class="btn btn-mini" title="Analyze 50-frame span around playhead" data-i18n="fx.tracker.analyze">Analyze 50f</button>
+                      <button type="button" id="btn-fx-track-clear" class="btn btn-mini" disabled data-i18n="fx.tracker.clearTrack">Clear</button>
+                      <button type="button" id="btn-fx-track-link-pw" class="btn btn-mini" disabled title="Link tracked 2D spline to Color Power Window" data-i18n="fx.tracker.linkPw">Link -&gt; Power Window</button>
+                    </div>
+                    <div class="tracker-track-meta">
+                      <label class="check-label">
+                        <input type="checkbox" id="fx-tracker-follow-track" checked>
+                        <span data-i18n="fx.tracker.followTrack">Apply Track Motion to Corner Pins</span>
+                      </label>
+                      <span id="fx-tracker-track-readout" class="telemetry-note mono" aria-live="polite">0 KF | Anchor 50%, 45%</span>
+                    </div>
+                  </div>
+
+                  <div class="tracker-pins-head">
+                    <span class="fx-param-label" data-i18n="fx.tracker.pinsTitle">4-Corner Pin Coordinates (%)</span>
+                    <button type="button" id="btn-fx-tracker-reset-pins" class="btn btn-mini" data-i18n="fx.tracker.resetPins">Reset Pins</button>
+                  </div>
+                  <div class="tracker-pins-grid mono">
+                    <div class="tracker-pin-card">
+                      <span class="tracker-pin-tag">TL</span>
+                      <label class="tracker-pin-field"><span>X</span><input type="number" id="fx-pin-tl-x" class="input-num" min="-25" max="125" step="0.5" value="8.0" aria-label="Top Left X percent"></label>
+                      <label class="tracker-pin-field"><span>Y</span><input type="number" id="fx-pin-tl-y" class="input-num" min="-25" max="125" step="0.5" value="10.0" aria-label="Top Left Y percent"></label>
+                    </div>
+                    <div class="tracker-pin-card">
+                      <span class="tracker-pin-tag">TR</span>
+                      <label class="tracker-pin-field"><span>X</span><input type="number" id="fx-pin-tr-x" class="input-num" min="-25" max="125" step="0.5" value="92.0" aria-label="Top Right X percent"></label>
+                      <label class="tracker-pin-field"><span>Y</span><input type="number" id="fx-pin-tr-y" class="input-num" min="-25" max="125" step="0.5" value="8.0" aria-label="Top Right Y percent"></label>
+                    </div>
+                    <div class="tracker-pin-card">
+                      <span class="tracker-pin-tag">BL</span>
+                      <label class="tracker-pin-field"><span>X</span><input type="number" id="fx-pin-bl-x" class="input-num" min="-25" max="125" step="0.5" value="6.0" aria-label="Bottom Left X percent"></label>
+                      <label class="tracker-pin-field"><span>Y</span><input type="number" id="fx-pin-bl-y" class="input-num" min="-25" max="125" step="0.5" value="90.0" aria-label="Bottom Left Y percent"></label>
+                    </div>
+                    <div class="tracker-pin-card">
+                      <span class="tracker-pin-tag">BR</span>
+                      <label class="tracker-pin-field"><span>X</span><input type="number" id="fx-pin-br-x" class="input-num" min="-25" max="125" step="0.5" value="94.0" aria-label="Bottom Right X percent"></label>
+                      <label class="tracker-pin-field"><span>Y</span><input type="number" id="fx-pin-br-y" class="input-num" min="-25" max="125" step="0.5" value="92.0" aria-label="Bottom Right Y percent"></label>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="fx-tracker-panel-stabilizer" class="tracker-tabpanel is-hidden" role="tabpanel" aria-labelledby="fx-tracker-tab-stabilizer" hidden>
+                  <div class="stab-top-bar">
+                    <label class="check-label">
+                      <input type="checkbox" id="fx-stab-enabled">
+                      <span data-i18n="fx.stab.enable">Enable Motion Stabilizer (deshake)</span>
+                    </label>
+                    <button type="button" id="btn-fx-stab-reset" class="btn btn-mini" data-i18n="fx.stab.reset">Reset</button>
+                  </div>
+                  <div id="fx-stab-preset-grid" class="stab-preset-grid" role="group" aria-label="Motion Stabilizer Presets">
+                    <button type="button" class="btn fx-preset-btn is-active" data-stab-preset="smooth_gimbal" aria-pressed="true">
+                      <span class="fx-preset-name" data-i18n="fx.stab.presetGimbal">Smooth Gimbal</span>
+                      <span class="fx-preset-meta mono">16px | 106%</span>
+                    </button>
+                    <button type="button" class="btn fx-preset-btn" data-stab-preset="locked_tripod" aria-pressed="false">
+                      <span class="fx-preset-name" data-i18n="fx.stab.presetTripod">Locked Tripod</span>
+                      <span class="fx-preset-meta mono">32px | 112%</span>
+                    </button>
+                    <button type="button" class="btn fx-preset-btn" data-stab-preset="handheld_rescue" aria-pressed="false">
+                      <span class="fx-preset-name" data-i18n="fx.stab.presetHandheld">Handheld Rescue</span>
+                      <span class="fx-preset-meta mono">48px | 118%</span>
+                    </button>
+                  </div>
+
+                  <div class="fx-param-grid">
+                    <div class="fx-param-row">
+                      <label class="fx-param-label" for="fx-stab-rx-range" data-i18n="fx.stab.rx">Search X (px)</label>
+                      <input type="range" id="fx-stab-rx-range" min="0" max="64" step="16" value="16">
+                      <input type="number" id="fx-stab-rx-num" class="input-num mono" min="0" max="64" step="16" value="16" aria-label="Stabilizer horizontal search radius">
+                    </div>
+                    <div class="fx-param-row">
+                      <label class="fx-param-label" for="fx-stab-ry-range" data-i18n="fx.stab.ry">Search Y (px)</label>
+                      <input type="range" id="fx-stab-ry-range" min="0" max="64" step="1" value="16">
+                      <input type="number" id="fx-stab-ry-num" class="input-num mono" min="0" max="64" step="1" value="16" aria-label="Stabilizer vertical search radius">
+                    </div>
+                    <div class="fx-param-row">
+                      <label class="fx-param-label" for="fx-stab-zoom-range" data-i18n="fx.stab.autoZoom">Auto-Zoom (%)</label>
+                      <input type="range" id="fx-stab-zoom-range" min="100" max="135" step="0.5" value="106">
+                      <input type="number" id="fx-stab-zoom-num" class="input-num mono" min="100" max="135" step="0.5" value="106.0" aria-label="Stabilizer auto-zoom crop percentage">
+                    </div>
+                  </div>
+
+                  <div class="stab-select-row">
+                    <div class="tracker-field-col">
+                      <label for="fx-stab-edge" data-i18n="fx.stab.edge">Edge Fill</label>
+                      <select id="fx-stab-edge" class="input-control mono" aria-label="Stabilizer edge fill mode">
+                        <option value="mirror" selected>Mirror</option>
+                        <option value="clamp">Clamp</option>
+                        <option value="original">Original</option>
+                        <option value="blank">Blank</option>
+                      </select>
+                    </div>
+                    <div class="tracker-field-col">
+                      <label for="fx-stab-search" data-i18n="fx.stab.search">Search Mode</label>
+                      <select id="fx-stab-search" class="input-control mono" aria-label="Stabilizer motion search strategy">
+                        <option value="exhaustive" selected>Exhaustive</option>
+                        <option value="less">Fast (Less)</option>
+                      </select>
+                    </div>
+                    <div class="tracker-field-col">
+                      <label for="fx-stab-blocksize" data-i18n="fx.stab.blocksize">Block (px)</label>
+                      <input type="number" id="fx-stab-blocksize" class="input-control mono" min="4" max="64" step="2" value="8" aria-label="Stabilizer block size">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <!-- LEFT: EFFECT CONTROLS STACK (PREMIERE / AE STYLE) -->
             <section class="nle-pane">
               <div class="pane-header">
@@ -1550,6 +1716,8 @@
                     <div class="pw-title-group">
                       <span class="pane-subheader-label" data-i18n="color.window.title">Power Window</span>
                       <span id="pw-status-badge" class="nle-tag mono">OFF</span>
+                      <span id="pw-track-link-badge" class="nle-tag is-blue mono is-hidden">TRACKED</span>
+                      <button type="button" id="btn-pw-unlink-track" class="btn btn-mini is-hidden" data-i18n="color.window.unlinkTrack">Unlink</button>
                     </div>
                     <div id="pw-shape-group" class="pw-shape-group" role="group" aria-label="Power Window shape">
                       <button type="button" class="btn btn-mini pw-shape-btn is-active" data-pw-shape="off" aria-pressed="true" data-i18n="color.window.off">Off</button>

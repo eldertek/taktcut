@@ -1152,6 +1152,8 @@ class RenderPlan(BaseModel):
     target_width: int | None = None
     target_height: int | None = None
     framing_mode: str | None = None
+    stabilizer_enabled: bool = False
+    planar_tracker_enabled: bool = False
     lut_path: str | None = None
     video_filter: str | None = None
     audio_filter: str | None = None

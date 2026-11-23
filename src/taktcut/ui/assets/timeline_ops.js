@@ -4052,7 +4052,6 @@ export function formatFfmetadataFromMarkers(markers, totalDurationS) {
   }
   return `${lines.join("\n")}\n`;
 }
-
 export function timelineDocToChapterInputs(doc) {
   if (!doc || !Array.isArray(doc.markers)) {
     return { markers: [], totalDurationS: 0 };
@@ -4680,7 +4679,6 @@ export function formatFcpxmlTimeline(timelineDoc, projectName = "TaktCut_Timelin
 
   return `${lines.join("\n")}\n`;
 }
-
 // ---------------------------------------------------------------------------
 // DaVinci Resolve Serial Color Node Tree & 3D .cube LUT Pipeline
 // ---------------------------------------------------------------------------
@@ -5760,4 +5758,289 @@ export function bakeColorNodeChainToCubeTextClient(treeOrNodes, size = 33, title
     }
   }
   return `${lines.join("\n")}\n`;
+}
+
+export const STABILIZER_PRESETS_CLIENT = {
+  smooth_gimbal: {
+    id: "smooth_gimbal",
+    name: "Smooth Gimbal",
+    rx: 16,
+    ry: 16,
+    edge: "mirror",
+    blocksize: 8,
+    contrast: 125,
+    search: "exhaustive",
+    auto_zoom_pct: 106.0
+  },
+  locked_tripod: {
+    id: "locked_tripod",
+    name: "Locked Tripod",
+    rx: 32,
+    ry: 32,
+    edge: "clamp",
+    blocksize: 16,
+    contrast: 100,
+    search: "exhaustive",
+    auto_zoom_pct: 112.0
+  },
+  handheld_rescue: {
+    id: "handheld_rescue",
+    name: "Handheld Rescue",
+    rx: 48,
+    ry: 48,
+    edge: "mirror",
+    blocksize: 12,
+    contrast: 90,
+    search: "exhaustive",
+    auto_zoom_pct: 118.0
+  }
+};
+
+export const PLANAR_TRACKER_PRESETS_CLIENT = {
+  screen_insert: {
+    id: "screen_insert",
+    name: "Screen Insert",
+    mode: "corner_pin",
+    interpolation: "cubic",
+    tl_x: 0.14,
+    tl_y: 0.14,
+    tr_x: 0.84,
+    tr_y: 0.18,
+    bl_x: 0.10,
+    bl_y: 0.84,
+    br_x: 0.86,
+    br_y: 0.88
+  },
+  anamorphic_skew: {
+    id: "anamorphic_skew",
+    name: "Anamorphic Skew",
+    mode: "corner_pin",
+    interpolation: "cubic",
+    tl_x: 0.05,
+    tl_y: 0.06,
+    tr_x: 0.95,
+    tr_y: 0.14,
+    bl_x: 0.12,
+    bl_y: 0.94,
+    br_x: 0.90,
+    br_y: 0.86
+  },
+  deskew_rectify: {
+    id: "deskew_rectify",
+    name: "Deskew / Rectify",
+    mode: "rectify_perspective",
+    interpolation: "cubic",
+    tl_x: 0.12,
+    tl_y: 0.10,
+    tr_x: 0.88,
+    tr_y: 0.14,
+    bl_x: 0.08,
+    bl_y: 0.90,
+    br_x: 0.92,
+    br_y: 0.88
+  },
+  point_follow: {
+    id: "point_follow",
+    name: "2D Point Follow",
+    mode: "point_track_only",
+    interpolation: "cubic",
+    tl_x: 0.0,
+    tl_y: 0.0,
+    tr_x: 1.0,
+    tr_y: 0.0,
+    bl_x: 0.0,
+    bl_y: 1.0,
+    br_x: 1.0,
+    br_y: 1.0
+  }
+};
+
+export function normalizeStabilizerClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const presetId = typeof src.preset === "string" && STABILIZER_PRESETS_CLIENT[src.preset]
+    ? src.preset
+    : src.preset === "custom"
+      ? "custom"
+      : "smooth_gimbal";
+  const base = STABILIZER_PRESETS_CLIENT[presetId] || STABILIZER_PRESETS_CLIENT.smooth_gimbal;
+  const clampInt = (v, lo, hi, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : fallback;
+  };
+  const clampNum = (v, lo, hi, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
+  };
+  const validEdges = new Set(["mirror", "clamp", "original", "blank"]);
+  const edge = validEdges.has(String(src.edge || "").toLowerCase())
+    ? String(src.edge).toLowerCase()
+    : base.edge;
+  const search = String(src.search || "").toLowerCase() === "less" ? "less" : "exhaustive";
+  return {
+    enabled: Boolean(src.enabled),
+    preset: presetId,
+    rx: clampInt(src.rx, 0, 64, base.rx),
+    ry: clampInt(src.ry, 0, 64, base.ry),
+    edge,
+    blocksize: clampInt(src.blocksize, 4, 64, base.blocksize),
+    contrast: clampInt(src.contrast, 1, 255, base.contrast),
+    search,
+    auto_zoom_pct: clampNum(src.auto_zoom_pct, 100, 135, base.auto_zoom_pct)
+  };
+}
+
+export function compileStabilizerFilterClient(raw, opts = {}) {
+  const params = normalizeStabilizerClient(raw);
+  if (!params.enabled) {
+    return { filtergraph: "", ffmpeg_vf_args: [], is_active: false, params };
+  }
+  const effRx = Math.max(0, Math.min(64, Math.round(params.rx / 16) * 16));
+  const parts = [
+    `deshake=x=-1:y=-1:w=-1:h=-1:rx=${effRx}:ry=${params.ry}:edge=${params.edge}:blocksize=${params.blocksize}:contrast=${params.contrast}:search=${params.search}`
+  ];
+  if (params.auto_zoom_pct > 100.05) {
+    const z = (params.auto_zoom_pct / 100.0).toFixed(4);
+    parts.push(`scale=w=ceil(iw*${z}/2)*2:h=ceil(ih*${z}/2)*2:flags=bicubic`);
+    if (opts.width && opts.height) {
+      const wEven = Math.max(2, Math.floor(Number(opts.width) / 2) * 2);
+      const hEven = Math.max(2, Math.floor(Number(opts.height) / 2) * 2);
+      parts.push(`crop=w=${wEven}:h=${hEven}:x=(iw-${wEven})/2:y=(ih-${hEven})/2`);
+    } else {
+      parts.push(`crop=w=floor(iw/${z}/2)*2:h=floor(ih/${z}/2)*2`);
+    }
+    parts.push("setsar=1");
+  }
+  if (opts.pix_fmt) parts.push(`format=${opts.pix_fmt}`);
+  const fg = parts.join(",");
+  return { filtergraph: fg, ffmpeg_vf_args: ["-vf", fg], is_active: true, params };
+}
+
+export function normalizePlanarTrackerClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const clampCoord = (v, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(-0.25, Math.min(1.25, n)) : fallback;
+  };
+  const clampAnchor = (v, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0.02, Math.min(0.98, n)) : fallback;
+  };
+  const mode = ["corner_pin", "rectify_perspective", "point_track_only"].includes(String(src.mode))
+    ? String(src.mode)
+    : "corner_pin";
+  const interpolation = String(src.interpolation) === "linear" ? "linear" : "cubic";
+  const rawKfs = Array.isArray(src.track_keyframes) ? src.track_keyframes : [];
+  const kfMap = new Map();
+  for (const kf of rawKfs) {
+    if (!kf || typeof kf !== "object") continue;
+    const f = Math.max(0, Math.round(Number(kf.frame) || 0));
+    const x = Number(kf.x);
+    const y = Number(kf.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const conf = Number.isFinite(Number(kf.confidence))
+      ? Math.max(0, Math.min(1, Number(kf.confidence)))
+      : 1.0;
+    kfMap.set(f, { frame: f, x, y, confidence: conf });
+  }
+  const track_keyframes = Array.from(kfMap.values()).sort((a, b) => a.frame - b.frame);
+  return {
+    enabled: Boolean(src.enabled),
+    preset: typeof src.preset === "string" && src.preset ? src.preset : "screen_insert",
+    mode,
+    interpolation,
+    tl_x: clampCoord(src.tl_x, 0.08),
+    tl_y: clampCoord(src.tl_y, 0.10),
+    tr_x: clampCoord(src.tr_x, 0.92),
+    tr_y: clampCoord(src.tr_y, 0.08),
+    bl_x: clampCoord(src.bl_x, 0.06),
+    bl_y: clampCoord(src.bl_y, 0.90),
+    br_x: clampCoord(src.br_x, 0.94),
+    br_y: clampCoord(src.br_y, 0.92),
+    track_anchor_x: clampAnchor(src.track_anchor_x, 0.50),
+    track_anchor_y: clampAnchor(src.track_anchor_y, 0.45),
+    track_box_pct: Number.isFinite(Number(src.track_box_pct))
+      ? Math.max(0.04, Math.min(0.35, Number(src.track_box_pct)))
+      : 0.12,
+    follow_track: src.follow_track !== undefined ? Boolean(src.follow_track) : true,
+    track_keyframes
+  };
+}
+
+export function evaluateTrackPointClient(rawTracker, frame) {
+  const params = normalizePlanarTrackerClient(rawTracker);
+  const kfs = params.track_keyframes;
+  if (!kfs.length) {
+    return { x: params.track_anchor_x, y: params.track_anchor_y, confidence: 1.0 };
+  }
+  if (frame <= kfs[0].frame) return { ...kfs[0] };
+  if (frame >= kfs[kfs.length - 1].frame) return { ...kfs[kfs.length - 1] };
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const a = kfs[i];
+    const b = kfs[i + 1];
+    if (a.frame <= frame && frame <= b.frame) {
+      const span = Math.max(1, b.frame - a.frame);
+      const u = (frame - a.frame) / span;
+      return {
+        x: a.x + (b.x - a.x) * u,
+        y: a.y + (b.y - a.y) * u,
+        confidence: a.confidence + (b.confidence - a.confidence) * u
+      };
+    }
+  }
+  return { ...kfs[kfs.length - 1] };
+}
+
+export function evaluateCornerPinsClient(rawTracker, frame) {
+  const params = normalizePlanarTrackerClient(rawTracker);
+  let dx = 0;
+  let dy = 0;
+  if (params.follow_track && params.track_keyframes.length >= 1) {
+    const ref = params.track_keyframes[0];
+    const cur = evaluateTrackPointClient(params, frame);
+    dx = cur.x - ref.x;
+    dy = cur.y - ref.y;
+  }
+  return {
+    tl: { x: params.tl_x + dx, y: params.tl_y + dy },
+    tr: { x: params.tr_x + dx, y: params.tr_y + dy },
+    bl: { x: params.bl_x + dx, y: params.bl_y + dy },
+    br: { x: params.br_x + dx, y: params.br_y + dy }
+  };
+}
+
+export function compilePlanarTrackerFilterClient(raw, opts = {}) {
+  const params = normalizePlanarTrackerClient(raw);
+  const isIdentity =
+    Math.abs(params.tl_x) <= 1e-4 &&
+    Math.abs(params.tl_y) <= 1e-4 &&
+    Math.abs(params.tr_x - 1) <= 1e-4 &&
+    Math.abs(params.tr_y) <= 1e-4 &&
+    Math.abs(params.bl_x) <= 1e-4 &&
+    Math.abs(params.bl_y - 1) <= 1e-4 &&
+    Math.abs(params.br_x - 1) <= 1e-4 &&
+    Math.abs(params.br_y - 1) <= 1e-4;
+  const hasDynamic = params.follow_track && params.track_keyframes.length >= 2;
+  if (!params.enabled || params.mode === "point_track_only" || (isIdentity && !hasDynamic)) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      is_active: false,
+      mode: params.mode,
+      uses_per_frame_eval: false,
+      keyframe_count: params.track_keyframes.length,
+      params
+    };
+  }
+  const sense = params.mode === "corner_pin" ? "destination" : "source";
+  const fg = `perspective=x0=${params.tl_x.toFixed(4)}*W:y0=${params.tl_y.toFixed(4)}*H:x1=${params.tr_x.toFixed(4)}*W:y1=${params.tr_y.toFixed(4)}*H:x2=${params.bl_x.toFixed(4)}*W:y2=${params.bl_y.toFixed(4)}*H:x3=${params.br_x.toFixed(4)}*W:y3=${params.br_y.toFixed(4)}*H:interpolation=${params.interpolation}:sense=${sense}${hasDynamic ? ":eval=frame" : ""}`;
+  const fullFg = opts.pix_fmt ? `${fg},format=${opts.pix_fmt}` : fg;
+  return {
+    filtergraph: fullFg,
+    ffmpeg_vf_args: ["-vf", fullFg],
+    is_active: true,
+    mode: params.mode,
+    uses_per_frame_eval: hasDynamic,
+    keyframe_count: params.track_keyframes.length,
+    params
+  };
 }

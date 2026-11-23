@@ -23,7 +23,14 @@ from taktcut.color import (
     compile_color_node_chain_filter,
     escape_ffmpeg_filter_path,
 )
-from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
+from taktcut.fx import (
+    ChromaKeyParams,
+    PlanarTrackerParams,
+    StabilizerParams,
+    compile_chroma_key_filter,
+    compile_planar_tracker_filter,
+    compile_stabilizer_filter,
+)
 from taktcut.models import (
     ALLOWED_AUDIO_ONLY_FORMATS,
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
@@ -2793,6 +2800,8 @@ def build_render_plan(
     vignette: VignetteParams | None = None,
     voice_cleanup: VoiceCleanupParams | None = None,
     color_nodes: Sequence[ColorNodeParams] | None = None,
+    stabilizer: StabilizerParams | None = None,
+    planar_tracker: PlanarTrackerParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -3050,6 +3059,26 @@ def build_render_plan(
         if probed_dur is not None:
             resolved_clip_dur = probed_dur / retime_speed
 
+    stabilizer_vf = ""
+    stabilizer_enabled = False
+    if stabilizer is not None and stabilizer.is_active():
+        stabilizer_vf = compile_stabilizer_filter(
+            stabilizer,
+            width=target_width,
+            height=target_height,
+            pix_fmt=pix_fmt,
+        )
+        stabilizer_enabled = bool(stabilizer_vf)
+
+    planar_tracker_vf = ""
+    planar_tracker_enabled = False
+    if planar_tracker is not None and planar_tracker.is_active():
+        planar_tracker_vf = compile_planar_tracker_filter(
+            planar_tracker,
+            pix_fmt=pix_fmt,
+        )
+        planar_tracker_enabled = bool(planar_tracker_vf)
+
     vf_parts: list[str] = []
     deint_vf = compile_deinterlace_filter(resolved_deinterlace)
     if deint_vf is not None:
@@ -3063,8 +3092,12 @@ def build_render_plan(
         vf_parts.append(reframe_vf)
     if framing_vf is not None:
         vf_parts.append(framing_vf)
+    if stabilizer_vf:
+        vf_parts.append(stabilizer_vf)
     if transform_vf is not None:
         vf_parts.append(transform_vf)
+    if planar_tracker_vf:
+        vf_parts.append(planar_tracker_vf)
     if chroma_key is not None and chroma_key.is_active():
         ck_fg = compile_chroma_key_filter(chroma_key, pix_fmt=pix_fmt)
         if ck_fg:
@@ -3335,6 +3368,8 @@ def build_render_plan(
         target_width=target_width,
         target_height=target_height,
         framing_mode=framing_mode,
+        stabilizer_enabled=stabilizer_enabled,
+        planar_tracker_enabled=planar_tracker_enabled,
         lut_path=str(lut_path) if lut_path is not None else None,
         video_filter=video_filter,
         audio_filter=audio_filter,

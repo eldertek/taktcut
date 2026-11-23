@@ -4008,6 +4008,104 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert page.locator("#fx-filtergraph-output").is_visible() is True
                     page.locator("#fx-filtergraph-drawer > summary").click()
 
+                    # Planar Tracker / Corner-Pin & Motion Stabilizer E2E (1440 & 375)
+                    page.locator("#fx-tracker-pane").scroll_into_view_if_needed()
+                    page.locator("#btn-fx-tracker-toggle").click()
+                    assert (
+                        page.locator("#btn-fx-tracker-toggle").get_attribute("aria-pressed")
+                        == "true"
+                    )
+                    page.locator('[data-tracker-preset="anamorphic_skew"]').click()
+                    page.wait_for_function(
+                        "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
+                        ".includes('perspective=x0=0.0500*W')"
+                    )
+                    page.locator("#fx-pin-tl-x").fill("12.0")
+                    page.locator("#fx-pin-tl-x").dispatch_event("change")
+                    page.wait_for_function(
+                        "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
+                        ".includes('perspective=x0=0.1200*W')"
+                    )
+                    # Drag Corner-Pin TL handle directly on #fx-program-canvas
+                    page.locator("#fx-program-canvas").scroll_into_view_if_needed()
+                    tl_drag_geom = page.evaluate(
+                        """() => {
+                            const c = document.getElementById('fx-program-canvas');
+                            const r = c.getBoundingClientRect();
+                            const g = c._planarTrackerGeom;
+                            const lw = g.canvasWidth || r.width;
+                            const lh = g.canvasHeight || r.height;
+                            const cs = Math.min(r.width / lw, r.height / lh);
+                            const ox = (r.width - lw * cs) * 0.5;
+                            const oy = (r.height - lh * cs) * 0.5;
+                            return {
+                                x: r.left + ox + g.handles.tl.x * cs,
+                                y: r.top + oy + g.handles.tl.y * cs
+                            };
+                        }"""
+                    )
+                    page.mouse.move(tl_drag_geom["x"], tl_drag_geom["y"])
+                    page.mouse.down()
+                    page.mouse.move(tl_drag_geom["x"] + 20, tl_drag_geom["y"] + 12, steps=3)
+                    page.mouse.up()
+                    dragged_tl_val = float(page.locator("#fx-pin-tl-x").input_value() or "12")
+                    assert dragged_tl_val > 12.2
+
+                    # Run real 2D SSD tracking forward & link to Color Power Window
+                    page.locator("#btn-fx-track-fwd").click()
+                    page.wait_for_function(
+                        "() => ("
+                        "document.getElementById('fx-tracker-track-readout').textContent || ''"
+                        ").includes('25 KF')"
+                    )
+                    page.wait_for_function(
+                        "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
+                        ".includes(':eval=frame')"
+                    )
+                    page.locator("#btn-fx-track-link-pw").click()
+                    page.locator("#tab-color").click()
+                    page.wait_for_selector("#panel-color:not(.is-hidden)")
+                    assert page.locator("#pw-track-link-badge").is_visible() is True
+                    assert "TRACKED (25 KF)" in (
+                        page.locator("#pw-track-link-badge").text_content() or ""
+                    )
+                    page.locator("#btn-pw-unlink-track").click()
+                    assert page.locator("#pw-track-link-badge").is_visible() is False
+
+                    # Switch back to FX and test Motion Stabilizer sub-tab
+                    page.locator("#tab-fx").click()
+                    page.wait_for_selector("#panel-fx:not(.is-hidden)")
+                    page.locator("#fx-tracker-tab-stabilizer").click()
+                    assert page.locator("#fx-tracker-panel-stabilizer").is_visible() is True
+                    page.locator('[data-stab-preset="locked_tripod"]').click()
+                    page.wait_for_function(
+                        "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
+                        ".includes('deshake=x=-1:y=-1:w=-1:h=-1:rx=32:ry=32')"
+                    )
+                    fx_trk_overflow = page.evaluate(
+                        "() => document.documentElement.scrollWidth - window.innerWidth"
+                    )
+                    assert fx_trk_overflow <= 0, (
+                        f"FX tracker overflow at {width}x{height}: {fx_trk_overflow}px"
+                    )
+                    if width <= 820:
+                        for mob_sel in (
+                            "#fx-tracker-tab-planar",
+                            "#fx-tracker-tab-stabilizer",
+                            "#btn-fx-track-fwd",
+                            "#btn-fx-stab-reset",
+                        ):
+                            mb = page.locator(mob_sel).bounding_box()
+                            assert mb is not None and mb["height"] >= 44, (
+                                f"Mobile touch target < 44px for {mob_sel}: {mb}"
+                            )
+                    # Clean up FX tracker & stabilizer so later Deliver tests stay baseline
+                    page.locator("#btn-fx-reset-all").click()
+                    page.wait_for_function(
+                        "() => (document.getElementById('fx-active-badge').textContent || '')"
+                        ".includes('0 FX')"
+                    )
+
                 # Verify Deliver Quick-Export Preset Strip & DaVinci Compact Sub-Tabs
                 page.locator("#tab-render").click()
                 page.wait_for_selector("#panel-render:not(.is-hidden)")
@@ -7558,5 +7656,84 @@ def test_ui_color_curves_endpoints_and_project_roundtrip(ui_server: tuple[str, P
     imp_node = json.loads(imp_raw.decode("utf-8"))["project"]["color"]["nodes"][0]
     assert len(imp_node["curves"]["master"]) == 4
     assert imp_node["curves"]["red"][1] == [0.5, 0.58]
+
+
+def test_ui_server_planar_tracker_and_stabilizer_api(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/fx/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    assert len(presets_data["stabilizer_presets"]) == 3
+    assert len(presets_data["planar_tracker_presets"]) == 4
+
+    stab_status, _, stab_raw = _http_call(
+        f"{base_url}/api/fx/stabilize/compile",
+        method="POST",
+        payload={"preset": "handheld_rescue", "width": 1920, "height": 1080, "pix_fmt": "yuv420p"},
+    )
+    assert stab_status == 200
+    stab = json.loads(stab_raw.decode("utf-8"))
+    assert stab["is_active"] is True
+    assert "deshake=x=-1:y=-1:w=-1:h=-1:rx=48:ry=48" in stab["filtergraph"]
+
+    trk_status, _, trk_raw = _http_call(
+        f"{base_url}/api/fx/tracker/compile",
+        method="POST",
+        payload={
+            "enabled": True,
+            "mode": "corner_pin",
+            "tl_x": 0.12,
+            "tl_y": 0.14,
+            "track_keyframes": [
+                {"frame": 0, "x": 0.50, "y": 0.45, "confidence": 1.0},
+                {"frame": 10, "x": 0.55, "y": 0.48, "confidence": 0.96},
+            ],
+        },
+    )
+    assert trk_status == 200
+    trk = json.loads(trk_raw.decode("utf-8"))
+    assert trk["is_active"] is True
+    assert trk["uses_per_frame_eval"] is True
+    assert ":eval=frame" in trk["filtergraph"]
+
+    fx_status, _, fx_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={
+            "nodes": [],
+            "stabilizer": {"enabled": True, "preset": "smooth_gimbal"},
+            "planar_tracker": {"enabled": True, "preset": "screen_insert"},
+        },
+    )
+    assert fx_status == 200
+    fx = json.loads(fx_raw.decode("utf-8"))
+    assert fx["stabilizer_active"] is True
+    assert fx["planar_tracker_active"] is True
+    assert "deshake=" in fx["filtergraph"]
+    assert "perspective=" in fx["filtergraph"]
+
+    # Ensure sample clip exists for /api/render/plan
+    _http_call(f"{base_url}/api/sample/generate-clip", method="POST", payload={})
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/tracker_stab_plan.mp4",
+            "stabilizer": {"enabled": True, "preset": "locked_tripod"},
+            "planar_tracker": {"enabled": True, "preset": "anamorphic_skew"},
+            "prefer_hw": False,
+        },
+    )
+    assert plan_status == 200
+    plan = json.loads(plan_raw.decode("utf-8"))["plan"]
+    assert plan["stabilizer_enabled"] is True
+    assert plan["planar_tracker_enabled"] is True
+    assert "deshake=" in plan["video_filter"]
+    assert "perspective=" in plan["video_filter"]
+    assert (workspace / ".taktcut-samples" / "sample_rec709.mp4").exists()
 
 

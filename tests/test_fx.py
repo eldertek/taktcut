@@ -23,20 +23,34 @@ from taktcut.fx import (
     ChromaKeyParams,
     FxNode,
     Keyframe,
+    PlanarTrackerParams,
+    StabilizerParams,
+    TrackPointKeyframe,
     apply_chroma_key_preset,
+    apply_planar_tracker_preset,
+    apply_stabilizer_preset,
     build_fade_keyframes,
     compile_chroma_key,
     compile_fx_filtergraph,
+    compile_planar_tracker,
     compile_preset_filtergraph,
+    compile_stabilizer,
     default_fx_node,
+    evaluate_corner_pins_at_frame,
     evaluate_easing,
     evaluate_keyframes,
     evaluate_node_intensity,
+    evaluate_track_point_at_frame,
     get_chroma_key_preset,
     get_fx_preset,
+    get_planar_tracker_preset,
+    get_stabilizer_preset,
     list_chroma_key_presets,
+    list_planar_tracker_presets,
+    list_stabilizer_presets,
     normalize_fx_node,
     sample_keyframe_curve,
+    track_point_sequence_luma,
 )
 from taktcut.ui.server import create_ui_server
 
@@ -1474,3 +1488,177 @@ def test_mosaic_pixelate_invert_negative_and_retro_arcade_execute_in_real_ffmpeg
             f"{proc.stderr.decode('utf-8', errors='replace')}"
         )
         assert len(proc.stdout) == 3 * w * h * 3
+
+
+
+def test_stabilizer_presets_validation_and_compile() -> None:
+    presets = list_stabilizer_presets()
+    assert len(presets) == 3
+    assert get_stabilizer_preset("locked_tripod").rx == 32
+
+    off_res = compile_stabilizer(StabilizerParams(enabled=False))
+    assert off_res.is_active is False
+    assert off_res.filtergraph == ""
+
+    gimbal = apply_stabilizer_preset("smooth_gimbal", enabled=True)
+    res = compile_stabilizer(gimbal, width=1920, height=1080, pix_fmt="yuv420p")
+    assert res.is_active is True
+    assert "deshake=x=-1:y=-1:w=-1:h=-1:rx=16:ry=16:edge=mirror" in res.filtergraph
+    assert "crop=w=1920:h=1080" in res.filtergraph
+    assert res.filtergraph.endswith("setsar=1,format=yuv420p")
+
+    for bad_kwargs in (
+        {"rx": -1},
+        {"rx": 65},
+        {"ry": True},
+        {"edge": "wrap"},
+        {"search": "turbo"},
+        {"auto_zoom_pct": 99.0},
+        {"auto_zoom_pct": 140.0},
+    ):
+        with pytest.raises(ValueError):
+            StabilizerParams(**bad_kwargs)  # type: ignore[arg-type]
+
+
+def test_planar_tracker_corner_pin_ssd_tracking_and_compile() -> None:
+    presets = list_planar_tracker_presets()
+    assert len(presets) == 4
+    assert get_planar_tracker_preset("deskew_rectify").mode == "rectify_perspective"
+
+    pt_only = apply_planar_tracker_preset("point_follow", enabled=True)
+    assert pt_only.is_active() is False
+    assert compile_planar_tracker(pt_only).filtergraph == ""
+
+    skew = apply_planar_tracker_preset("anamorphic_skew", enabled=True)
+    static_res = compile_planar_tracker(skew, pix_fmt="yuv420p")
+    assert static_res.is_active is True
+    assert static_res.uses_per_frame_eval is False
+    assert "perspective=x0=0.0500*W:y0=0.0600*H" in static_res.filtergraph
+    assert ":interpolation=cubic:sense=destination" in static_res.filtergraph
+
+    w, h = 96, 64
+    frames: list[bytes] = []
+    expected_centers: list[tuple[float, float]] = []
+    for f_idx in range(6):
+        cx = 28 + f_idx * 3
+        cy = 24 + f_idx * 2
+        expected_centers.append((cx / w, cy / h))
+        buf = bytearray([20] * (w * h))
+        for yy in range(cy - 6, cy + 7):
+            for xx in range(cx - 6, cx + 7):
+                buf[yy * w + xx] = min(250, 140 + (xx - cx + 6) * 6 + (yy - cy + 6) * 3)
+        frames.append(bytes(buf))
+
+    tracked = track_point_sequence_luma(
+        frames,
+        w,
+        h,
+        anchor_x=expected_centers[0][0],
+        anchor_y=expected_centers[0][1],
+        box_pct=0.14,
+        search_radius_px=10,
+        start_frame=10,
+    )
+    assert len(tracked) == 6
+    assert tracked[0].frame == 10
+    assert tracked[-1].frame == 15
+    assert abs(tracked[-1].x - expected_centers[-1][0]) < 0.025
+    assert abs(tracked[-1].y - expected_centers[-1][1]) < 0.025
+    assert tracked[-1].confidence >= 0.90
+
+    dyn_params = PlanarTrackerParams(
+        enabled=True,
+        mode="corner_pin",
+        tl_x=0.10,
+        tl_y=0.10,
+        tr_x=0.90,
+        tr_y=0.12,
+        bl_x=0.08,
+        bl_y=0.88,
+        br_x=0.92,
+        br_y=0.90,
+        follow_track=True,
+        track_keyframes=tracked,
+    )
+    mid_pt = evaluate_track_point_at_frame(dyn_params, 12)
+    assert tracked[0].x < mid_pt[0] < tracked[-1].x
+    pins_end = evaluate_corner_pins_at_frame(dyn_params, 15)
+    assert pins_end[0][0] > dyn_params.tl_x
+
+    dyn_res = compile_planar_tracker(dyn_params)
+    assert dyn_res.is_active is True
+    assert dyn_res.uses_per_frame_eval is True
+    assert ":eval=frame" in dyn_res.filtergraph
+
+    combined = compile_fx_filtergraph(
+        [FxNode(effect="vignette")],
+        stabilizer=apply_stabilizer_preset("smooth_gimbal", enabled=True),
+        planar_tracker=dyn_params,
+        chroma_key=apply_chroma_key_preset("studio_green"),
+    )
+    assert combined.stabilizer_active is True
+    assert combined.planar_tracker_active is True
+    assert combined.chroma_key_active is True
+    assert "deshake=" in combined.filtergraph
+    assert "perspective=" in combined.filtergraph
+    assert "colorkey=" in combined.filtergraph
+
+    with pytest.raises(ValueError):
+        TrackPointKeyframe(frame=-1, x=0.5, y=0.5)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_stabilizer_and_planar_tracker_execute_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    w, h = 320, 180
+    stab = apply_stabilizer_preset("smooth_gimbal", enabled=True)
+    trk = PlanarTrackerParams(
+        enabled=True,
+        mode="corner_pin",
+        tl_x=0.08,
+        tl_y=0.10,
+        tr_x=0.92,
+        tr_y=0.08,
+        bl_x=0.06,
+        bl_y=0.90,
+        br_x=0.94,
+        br_y=0.92,
+        follow_track=True,
+        track_keyframes=[
+            TrackPointKeyframe(frame=0, x=0.50, y=0.50, confidence=1.0),
+            TrackPointKeyframe(frame=5, x=0.53, y=0.52, confidence=0.98),
+        ],
+    )
+    compiled = compile_fx_filtergraph(
+        [],
+        width=w,
+        height=h,
+        stabilizer=stab,
+        planar_tracker=trk,
+    )
+    proc = subprocess.run(
+        [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=duration=0.24:size={w}x{h}:rate=25",
+            "-vf",
+            compiled.filtergraph,
+            "-frames:v",
+            "4",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+    assert len(proc.stdout) == 4 * w * h * 3

@@ -2261,3 +2261,51 @@ def test_voice_cleanup_params_validation_and_filter_compile(tmp_path: Path) -> N
     result = execute_render_plan(plan)
     assert result.success is True, result.stderr_tail
     assert result.bytes_written > 0
+
+
+
+def test_stabilizer_and_planar_tracker_render_plan_and_real_ffmpeg(tmp_path: Path) -> None:
+    from taktcut.fx import PlanarTrackerParams, StabilizerParams
+
+    src = tmp_path / "tracker_stab_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "tracker_stab_out.mp4"
+
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        stabilizer=StabilizerParams(
+            enabled=True,
+            preset="locked_tripod",
+            rx=32,
+            ry=24,
+            auto_zoom_pct=108.0,
+        ),
+        planar_tracker=PlanarTrackerParams(
+            enabled=True,
+            mode="corner_pin",
+            tl_x=0.10,
+            tl_y=0.12,
+            tr_x=0.90,
+            tr_y=0.10,
+            bl_x=0.08,
+            bl_y=0.88,
+            br_x=0.92,
+            br_y=0.90,
+        ),
+        prefer_hw=False,
+    )
+    assert plan.stabilizer_enabled is True
+    assert plan.planar_tracker_enabled is True
+    assert plan.video_filter is not None
+    assert "deshake=" in plan.video_filter
+    assert "perspective=" in plan.video_filter
+
+    res = execute_render_plan(plan)
+    assert res.success is True, res.stderr_tail
+    assert res.bytes_written > 0
+    probe = probe_media(out)
+    assert probe.width == 640
+    assert probe.height == 360

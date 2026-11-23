@@ -15,8 +15,10 @@ import {
   computeTimelineZoomViewport,
   evaluateClipFadeEnvelope,
   evaluateClipTransformAtTime,
+  evaluateCornerPinsClient,
   evaluateRetimeSourceOffset,
   evaluateRetimeSpeedAt,
+  evaluateTrackPointClient,
   evaluateTransformParamAtTime,
   evaluateTransformParamSpeedAtTime,
   findActiveTransitionAtFrame,
@@ -38,7 +40,9 @@ import {
   normalizeClipTransition,
   normalizeColorCurves,
   normalizeCurvePoints,
+  normalizePlanarTrackerClient,
   normalizePowerWindow,
+  normalizeStabilizerClient,
   resolveTransformKeyframeBezier,
   sampleTransformCurve
 } from "./timeline_ops.js";
@@ -746,9 +750,11 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
-  // Subtle editorial specular keylight disc for glow/flare/chroma response
-  const keyX = w * pal.keyX;
-  const keyY = h * pal.keyY;
+  // Subtle editorial specular keylight disc with smooth parallax for optical tracking
+  const parallaxX = 0.045 * Math.sin((playheadFrame || 0) * 0.08);
+  const parallaxY = 0.03 * Math.cos((playheadFrame || 0) * 0.06);
+  const keyX = w * (pal.keyX + parallaxX);
+  const keyY = h * (pal.keyY + parallaxY);
   const keyR = Math.max(18, Math.min(w, h) * 0.22);
   const keyRgb = applyGradeOrCdlRgb(pal.key[0], pal.key[1], pal.key[2], cdl);
   const keyGrad = ctx.createRadialGradient(keyX, keyY, 2, keyX, keyY, keyR);
@@ -760,6 +766,13 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   ctx.fillStyle = keyGrad;
   ctx.beginPath();
   ctx.arc(keyX, keyY, keyR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Crisp studio optical fiducial core inside keylight for 2D planar feature tracking
+  const coreR = Math.max(3, Math.min(6, Math.min(w, h) * 0.018));
+  ctx.fillStyle = "rgba(255, 255, 255, 0.34)";
+  ctx.beginPath();
+  ctx.arc(keyX, keyY, coreR, 0, Math.PI * 2);
   ctx.fill();
 
   // Subtle optical framing reticule & cinematic horizon marks (no SMPTE bars on editorial picture)
@@ -1757,6 +1770,389 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
   }
 }
 
+function computeUnitSquareHomography(p0, p1, p2, p3) {
+  const dx1 = p1.x - p3.x;
+  const dy1 = p1.y - p3.y;
+  const dx2 = p2.x - p3.x;
+  const dy2 = p2.y - p3.y;
+  const dx3 = p0.x - p1.x - p2.x + p3.x;
+  const dy3 = p0.y - p1.y - p2.y + p3.y;
+  const det = dx1 * dy2 - dx2 * dy1;
+  if (Math.abs(det) < 1e-8) return null;
+  const g = (dx3 * dy2 - dx2 * dy3) / det;
+  const h = (dx1 * dy3 - dx3 * dy1) / det;
+  const a = p1.x - p0.x + g * p1.x;
+  const b = p2.x - p0.x + h * p2.x;
+  const c = p0.x;
+  const d = p1.y - p0.y + g * p1.y;
+  const e = p2.y - p0.y + h * p2.y;
+  const f = p0.y;
+  return [a, b, c, d, e, f, g, h];
+}
+
+function evalHomography(H, u, v) {
+  if (!H) return null;
+  const w = H[6] * u + H[7] * v + 1;
+  if (Math.abs(w) < 1e-6) return null;
+  return {
+    x: (H[0] * u + H[1] * v + H[2]) / w,
+    y: (H[3] * u + H[4] * v + H[5]) / w
+  };
+}
+
+function drawTexturedTriangle(ctx, img, s0, s1, s2, d0, d1, d2) {
+  const denom = (s1.x - s0.x) * (s2.y - s0.y) - (s2.x - s0.x) * (s1.y - s0.y);
+  if (Math.abs(denom) < 1e-6) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(d0.x, d0.y);
+  ctx.lineTo(d1.x, d1.y);
+  ctx.lineTo(d2.x, d2.y);
+  ctx.closePath();
+  ctx.clip();
+
+  const m11 = ((d1.x - d0.x) * (s2.y - s0.y) - (d2.x - d0.x) * (s1.y - s0.y)) / denom;
+  const m12 = ((d2.x - d0.x) * (s1.x - s0.x) - (d1.x - d0.x) * (s2.x - s0.x)) / denom;
+  const m21 = ((d1.y - d0.y) * (s2.y - s0.y) - (d2.y - d0.y) * (s1.y - s0.y)) / denom;
+  const m22 = ((d2.y - d0.y) * (s1.x - s0.x) - (d1.y - d0.y) * (s2.x - s0.x)) / denom;
+  const dx = d0.x - m11 * s0.x - m12 * s0.y;
+  const dy = d0.y - m21 * s0.x - m22 * s0.y;
+  ctx.transform(m11, m21, m12, m22, dx, dy);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+
+function drawPerspectiveWarpedBuffer(ctx, buf, bw, bh, fx, fy, frameW, frameH, pins, mode) {
+  const toDstPt = (pt) => ({ x: fx + pt.x * frameW, y: fy + pt.y * frameH });
+  const toSrcPt = (pt) => ({
+    x: Math.max(0, Math.min(bw, pt.x * bw)),
+    y: Math.max(0, Math.min(bh, pt.y * bh))
+  });
+  const gridN = 8;
+  const isRectify = mode === "rectify_perspective";
+  const H = isRectify
+    ? computeUnitSquareHomography(
+        toSrcPt(pins.tl),
+        toSrcPt(pins.tr),
+        toSrcPt(pins.bl),
+        toSrcPt(pins.br)
+      )
+    : computeUnitSquareHomography(
+        toDstPt(pins.tl),
+        toDstPt(pins.tr),
+        toDstPt(pins.bl),
+        toDstPt(pins.br)
+      );
+
+  if (!H) {
+    ctx.drawImage(buf, fx, fy, frameW, frameH);
+    return;
+  }
+
+  for (let iy = 0; iy < gridN; iy += 1) {
+    const v0 = iy / gridN;
+    const v1 = (iy + 1) / gridN;
+    for (let ix = 0; ix < gridN; ix += 1) {
+      const u0 = ix / gridN;
+      const u1 = (ix + 1) / gridN;
+      const cornersUv = [
+        [u0, v0],
+        [u1, v0],
+        [u0, v1],
+        [u1, v1]
+      ];
+      const srcPts = cornersUv.map(([u, v]) =>
+        isRectify
+          ? evalHomography(H, u, v) || { x: u * bw, y: v * bh }
+          : { x: u * bw, y: v * bh }
+      );
+      const dstPts = cornersUv.map(([u, v]) =>
+        isRectify
+          ? { x: fx + u * frameW, y: fy + v * frameH }
+          : evalHomography(H, u, v) || { x: fx + u * frameW, y: fy + v * frameH }
+      );
+      drawTexturedTriangle(ctx, buf, srcPts[0], srcPts[1], srcPts[2], dstPts[0], dstPts[1], dstPts[2]);
+      drawTexturedTriangle(ctx, buf, srcPts[1], srcPts[3], srcPts[2], dstPts[1], dstPts[3], dstPts[2]);
+    }
+  }
+}
+
+export function drawPlanarTrackerOverlay(ctx, fx, fy, frameW, frameH, trackerState, playheadFrame) {
+  const norm = normalizePlanarTrackerClient(trackerState);
+  const pins = evaluateCornerPinsClient(norm, playheadFrame);
+  const toCanvas = (pt) => ({ x: fx + pt.x * frameW, y: fy + pt.y * frameH });
+  const cTl = toCanvas(pins.tl);
+  const cTr = toCanvas(pins.tr);
+  const cBl = toCanvas(pins.bl);
+  const cBr = toCanvas(pins.br);
+
+  ctx.save();
+  // Draw 4-corner planar quad + 3x3 internal perspective grid
+  if (norm.mode !== "point_track_only") {
+    ctx.strokeStyle = "rgba(230, 132, 66, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (let i = 1; i <= 2; i += 1) {
+      const f = i / 3;
+      ctx.beginPath();
+      ctx.moveTo(cTl.x + (cTr.x - cTl.x) * f, cTl.y + (cTr.y - cTl.y) * f);
+      ctx.lineTo(cBl.x + (cBr.x - cBl.x) * f, cBl.y + (cBr.y - cBl.y) * f);
+      ctx.moveTo(cTl.x + (cBl.x - cTl.x) * f, cTl.y + (cBl.y - cTl.y) * f);
+      ctx.lineTo(cTr.x + (cBr.x - cTr.x) * f, cTr.y + (cBr.y - cTr.y) * f);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = "rgba(230, 132, 66, 0.92)";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(cTl.x, cTl.y);
+    ctx.lineTo(cTr.x, cTr.y);
+    ctx.lineTo(cBr.x, cBr.y);
+    ctx.lineTo(cBl.x, cBl.y);
+    ctx.closePath();
+    ctx.stroke();
+
+    const pinItems = [
+      { id: "tl", label: "TL", pt: cTl },
+      { id: "tr", label: "TR", pt: cTr },
+      { id: "bl", label: "BL", pt: cBl },
+      { id: "br", label: "BR", pt: cBr }
+    ];
+    ctx.font = "700 9px ui-monospace, monospace";
+    for (const item of pinItems) {
+      ctx.fillStyle = "#141416";
+      ctx.strokeStyle = "#e68442";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(item.pt.x, item.pt.y, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#f4a46b";
+      ctx.fillText(item.label, item.pt.x + 7, item.pt.y + 3);
+    }
+  }
+
+  // Draw 2D motion spline across tracked keyframes
+  const kfs = norm.track_keyframes || [];
+  if (kfs.length >= 2) {
+    ctx.strokeStyle = "rgba(104, 156, 255, 0.85)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    kfs.forEach((kf, idx) => {
+      const px = fx + kf.x * frameW;
+      const py = fy + kf.y * frameH;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(104, 156, 255, 0.95)";
+    for (let i = 0; i < kfs.length; i += Math.max(1, Math.floor(kfs.length / 20))) {
+      const px = fx + kfs[i].x * frameW;
+      const py = fy + kfs[i].y * frameH;
+      ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+    }
+  }
+
+  // Draw active 2D track point pattern + search reticle
+  const trkPt = evaluateTrackPointClient(norm, playheadFrame);
+  const ax = fx + trkPt.x * frameW;
+  const ay = fy + trkPt.y * frameH;
+  const boxHalfW = Math.max(8, frameW * norm.track_box_pct * 0.5);
+  const boxHalfH = Math.max(8, frameH * norm.track_box_pct * 0.5);
+  ctx.strokeStyle = "rgba(63, 185, 80, 0.92)";
+  ctx.lineWidth = 1.4;
+  ctx.strokeRect(ax - boxHalfW, ay - boxHalfH, boxHalfW * 2, boxHalfH * 2);
+
+  ctx.strokeStyle = "rgba(104, 156, 255, 0.55)";
+  ctx.setLineDash([3, 2]);
+  ctx.strokeRect(ax - boxHalfW * 1.65, ay - boxHalfH * 1.65, boxHalfW * 3.3, boxHalfH * 3.3);
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = "#3fb950";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(ax - 7, ay);
+  ctx.lineTo(ax + 7, ay);
+  ctx.moveTo(ax, ay - 7);
+  ctx.lineTo(ax, ay + 7);
+  ctx.stroke();
+
+  ctx.restore();
+  return {
+    fx,
+    fy,
+    frameW,
+    frameH,
+    mode: norm.mode,
+    handles: {
+      tl: cTl,
+      tr: cTr,
+      bl: cBl,
+      br: cBr,
+      anchor: { x: ax, y: ay }
+    }
+  };
+}
+
+let _trackerScratchCanvas = null;
+
+export function trackPointSequenceCanvas(doc, cdl, framingState, anchorX, anchorY, boxPct, frameList) {
+  if (!Array.isArray(frameList) || frameList.length === 0) return [];
+  const w = 240;
+  const h = 135;
+  _trackerScratchCanvas = ensureScratchCanvas(_trackerScratchCanvas, w, h);
+  if (!_trackerScratchCanvas) return [];
+  const ctx = _trackerScratchCanvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return [];
+
+  const aspectSpec = getAspectRatioPreset(
+    framingState && framingState.aspectPreset ? framingState.aspectPreset : "16:9"
+  );
+  const framingMode = framingState && framingState.framingMode === "fit" ? "fit" : "fill";
+  const targetAspect = aspectSpec.width / aspectSpec.height;
+  const srcAspect = doc && doc.width > 0 && doc.height > 0 ? doc.width / doc.height : 16 / 9;
+
+  const sampleGray = (frameNum) => {
+    const activeClips = [];
+    if (doc && doc.tracks) {
+      for (const trk of doc.tracks) {
+        if (trk.kind !== "video") continue;
+        for (const c of trk.clips || []) {
+          if (frameNum >= c.start_frame && frameNum < c.start_frame + c.duration_frames) {
+            activeClips.push({ track: `V${trk.index}`, clip: c });
+          }
+        }
+      }
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    drawFramedBaseScene(
+      ctx,
+      w,
+      h,
+      doc,
+      frameNum,
+      cdl,
+      activeClips,
+      framingMode,
+      srcAspect,
+      targetAspect,
+      null
+    );
+    const img = ctx.getImageData(0, 0, w, h).data;
+    const gray = new Uint8Array(w * h);
+    for (let i = 0, p = 0; i < img.length; i += 4, p += 1) {
+      gray[p] = Math.round(0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2]);
+    }
+    return gray;
+  };
+
+  const halfW = Math.max(3, Math.round(w * Math.max(0.04, Math.min(0.35, boxPct)) * 0.5));
+  const halfH = Math.max(3, Math.round(h * Math.max(0.04, Math.min(0.35, boxPct)) * 0.5));
+  const rad = 18;
+  let curPx = Math.max(0.02, Math.min(0.98, anchorX)) * w;
+  let curPy = Math.max(0.02, Math.min(0.98, anchorY)) * h;
+  let prevGray = sampleGray(frameList[0]);
+
+  const results = [
+    {
+      frame: Math.max(0, Math.round(frameList[0])),
+      x: Number((curPx / w).toFixed(5)),
+      y: Number((curPy / h).toFixed(5)),
+      confidence: 1.0
+    }
+  ];
+
+  for (let idx = 1; idx < frameList.length; idx += 1) {
+    const fNum = Math.max(0, Math.round(frameList[idx]));
+    const currGray = sampleGray(fNum);
+    const cxI = Math.max(halfW, Math.min(w - 1 - halfW, Math.round(curPx)));
+    const cyI = Math.max(halfH, Math.min(h - 1 - halfH, Math.round(curPy)));
+
+    const tpl = [];
+    let tplSum = 0;
+    for (let dyT = -halfH; dyT <= halfH; dyT += 1) {
+      const rowOff = (cyI + dyT) * w;
+      for (let dxT = -halfW; dxT <= halfW; dxT += 1) {
+        const v = prevGray[rowOff + cxI + dxT];
+        tpl.push(v);
+        tplSum += v;
+      }
+    }
+    const tplMean = tplSum / Math.max(1, tpl.length);
+    let tplVar = 0;
+    for (let k = 0; k < tpl.length; k += 1) {
+      const d = tpl[k] - tplMean;
+      tplVar += d * d;
+    }
+
+    const minDx = Math.max(halfW - cxI, -rad);
+    const maxDx = Math.min(w - 1 - halfW - cxI, rad);
+    const minDy = Math.max(halfH - cyI, -rad);
+    const maxDy = Math.min(h - 1 - halfH - cyI, rad);
+
+    let bestSsd = Number.POSITIVE_INFINITY;
+    let bestOx = 0;
+    let bestOy = 0;
+    const ssdMap = new Map();
+
+    for (let oy = minDy; oy <= maxDy; oy += 1) {
+      for (let ox = minDx; ox <= maxDx; ox += 1) {
+        let ssd = 0;
+        let k = 0;
+        const baseY = cyI + oy;
+        const baseX = cxI + ox;
+        for (let dyT = -halfH; dyT <= halfH; dyT += 1) {
+          const rowOff = (baseY + dyT) * w + baseX;
+          for (let dxT = -halfW; dxT <= halfW; dxT += 1) {
+            const diff = currGray[rowOff + dxT] - tpl[k];
+            ssd += diff * diff;
+            k += 1;
+          }
+        }
+        ssdMap.set(`${ox},${oy}`, ssd);
+        if (ssd < bestSsd) {
+          bestSsd = ssd;
+          bestOx = ox;
+          bestOy = oy;
+        }
+      }
+    }
+
+    let subX = 0;
+    let subY = 0;
+    if (ssdMap.has(`${bestOx - 1},${bestOy}`) && ssdMap.has(`${bestOx + 1},${bestOy}`)) {
+      const sL = ssdMap.get(`${bestOx - 1},${bestOy}`);
+      const sC = ssdMap.get(`${bestOx},${bestOy}`);
+      const sR = ssdMap.get(`${bestOx + 1},${bestOy}`);
+      const denomX = 2 * (sL - 2 * sC + sR);
+      if (Math.abs(denomX) > 1e-6) subX = Math.max(-0.5, Math.min(0.5, (sL - sR) / denomX));
+    }
+    if (ssdMap.has(`${bestOx},${bestOy - 1}`) && ssdMap.has(`${bestOx},${bestOy + 1}`)) {
+      const sU = ssdMap.get(`${bestOx},${bestOy - 1}`);
+      const sC = ssdMap.get(`${bestOx},${bestOy}`);
+      const sD = ssdMap.get(`${bestOx},${bestOy + 1}`);
+      const denomY = 2 * (sU - 2 * sC + sD);
+      if (Math.abs(denomY) > 1e-6) subY = Math.max(-0.5, Math.min(0.5, (sU - sD) / denomY));
+    }
+
+    curPx = Math.max(2, Math.min(w - 2, cxI + bestOx + subX));
+    curPy = Math.max(2, Math.min(h - 2, cyI + bestOy + subY));
+    const normDenom = Math.max(tplVar, tpl.length * 225.0);
+    const conf = Math.max(0, Math.min(1, 1.0 - bestSsd / normDenom));
+    results.push({
+      frame: fNum,
+      x: Number((curPx / w).toFixed(5)),
+      y: Number((curPy / h).toFixed(5)),
+      confidence: Number(conf.toFixed(4))
+    });
+    prevGray = currGray;
+  }
+  return results;
+}
+
 export function drawProgramMonitorCanvas(
   canvas,
   doc,
@@ -1820,6 +2216,10 @@ export function drawProgramMonitorCanvas(
   const ckRaw = chromaKeyState || (fxState && fxState.chromaKey) || null;
   const ckActive = !bypassAll && Boolean(ckRaw && ckRaw.enabled);
   const ckMatteView = ckRaw && ckRaw.matteView === "alpha_matte" ? "alpha_matte" : "final";
+  const stabRaw = fxState && fxState.stabilizer ? normalizeStabilizerClient(fxState.stabilizer) : null;
+  const stabActive = !bypassAll && Boolean(stabRaw && stabRaw.enabled);
+  const trkRaw = fxState && fxState.planarTracker ? normalizePlanarTrackerClient(fxState.planarTracker) : null;
+  const trkActive = !bypassAll && Boolean(trkRaw && trkRaw.enabled);
   const wipeActive = Boolean(splitWipeState && splitWipeState.enabled);
 
   const renderScenePass = (passCdl, passFxState, passTitleState, passSubState, passCkState) => {
@@ -1829,6 +2229,16 @@ export function drawProgramMonitorCanvas(
     const pCkRaw = passCkState || (passFxState && passFxState.chromaKey) || null;
     const pCkActive = !pBypassAll && Boolean(pCkRaw && pCkRaw.enabled);
     const pCkMatteView = pCkRaw && pCkRaw.matteView === "alpha_matte" ? "alpha_matte" : "final";
+    const pStabRaw =
+      !pBypassAll && passFxState && passFxState.stabilizer
+        ? normalizeStabilizerClient(passFxState.stabilizer)
+        : null;
+    const pStabActive = Boolean(pStabRaw && pStabRaw.enabled);
+    const pTrkRaw =
+      !pBypassAll && passFxState && passFxState.planarTracker
+        ? normalizePlanarTrackerClient(passFxState.planarTracker)
+        : null;
+    const pTrkActive = Boolean(pTrkRaw && pTrkRaw.enabled);
 
     // Compute spatial shake + camera_shake + gate-weave displacement
     let shiftX = 0;
@@ -2360,17 +2770,32 @@ export function drawProgramMonitorCanvas(
         drawTransparencyCheckerboard(ctx, fx, fy, frameW, frameH);
       }
 
+      const stabZoom = pStabActive && pStabRaw ? Math.max(1, pStabRaw.auto_zoom_pct / 100.0) : 1.0;
+      const dampFactor = pStabActive ? 0.15 : 1.0;
+      const effShiftX = shiftX * dampFactor;
+      const effShiftY = shiftY * dampFactor;
       const overscan = !hasLegacyShake && cameraShakeOverscan > 0 ? cameraShakeOverscan : 0;
-      const drawX = fx - overscan + shiftX;
-      const drawY = fy - overscan + shiftY;
-      const drawW = frameW + overscan * 2;
-      const drawH = frameH + overscan * 2;
+      const baseW = (frameW + overscan * 2) * stabZoom;
+      const baseH = (frameH + overscan * 2) * stabZoom;
+      const drawX = fx + (frameW - baseW) * 0.5 + effShiftX;
+      const drawY = fy + (frameH - baseH) * 0.5 + effShiftY;
+      const drawW = baseW;
+      const drawH = baseH;
 
-      ctx.drawImage(buf, drawX, drawY, drawW, drawH);
-      if (motionBlurAmt >= 0.05 && (Math.abs(shiftX) > 0.2 || Math.abs(shiftY) > 0.2)) {
+      if (pTrkActive && pTrkRaw && pTrkRaw.mode !== "point_track_only") {
+        const pins = evaluateCornerPinsClient(pTrkRaw, playheadFrame);
+        ctx.save();
+        ctx.fillStyle = "#0b0b0e";
+        ctx.fillRect(fx, fy, frameW, frameH);
+        drawPerspectiveWarpedBuffer(ctx, buf, bw, bh, drawX, drawY, drawW, drawH, pins, pTrkRaw.mode);
+        ctx.restore();
+      } else {
+        ctx.drawImage(buf, drawX, drawY, drawW, drawH);
+      }
+      if (motionBlurAmt >= 0.05 && (Math.abs(effShiftX) > 0.2 || Math.abs(effShiftY) > 0.2)) {
         ctx.save();
         ctx.globalAlpha = Math.min(0.42, motionBlurAmt * 0.42);
-        ctx.drawImage(buf, fx - shiftX * 0.55, fy - shiftY * 0.55, frameW, frameH);
+        ctx.drawImage(buf, fx - effShiftX * 0.55, fy - effShiftY * 0.55, frameW, frameH);
         ctx.restore();
       }
     } else {
@@ -2818,9 +3243,21 @@ export function drawProgramMonitorCanvas(
     ctx.fillText(label, fx + 14, leftPillY + 12);
   }
 
-  // FX & Chroma Key telemetry pill inside Program Monitor corner
-  if (rawNodes.length > 0 || (ckRaw && ckRaw.enabled)) {
+  // FX, Chroma Key, Stabilizer & Planar Tracker telemetry pill inside Program Monitor corner
+  if (rawNodes.length > 0 || (ckRaw && ckRaw.enabled) || stabActive || trkActive) {
     const parts = [];
+    if (stabActive && stabRaw) {
+      parts.push(`STAB ${Math.round(stabRaw.auto_zoom_pct)}%`);
+    }
+    if (trkActive && trkRaw) {
+      parts.push(
+        trkRaw.mode === "point_track_only"
+          ? `TRK ${trkRaw.track_keyframes.length}KF`
+          : trkRaw.mode === "rectify_perspective"
+            ? "RECTIFY"
+            : "CORNER-PIN"
+      );
+    }
     if (ckRaw && ckRaw.enabled) {
       const hexTag = String(ckRaw.key_color || "#00b140").toUpperCase();
       parts.push(ckMatteView === "alpha_matte" ? `KEY ${hexTag} (ALPHA)` : `KEY ${hexTag}`);
@@ -2846,6 +3283,31 @@ export function drawProgramMonitorCanvas(
     ctx.fillRect(fx + frameW - tw - 8, fxPillY, tw, 17);
     ctx.fillStyle = bypassAll || parts.length === 0 ? "#a4a4ae" : "#111114";
     ctx.fillText(label, fx + frameW - tw - 2, fxPillY + 12);
+  }
+
+  // Planar Tracker & 4-Corner Pin interactive overlay
+  const showTrackerHud =
+    trkActive &&
+    trkRaw &&
+    !(ckActive && ckMatteView === "alpha_matte") &&
+    (!renderOpts || renderOpts.showPlanarTrackerOverlay !== false);
+  if (showTrackerHud) {
+    const trkGeom = drawPlanarTrackerOverlay(
+      ctx,
+      fx,
+      fy,
+      frameW,
+      frameH,
+      trkRaw,
+      playheadFrame
+    );
+    canvas._planarTrackerGeom = {
+      ...trkGeom,
+      canvasWidth: width,
+      canvasHeight: height
+    };
+  } else {
+    canvas._planarTrackerGeom = null;
   }
 
   // Auto-Reframe & Social Aspect Ratio Crop overlay

@@ -661,6 +661,8 @@ class FxCompileResult(BaseModel):
     active_effects: list[FxType]
     keyframed_effects: list[FxType] = Field(default_factory=list)
     chroma_key_active: bool = False
+    stabilizer_active: bool = False
+    planar_tracker_active: bool = False
     bypassed_count: int
     normalized_nodes: list[FxNode]
     estimated_render_seconds: float
@@ -1960,6 +1962,919 @@ def compile_chroma_key(
     )
 
 
+StabilizerPresetId = Literal["smooth_gimbal", "locked_tripod", "handheld_rescue", "custom"]
+StabilizerEdgeMode = Literal["mirror", "clamp", "original", "blank"]
+StabilizerSearchMode = Literal["exhaustive", "less"]
+
+STABILIZER_RX_MIN: int = 0
+STABILIZER_RX_MAX: int = 64
+STABILIZER_RY_MIN: int = 0
+STABILIZER_RY_MAX: int = 64
+STABILIZER_BLOCKSIZE_MIN: int = 4
+STABILIZER_BLOCKSIZE_MAX: int = 64
+STABILIZER_CONTRAST_MIN: int = 1
+STABILIZER_CONTRAST_MAX: int = 255
+STABILIZER_AUTO_ZOOM_MIN: float = 100.0
+STABILIZER_AUTO_ZOOM_MAX: float = 135.0
+STABILIZER_AUTO_ZOOM_DEFAULT: float = 106.0
+
+ALLOWED_STABILIZER_PRESETS: tuple[StabilizerPresetId, ...] = (
+    "smooth_gimbal",
+    "locked_tripod",
+    "handheld_rescue",
+    "custom",
+)
+ALLOWED_STABILIZER_EDGES: tuple[StabilizerEdgeMode, ...] = (
+    "mirror",
+    "clamp",
+    "original",
+    "blank",
+)
+ALLOWED_STABILIZER_SEARCH_MODES: tuple[StabilizerSearchMode, ...] = (
+    "exhaustive",
+    "less",
+)
+
+
+def _validate_finite_bound_int(
+    raw: Any,
+    field_name: str,
+    min_val: int,
+    max_val: int,
+) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
+        raise ValueError(f"{field_name} must be an integer, got {raw!r}")
+    val = float(raw)
+    if not math.isfinite(val):
+        raise ValueError(f"{field_name} must be finite, got {raw!r}")
+    ival = round(val)
+    if ival < min_val or ival > max_val:
+        raise ValueError(f"{field_name} must be within [{min_val}, {max_val}], got {ival}")
+    return ival
+
+
+class StabilizerParams(BaseModel):
+    """Validated motion stabilizer parameters compiled to FFmpeg deshake + auto-zoom."""
+
+    enabled: bool = False
+    preset: StabilizerPresetId = "smooth_gimbal"
+    rx: int = 16
+    ry: int = 16
+    edge: StabilizerEdgeMode = "mirror"
+    blocksize: int = 8
+    contrast: int = 125
+    search: StabilizerSearchMode = "exhaustive"
+    auto_zoom_pct: float = STABILIZER_AUTO_ZOOM_DEFAULT
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"enabled must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_STABILIZER_PRESETS:
+            allowed = ", ".join(ALLOWED_STABILIZER_PRESETS)
+            raise ValueError(f"Unsupported stabilizer preset {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("rx", mode="before")
+    @classmethod
+    def _validate_rx(cls, raw: Any) -> int:
+        return _validate_finite_bound_int(raw, "rx", STABILIZER_RX_MIN, STABILIZER_RX_MAX)
+
+    @field_validator("ry", mode="before")
+    @classmethod
+    def _validate_ry(cls, raw: Any) -> int:
+        return _validate_finite_bound_int(raw, "ry", STABILIZER_RY_MIN, STABILIZER_RY_MAX)
+
+    @field_validator("edge", mode="before")
+    @classmethod
+    def _validate_edge(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"edge must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_STABILIZER_EDGES:
+            allowed = ", ".join(ALLOWED_STABILIZER_EDGES)
+            raise ValueError(f"Unsupported stabilizer edge {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("blocksize", mode="before")
+    @classmethod
+    def _validate_blocksize(cls, raw: Any) -> int:
+        return _validate_finite_bound_int(
+            raw,
+            "blocksize",
+            STABILIZER_BLOCKSIZE_MIN,
+            STABILIZER_BLOCKSIZE_MAX,
+        )
+
+    @field_validator("contrast", mode="before")
+    @classmethod
+    def _validate_contrast(cls, raw: Any) -> int:
+        return _validate_finite_bound_int(
+            raw,
+            "contrast",
+            STABILIZER_CONTRAST_MIN,
+            STABILIZER_CONTRAST_MAX,
+        )
+
+    @field_validator("search", mode="before")
+    @classmethod
+    def _validate_search(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"search must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_STABILIZER_SEARCH_MODES:
+            allowed = ", ".join(ALLOWED_STABILIZER_SEARCH_MODES)
+            raise ValueError(f"Unsupported stabilizer search {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("auto_zoom_pct", mode="before")
+    @classmethod
+    def _validate_auto_zoom_pct(cls, raw: Any) -> float:
+        return _validate_finite_bound_float(
+            raw,
+            "auto_zoom_pct",
+            STABILIZER_AUTO_ZOOM_MIN,
+            STABILIZER_AUTO_ZOOM_MAX,
+        )
+
+    def is_active(self) -> bool:
+        """Return True when motion stabilization is enabled."""
+        return self.enabled
+
+
+class StabilizerPreset(BaseModel):
+    """Curated DaVinci/Premiere style motion stabilizer preset."""
+
+    id: StabilizerPresetId
+    name: str
+    rx: int
+    ry: int
+    edge: StabilizerEdgeMode
+    blocksize: int
+    contrast: int
+    search: StabilizerSearchMode
+    auto_zoom_pct: float
+    description: str
+
+
+class StabilizerCompileResult(BaseModel):
+    """Compiled FFmpeg deshake stabilizer filtergraph and validated parameters."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_active: bool
+    params: StabilizerParams
+
+
+STABILIZER_PRESETS: tuple[StabilizerPreset, ...] = (
+    StabilizerPreset(
+        id="smooth_gimbal",
+        name="Smooth Gimbal",
+        rx=16,
+        ry=16,
+        edge="mirror",
+        blocksize=8,
+        contrast=125,
+        search="exhaustive",
+        auto_zoom_pct=106.0,
+        description="Subtle handheld smoothing with 106% edge compensation.",
+    ),
+    StabilizerPreset(
+        id="locked_tripod",
+        name="Locked Tripod",
+        rx=32,
+        ry=32,
+        edge="clamp",
+        blocksize=16,
+        contrast=100,
+        search="exhaustive",
+        auto_zoom_pct=112.0,
+        description="Tight tripod-style lockup for static interviews and B-roll.",
+    ),
+    StabilizerPreset(
+        id="handheld_rescue",
+        name="Handheld Rescue",
+        rx=48,
+        ry=48,
+        edge="mirror",
+        blocksize=12,
+        contrast=90,
+        search="exhaustive",
+        auto_zoom_pct=118.0,
+        description="Wide 48px search window for heavy walking handheld jitter.",
+    ),
+)
+
+
+def list_stabilizer_presets() -> list[StabilizerPreset]:
+    """Return built-in motion stabilizer presets."""
+    return list(STABILIZER_PRESETS)
+
+
+def get_stabilizer_preset(preset_id: str) -> StabilizerPreset:
+    """Lookup a motion stabilizer preset by id."""
+    cleaned = preset_id.strip().lower()
+    for preset in STABILIZER_PRESETS:
+        if preset.id == cleaned:
+            return preset
+    raise ValueError(f"Unknown stabilizer preset: {preset_id!r}")
+
+
+def apply_stabilizer_preset(preset_id: str, *, enabled: bool = True) -> StabilizerParams:
+    """Create StabilizerParams from a curated preset."""
+    preset = get_stabilizer_preset(preset_id)
+    return StabilizerParams(
+        enabled=enabled,
+        preset=preset.id,
+        rx=preset.rx,
+        ry=preset.ry,
+        edge=preset.edge,
+        blocksize=preset.blocksize,
+        contrast=preset.contrast,
+        search=preset.search,
+        auto_zoom_pct=preset.auto_zoom_pct,
+    )
+
+
+def _coerce_stabilizer_params(raw: StabilizerParams | dict[str, Any]) -> StabilizerParams:
+    if isinstance(raw, StabilizerParams):
+        return StabilizerParams.model_validate(raw.model_dump())
+    return StabilizerParams.model_validate(raw)
+
+
+def compile_stabilizer_filter(
+    stabilizer: StabilizerParams | dict[str, Any],
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    pix_fmt: str | None = None,
+) -> str:
+    """Compile validated StabilizerParams into a safe FFmpeg deshake + auto-zoom filter."""
+    params = _coerce_stabilizer_params(stabilizer)
+    if pix_fmt is not None and pix_fmt not in ALLOWED_CHROMA_PIX_FMTS:
+        raise ValueError(f"Unsupported pixel format: {pix_fmt!r}")
+    if not params.is_active():
+        return ""
+
+    eff_rx = max(0, min(64, round(params.rx / 16) * 16))
+    parts: list[str] = [
+        (
+            f"deshake=x=-1:y=-1:w=-1:h=-1"
+            f":rx={eff_rx}:ry={params.ry}"
+            f":edge={params.edge}:blocksize={params.blocksize}"
+            f":contrast={params.contrast}:search={params.search}"
+        )
+    ]
+    if params.auto_zoom_pct > 100.05:
+        z = params.auto_zoom_pct / 100.0
+        parts.append(
+            f"scale=w=ceil(iw*{z:.4f}/2)*2:h=ceil(ih*{z:.4f}/2)*2:flags=bicubic"
+        )
+        if width is not None and height is not None:
+            w_even = max(2, (int(width) // 2) * 2)
+            h_even = max(2, (int(height) // 2) * 2)
+            parts.append(
+                f"crop=w={w_even}:h={h_even}:x=(iw-{w_even})/2:y=(ih-{h_even})/2"
+            )
+        else:
+            parts.append(
+                f"crop=w=floor(iw/{z:.4f}/2)*2:h=floor(ih/{z:.4f}/2)*2"
+            )
+        parts.append("setsar=1")
+    if pix_fmt is not None:
+        parts.append(f"format={pix_fmt}")
+    return ",".join(parts)
+
+
+def compile_stabilizer(
+    stabilizer: StabilizerParams | dict[str, Any],
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    pix_fmt: str | None = None,
+) -> StabilizerCompileResult:
+    """Compile motion stabilizer parameters into an FFmpeg filtergraph and metadata."""
+    params = _coerce_stabilizer_params(stabilizer)
+    fg = compile_stabilizer_filter(params, width=width, height=height, pix_fmt=pix_fmt)
+    return StabilizerCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_active=bool(fg),
+        params=params,
+    )
+
+
+CornerPinMode = Literal["corner_pin", "rectify_perspective", "point_track_only"]
+PerspectiveInterpolation = Literal["linear", "cubic"]
+PlanarTrackerPresetId = Literal[
+    "screen_insert",
+    "anamorphic_skew",
+    "deskew_rectify",
+    "point_follow",
+    "custom",
+]
+
+ALLOWED_CORNER_PIN_MODES: tuple[CornerPinMode, ...] = (
+    "corner_pin",
+    "rectify_perspective",
+    "point_track_only",
+)
+ALLOWED_PERSPECTIVE_INTERP: tuple[PerspectiveInterpolation, ...] = ("linear", "cubic")
+ALLOWED_PLANAR_TRACKER_PRESETS: tuple[PlanarTrackerPresetId, ...] = (
+    "screen_insert",
+    "anamorphic_skew",
+    "deskew_rectify",
+    "point_follow",
+    "custom",
+)
+PIN_COORD_MIN: float = -0.25
+PIN_COORD_MAX: float = 1.25
+TRACK_ANCHOR_MIN: float = 0.02
+TRACK_ANCHOR_MAX: float = 0.98
+TRACK_BOX_PCT_MIN: float = 0.04
+TRACK_BOX_PCT_MAX: float = 0.35
+MAX_TRACK_KEYFRAMES: int = 256
+MAX_PERSPECTIVE_EXPR_SEGMENTS: int = 20
+
+
+class TrackPointKeyframe(BaseModel):
+    """A single 2D tracked feature keyframe in normalized frame coordinates."""
+
+    frame: int = Field(ge=0)
+    x: float
+    y: float
+    confidence: float = 1.0
+
+    @field_validator("frame", mode="before")
+    @classmethod
+    def _validate_frame(cls, raw: Any) -> int:
+        return _validate_finite_bound_int(raw, "frame", 0, 10_000_000)
+
+    @field_validator("x", "y", mode="before")
+    @classmethod
+    def _validate_xy(cls, raw: Any, info: Any) -> float:
+        return _validate_finite_bound_float(raw, str(info.field_name), -0.5, 1.5)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _validate_confidence(cls, raw: Any) -> float:
+        return _validate_finite_bound_float(raw, "confidence", 0.0, 1.0)
+
+
+class PlanarTrackerParams(BaseModel):
+    """Validated 2D Planar Point Tracker and 4-Corner Pin perspective parameters."""
+
+    enabled: bool = False
+    preset: PlanarTrackerPresetId = "screen_insert"
+    mode: CornerPinMode = "corner_pin"
+    interpolation: PerspectiveInterpolation = "cubic"
+    tl_x: float = 0.08
+    tl_y: float = 0.10
+    tr_x: float = 0.92
+    tr_y: float = 0.08
+    bl_x: float = 0.06
+    bl_y: float = 0.90
+    br_x: float = 0.94
+    br_y: float = 0.92
+    track_anchor_x: float = 0.50
+    track_anchor_y: float = 0.45
+    track_box_pct: float = 0.12
+    follow_track: bool = True
+    track_keyframes: list[TrackPointKeyframe] = Field(default_factory=list)
+
+    @field_validator("enabled", "follow_track", mode="before")
+    @classmethod
+    def _validate_bools(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_PLANAR_TRACKER_PRESETS:
+            allowed = ", ".join(ALLOWED_PLANAR_TRACKER_PRESETS)
+            raise ValueError(
+                f"Unsupported planar tracker preset {raw!r}; expected one of: {allowed}"
+            )
+        return cleaned
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _validate_mode(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"mode must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_CORNER_PIN_MODES:
+            allowed = ", ".join(ALLOWED_CORNER_PIN_MODES)
+            raise ValueError(f"Unsupported corner-pin mode {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("interpolation", mode="before")
+    @classmethod
+    def _validate_interpolation(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"interpolation must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_PERSPECTIVE_INTERP:
+            allowed = ", ".join(ALLOWED_PERSPECTIVE_INTERP)
+            raise ValueError(f"Unsupported interpolation {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator(
+        "tl_x",
+        "tl_y",
+        "tr_x",
+        "tr_y",
+        "bl_x",
+        "bl_y",
+        "br_x",
+        "br_y",
+        mode="before",
+    )
+    @classmethod
+    def _validate_pin_coord(cls, raw: Any, info: Any) -> float:
+        return _validate_finite_bound_float(
+            raw,
+            str(info.field_name),
+            PIN_COORD_MIN,
+            PIN_COORD_MAX,
+        )
+
+    @field_validator("track_anchor_x", "track_anchor_y", mode="before")
+    @classmethod
+    def _validate_anchor(cls, raw: Any, info: Any) -> float:
+        return _validate_finite_bound_float(
+            raw,
+            str(info.field_name),
+            TRACK_ANCHOR_MIN,
+            TRACK_ANCHOR_MAX,
+        )
+
+    @field_validator("track_box_pct", mode="before")
+    @classmethod
+    def _validate_track_box_pct(cls, raw: Any) -> float:
+        return _validate_finite_bound_float(
+            raw,
+            "track_box_pct",
+            TRACK_BOX_PCT_MIN,
+            TRACK_BOX_PCT_MAX,
+        )
+
+    @field_validator("track_keyframes")
+    @classmethod
+    def _validate_track_keyframes(
+        cls,
+        kfs: list[TrackPointKeyframe],
+    ) -> list[TrackPointKeyframe]:
+        if len(kfs) > MAX_TRACK_KEYFRAMES:
+            raise ValueError(f"At most {MAX_TRACK_KEYFRAMES} track keyframes are supported")
+        dedup: dict[int, TrackPointKeyframe] = {}
+        for kf in kfs:
+            dedup[kf.frame] = kf
+        return [dedup[f] for f in sorted(dedup)]
+
+    def is_identity_corners(self) -> bool:
+        """Return True when all 4 corner pins match the unwarped frame corners."""
+        return (
+            abs(self.tl_x - 0.0) <= 1e-4
+            and abs(self.tl_y - 0.0) <= 1e-4
+            and abs(self.tr_x - 1.0) <= 1e-4
+            and abs(self.tr_y - 0.0) <= 1e-4
+            and abs(self.bl_x - 0.0) <= 1e-4
+            and abs(self.bl_y - 1.0) <= 1e-4
+            and abs(self.br_x - 1.0) <= 1e-4
+            and abs(self.br_y - 1.0) <= 1e-4
+        )
+
+    def is_active(self) -> bool:
+        """Return True when planar tracking / corner-pin produces an active perspective warp."""
+        if not self.enabled or self.mode == "point_track_only":
+            return False
+        has_track_motion = self.follow_track and len(self.track_keyframes) >= 2
+        return not self.is_identity_corners() or has_track_motion
+
+
+class PlanarTrackerPreset(BaseModel):
+    """Curated Mocha/Fusion style 2D Planar Tracker & Corner-Pin preset."""
+
+    id: PlanarTrackerPresetId
+    name: str
+    mode: CornerPinMode
+    interpolation: PerspectiveInterpolation
+    tl_x: float
+    tl_y: float
+    tr_x: float
+    tr_y: float
+    bl_x: float
+    bl_y: float
+    br_x: float
+    br_y: float
+    description: str
+
+
+class PlanarTrackerCompileResult(BaseModel):
+    """Compiled FFmpeg perspective corner-pin filtergraph and validated parameters."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_active: bool
+    mode: CornerPinMode
+    uses_per_frame_eval: bool
+    keyframe_count: int
+    params: PlanarTrackerParams
+
+
+PLANAR_TRACKER_PRESETS: tuple[PlanarTrackerPreset, ...] = (
+    PlanarTrackerPreset(
+        id="screen_insert",
+        name="Screen Insert",
+        mode="corner_pin",
+        interpolation="cubic",
+        tl_x=0.14,
+        tl_y=0.14,
+        tr_x=0.84,
+        tr_y=0.18,
+        bl_x=0.10,
+        bl_y=0.84,
+        br_x=0.86,
+        br_y=0.88,
+        description="Perspective corner-pin insert for angled monitors and billboards.",
+    ),
+    PlanarTrackerPreset(
+        id="anamorphic_skew",
+        name="Anamorphic Skew",
+        mode="corner_pin",
+        interpolation="cubic",
+        tl_x=0.05,
+        tl_y=0.06,
+        tr_x=0.95,
+        tr_y=0.14,
+        bl_x=0.12,
+        bl_y=0.94,
+        br_x=0.90,
+        br_y=0.86,
+        description="Dynamic 4-corner parallax warp for HUD and screen overlays.",
+    ),
+    PlanarTrackerPreset(
+        id="deskew_rectify",
+        name="Deskew / Rectify",
+        mode="rectify_perspective",
+        interpolation="cubic",
+        tl_x=0.12,
+        tl_y=0.10,
+        tr_x=0.88,
+        tr_y=0.14,
+        bl_x=0.08,
+        bl_y=0.90,
+        br_x=0.92,
+        br_y=0.88,
+        description="Flatten a skewed planar region in source footage back to full 16:9.",
+    ),
+    PlanarTrackerPreset(
+        id="point_follow",
+        name="2D Point Follow",
+        mode="point_track_only",
+        interpolation="cubic",
+        tl_x=0.0,
+        tl_y=0.0,
+        tr_x=1.0,
+        tr_y=0.0,
+        bl_x=0.0,
+        bl_y=1.0,
+        br_x=1.0,
+        br_y=1.0,
+        description="Track 2D anchor without warping picture; drive Color Power Windows.",
+    ),
+)
+
+
+def list_planar_tracker_presets() -> list[PlanarTrackerPreset]:
+    """Return built-in 2D Planar Tracker & Corner-Pin presets."""
+    return list(PLANAR_TRACKER_PRESETS)
+
+
+def get_planar_tracker_preset(preset_id: str) -> PlanarTrackerPreset:
+    """Lookup a 2D Planar Tracker preset by id."""
+    cleaned = preset_id.strip().lower()
+    for preset in PLANAR_TRACKER_PRESETS:
+        if preset.id == cleaned:
+            return preset
+    raise ValueError(f"Unknown planar tracker preset: {preset_id!r}")
+
+
+def apply_planar_tracker_preset(preset_id: str, *, enabled: bool = True) -> PlanarTrackerParams:
+    """Create PlanarTrackerParams from a curated preset."""
+    preset = get_planar_tracker_preset(preset_id)
+    return PlanarTrackerParams(
+        enabled=enabled,
+        preset=preset.id,
+        mode=preset.mode,
+        interpolation=preset.interpolation,
+        tl_x=preset.tl_x,
+        tl_y=preset.tl_y,
+        tr_x=preset.tr_x,
+        tr_y=preset.tr_y,
+        bl_x=preset.bl_x,
+        bl_y=preset.bl_y,
+        br_x=preset.br_x,
+        br_y=preset.br_y,
+    )
+
+
+def _coerce_planar_tracker_params(
+    raw: PlanarTrackerParams | dict[str, Any],
+) -> PlanarTrackerParams:
+    if isinstance(raw, PlanarTrackerParams):
+        return PlanarTrackerParams.model_validate(raw.model_dump())
+    return PlanarTrackerParams.model_validate(raw)
+
+
+def evaluate_track_point_at_frame(
+    params: PlanarTrackerParams,
+    frame: int,
+) -> tuple[float, float, float]:
+    """Evaluate normalized 2D track (x, y, confidence) at integer frame via linear interp."""
+    kfs = params.track_keyframes
+    if not kfs:
+        return (params.track_anchor_x, params.track_anchor_y, 1.0)
+    if frame <= kfs[0].frame:
+        return (kfs[0].x, kfs[0].y, kfs[0].confidence)
+    if frame >= kfs[-1].frame:
+        return (kfs[-1].x, kfs[-1].y, kfs[-1].confidence)
+    for idx in range(len(kfs) - 1):
+        a = kfs[idx]
+        b = kfs[idx + 1]
+        if a.frame <= frame <= b.frame:
+            span = max(1, b.frame - a.frame)
+            u = (frame - a.frame) / span
+            return (
+                a.x + (b.x - a.x) * u,
+                a.y + (b.y - a.y) * u,
+                a.confidence + (b.confidence - a.confidence) * u,
+            )
+    return (kfs[-1].x, kfs[-1].y, kfs[-1].confidence)
+
+
+def evaluate_corner_pins_at_frame(
+    params: PlanarTrackerParams,
+    frame: int,
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]:
+    """Return ((tl_x, tl_y), (tr_x, tr_y), (bl_x, bl_y), (br_x, br_y)) at frame."""
+    dx = 0.0
+    dy = 0.0
+    if params.follow_track and len(params.track_keyframes) >= 1:
+        ref_x = params.track_keyframes[0].x
+        ref_y = params.track_keyframes[0].y
+        cur_x, cur_y, _ = evaluate_track_point_at_frame(params, frame)
+        dx = cur_x - ref_x
+        dy = cur_y - ref_y
+    return (
+        (params.tl_x + dx, params.tl_y + dy),
+        (params.tr_x + dx, params.tr_y + dy),
+        (params.bl_x + dx, params.bl_y + dy),
+        (params.br_x + dx, params.br_y + dy),
+    )
+
+
+def track_point_sequence_luma(
+    frames: Sequence[Sequence[int] | bytes | bytearray],
+    width: int,
+    height: int,
+    *,
+    anchor_x: float,
+    anchor_y: float,
+    box_pct: float = 0.12,
+    search_radius_px: int = 20,
+    start_frame: int = 0,
+) -> list[TrackPointKeyframe]:
+    """Track a 2D luminance template patch across grayscale frames via SSD block matching."""
+    if width < 8 or height < 8:
+        raise ValueError(f"Frame dimensions too small for tracking: {width}x{height}")
+    if not frames:
+        return []
+    expected_len = width * height
+    for idx, buf in enumerate(frames):
+        if len(buf) != expected_len:
+            raise ValueError(
+                f"Frame {idx} buffer length {len(buf)} != {width}x{height}={expected_len}"
+            )
+
+    ax = _validate_finite_bound_float(anchor_x, "anchor_x", 0.02, 0.98)
+    ay = _validate_finite_bound_float(anchor_y, "anchor_y", 0.02, 0.98)
+    bp = _validate_finite_bound_float(box_pct, "box_pct", 0.04, 0.35)
+    rad = max(2, min(64, int(search_radius_px)))
+
+    half_w = max(3, round(width * bp * 0.5))
+    half_h = max(3, round(height * bp * 0.5))
+    cur_px = ax * width
+    cur_py = ay * height
+
+    results: list[TrackPointKeyframe] = [
+        TrackPointKeyframe(
+            frame=start_frame,
+            x=round(cur_px / width, 5),
+            y=round(cur_py / height, 5),
+            confidence=1.0,
+        )
+    ]
+
+    for f_idx in range(1, len(frames)):
+        prev_buf = frames[f_idx - 1]
+        curr_buf = frames[f_idx]
+        cx_i = max(half_w, min(width - 1 - half_w, round(cur_px)))
+        cy_i = max(half_h, min(height - 1 - half_h, round(cur_py)))
+
+        # Compute template energy for normalized confidence
+        tpl_vals: list[int] = []
+        tpl_sum = 0
+        for dy_t in range(-half_h, half_h + 1):
+            row_off = (cy_i + dy_t) * width
+            for dx_t in range(-half_w, half_w + 1):
+                v = int(prev_buf[row_off + cx_i + dx_t])
+                tpl_vals.append(v)
+                tpl_sum += v
+        n_pix = len(tpl_vals)
+        tpl_mean = tpl_sum / max(1, n_pix)
+        tpl_var = sum((v - tpl_mean) ** 2 for v in tpl_vals)
+
+        min_dx = max(half_w - cx_i, -rad)
+        max_dx = min(width - 1 - half_w - cx_i, rad)
+        min_dy = max(half_h - cy_i, -rad)
+        max_dy = min(height - 1 - half_h - cy_i, rad)
+
+        best_ssd = float("inf")
+        best_ox = 0
+        best_oy = 0
+        ssd_grid: dict[tuple[int, int], float] = {}
+
+        for oy in range(min_dy, max_dy + 1):
+            for ox in range(min_dx, max_dx + 1):
+                ssd = 0.0
+                k = 0
+                base_y = cy_i + oy
+                base_x = cx_i + ox
+                for dy_t in range(-half_h, half_h + 1):
+                    row_off = (base_y + dy_t) * width + base_x
+                    for dx_t in range(-half_w, half_w + 1):
+                        diff = int(curr_buf[row_off + dx_t]) - tpl_vals[k]
+                        ssd += diff * diff
+                        k += 1
+                ssd_grid[(ox, oy)] = ssd
+                if ssd < best_ssd:
+                    best_ssd = ssd
+                    best_ox = ox
+                    best_oy = oy
+
+        # Parabolic sub-pixel refinement on X and Y
+        sub_x = 0.0
+        sub_y = 0.0
+        if (best_ox - 1, best_oy) in ssd_grid and (best_ox + 1, best_oy) in ssd_grid:
+            s_l = ssd_grid[(best_ox - 1, best_oy)]
+            s_c = ssd_grid[(best_ox, best_oy)]
+            s_r = ssd_grid[(best_ox + 1, best_oy)]
+            denom_x = 2.0 * (s_l - 2.0 * s_c + s_r)
+            if abs(denom_x) > 1e-6:
+                sub_x = max(-0.5, min(0.5, (s_l - s_r) / denom_x))
+        if (best_ox, best_oy - 1) in ssd_grid and (best_ox, best_oy + 1) in ssd_grid:
+            s_u = ssd_grid[(best_ox, best_oy - 1)]
+            s_c = ssd_grid[(best_ox, best_oy)]
+            s_d = ssd_grid[(best_ox, best_oy + 1)]
+            denom_y = 2.0 * (s_u - 2.0 * s_c + s_d)
+            if abs(denom_y) > 1e-6:
+                sub_y = max(-0.5, min(0.5, (s_u - s_d) / denom_y))
+
+        cur_px = max(2.0, min(width - 2.0, cx_i + best_ox + sub_x))
+        cur_py = max(2.0, min(height - 2.0, cy_i + best_oy + sub_y))
+        norm_denom = max(tpl_var, n_pix * 225.0)
+        conf = max(0.0, min(1.0, 1.0 - (best_ssd / norm_denom)))
+        results.append(
+            TrackPointKeyframe(
+                frame=start_frame + f_idx,
+                x=round(cur_px / width, 5),
+                y=round(cur_py / height, 5),
+                confidence=round(conf, 4),
+            )
+        )
+    return results
+
+
+def _downsample_track_keyframes(
+    keyframes: Sequence[TrackPointKeyframe],
+    max_points: int,
+) -> list[TrackPointKeyframe]:
+    if len(keyframes) <= max_points:
+        return list(keyframes)
+    step = (len(keyframes) - 1) / (max_points - 1)
+    indices = sorted({0, len(keyframes) - 1, *(round(i * step) for i in range(max_points))})
+    return [keyframes[i] for i in indices]
+
+
+def _build_piecewise_delta_expr(
+    keyframes: Sequence[TrackPointKeyframe],
+    axis: Literal["x", "y"],
+    dim_sym: Literal["W", "H"],
+) -> str:
+    sampled = _downsample_track_keyframes(keyframes, MAX_PERSPECTIVE_EXPR_SEGMENTS + 1)
+    ref = sampled[0].x if axis == "x" else sampled[0].y
+    deltas = [
+        (kf.frame, round((kf.x if axis == "x" else kf.y) - ref, 5))
+        for kf in sampled
+    ]
+    if all(abs(d) <= 1e-5 for _, d in deltas):
+        return ""
+
+    # Build nested if(lt(in, f_next), lerp_expr, tail)
+    tail = f"({deltas[-1][1]:+.5f})*{dim_sym}"
+    expr = tail
+    for idx in range(len(deltas) - 2, -1, -1):
+        f0, d0 = deltas[idx]
+        f1, d1 = deltas[idx + 1]
+        span = max(1, f1 - f0)
+        if abs(d1 - d0) <= 1e-5:
+            seg_val = f"({d0:+.5f})*{dim_sym}"
+        else:
+            slope = (d1 - d0) / span
+            seg_val = f"(({d0:+.5f})+({slope:+.7f})*max(0\\,in-{f0}))*{dim_sym}"
+        expr = f"if(lt(in\\,{f1})\\,{seg_val}\\,{expr})"
+    return expr
+
+
+def compile_planar_tracker_filter(
+    planar_tracker: PlanarTrackerParams | dict[str, Any],
+    *,
+    pix_fmt: str | None = None,
+) -> str:
+    """Compile validated PlanarTrackerParams into an FFmpeg perspective corner-pin filter."""
+    params = _coerce_planar_tracker_params(planar_tracker)
+    if pix_fmt is not None and pix_fmt not in ALLOWED_CHROMA_PIX_FMTS:
+        raise ValueError(f"Unsupported pixel format: {pix_fmt!r}")
+    if not params.is_active():
+        return ""
+
+    sense = "destination" if params.mode == "corner_pin" else "source"
+    use_dynamic = params.follow_track and len(params.track_keyframes) >= 2
+    dx_expr = _build_piecewise_delta_expr(params.track_keyframes, "x", "W") if use_dynamic else ""
+    dy_expr = _build_piecewise_delta_expr(params.track_keyframes, "y", "H") if use_dynamic else ""
+    has_eval_frame = bool(dx_expr or dy_expr)
+
+    def _coord_expr(base: float, dim_sym: Literal["W", "H"], delta_expr: str) -> str:
+        base_str = f"{base:.4f}*{dim_sym}"
+        return f"{base_str}+{delta_expr}" if delta_expr else base_str
+
+    x0 = _coord_expr(params.tl_x, "W", dx_expr)
+    y0 = _coord_expr(params.tl_y, "H", dy_expr)
+    x1 = _coord_expr(params.tr_x, "W", dx_expr)
+    y1 = _coord_expr(params.tr_y, "H", dy_expr)
+    x2 = _coord_expr(params.bl_x, "W", dx_expr)
+    y2 = _coord_expr(params.bl_y, "H", dy_expr)
+    x3 = _coord_expr(params.br_x, "W", dx_expr)
+    y3 = _coord_expr(params.br_y, "H", dy_expr)
+
+    persp = (
+        f"perspective=x0={x0}:y0={y0}:x1={x1}:y1={y1}"
+        f":x2={x2}:y2={y2}:x3={x3}:y3={y3}"
+        f":interpolation={params.interpolation}:sense={sense}"
+    )
+    if has_eval_frame:
+        persp += ":eval=frame"
+    if pix_fmt is not None:
+        return f"{persp},format={pix_fmt}"
+    return persp
+
+
+def compile_planar_tracker(
+    planar_tracker: PlanarTrackerParams | dict[str, Any],
+    *,
+    pix_fmt: str | None = None,
+) -> PlanarTrackerCompileResult:
+    """Compile Planar Tracker / Corner-Pin parameters into FFmpeg filtergraph and metadata."""
+    params = _coerce_planar_tracker_params(planar_tracker)
+    fg = compile_planar_tracker_filter(params, pix_fmt=pix_fmt)
+    uses_eval = ":eval=frame" in fg
+    return PlanarTrackerCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_active=bool(fg),
+        mode=params.mode,
+        uses_per_frame_eval=uses_eval,
+        keyframe_count=len(params.track_keyframes),
+        params=params,
+    )
+
+
 def compile_fx_filtergraph(
     nodes: Sequence[FxNode | dict[str, Any]],
     *,
@@ -1970,8 +2885,10 @@ def compile_fx_filtergraph(
     pix_fmt: str = "yuv420p",
     use_gpu: bool = False,
     chroma_key: ChromaKeyParams | dict[str, Any] | None = None,
+    stabilizer: StabilizerParams | dict[str, Any] | None = None,
+    planar_tracker: PlanarTrackerParams | dict[str, Any] | None = None,
 ) -> FxCompileResult:
-    """Compile a multi-effect stack (plus optional chroma keyer) into an FFmpeg -vf filtergraph."""
+    """Compile an FX stack (plus optional stabilizer, planar tracker, and chroma keyer)."""
     if pix_fmt not in ALLOWED_PIX_FMTS:
         raise ValueError(f"Unsupported pixel format: {pix_fmt!r}")
 
@@ -1987,12 +2904,22 @@ def compile_fx_filtergraph(
     ck_params = _coerce_chroma_key_params(chroma_key) if chroma_key is not None else None
     ck_active = bool(ck_params is not None and ck_params.is_active())
 
-    if not active_nodes and not ck_active:
+    stab_params = _coerce_stabilizer_params(stabilizer) if stabilizer is not None else None
+    stab_active = bool(stab_params is not None and stab_params.is_active())
+
+    trk_params = (
+        _coerce_planar_tracker_params(planar_tracker) if planar_tracker is not None else None
+    )
+    trk_active = bool(trk_params is not None and trk_params.is_active())
+
+    if not active_nodes and not ck_active and not stab_active and not trk_active:
         return FxCompileResult(
             filtergraph="",
             ffmpeg_vf_args=[],
             active_effects=[],
             chroma_key_active=False,
+            stabilizer_active=False,
+            planar_tracker_active=False,
             bypassed_count=bypassed_count,
             normalized_nodes=normalized_nodes,
             estimated_render_seconds=0.0,
@@ -2015,6 +2942,18 @@ def compile_fx_filtergraph(
 
     segments: list[str] = []
     total_weight = 0.0
+    if stab_active and stab_params is not None:
+        stab_seg = compile_stabilizer_filter(stab_params, width=w_px, height=h_px, pix_fmt=None)
+        if stab_seg:
+            segments.append(stab_seg)
+            total_weight += 0.90
+
+    if trk_active and trk_params is not None:
+        trk_seg = compile_planar_tracker_filter(trk_params, pix_fmt=None)
+        if trk_seg:
+            segments.append(trk_seg)
+            total_weight += 0.85
+
     if ck_active and ck_params is not None:
         ck_seg = compile_chroma_key_filter(ck_params, pix_fmt=None)
         if ck_seg:
@@ -2119,6 +3058,8 @@ def compile_fx_filtergraph(
         active_effects=active_effects,
         keyframed_effects=keyframed_effects,
         chroma_key_active=ck_active,
+        stabilizer_active=stab_active,
+        planar_tracker_active=trk_active,
         bypassed_count=bypassed_count,
         normalized_nodes=normalized_nodes,
         estimated_render_seconds=est_seconds,
