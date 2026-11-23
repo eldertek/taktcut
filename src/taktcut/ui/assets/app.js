@@ -9,6 +9,7 @@ import {
   drawProgramMonitorCanvas,
   drawStereoVuMeterCanvas,
   drawTimelineCanvas,
+  drawTimelineOverviewCanvas,
   findActiveSubtitleCue,
   framesToSmpte
 } from "./canvas.js";
@@ -63,7 +64,10 @@ import {
   TRANSITION_DURATION_MAX_S,
   TRANSITION_DURATION_MIN_S,
   addMarkerInDocument,
+  appendClipToTrackInDocument,
   appendStillBounded,
+  buildSourceTapeSegments,
+  classifyMediaPoolEntry,
   cloneTimelineDoc,
   collectSnapTargets,
   clampSplitWipePercent,
@@ -76,10 +80,12 @@ import {
   computeInOutRangeMetrics,
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
+  computeTimelineZoomViewport,
   createStillRecord,
   deleteMarkerInDocument,
   estimateRenderFileSize,
   evaluateTimelineAudioLevels,
+  filterMediaPoolEntries,
   filterTimelineClips,
   findAdjacentCutForClip,
   findClipIndex,
@@ -97,6 +103,7 @@ import {
   getTransformPresetClient,
   getTransitionPresetName,
   hasSplittableClipAtFrame,
+  insertClipAtFrameInDocument,
   isClipTransformIdentity,
   isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
@@ -110,10 +117,12 @@ import {
   normalizeInOutRange,
   normalizeMarkerColor,
   removeStillById,
+  resolveSourceTapeFrame,
   rippleDeleteClipInDocument,
   sanitizeStillDataUrl,
   setClipLabelColor,
   setInOutRange,
+  smartInsertClipInDocument,
   splitClipInDocument,
   splitClipsAtPlayhead,
   stepPlayheadInRange,
@@ -463,7 +472,13 @@ const state = {
   renderEngine: "local",
   remotePollTimer: null,
   deliverSettingsTab: "video",
-  mediaPoolInfoEntry: null
+  mediaPoolInfoEntry: null,
+  mediaPoolType: "all",
+  mediaPoolSourceTape: false,
+  mediaPoolActiveClipId: null,
+  timelineViewStartFrame: 0,
+  timelineOverviewDraw: null,
+  sourceTapeState: null
 };
 
 function byId(id) {
@@ -860,12 +875,32 @@ function redrawActiveCanvases() {
       null,
       { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain }, vignette: { ...state.vignette } }
     );
+    const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
+    const zoomVp = computeTimelineZoomViewport(
+      startFrame,
+      state.timelineMaxFrame,
+      state.timelineZoom,
+      null,
+      state.timelineViewStartFrame
+    );
+    state.timelineViewStartFrame = zoomVp.viewStartFrame;
+    state.timelineOverviewDraw = drawTimelineOverviewCanvas(
+      byId("timeline-overview-canvas"),
+      state.timelineDoc,
+      {
+        zoom: state.timelineZoom,
+        viewStartFrame: state.timelineViewStartFrame,
+        playheadFrame: state.playheadFrame,
+        ioRange: state.ioRange
+      }
+    );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
       state.timelineDoc,
       state.timelineValidation,
       {
         zoom: state.timelineZoom,
+        viewStartFrame: state.timelineViewStartFrame,
         selected: state.timelineSelected,
         playheadFrame: state.playheadFrame,
         tool: state.timelineTool,
@@ -2128,6 +2163,15 @@ function syncTimelineIndexSelection() {
       card.classList.toggle("is-selected", isSel);
     }
   }
+  if (selectedId) {
+    state.mediaPoolActiveClipId = selectedId;
+  }
+  if (state.timelineDoc && state.mediaPoolType !== "stills") {
+    updateMasterBinCutToolbar();
+  }
+  if (state.mediaPoolSourceTape) {
+    syncSourceTapeScrubToPlayhead();
+  }
 }
 
 const MEDIA_POOL_PALETTES = {
@@ -2242,38 +2286,295 @@ function closeMediaPoolInfoDialog() {
   }
 }
 
+function getActiveMediaPoolEntry(clipEntries = null) {
+  const doc = state.timelineDoc;
+  if (!doc) return null;
+  const poolEntries = Array.isArray(clipEntries)
+    ? clipEntries
+    : filterMediaPoolEntries(doc, {
+        mediaType: state.mediaPoolType === "stills" ? "all" : state.mediaPoolType,
+        stills: state.stillsGallery
+      }).clipItems;
+  if (poolEntries.length === 0) return null;
+  const selectedId = getSelectedTimelineClipId();
+  if (selectedId) {
+    const selMatch = poolEntries.find((e) => e.id === selectedId);
+    if (selMatch) return selMatch;
+  }
+  if (state.mediaPoolActiveClipId) {
+    const activeMatch = poolEntries.find((e) => e.id === state.mediaPoolActiveClipId);
+    if (activeMatch) return activeMatch;
+  }
+  return poolEntries[0];
+}
+
+function updateMasterBinCutToolbar(clipEntries) {
+  const targetEl = byId("media-pool-active-target");
+  const smartBtn = byId("btn-pool-smart-insert");
+  const phBtn = byId("btn-pool-insert-playhead");
+  const appendBtn = byId("btn-pool-append");
+  const active = state.mediaPoolType === "stills" ? null : getActiveMediaPoolEntry(clipEntries);
+  const disabled = !state.timelineDoc || !active;
+  if (targetEl) {
+    targetEl.textContent = active ? `${active.label} -> ${active.trackId}` : "--";
+    targetEl.title = active ? `${active.label} (${active.trackId})` : "";
+  }
+  if (smartBtn) smartBtn.disabled = disabled;
+  if (phBtn) phBtn.disabled = disabled;
+  if (appendBtn) appendBtn.disabled = disabled;
+}
+
+function applyMasterBinEdit(mode) {
+  const doc = state.timelineDoc;
+  if (!doc) return false;
+  const entry = getActiveMediaPoolEntry();
+  if (!entry) return false;
+
+  let res;
+  if (mode === "append") {
+    res = appendClipToTrackInDocument(doc, entry);
+  } else if (mode === "smart_insert") {
+    res = smartInsertClipInDocument(doc, entry, state.playheadFrame);
+  } else {
+    res = insertClipAtFrameInDocument(doc, entry, state.playheadFrame, { ripple: true });
+  }
+  if (!res || !res.changed || !res.insertedClip) return false;
+
+  const trackLabel = `${res.trackKind === "audio" ? "A" : "V"}${res.trackIndex}`;
+  const fps = Math.max(1, doc.fps ? doc.fps.num / Math.max(1, doc.fps.den) : 25);
+  const tc = framesToSmpte(res.insertFrame, doc.fps ? doc.fps.num : 25, doc.fps ? doc.fps.den : 1);
+  if (mode === "append") {
+    commitTimelineMutation(res.doc, state.timelineSelected);
+    state.mediaPoolActiveClipId = res.insertedClip.id;
+    showBanner(
+      t("timeline.mediapool.bannerAppended")
+        .replace("{name}", res.insertedClip.name)
+        .replace("{track}", trackLabel)
+        .replace("{tc}", tc),
+      "success"
+    );
+  } else {
+    commitTimelineMutation(res.doc, { kind: "clip", data: res.insertedClip });
+    state.mediaPoolActiveClipId = res.insertedClip.id;
+    const key =
+      mode === "smart_insert"
+        ? "timeline.mediapool.bannerSmartInserted"
+        : "timeline.mediapool.bannerInserted";
+    showBanner(
+      t(key)
+        .replace("{name}", res.insertedClip.name)
+        .replace("{track}", trackLabel)
+        .replace("{tc}", tc),
+      "success"
+    );
+  }
+  void fps;
+  return true;
+}
+
+function syncSourceTapeScrubToPlayhead() {
+  const tape = state.sourceTapeState;
+  const scrubEl = byId("source-tape-scrub");
+  const readoutEl = byId("source-tape-readout");
+  const tcEl = byId("source-tape-tc");
+  const segHost = byId("source-tape-segments");
+  if (!tape || !tape.segments || tape.segments.length === 0) return;
+
+  const selectedId = getSelectedTimelineClipId() || state.mediaPoolActiveClipId;
+  let activeSeg =
+    tape.segments.find(
+      (s) =>
+        state.playheadFrame >= s.entry.startFrames &&
+        state.playheadFrame < s.entry.startFrames + s.durationFrames
+    ) ||
+    tape.segments.find((s) => s.entry.id === selectedId) ||
+    tape.segments[0];
+
+  const offsetInClip = Math.max(
+    0,
+    Math.min(activeSeg.durationFrames - 1, state.playheadFrame - activeSeg.entry.startFrames)
+  );
+  const tapeFrame = activeSeg.tapeStartFrame + offsetInClip;
+  if (scrubEl && document.activeElement !== scrubEl) {
+    scrubEl.value = String(tapeFrame);
+  }
+  if (readoutEl) {
+    readoutEl.textContent = `${activeSeg.entry.label} (${activeSeg.entry.trackId})`;
+  }
+  if (tcEl) {
+    const doc = state.timelineDoc;
+    const fpsNum = doc && doc.fps ? doc.fps.num : 25;
+    const fpsDen = doc && doc.fps ? doc.fps.den : 1;
+    tcEl.textContent = `${framesToSmpte(tapeFrame, fpsNum, fpsDen)} / ${tape.totalTimecode}`;
+  }
+  if (segHost) {
+    for (const segBtn of segHost.querySelectorAll("[data-tape-clip-id]")) {
+      const isAct = segBtn.getAttribute("data-tape-clip-id") === activeSeg.entry.id;
+      segBtn.classList.toggle("is-active", isAct);
+    }
+  }
+}
+
+function renderMediaPoolSourceTape(clipEntries) {
+  const host = byId("media-pool-source-tape");
+  const tapeBtn = byId("btn-media-pool-source-tape");
+  if (tapeBtn) {
+    tapeBtn.classList.toggle("is-active", Boolean(state.mediaPoolSourceTape));
+    tapeBtn.setAttribute("aria-pressed", state.mediaPoolSourceTape ? "true" : "false");
+  }
+  if (!host) return;
+  const doc = state.timelineDoc;
+  if (!state.mediaPoolSourceTape || !doc || !Array.isArray(clipEntries) || clipEntries.length === 0) {
+    state.sourceTapeState = null;
+    host.classList.add("is-hidden");
+    return;
+  }
+  host.classList.remove("is-hidden");
+  const tape = buildSourceTapeSegments(clipEntries, doc.fps || 25);
+  state.sourceTapeState = tape;
+
+  const scrubEl = byId("source-tape-scrub");
+  if (scrubEl) {
+    scrubEl.min = "0";
+    scrubEl.max = String(Math.max(0, tape.totalFrames - 1));
+  }
+
+  const segHost = byId("source-tape-segments");
+  if (segHost) {
+    const segButtons = tape.segments.map((seg) => {
+      const pal = computeClipThumbPalette(seg.entry);
+      const btn = dom("button", "source-tape-segment");
+      btn.type = "button";
+      btn.setAttribute("role", "listitem");
+      btn.setAttribute("data-tape-clip-id", seg.entry.id);
+      btn.style.flexGrow = String(Math.max(1, seg.durationFrames));
+      btn.style.setProperty("--tape-accent", pal.accent);
+      btn.title = `${seg.entry.label} (${seg.entry.trackId} | ${seg.tapeStartTc} - ${seg.tapeEndTc})`;
+      btn.setAttribute("aria-label", `${seg.entry.label} (${seg.entry.trackId})`);
+      btn.addEventListener("click", () => {
+        state.mediaPoolActiveClipId = seg.entry.id;
+        selectClipFromTimelineIndex(seg.entry);
+        syncSourceTapeScrubToPlayhead();
+      });
+      return btn;
+    });
+    segHost.replaceChildren(...segButtons);
+  }
+  syncSourceTapeScrubToPlayhead();
+}
+
 function renderMediaPool() {
   const list = byId("media-pool-list");
   if (!list) return;
   const countEl = byId("media-pool-count");
+  const typeGroup = byId("media-pool-type-filter");
+  if (typeGroup) {
+    for (const pill of typeGroup.querySelectorAll("[data-pool-type]")) {
+      const kind = pill.getAttribute("data-pool-type") || "all";
+      const isAct = kind === state.mediaPoolType;
+      pill.classList.toggle("is-active", isAct);
+      pill.setAttribute("aria-pressed", isAct ? "true" : "false");
+    }
+  }
+
   const doc = state.timelineDoc;
-  if (!doc) {
+  if (!doc && state.mediaPoolType !== "stills") {
     if (countEl) countEl.textContent = "0 CLIPS";
     list.replaceChildren(dom("div", "timeline-index-empty mono", t("timeline.mediapool.empty")));
+    renderMediaPoolSourceTape([]);
+    updateMasterBinCutToolbar([]);
     return;
   }
-  const entries = filterTimelineClips(doc);
+
+  const poolResult = filterMediaPoolEntries(doc, {
+    mediaType: state.mediaPoolType,
+    stills: state.stillsGallery
+  });
+
   if (countEl) {
-    countEl.textContent = `${entries.length} ${entries.length === 1 ? "CLIP" : "CLIPS"}`;
+    if (poolResult.activeType === "stills") {
+      const n = poolResult.stillItems.length;
+      countEl.textContent = `${n} ${n === 1 ? "STILL" : "STILLS"}`;
+    } else if (poolResult.activeType === "all") {
+      const n = poolResult.clipItems.length;
+      countEl.textContent = `${n} ${n === 1 ? "CLIP" : "CLIPS"}`;
+    } else {
+      countEl.textContent = `${poolResult.clipItems.length} / ${poolResult.totalClipCount}`;
+    }
   }
+
+  if (poolResult.activeType === "stills") {
+    renderMediaPoolSourceTape([]);
+    updateMasterBinCutToolbar([]);
+    if (poolResult.stillItems.length === 0) {
+      list.replaceChildren(dom("div", "timeline-index-empty mono", t("timeline.mediapool.emptyStills")));
+      return;
+    }
+    const stillCards = poolResult.stillItems.map((still) => {
+      const safeUrl = sanitizeStillDataUrl(still.dataUrl);
+      const card = dom("button", "media-pool-card is-still");
+      card.type = "button";
+      card.setAttribute("role", "listitem");
+      card.setAttribute("data-pool-still-id", still.id);
+      card.title = `${still.filename} (${still.preset || still.label})`;
+
+      const thumb = dom("div", "media-pool-thumb is-still-thumb");
+      const thumbTop = dom("div", "media-pool-thumb-top");
+      thumbTop.appendChild(dom("span", "media-pool-track mono", "STILL"));
+      thumbTop.appendChild(dom("span", "media-pool-dur mono", still.source === "fx" ? "FX" : "CLR"));
+
+      const visual = dom("div", "media-pool-visual is-still");
+      if (safeUrl) {
+        const img = document.createElement("img");
+        img.className = "media-pool-still-img";
+        img.src = safeUrl;
+        img.alt = `${still.label} ${still.preset || ""}`.trim();
+        img.loading = "lazy";
+        visual.appendChild(img);
+      }
+      thumb.replaceChildren(thumbTop, visual);
+
+      const nameEl = dom("span", "media-pool-name mono", still.preset || still.filename);
+      const metaEl = dom("div", "media-pool-meta mono");
+      metaEl.appendChild(
+        dom("span", "media-pool-meta-tc", still.timecode || still.timestampLabel || "PNG")
+      );
+      card.replaceChildren(thumb, nameEl, metaEl);
+      card.addEventListener("click", () => downloadStillPng(still));
+      return card;
+    });
+    list.replaceChildren(...stillCards);
+    return;
+  }
+
+  const entries = poolResult.clipItems;
+  renderMediaPoolSourceTape(entries);
+  updateMasterBinCutToolbar(entries);
+
   if (entries.length === 0) {
     list.replaceChildren(dom("div", "timeline-index-empty mono", t("timeline.mediapool.empty")));
     return;
   }
+
   const fpsFloat = Math.max(1, doc.fps.num / Math.max(1, doc.fps.den));
   const selectedId = getSelectedTimelineClipId();
   const infoHint = t("timeline.mediapool.infoHint");
   const cards = entries.map((entry) => {
     const isSel = Boolean(selectedId && entry.id === selectedId);
     const isAudio = entry.trackKind === "audio";
+    const isTitle = entry.mediaCategory === "title";
     const durSec = (entry.durationFrames / fpsFloat).toFixed(1);
     const colorId = entry.labelColor || "default";
     const pal = computeClipThumbPalette(entry);
 
-    const card = dom("button", `media-pool-card${isAudio ? " is-audio" : " is-video"}${isSel ? " is-selected" : ""}`);
+    const card = dom(
+      "button",
+      `media-pool-card${isAudio ? " is-audio" : isTitle ? " is-title" : " is-video"}${isSel ? " is-selected" : ""}`
+    );
     card.type = "button";
     card.setAttribute("role", "listitem");
     card.setAttribute("data-pool-clip-id", entry.id);
+    card.setAttribute("data-media-category", entry.mediaCategory || "video");
     card.setAttribute("data-label-color", colorId);
     card.title = `${entry.label} (${entry.trackId} | ${durSec}s | ${entry.durationFrames}f) - ${infoHint}`;
 
@@ -2314,7 +2615,11 @@ function renderMediaPool() {
     metaEl.appendChild(dom("span", "media-pool-meta-tc", `${entry.startTimecode} | ${entry.durationFrames}f`));
 
     card.replaceChildren(thumb, nameEl, metaEl);
-    card.addEventListener("click", () => selectClipFromTimelineIndex(entry));
+    card.addEventListener("click", () => {
+      state.mediaPoolActiveClipId = entry.id;
+      selectClipFromTimelineIndex(entry);
+      updateMasterBinCutToolbar(entries);
+    });
     card.addEventListener("dblclick", () => openMediaPoolInfoDialog(entry));
     card.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
@@ -4623,6 +4928,7 @@ function renderStillsGalleryContainer(container) {
 function renderStillsGallery() {
   renderStillsGalleryContainer(byId("color-stills-gallery"));
   renderStillsGalleryContainer(byId("fx-stills-gallery"));
+  renderMediaPool();
 }
 
 function grabMonitorStill(target) {
@@ -7005,8 +7311,22 @@ function rippleDeleteSelectedClipAction() {
 
 function setPlayhead(frame) {
   state.playheadFrame = Math.max(0, Math.min(state.timelineMaxFrame, Math.round(frame)));
+  if (state.timelineZoom > 1 && state.timelineDoc) {
+    const startFrame = state.timelineDoc.start_frame || 0;
+    const vp = computeTimelineZoomViewport(
+      startFrame,
+      state.timelineMaxFrame,
+      state.timelineZoom,
+      state.playheadFrame,
+      state.timelineViewStartFrame
+    );
+    state.timelineViewStartFrame = vp.viewStartFrame;
+  }
   updatePlayheadReadout();
   updateTimelineToolbarUI();
+  if (state.mediaPoolSourceTape) {
+    syncSourceTapeScrubToPlayhead();
+  }
   if (
     state.activeTab === "timeline" ||
     state.activeTab === "fx" ||
@@ -7684,6 +8004,58 @@ function resolvePointerFrame(x, opts = {}) {
     snapFrame: null,
     snapKind: null
   };
+}
+
+function bindTimelineOverviewCanvas(canvas) {
+  if (!canvas) return;
+  const ovPtr = { active: false, pointerId: null };
+
+  const scrubAt = (ev) => {
+    const ov = state.timelineOverviewDraw;
+    if (!state.timelineDoc || !ov || typeof ov.xToFrame !== "function") return;
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const frame = ov.xToFrame(x);
+    if (state.timelineZoom > 1) {
+      const vp = computeTimelineZoomViewport(
+        ov.startFrame,
+        ov.maxFrame,
+        state.timelineZoom,
+        frame,
+        null
+      );
+      state.timelineViewStartFrame = vp.viewStartFrame;
+    }
+    setPlayhead(frame);
+  };
+
+  canvas.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse" && ev.button !== 0) return;
+    stopPlayback();
+    ovPtr.active = true;
+    ovPtr.pointerId = ev.pointerId;
+    if (canvas.setPointerCapture) {
+      try {
+        canvas.setPointerCapture(ev.pointerId);
+      } catch {
+        // Ignore synthetic pointer events
+      }
+    }
+    scrubAt(ev);
+  });
+
+  canvas.addEventListener("pointermove", (ev) => {
+    if (!ovPtr.active || (ovPtr.pointerId !== null && ev.pointerId !== ovPtr.pointerId)) return;
+    scrubAt(ev);
+  });
+
+  const endDrag = (ev) => {
+    if (!ovPtr.active || (ovPtr.pointerId !== null && ev.pointerId !== ovPtr.pointerId)) return;
+    ovPtr.active = false;
+    ovPtr.pointerId = null;
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
 }
 
 function bindTimelineCanvasScrub(canvas) {
@@ -9682,6 +10054,17 @@ function wireEvents() {
   byId("timeline-zoom").addEventListener("input", () => {
     state.timelineZoom = Number.parseFloat(byId("timeline-zoom").value);
     byId("timeline-zoom-label").textContent = `${state.timelineZoom.toFixed(1)}x`;
+    if (state.timelineDoc) {
+      const startFrame = state.timelineDoc.start_frame || 0;
+      const vp = computeTimelineZoomViewport(
+        startFrame,
+        state.timelineMaxFrame,
+        state.timelineZoom,
+        state.playheadFrame,
+        null
+      );
+      state.timelineViewStartFrame = vp.viewStartFrame;
+    }
     redrawActiveCanvases();
   });
 
@@ -9719,7 +10102,76 @@ function wireEvents() {
   const loopIoBtn = byId("btn-tc-loop-io");
   if (loopIoBtn) loopIoBtn.addEventListener("click", toggleIoLoopAction);
 
+  bindTimelineOverviewCanvas(byId("timeline-overview-canvas"));
   bindTimelineCanvasScrub(byId("timeline-canvas"));
+
+  const poolFilterGroup = byId("media-pool-type-filter");
+  if (poolFilterGroup) {
+    for (const pill of poolFilterGroup.querySelectorAll("[data-pool-type]")) {
+      pill.addEventListener("click", () => {
+        const nextType = pill.getAttribute("data-pool-type") || "all";
+        state.mediaPoolType = nextType;
+        renderMediaPool();
+        pill.blur();
+      });
+    }
+  }
+  const sourceTapeBtn = byId("btn-media-pool-source-tape");
+  if (sourceTapeBtn) {
+    sourceTapeBtn.addEventListener("click", () => {
+      state.mediaPoolSourceTape = !state.mediaPoolSourceTape;
+      renderMediaPool();
+      sourceTapeBtn.blur();
+    });
+  }
+  const sourceTapeScrub = byId("source-tape-scrub");
+  if (sourceTapeScrub) {
+    sourceTapeScrub.addEventListener("input", () => {
+      const tape = state.sourceTapeState;
+      if (!tape) return;
+      stopPlayback();
+      const val = Number.parseInt(sourceTapeScrub.value, 10);
+      const resolved = resolveSourceTapeFrame(tape, val);
+      if (resolved && resolved.segment && resolved.segment.entry) {
+        state.mediaPoolActiveClipId = resolved.segment.entry.id;
+        const found = findTrackAndClip(
+          state.timelineDoc,
+          resolved.segment.entry.trackKind,
+          resolved.segment.entry.trackIndex,
+          resolved.segment.entry.clipIndex
+        );
+        if (found) {
+          state.timelineSelected = { kind: "clip", data: found.clip };
+        }
+        setPlayhead(resolved.timelineFrame);
+        renderTimelineSelection();
+      }
+    });
+    sourceTapeScrub.addEventListener("change", () => {
+      sourceTapeScrub.blur();
+    });
+  }
+  const smartInsertBtn = byId("btn-pool-smart-insert");
+  if (smartInsertBtn) {
+    smartInsertBtn.addEventListener("click", () => {
+      applyMasterBinEdit("smart_insert");
+      smartInsertBtn.blur();
+    });
+  }
+  const insertPhBtn = byId("btn-pool-insert-playhead");
+  if (insertPhBtn) {
+    insertPhBtn.addEventListener("click", () => {
+      applyMasterBinEdit("insert_playhead");
+      insertPhBtn.blur();
+    });
+  }
+  const appendBtn = byId("btn-pool-append");
+  if (appendBtn) {
+    appendBtn.addEventListener("click", () => {
+      applyMasterBinEdit("append");
+      appendBtn.blur();
+    });
+  }
   wireClipAudioInspector();
   wireClipRetimeInspector();
   wireClipTransformInspector();

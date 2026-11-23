@@ -959,6 +959,13 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "render-tabpanel-file",
         "media-pool-info-dialog",
         "media-pool-info-kv",
+        "media-pool-type-filter",
+        "btn-media-pool-source-tape",
+        "media-pool-cut-toolbar",
+        "btn-pool-smart-insert",
+        "btn-pool-insert-playhead",
+        "btn-pool-append",
+        "timeline-overview-canvas",
     ):
         assert elem_id in html_text
     assert "v0.1.27" in html_text
@@ -971,6 +978,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert "100dvh" in css_text
     assert ".deliver-subtabs" in css_text
     assert ".deliver-actions-footer" in css_text
+    assert ".media-pool-type-filter" in css_text
+    assert ".timeline-overview-canvas" in css_text
+    assert ".nle-titles-bottom" in css_text
     assert "\u2013" not in css_text and "\u2014" not in css_text
 
     i18n_status, _, i18n_raw = _http_call(f"{base_url}/i18n.js")
@@ -981,6 +991,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Burn-Ins & Looks"' in i18n_text
     assert '"Incrustations & Looks"' in i18n_text
     assert '"Infos du Plan"' in i18n_text
+    assert '"Bande Source"' in i18n_text
+    assert '"Insertion Intel."' in i18n_text
+    assert '"Ajouter Fin"' in i18n_text
     assert '"TEMPÉRATURE"' in i18n_text
     assert '"Télécharger OTIO"' in i18n_text
     assert '"Sélection"' in i18n_text
@@ -1047,10 +1060,13 @@ import {{
   SPLIT_WIPE_POS_MIN,
   STILLS_GALLERY_MAX,
   addMarkerInDocument,
+  appendClipToTrackInDocument,
   appendStillBounded,
   buildAtempoStagesClient,
+  buildSourceTapeSegments,
   buildStillFilename,
   clampSplitWipePercent,
+  classifyMediaPoolEntry,
   collectSnapTargets,
   compileAudioFilterClient,
   compileFairlightAudioFilterClient,
@@ -1062,16 +1078,19 @@ import {{
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
   computeSplitWipePercentFromPointer,
+  computeTimelineZoomViewport,
   createStillRecord,
   deleteMarkerInDocument,
   escapeFfmetadataValue,
   escapeXmlAttr,
   estimateRenderFileSize,
+  filterMediaPoolEntries,
   filterTimelineClips,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
   findAllCutJunctions,
   findMagneticSnap,
+  findNearestEditPointForTrack,
   formatCmx3600Edl,
   formatFcpxmlTimeline,
   formatFfmetadataFromMarkers,
@@ -1080,6 +1099,7 @@ import {{
   formatYoutubeChaptersFromMarkers,
   framesToSmpteTimecode,
   getDeliveryPresetClient,
+  insertClipAtFrameInDocument,
   isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
   isValidClipLabelColor,
@@ -1092,11 +1112,13 @@ import {{
   normalizeInOutRange,
   normalizeMarkerColor,
   removeStillById,
+  resolveSourceTapeFrame,
   sanitizeStillDataUrl,
   normalizeSplitWipeState,
   rippleDeleteClipInDocument,
   setClipLabelColor,
   setInOutRange,
+  smartInsertClipInDocument,
   splitClipInDocument,
   splitClipsAtPlayhead,
   stepPlayheadInRange,
@@ -2412,6 +2434,103 @@ assert.deepEqual(
 assert.deepEqual(filterTimelineClips(indexDoc, {{ labelColor: "purple" }}), []);
 assert.deepEqual(filterTimelineClips(indexDoc, {{ labelColor: "__proto__" }}), []);
 assert.equal(JSON.stringify(indexDoc), indexSnapBefore);
+
+// Master Bin Smart Bins, Cut Page Assembly, Source Tape, Dual-Timeline Zoom
+assert.equal(
+  classifyMediaPoolEntry({{ trackKind: "video", trackIndex: 1, label: "A001_Cam" }}),
+  "video"
+);
+assert.equal(
+  classifyMediaPoolEntry({{ trackKind: "video", trackIndex: 2, label: "GFX_LowerThird" }}),
+  "title"
+);
+assert.equal(
+  classifyMediaPoolEntry({{ trackKind: "audio", trackIndex: 1, label: "VO_Main" }}),
+  "audio"
+);
+
+const sampleStills = [{{ id: "st-1", label: "COLOR", preset: "Teal" }}];
+const poolResAll = filterMediaPoolEntries(indexDoc, {{
+  mediaType: "all",
+  stills: sampleStills
+}});
+assert.equal(poolResAll.counts.all, 6);
+assert.equal(poolResAll.counts.audio, 3);
+assert.equal(poolResAll.counts.stills, 1);
+const poolResStills = filterMediaPoolEntries(indexDoc, {{
+  mediaType: "stills",
+  stills: sampleStills
+}});
+assert.equal(poolResStills.stillItems.length, 1);
+
+const cutDoc = {{
+  name: "Cut_Page_Unit",
+  source_format: "drt",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [
+        {{
+          id: "v1-a",
+          name: "Shot_A",
+          track_index: 1,
+          media_type: "video",
+          start_frame: 0,
+          duration_frames: 100
+        }},
+        {{
+          id: "v1-b",
+          name: "Shot_B",
+          track_index: 1,
+          media_type: "video",
+          start_frame: 100,
+          duration_frames: 100
+        }}
+      ]
+    }}
+  ],
+  markers: []
+}};
+assert.equal(findNearestEditPointForTrack(cutDoc, "video", 1, 88), 100);
+assert.equal(findNearestEditPointForTrack(cutDoc, "video", 1, 20), 0);
+
+const refClip0 = {{ trackKind: "video", trackIndex: 1, clipIndex: 0 }};
+const appRes = appendClipToTrackInDocument(cutDoc, refClip0);
+assert.equal(appRes.changed, true);
+assert.equal(appRes.insertFrame, 200);
+assert.equal(appRes.doc.tracks[0].clips.length, 3);
+assert.equal(appRes.doc.tracks[0].clips[2].start_frame, 200);
+
+const smartRes = smartInsertClipInDocument(cutDoc, refClip0, 88);
+assert.equal(smartRes.changed, true);
+assert.equal(smartRes.nearestEditFrame, 100);
+assert.equal(smartRes.insertedClip.start_frame, 100);
+assert.equal(smartRes.doc.tracks[0].clips[2].start_frame, 200);
+
+const midRes = insertClipAtFrameInDocument(cutDoc, refClip0, 50, {{ ripple: true }});
+assert.equal(midRes.changed, true);
+assert.equal(midRes.doc.tracks[0].clips.length, 4);
+assert.equal(midRes.doc.tracks[0].clips[0].duration_frames, 50);
+assert.equal(midRes.doc.tracks[0].clips[1].start_frame, 50);
+assert.equal(midRes.doc.tracks[0].clips[2].start_frame, 150);
+assert.equal(midRes.doc.tracks[0].clips[3].start_frame, 200);
+
+const tape = buildSourceTapeSegments(filterTimelineClips(cutDoc), 25);
+assert.equal(tape.totalFrames, 200);
+const tapeHit = resolveSourceTapeFrame(tape, 125);
+assert.equal(tapeHit.segment.entry.label, "Shot_B");
+assert.equal(tapeHit.timelineFrame, 125);
+
+const vpZoom = computeTimelineZoomViewport(0, 500, 2, 250, null);
+assert.equal(vpZoom.visibleSpan, 250);
+assert.equal(vpZoom.viewStartFrame, 125);
+assert.equal(vpZoom.viewEndFrame, 375);
 """
     proc = subprocess.run(
         [node, "--input-type=module"],
@@ -2835,6 +2954,12 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 if width <= 820:
                     pool_box = first_pool_card.bounding_box()
                     assert pool_box is not None and pool_box["height"] >= 44
+                    pill_box = page.locator(
+                        '#media-pool-type-filter [data-pool-type="video"]'
+                    ).bounding_box()
+                    assert pill_box is not None and pill_box["height"] >= 44
+                    append_box = page.locator("#btn-pool-append").bounding_box()
+                    assert append_box is not None and append_box["height"] >= 44
                 first_pool_card.dblclick()
                 page.wait_for_selector("#media-pool-info-dialog[open]")
                 pool_kv_text = page.locator("#media-pool-info-kv").text_content() or ""
@@ -2843,11 +2968,28 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 page.wait_for_function(
                     "() => !document.getElementById('media-pool-info-dialog').open"
                 )
+                # Smart Bin type filter & Source Tape check
+                page.locator('#media-pool-type-filter [data-pool-type="audio"]').click()
+                assert page.locator("#media-pool-list .media-pool-card").count() >= 1
+                assert page.locator('#media-pool-list .media-pool-card.is-video').count() == 0
+                page.locator('#media-pool-type-filter [data-pool-type="all"]').click()
+                page.locator("#btn-media-pool-source-tape").click()
+                assert page.locator("#media-pool-source-tape").is_visible() is True
+                page.locator("#btn-media-pool-source-tape").click()
+                assert page.locator("#media-pool-source-tape").is_visible() is False
                 page.locator("#playhead-slider").fill("25")
                 page.locator("#playhead-slider").dispatch_event("input")
                 page.locator("#playhead-slider").evaluate("el => el.blur()")
                 assert page.locator("#program-frame-counter").text_content() == "25f / 500f"
                 if width == 1440:
+                    # Cut Page Append & Undo check (preserves playhead 25f, extends timeline)
+                    page.locator("#btn-pool-append").click()
+                    assert page.locator("#program-frame-counter").text_content() == "25f / 625f"
+                    page.locator("#btn-timeline-undo").click()
+                    assert page.locator("#program-frame-counter").text_content() == "25f / 500f"
+                    # Dual-Timeline Overview Canvas visible
+                    ov_box = page.locator("#timeline-overview-canvas").bounding_box()
+                    assert ov_box is not None and ov_box["height"] >= 24
                     page.keyboard.press("ArrowRight")
                     assert page.locator("#program-frame-counter").text_content() == "26f / 500f"
                     page.keyboard.press("ArrowLeft")

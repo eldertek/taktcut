@@ -1834,6 +1834,27 @@ function _resolveClipLabelColorFilter(rawColor) {
   return { active: true, colorId: null };
 }
 
+export const MEDIA_POOL_TYPES = Object.freeze(["all", "video", "audio", "title", "stills"]);
+
+export function classifyMediaPoolEntry(entry) {
+  if (!entry || typeof entry !== "object") return "video";
+  const trackKind = entry.trackKind === "audio" || entry.media_type === "audio" ? "audio" : "video";
+  if (trackKind === "audio") return "audio";
+  const trackIndex = Number.isFinite(Number(entry.trackIndex ?? entry.track_index))
+    ? Number(entry.trackIndex ?? entry.track_index)
+    : 1;
+  const label = String(entry.label ?? entry.name ?? "");
+  const sourcePath = String(entry.sourcePath ?? entry.source_path ?? "");
+  if (
+    trackIndex >= 2 ||
+    /\b(gfx|title|lower[_-]?third|subtitle|caption)\b/i.test(label) ||
+    /^gfx\//i.test(sourcePath)
+  ) {
+    return "title";
+  }
+  return "video";
+}
+
 export function filterTimelineClips(doc, options = {}) {
   if (!doc || !Array.isArray(doc.tracks)) return [];
   const opts = options && typeof options === "object" ? options : {};
@@ -1843,6 +1864,8 @@ export function filterTimelineClips(doc, options = {}) {
   if (colorFilter.active && colorFilter.colorId === null) {
     return [];
   }
+  const rawType = typeof opts.mediaType === "string" ? opts.mediaType.trim().toLowerCase() : "all";
+  const typeFilter = rawType === "titles" ? "title" : rawType || "all";
 
   const fps = doc.fps !== undefined ? doc.fps : 25;
   const results = [];
@@ -1859,8 +1882,18 @@ export function filterTimelineClips(doc, options = {}) {
 
       const label = typeof clip.name === "string" ? clip.name : String(clip.name ?? "");
       const labelColor = normalizeClipLabelColor(clip.label_color);
+      const sourcePath = typeof clip.source_path === "string" ? clip.source_path : "";
+      const mediaCategory = classifyMediaPoolEntry({
+        trackKind,
+        trackIndex,
+        label,
+        sourcePath
+      });
 
       if (colorFilter.active && labelColor !== colorFilter.colorId) {
+        continue;
+      }
+      if (typeFilter !== "all" && mediaCategory !== typeFilter) {
         continue;
       }
       if (queryNeedle && !label.toLowerCase().includes(queryNeedle)) {
@@ -1902,6 +1935,387 @@ export function filterTimelineClips(doc, options = {}) {
   });
 
   return results;
+}
+
+export function filterMediaPoolEntries(doc, options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const rawType = typeof opts.mediaType === "string" ? opts.mediaType.trim().toLowerCase() : "all";
+  const activeType = rawType === "titles" ? "title" : MEDIA_POOL_TYPES.includes(rawType) ? rawType : "all";
+  const queryNeedle = typeof opts.query === "string" ? opts.query.trim().toLowerCase() : "";
+  const stills = Array.isArray(opts.stills) ? opts.stills : [];
+
+  const allClips = filterTimelineClips(doc, { labelColor: opts.labelColor });
+  const counts = {
+    all: allClips.length,
+    video: 0,
+    audio: 0,
+    title: 0,
+    stills: stills.length
+  };
+  for (const entry of allClips) {
+    const cat = classifyMediaPoolEntry(entry);
+    if (cat === "audio") counts.audio += 1;
+    else if (cat === "title") counts.title += 1;
+    else counts.video += 1;
+  }
+
+  if (activeType === "stills") {
+    const filteredStills = stills.filter((s) => {
+      if (!s || typeof s !== "object") return false;
+      if (!queryNeedle) return true;
+      const hay = `${s.label || ""} ${s.preset || ""} ${s.filename || ""}`.toLowerCase();
+      return hay.includes(queryNeedle);
+    });
+    return {
+      activeType,
+      items: filteredStills,
+      clipItems: [],
+      stillItems: filteredStills,
+      totalClipCount: allClips.length,
+      counts
+    };
+  }
+
+  const clipItems = filterTimelineClips(doc, {
+    query: opts.query,
+    labelColor: opts.labelColor,
+    mediaType: activeType
+  }).map((entry) => ({
+    ...entry,
+    mediaCategory: classifyMediaPoolEntry(entry)
+  }));
+  return {
+    activeType,
+    items: clipItems,
+    clipItems,
+    stillItems: [],
+    totalClipCount: allClips.length,
+    counts
+  };
+}
+
+export function findNearestEditPointForTrack(doc, trackKind, trackIndex, playheadFrame) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return Math.max(0, Math.round(Number(playheadFrame) || 0));
+  }
+  const docStart = Number.isFinite(Number(doc.start_frame)) ? Math.round(Number(doc.start_frame)) : 0;
+  const ph = Math.max(docStart, Math.round(Number(playheadFrame) || 0));
+  const kind = trackKind === "audio" ? "audio" : "video";
+  const idx = Number.isFinite(Number(trackIndex)) ? Number(trackIndex) : 1;
+  const trk =
+    doc.tracks.find((t) => t && t.kind === kind && Number(t.index) === idx) ||
+    doc.tracks.find((t) => t && t.kind === kind);
+
+  const boundaries = new Set([docStart]);
+  if (trk && Array.isArray(trk.clips)) {
+    for (const c of trk.clips) {
+      if (!c) continue;
+      const s = Number.isFinite(Number(c.start_frame)) ? Math.round(Number(c.start_frame)) : docStart;
+      const d = Number.isFinite(Number(c.duration_frames)) ? Math.max(0, Math.round(Number(c.duration_frames))) : 0;
+      boundaries.add(Math.max(docStart, s));
+      boundaries.add(Math.max(docStart, s + d));
+    }
+  }
+  let best = docStart;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const b of boundaries) {
+    const dist = Math.abs(b - ph);
+    if (dist < bestDist || (dist === bestDist && b < best)) {
+      bestDist = dist;
+      best = b;
+    }
+  }
+  return best;
+}
+
+function _resolveBinSourceClip(doc, sourceClipOrEntry) {
+  if (!doc || !Array.isArray(doc.tracks) || !sourceClipOrEntry) return null;
+  if (
+    sourceClipOrEntry.trackKind !== undefined &&
+    sourceClipOrEntry.trackIndex !== undefined &&
+    sourceClipOrEntry.clipIndex !== undefined
+  ) {
+    const found = findTrackAndClip(
+      doc,
+      sourceClipOrEntry.trackKind,
+      sourceClipOrEntry.trackIndex,
+      sourceClipOrEntry.clipIndex
+    );
+    if (found) {
+      return {
+        trackKind: sourceClipOrEntry.trackKind === "audio" ? "audio" : "video",
+        trackIndex: Number(found.trk.index) || 1,
+        clip: found.clip
+      };
+    }
+  }
+  const kind =
+    sourceClipOrEntry.trackKind === "audio" || sourceClipOrEntry.media_type === "audio"
+      ? "audio"
+      : "video";
+  const tIdx = Number.isFinite(Number(sourceClipOrEntry.trackIndex ?? sourceClipOrEntry.track_index))
+    ? Number(sourceClipOrEntry.trackIndex ?? sourceClipOrEntry.track_index)
+    : 1;
+  return {
+    trackKind: kind,
+    trackIndex: tIdx,
+    clip: {
+      name: String(sourceClipOrEntry.label ?? sourceClipOrEntry.name ?? "Clip"),
+      track_index: tIdx,
+      media_type: kind,
+      start_frame: Number(sourceClipOrEntry.startFrames ?? sourceClipOrEntry.start_frame ?? 0),
+      duration_frames: Math.max(
+        1,
+        Math.round(Number(sourceClipOrEntry.durationFrames ?? sourceClipOrEntry.duration_frames ?? 75))
+      ),
+      source_in_frame: Number(sourceClipOrEntry.source_in_frame ?? 0),
+      source_path: sourceClipOrEntry.sourcePath ?? sourceClipOrEntry.source_path ?? null,
+      media_ref: sourceClipOrEntry.media_ref ?? null,
+      source_fps: sourceClipOrEntry.source_fps ?? null,
+      label_color: sourceClipOrEntry.labelColor ?? sourceClipOrEntry.label_color ?? "default"
+    }
+  };
+}
+
+function _buildInsertedClipClone(nextDoc, srcClip, trackKind, trackIndex, insertFrame) {
+  const usedIds = new Set();
+  for (const trk of nextDoc.tracks || []) {
+    for (const c of trk.clips || []) {
+      if (c && c.id != null && String(c.id) !== "") usedIds.add(String(c.id));
+    }
+  }
+  const baseSlug = String(srcClip.name || "Clip")
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "Clip";
+  let seq = 1;
+  let nextId = `${baseSlug}_cut_${seq}`;
+  while (usedIds.has(nextId)) {
+    seq += 1;
+    nextId = `${baseSlug}_cut_${seq}`;
+  }
+  const cloned = cloneTimelineDoc(srcClip);
+  cloned.id = nextId;
+  cloned.track_index = trackIndex;
+  cloned.media_type = trackKind;
+  cloned.start_frame = insertFrame;
+  cloned.duration_frames = Math.max(1, Math.round(Number(srcClip.duration_frames) || 75));
+  cloned.enabled = srcClip.enabled !== false;
+  cloned.transition_out = null;
+  return cloned;
+}
+
+export function insertClipAtFrameInDocument(doc, sourceClipOrEntry, targetFrame, opts = {}) {
+  if (!doc || !Array.isArray(doc.tracks) || !sourceClipOrEntry) {
+    return { doc, insertedClip: null, insertFrame: 0, shiftedCount: 0, changed: false };
+  }
+  const resolved = _resolveBinSourceClip(doc, sourceClipOrEntry);
+  if (!resolved) {
+    return { doc, insertedClip: null, insertFrame: 0, shiftedCount: 0, changed: false };
+  }
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk =
+    nextDoc.tracks.find(
+      (t) => t && t.kind === resolved.trackKind && Number(t.index) === resolved.trackIndex
+    ) || nextDoc.tracks.find((t) => t && t.kind === resolved.trackKind);
+  if (!trk) {
+    return { doc, insertedClip: null, insertFrame: 0, shiftedCount: 0, changed: false };
+  }
+  if (!Array.isArray(trk.clips)) trk.clips = [];
+
+  const docStart = Number.isFinite(Number(nextDoc.start_frame)) ? Math.round(Number(nextDoc.start_frame)) : 0;
+  const insertFrame = Math.max(docStart, Math.round(Number(targetFrame) || docStart));
+  const fpsRate = nextDoc.fps ? Math.max(1, nextDoc.fps.num / Math.max(1, nextDoc.fps.den)) : 25;
+  const newClip = _buildInsertedClipClone(
+    nextDoc,
+    resolved.clip,
+    trk.kind === "audio" ? "audio" : "video",
+    Number(trk.index) || 1,
+    insertFrame
+  );
+  const insertDur = newClip.duration_frames;
+  const ripple = opts.ripple !== false;
+
+  if (ripple) {
+    const nextClips = [];
+    const splitRightClips = new Set();
+    for (const c of trk.clips) {
+      if (!c) continue;
+      const cStart = Math.round(Number(c.start_frame) || 0);
+      const cDur = Math.max(0, Math.round(Number(c.duration_frames) || 0));
+      const cEnd = cStart + cDur;
+      if (insertFrame > cStart && insertFrame < cEnd) {
+        const { leftClip, rightClip } = _buildSplitClipPair(c, insertFrame, nextDoc.fps, fpsRate);
+        rightClip.start_frame = insertFrame + insertDur;
+        splitRightClips.add(rightClip);
+        nextClips.push(leftClip, rightClip);
+      } else {
+        nextClips.push(c);
+      }
+    }
+    let shiftedCount = 0;
+    for (const c of nextClips) {
+      if (splitRightClips.has(c)) {
+        shiftedCount += 1;
+        continue;
+      }
+      if (c.start_frame >= insertFrame) {
+        c.start_frame += insertDur;
+        shiftedCount += 1;
+      }
+    }
+    nextClips.push(newClip);
+    nextClips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+    trk.clips = nextClips;
+    return {
+      doc: nextDoc,
+      insertedClip: newClip,
+      insertFrame,
+      shiftedCount,
+      trackKind: trk.kind,
+      trackIndex: Number(trk.index) || 1,
+      changed: true
+    };
+  }
+
+  trk.clips.push(newClip);
+  trk.clips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+  return {
+    doc: nextDoc,
+    insertedClip: newClip,
+    insertFrame,
+    shiftedCount: 0,
+    trackKind: trk.kind,
+    trackIndex: Number(trk.index) || 1,
+    changed: true
+  };
+}
+
+export function smartInsertClipInDocument(doc, sourceClipOrEntry, playheadFrame) {
+  if (!doc || !Array.isArray(doc.tracks) || !sourceClipOrEntry) {
+    return { doc, insertedClip: null, insertFrame: 0, nearestEditFrame: 0, shiftedCount: 0, changed: false };
+  }
+  const resolved = _resolveBinSourceClip(doc, sourceClipOrEntry);
+  if (!resolved) {
+    return { doc, insertedClip: null, insertFrame: 0, nearestEditFrame: 0, shiftedCount: 0, changed: false };
+  }
+  const nearestEditFrame = findNearestEditPointForTrack(
+    doc,
+    resolved.trackKind,
+    resolved.trackIndex,
+    playheadFrame
+  );
+  const res = insertClipAtFrameInDocument(doc, sourceClipOrEntry, nearestEditFrame, { ripple: true });
+  return { ...res, nearestEditFrame };
+}
+
+export function appendClipToTrackInDocument(doc, sourceClipOrEntry) {
+  if (!doc || !Array.isArray(doc.tracks) || !sourceClipOrEntry) {
+    return { doc, insertedClip: null, insertFrame: 0, shiftedCount: 0, changed: false };
+  }
+  const resolved = _resolveBinSourceClip(doc, sourceClipOrEntry);
+  if (!resolved) {
+    return { doc, insertedClip: null, insertFrame: 0, shiftedCount: 0, changed: false };
+  }
+  const docStart = Number.isFinite(Number(doc.start_frame)) ? Math.round(Number(doc.start_frame)) : 0;
+  const trk =
+    doc.tracks.find(
+      (t) => t && t.kind === resolved.trackKind && Number(t.index) === resolved.trackIndex
+    ) || doc.tracks.find((t) => t && t.kind === resolved.trackKind);
+  let trackEnd = docStart;
+  if (trk && Array.isArray(trk.clips)) {
+    for (const c of trk.clips) {
+      if (!c) continue;
+      const endF = (Number(c.start_frame) || docStart) + Math.max(0, Number(c.duration_frames) || 0);
+      if (endF > trackEnd) trackEnd = endF;
+    }
+  }
+  return insertClipAtFrameInDocument(doc, sourceClipOrEntry, trackEnd, { ripple: false });
+}
+
+export function buildSourceTapeSegments(entries, fps = 25) {
+  const list = Array.isArray(entries) ? entries : [];
+  let cursor = 0;
+  const segments = [];
+  for (const entry of list) {
+    if (!entry) continue;
+    const dur = Math.max(1, Math.round(Number(entry.durationFrames) || 0));
+    const tapeStartFrame = cursor;
+    const tapeEndFrame = cursor + dur;
+    segments.push({
+      entry,
+      tapeStartFrame,
+      tapeEndFrame,
+      durationFrames: dur,
+      tapeStartTc: framesToSmpteTimecode(tapeStartFrame, fps),
+      tapeEndTc: framesToSmpteTimecode(tapeEndFrame, fps)
+    });
+    cursor = tapeEndFrame;
+  }
+  return {
+    totalFrames: cursor,
+    totalTimecode: framesToSmpteTimecode(cursor, fps),
+    segments
+  };
+}
+
+export function resolveSourceTapeFrame(tape, tapeFrame) {
+  if (!tape || !Array.isArray(tape.segments) || tape.segments.length === 0) {
+    return null;
+  }
+  const clamped = Math.max(0, Math.min(Math.max(0, tape.totalFrames - 1), Math.round(Number(tapeFrame) || 0)));
+  let activeSeg = tape.segments[tape.segments.length - 1];
+  for (const seg of tape.segments) {
+    if (clamped >= seg.tapeStartFrame && clamped < seg.tapeEndFrame) {
+      activeSeg = seg;
+      break;
+    }
+  }
+  const localOffset = Math.max(0, clamped - activeSeg.tapeStartFrame);
+  const timelineFrame = activeSeg.entry.startFrames + Math.min(activeSeg.durationFrames, localOffset);
+  return {
+    tapeFrame: clamped,
+    segment: activeSeg,
+    timelineFrame
+  };
+}
+
+export function computeTimelineZoomViewport(
+  startFrame,
+  maxFrame,
+  zoom = 1,
+  anchorFrame = null,
+  currentViewStart = null
+) {
+  const s = Number.isFinite(Number(startFrame)) ? Number(startFrame) : 0;
+  const m = Number.isFinite(Number(maxFrame)) ? Math.max(s + 25, Number(maxFrame)) : s + 25;
+  const spanFrames = Math.max(25, m - s);
+  const z = Math.max(1, Math.min(6, Number(zoom) || 1));
+  const visibleSpan = spanFrames / z;
+  const maxViewStart = Math.max(s, s + spanFrames - visibleSpan);
+
+  let viewStart =
+    currentViewStart !== null && Number.isFinite(Number(currentViewStart))
+      ? Number(currentViewStart)
+      : s;
+
+  if (anchorFrame !== null && Number.isFinite(Number(anchorFrame))) {
+    const anchor = Math.max(s, Math.min(s + spanFrames, Number(anchorFrame)));
+    if (currentViewStart === null || anchor < viewStart || anchor > viewStart + visibleSpan) {
+      viewStart = anchor - visibleSpan * 0.5;
+    }
+  }
+
+  viewStart = Math.max(s, Math.min(maxViewStart, viewStart));
+  return {
+    startFrame: s,
+    maxFrame: s + spanFrames,
+    spanFrames,
+    visibleSpan,
+    zoom: z,
+    viewStartFrame: viewStart,
+    viewEndFrame: viewStart + visibleSpan
+  };
 }
 
 export function toggleTrackMuteInDocument(doc, trackKind, trackIndex) {

@@ -5,6 +5,7 @@ import {
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
+  computeTimelineZoomViewport,
   evaluateClipFadeEnvelope,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
@@ -2627,12 +2628,19 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     maxFrame = opts.fixedMaxFrame;
   }
   const startFrame = doc.start_frame || 0;
-  const spanFrames = Math.max(25, maxFrame - startFrame);
-  const visibleSpan = spanFrames / zoom;
+  const viewport = computeTimelineZoomViewport(
+    startFrame,
+    maxFrame,
+    zoom,
+    null,
+    opts && opts.viewStartFrame !== undefined ? opts.viewStartFrame : null
+  );
+  const viewStart = viewport.viewStartFrame;
+  const visibleSpan = viewport.visibleSpan;
   const pxPerFrame = timelineW / visibleSpan;
 
-  const frameToX = (f) => timelineX + (f - startFrame) * pxPerFrame;
-  const xToRawFrame = (x) => startFrame + (x - timelineX) / pxPerFrame;
+  const frameToX = (f) => timelineX + (f - viewStart) * pxPerFrame;
+  const xToRawFrame = (x) => viewStart + (x - timelineX) / pxPerFrame;
   const xToFrame = (x) =>
     Math.max(startFrame, Math.min(maxFrame, Math.round(xToRawFrame(x))));
 
@@ -2661,7 +2669,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   // BPM Beat-Sync Grid (precomputed when enabled)
   const bpmGrid = opts && opts.bpmGrid && opts.bpmGrid.enabled ? opts.bpmGrid : null;
   const beatTicks = bpmGrid
-    ? computeBpmBeatFrames(doc, bpmGrid, startFrame, Math.ceil(startFrame + visibleSpan))
+    ? computeBpmBeatFrames(doc, bpmGrid, Math.floor(viewStart), Math.ceil(viewStart + visibleSpan))
     : [];
   const beatSpacingPx =
     beatTicks.length >= 2
@@ -2702,7 +2710,8 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.font = "10px ui-monospace, monospace";
   }
 
-  for (let f = startFrame; f <= startFrame + visibleSpan; f += stepFrames) {
+  const firstTick = startFrame + Math.max(0, Math.floor((viewStart - startFrame) / stepFrames)) * stepFrames;
+  for (let f = firstTick; f <= viewStart + visibleSpan + stepFrames; f += stepFrames) {
     const x = frameToX(f);
     if (x < timelineX || x > timelineX + timelineW - 4) continue;
     ctx.strokeStyle = "#34343c";
@@ -3605,8 +3614,168 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     pxPerFrame,
     startFrame,
     maxFrame,
+    viewStartFrame: viewStart,
+    viewEndFrame: viewStart + visibleSpan,
+    visibleSpan,
     rulerHeight,
     labelColW
+  };
+}
+
+export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
+  const totalHeight = 28;
+  const { ctx, width, height } = setupCanvas(canvas, totalHeight);
+  ctx.fillStyle = "#18181c";
+  ctx.fillRect(0, 0, width, height);
+
+  if (!doc) {
+    return {
+      startFrame: 0,
+      maxFrame: 0,
+      spanFrames: 25,
+      timelineX: 0,
+      timelineW: width,
+      frameToX: () => 0,
+      xToFrame: () => 0
+    };
+  }
+
+  const labelColW = width < 480 ? 58 : 118;
+  const timelineX = labelColW;
+  const timelineW = Math.max(120, width - labelColW - 10);
+  const tracks = Array.isArray(doc.tracks) ? doc.tracks : [];
+  const startFrame = doc.start_frame || 0;
+  let maxFrame = startFrame;
+  for (const trk of tracks) {
+    for (const c of trk.clips || []) {
+      const endF = (c.start_frame || 0) + (c.duration_frames || 0);
+      if (endF > maxFrame) maxFrame = endF;
+    }
+  }
+  for (const mk of doc.markers || []) {
+    const endM = (mk.frame || 0) + (mk.duration_frames || 1);
+    if (endM > maxFrame) maxFrame = endM;
+  }
+  const spanFrames = Math.max(25, maxFrame - startFrame);
+  const pxPerFrame = timelineW / spanFrames;
+  const frameToX = (f) => timelineX + (f - startFrame) * pxPerFrame;
+  const xToFrame = (x) =>
+    Math.max(startFrame, Math.min(maxFrame, Math.round(startFrame + (x - timelineX) / pxPerFrame)));
+
+  // Left overview label rail
+  ctx.fillStyle = "#222227";
+  ctx.fillRect(0, 0, labelColW, height);
+  ctx.strokeStyle = "#111114";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(labelColW, 0);
+  ctx.lineTo(labelColW, height);
+  ctx.moveTo(0, height - 0.5);
+  ctx.lineTo(width, height - 0.5);
+  ctx.stroke();
+
+  ctx.fillStyle = "#8e8e98";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.fillText(width < 480 ? "OVW" : "OVERVIEW", 8, 17);
+
+  // I/O Range Highlight
+  const ioMetrics = computeInOutRangeMetrics(
+    opts && opts.ioRange ? opts.ioRange : null,
+    doc.fps,
+    startFrame,
+    maxFrame
+  );
+  if (ioMetrics.isActive) {
+    const rx0 = Math.max(timelineX, ioMetrics.hasIn ? frameToX(ioMetrics.in_frame) : timelineX);
+    const rx1 = Math.min(
+      timelineX + timelineW,
+      ioMetrics.hasOut ? frameToX(ioMetrics.out_frame) : timelineX + timelineW
+    );
+    if (rx1 > rx0) {
+      ctx.fillStyle = "rgba(57, 197, 207, 0.14)";
+      ctx.fillRect(rx0, 1, rx1 - rx0, height - 2);
+    }
+  }
+
+  // Mini track bars
+  const rowCount = Math.max(1, tracks.length);
+  const padY = 3;
+  const usableH = Math.max(8, height - padY * 2);
+  const laneH = Math.max(2, Math.floor((usableH - (rowCount - 1)) / rowCount));
+  tracks.forEach((trk, idx) => {
+    const ly = padY + idx * (laneH + 1);
+    const isAudio = trk.kind === "audio";
+    for (const clip of trk.clips || []) {
+      const cx = frameToX(clip.start_frame || 0);
+      const cw = Math.max(2, (clip.duration_frames || 0) * pxPerFrame);
+      const drawX = Math.max(timelineX, cx);
+      const drawW = Math.min(timelineX + timelineW, cx + cw) - drawX;
+      if (drawW <= 0.5) continue;
+      const labelColorId = normalizeClipLabelColor(clip.label_color);
+      const labelMeta = CLIP_LABEL_COLORS[labelColorId];
+      ctx.fillStyle =
+        labelMeta && labelMeta.hex
+          ? labelMeta.hex
+          : isAudio
+            ? "#2d7564"
+            : "#3d6699";
+      ctx.fillRect(drawX, ly, drawW, laneH);
+    }
+  });
+
+  // Markers ticks
+  for (const mk of doc.markers || []) {
+    const mx = frameToX(mk.frame || 0);
+    if (mx < timelineX || mx > timelineX + timelineW) continue;
+    ctx.fillStyle = MARKER_COLOR_HEX[mk.color] || "#528bff";
+    ctx.fillRect(Math.round(mx) - 1, 1, 2, 4);
+  }
+
+  // Zoom Viewport Window Bracket
+  const zoom = opts && opts.zoom ? Math.max(1, Number(opts.zoom)) : 1;
+  const vp = computeTimelineZoomViewport(
+    startFrame,
+    maxFrame,
+    zoom,
+    null,
+    opts && opts.viewStartFrame !== undefined ? opts.viewStartFrame : null
+  );
+  const vx0 = Math.max(timelineX, frameToX(vp.viewStartFrame));
+  const vx1 = Math.min(timelineX + timelineW, frameToX(vp.viewEndFrame));
+  const vw = Math.max(8, vx1 - vx0);
+  if (zoom > 1.01) {
+    ctx.fillStyle = "rgba(17, 17, 20, 0.55)";
+    if (vx0 > timelineX) ctx.fillRect(timelineX, 1, vx0 - timelineX, height - 2);
+    if (vx1 < timelineX + timelineW) {
+      ctx.fillRect(vx1, 1, timelineX + timelineW - vx1, height - 2);
+    }
+    ctx.strokeStyle = "#e68442";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(vx0 + 0.5, 1.5, vw - 1, height - 3);
+  } else {
+    ctx.strokeStyle = "rgba(230, 132, 66, 0.42)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(timelineX + 0.5, 1.5, timelineW - 1, height - 3);
+  }
+
+  // Playhead needle
+  const ph = opts && typeof opts.playheadFrame === "number" ? opts.playheadFrame : startFrame;
+  const px = Math.round(Math.max(timelineX, Math.min(timelineX + timelineW, frameToX(ph)))) + 0.5;
+  ctx.strokeStyle = "#f4a46b";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(px, 0);
+  ctx.lineTo(px, height);
+  ctx.stroke();
+
+  return {
+    startFrame,
+    maxFrame,
+    spanFrames,
+    timelineX,
+    timelineW,
+    frameToX,
+    xToFrame
   };
 }
 

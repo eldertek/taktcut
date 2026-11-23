@@ -62,9 +62,74 @@
             </div>
             <div class="pane-body pane-scroll-dock">
               <section id="media-pool-section" class="media-pool-section" aria-label="Media Pool Master Bin">
-                <div class="pane-subheader">
+                <div class="pane-subheader media-pool-header-row">
                   <span data-i18n="timeline.mediapool.title">Master Bin</span>
-                  <span id="media-pool-count" class="nle-tag mono">0 CLIPS</span>
+                  <div class="viewer-controls media-pool-header-controls">
+                    <button
+                      type="button"
+                      id="btn-media-pool-source-tape"
+                      class="btn btn-mini media-pool-tape-btn"
+                      aria-pressed="false"
+                      title="Toggle DaVinci Cut Page Source Tape continuous strip"
+                      data-i18n="timeline.mediapool.sourceTape"
+                    >Source Tape</button>
+                    <span id="media-pool-count" class="nle-tag mono">0 CLIPS</span>
+                  </div>
+                </div>
+                <div
+                  id="media-pool-type-filter"
+                  class="media-pool-type-filter"
+                  role="group"
+                  aria-label="Filter Master Bin by media type"
+                >
+                  <button type="button" class="btn btn-mini media-pool-filter-pill is-active" data-pool-type="all" aria-pressed="true" data-i18n="timeline.mediapool.filterAll">All</button>
+                  <button type="button" class="btn btn-mini media-pool-filter-pill" data-pool-type="video" aria-pressed="false" data-i18n="timeline.mediapool.filterVideo">Video</button>
+                  <button type="button" class="btn btn-mini media-pool-filter-pill" data-pool-type="audio" aria-pressed="false" data-i18n="timeline.mediapool.filterAudio">Audio</button>
+                  <button type="button" class="btn btn-mini media-pool-filter-pill" data-pool-type="title" aria-pressed="false" data-i18n="timeline.mediapool.filterTitles">Titles</button>
+                  <button type="button" class="btn btn-mini media-pool-filter-pill" data-pool-type="stills" aria-pressed="false" data-i18n="timeline.mediapool.filterStills">Stills</button>
+                </div>
+                <div id="media-pool-source-tape" class="media-pool-source-tape is-hidden" aria-label="Source Tape continuous bin scrub">
+                  <div class="source-tape-head mono">
+                    <span id="source-tape-readout" class="source-tape-readout">--</span>
+                    <span id="source-tape-tc" class="nle-tag">00:00:00:00</span>
+                  </div>
+                  <div id="source-tape-segments" class="source-tape-segments" role="list"></div>
+                  <input
+                    type="range"
+                    id="source-tape-scrub"
+                    class="scrub-slider source-tape-scrub"
+                    min="0"
+                    max="0"
+                    step="1"
+                    value="0"
+                    aria-label="Scrub continuous Source Tape"
+                  >
+                </div>
+                <div id="media-pool-cut-toolbar" class="media-pool-cut-toolbar" role="group" aria-label="Cut Page assembly actions">
+                  <span id="media-pool-active-target" class="media-pool-active-target mono">--</span>
+                  <div class="media-pool-cut-btns">
+                    <button
+                      type="button"
+                      id="btn-pool-smart-insert"
+                      class="btn btn-mini media-pool-cut-btn"
+                      title="Smart Insert at nearest cut point on target track"
+                      data-i18n="timeline.mediapool.smartInsert"
+                    >Smart Insert</button>
+                    <button
+                      type="button"
+                      id="btn-pool-insert-playhead"
+                      class="btn btn-mini media-pool-cut-btn"
+                      title="Insert selected clip at playhead"
+                      data-i18n="timeline.mediapool.insertPlayhead"
+                    >Insert @ PH</button>
+                    <button
+                      type="button"
+                      id="btn-pool-append"
+                      class="btn btn-mini btn-primary media-pool-cut-btn"
+                      title="Append selected clip at end of target track"
+                      data-i18n="timeline.mediapool.append"
+                    >Append</button>
+                  </div>
                 </div>
                 <div id="media-pool-list" class="media-pool-grid" role="list"></div>
               </section>
@@ -727,6 +792,7 @@
           </div>
           <div class="pane-body-tight">
             <div class="viewer-well">
+              <canvas id="timeline-overview-canvas" class="studio-canvas timeline-overview-canvas" aria-label="Dual-timeline full sequence overview"></canvas>
               <canvas id="timeline-canvas" class="studio-canvas" aria-label="Interactive multi-track timeline"></canvas>
             </div>
           </div>
@@ -1166,6 +1232,7 @@
           </section>
         </div>
 
+        <div class="nle-titles-bottom">
         <!-- CAPTIONS & SUBTITLES TRACK (.SRT / .VTT) -->
         <section id="subtitles-workbench-pane" class="nle-pane">
           <div class="pane-header">
@@ -1280,6 +1347,7 @@
             </details>
           </div>
         </section>
+        </div>
       </section>
 
       <!-- PAGE 4: COLOR (DAVINCI COLOR WHEELS + LUMETRI TONE + SCOPES + FFMPEG + .CUBE) -->
