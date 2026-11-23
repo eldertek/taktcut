@@ -98,7 +98,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.9"
+    assert health["version"] == "0.1.10"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -863,7 +863,7 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "fx-stills-gallery",
     ):
         assert elem_id in html_text
-    assert "v0.1.9" in html_text
+    assert "v0.1.10" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -2884,6 +2884,55 @@ def test_ui_fairlight_loudness_and_dialogue_eq_endpoints_and_assets(
         "demo_adapter.js",
         "i18n.js",
         "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+
+def test_ui_sapphire_halation_letterbox_cinema_35mm_endpoints_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/fx/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    preset_ids = {p["id"] for p in presets_data["presets"]}
+    assert "cinema_35mm" in preset_ids
+    assert "halation" in presets_data["specs"]
+    assert "letterbox" in presets_data["specs"]
+    lb_spec = presets_data["specs"]["letterbox"][0]
+    assert lb_spec["kind"] == "enum"
+    assert lb_spec["options"] == ["2.39", "2.35", "1.85", "2.00"]
+
+    compile_status, _, compile_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={"preset_id": "cinema_35mm", "duration_seconds": 8.0},
+    )
+    assert compile_status == 200
+    compiled = json.loads(compile_raw.decode("utf-8"))
+    assert compiled["active_effects"] == ["halation", "letterbox", "film_grain"]
+    assert "split[hal0_base][hal0_src]" in compiled["filtergraph"]
+    assert "drawbox=x=0:y=0:w=iw:h='round(ih*0.1281)'" in compiled["filtergraph"]
+    assert "noise=alls=14:allf=t+u" in compiled["filtergraph"]
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'data-fx-add="halation"' in html_text
+    assert 'data-fx-add="letterbox"' in html_text
+    assert 'data-fx-preset="cinema_35mm"' in html_text
+    assert "12 FX" in html_text
+
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "demo_adapter.js",
+        "i18n.js",
     ):
         content = (assets_dir / asset_name).read_text(encoding="utf-8")
         assert "\u2014" not in content, f"U+2014 found in {asset_name}"

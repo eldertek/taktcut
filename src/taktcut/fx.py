@@ -20,6 +20,8 @@ FxType = Literal[
     "film_grain",
     "optical_glow",
     "rgb_split",
+    "halation",
+    "letterbox",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -33,7 +35,19 @@ FX_TYPES: tuple[FxType, ...] = (
     "film_grain",
     "optical_glow",
     "rgb_split",
+    "halation",
+    "letterbox",
 )
+
+LETTERBOX_RATIOS: tuple[str, ...] = ("2.39", "2.35", "1.85", "2.00")
+_LETTERBOX_RATIO_ALIASES: dict[str, str] = {
+    "2.39": "2.39",
+    "2.35": "2.35",
+    "1.85": "1.85",
+    "2.00": "2.00",
+    "2.0": "2.00",
+    "2": "2.00",
+}
 
 EasingType = Literal["linear", "ease_in", "ease_out", "ease_in_out"]
 
@@ -86,6 +100,9 @@ _PARAM_ALIASES: dict[str, str] = {
     "GlowIntensity": "glow_intensity",
     "GlowRadius": "glow_radius",
     "ChromaShiftPx": "chroma_shift_px",
+    "HalationStrength": "halation_strength",
+    "HalationRadius": "halation_radius",
+    "Ratio": "ratio",
 }
 
 
@@ -94,12 +111,13 @@ class FxParamSpec(BaseModel):
 
     name: str
     label: str
-    kind: Literal["float", "int", "color"]
+    kind: Literal["float", "int", "color", "enum"]
     default: float | int | str
     min_val: float | None = None
     max_val: float | None = None
     step: float | None = None
     unit: str = ""
+    options: tuple[str, ...] | None = None
 
 
 FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
@@ -388,6 +406,37 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             unit="px",
         ),
     ),
+    "halation": (
+        FxParamSpec(
+            name="halation_strength",
+            label="Halation Strength",
+            kind="float",
+            default=0.55,
+            min_val=0.0,
+            max_val=1.0,
+            step=0.05,
+        ),
+        FxParamSpec(
+            name="halation_radius",
+            label="Halation Radius",
+            kind="float",
+            default=10.0,
+            min_val=2.0,
+            max_val=20.0,
+            step=0.5,
+            unit="px",
+        ),
+    ),
+    "letterbox": (
+        FxParamSpec(
+            name="ratio",
+            label="Aspect Ratio",
+            kind="enum",
+            default="2.39",
+            unit=":1",
+            options=LETTERBOX_RATIOS,
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -401,6 +450,8 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "film_grain": 0.45,
     "optical_glow": 1.20,
     "rgb_split": 0.55,
+    "halation": 1.25,
+    "letterbox": 0.20,
 }
 
 
@@ -869,6 +920,38 @@ FX_PRESETS: tuple[FxPreset, ...] = (
             ),
         ],
     ),
+    FxPreset(
+        id="cinema_35mm",
+        name="35mm Cinema Halation",
+        category="Film",
+        description=(
+            "35mm red-orange highlight halation with 2.39:1 anamorphic letterbox and organic grain."
+        ),
+        nodes=[
+            FxNode(
+                effect="halation",
+                enabled=True,
+                params={
+                    "halation_strength": 0.55,
+                    "halation_radius": 10.0,
+                },
+            ),
+            FxNode(
+                effect="letterbox",
+                enabled=True,
+                params={
+                    "ratio": "2.39",
+                },
+            ),
+            FxNode(
+                effect="film_grain",
+                enabled=True,
+                params={
+                    "strength": 14.0,
+                },
+            ),
+        ],
+    ),
 )
 
 
@@ -889,6 +972,31 @@ def _validate_hex_color(raw: Any) -> str:
     if not _HEX_COLOR_RE.fullmatch(trimmed):
         raise ValueError(f"Invalid hex color {raw!r}; expected '#RRGGBB'")
     return trimmed.lower()
+
+
+def normalize_enum_fx_param(raw: Any, spec: FxParamSpec) -> str:
+    """Validate and canonicalize an enum FX parameter against its allowed options."""
+    if isinstance(raw, bool):
+        raise ValueError(f"Parameter {spec.name!r} must not be bool")
+    options = spec.options or ()
+    if isinstance(raw, int | float):
+        num = float(raw)
+        if not math.isfinite(num):
+            raise ValueError(f"Parameter {spec.name!r} must be finite, got {raw!r}")
+        candidate = f"{num:.2f}"
+    elif isinstance(raw, str):
+        trimmed = raw.strip()
+        candidate = _LETTERBOX_RATIO_ALIASES.get(trimmed, trimmed)
+    else:
+        raise ValueError(f"Parameter {spec.name!r} must be a valid option string, got {raw!r}")
+
+    if candidate in _LETTERBOX_RATIO_ALIASES:
+        candidate = _LETTERBOX_RATIO_ALIASES[candidate]
+    if candidate not in options:
+        raise ValueError(
+            f"Unsupported value {raw!r} for {spec.name!r}; expected one of {', '.join(options)}"
+        )
+    return candidate
 
 
 def _hex_to_rgb_unit(hex_color: str) -> tuple[float, float, float]:
@@ -1061,6 +1169,8 @@ def normalize_fx_node(raw_node: FxNode | dict[str, Any]) -> FxNode:
         raw_val = canonical_raw.get(spec.name, spec.default)
         if spec.kind == "color":
             normalized_params[spec.name] = _validate_hex_color(raw_val)
+        elif spec.kind == "enum":
+            normalized_params[spec.name] = normalize_enum_fx_param(raw_val, spec)
         elif spec.kind == "int":
             if isinstance(raw_val, bool):
                 raise ValueError(f"Parameter {spec.name!r} must be numeric, not bool")
@@ -1377,6 +1487,34 @@ def _compile_rgb_split(params: dict[str, float | int | str]) -> str:
     return f"rgbashift=rh={shift_px}:bh={-shift_px}"
 
 
+def _compile_halation(idx: int, params: dict[str, float | int | str]) -> str:
+    strength = _clamp_num(float(params["halation_strength"]), 0.0, 1.0)
+    radius = _clamp_num(float(params["halation_radius"]), 2.0, 20.0)
+    base_pad = f"hal{idx}_base"
+    src_pad = f"hal{idx}_src"
+    blur_pad = f"hal{idx}_blur"
+    return (
+        f"split[{base_pad}][{src_pad}];"
+        f"[{src_pad}]lutrgb="
+        "r='if(gte(val,155),min(255,(val-155)*2.4000),0)':"
+        "g='if(gte(val,155),min(255,(val-155)*0.8200),0)':"
+        "b='if(gte(val,155),min(255,(val-155)*0.1800),0)',"
+        f"gblur=sigma={radius:.2f}:steps=2[{blur_pad}];"
+        f"[{base_pad}][{blur_pad}]blend=all_mode=screen:all_opacity={strength:.4f}"
+    )
+
+
+def _compile_letterbox(params: dict[str, float | int | str]) -> str:
+    ratio_str = normalize_enum_fx_param(params["ratio"], FX_PARAM_SPECS["letterbox"][0])
+    ratio_val = float(ratio_str)
+    bar_frac = round(max(0.0, (1.0 - (16.0 / 9.0) / ratio_val) / 2.0), 4)
+    return (
+        f"drawbox=x=0:y=0:w=iw:h='round(ih*{bar_frac:.4f})':color=black@1:t=fill,"
+        f"drawbox=x=0:y='ih-round(ih*{bar_frac:.4f})':w=iw:h='round(ih*{bar_frac:.4f})':"
+        "color=black@1:t=fill"
+    )
+
+
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
     """Return all built-in Chroma Key / Green Screen Studio presets."""
     return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
@@ -1495,7 +1633,14 @@ def compile_fx_filtergraph(
         )
 
     needs_rgb = any(
-        n.effect in {"glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split"}
+        n.effect in {
+            "glow",
+            "lens_flare",
+            "chroma_aberration",
+            "optical_glow",
+            "rgb_split",
+            "halation",
+        }
         for n in active_nodes
     )
 
@@ -1547,6 +1692,12 @@ def compile_fx_filtergraph(
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "rgb_split":
             seg = _compile_rgb_split(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "halation":
+            seg = _compile_halation(idx, node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "letterbox":
+            seg = _compile_letterbox(node.params)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb or ck_active:

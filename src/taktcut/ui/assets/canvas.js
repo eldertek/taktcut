@@ -386,6 +386,7 @@ function hexToRgbTuple(hex) {
 }
 
 let _fxScratchCanvas = null;
+let _halScratchCanvas = null;
 let _transScratchA = null;
 let _transScratchB = null;
 function ensureScratchCanvas(existing, w, h) {
@@ -1690,6 +1691,63 @@ export function drawProgramMonitorCanvas(
             ctx.fillRect(fx, fy, frameW, frameH);
             ctx.restore();
           }
+        }
+      } else if (node.effect === "halation") {
+        const strength = clamp01(Number(p.halation_strength ?? 0.55) * kfMul);
+        const radius = Math.min(20, Math.max(2, Number(p.halation_radius ?? 10)));
+        if (strength > 0.005) {
+          const halCanvas = buf
+            ? (_halScratchCanvas = ensureScratchCanvas(_halScratchCanvas, bw, bh))
+            : null;
+          if (halCanvas && buf && typeof ctx.filter === "string") {
+            const hctx = halCanvas.getContext("2d");
+            const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, frameW / 640)));
+            hctx.save();
+            hctx.setTransform(1, 0, 0, 1, 0, 0);
+            hctx.globalCompositeOperation = "source-over";
+            hctx.clearRect(0, 0, bw, bh);
+            hctx.filter = `blur(${blurPx}px) brightness(1.22) contrast(1.45)`;
+            hctx.drawImage(buf, 0, 0, bw, bh);
+            hctx.filter = "none";
+            hctx.globalCompositeOperation = "multiply";
+            hctx.fillStyle = "rgb(255, 76, 22)";
+            hctx.fillRect(0, 0, bw, bh);
+            hctx.restore();
+
+            ctx.save();
+            ctx.globalCompositeOperation = "screen";
+            ctx.globalAlpha = Math.min(0.92, strength * 0.85);
+            ctx.drawImage(halCanvas, fx + shiftX, fy + shiftY, frameW, frameH);
+            ctx.restore();
+          }
+          const hx = fx + frameW * 0.72 + shiftX;
+          const hy = fy + frameH * 0.30 + shiftY;
+          const hr = Math.max(28, radius * 4.2 * Math.max(0.5, frameW / 640));
+          const hGrad = ctx.createRadialGradient(hx, hy, 2, hx, hy, hr);
+          hGrad.addColorStop(0, `rgba(255, 118, 48, ${(strength * 0.58).toFixed(3)})`);
+          hGrad.addColorStop(0.38, `rgba(255, 58, 20, ${(strength * 0.34).toFixed(3)})`);
+          hGrad.addColorStop(1, "rgba(255, 40, 12, 0)");
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.fillStyle = hGrad;
+          ctx.fillRect(fx, fy, frameW, frameH);
+          ctx.restore();
+        }
+      } else if (node.effect === "letterbox") {
+        const parsedRatio = Number.parseFloat(String(p.ratio ?? "2.39"));
+        const ratioVal = Number.isFinite(parsedRatio)
+          ? Math.min(2.39, Math.max(1.85, parsedRatio))
+          : 2.39;
+        const frameAspect = frameW / Math.max(1, frameH);
+        const barH = (frameAspect < ratioVal
+          ? Math.max(0, (frameH - frameW / ratioVal) * 0.5)
+          : 0) * Math.min(1, kfMul);
+        if (barH >= 0.5) {
+          ctx.save();
+          ctx.fillStyle = "#000000";
+          ctx.fillRect(fx, fy, frameW, barH);
+          ctx.fillRect(fx, fy + frameH - barH, frameW, barH);
+          ctx.restore();
         }
       }
     }

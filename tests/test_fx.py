@@ -162,9 +162,10 @@ def test_ten_presets_compile_and_lookup() -> None:
         "Moody Vignette",
         "Cyberpunk Glow",
         "Anamorphic Dream",
+        "35mm Cinema Halation",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 10
+    assert len(FX_PRESETS) == 11
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -267,7 +268,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 10
+    assert len(p_data["presets"]) == 11
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -739,7 +740,13 @@ def test_vignette_and_film_grain_bounds_and_compilation() -> None:
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
 def test_film_finishing_presets_execute_in_real_ffmpeg() -> None:
     ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-    for preset_id in ("35mm_cinema", "moody_vignette", "cyberpunk_glow", "anamorphic_dream"):
+    for preset_id in (
+        "35mm_cinema",
+        "moody_vignette",
+        "cyberpunk_glow",
+        "anamorphic_dream",
+        "cinema_35mm",
+    ):
         res = compile_preset_filtergraph(
             preset_id,
             duration_seconds=0.2,
@@ -830,3 +837,130 @@ def test_optical_glow_and_rgb_split_bounds_and_compilation() -> None:
         normalize_fx_node({"effect": "optical_glow", "params": {"glow_radius": float("inf")}})
     with pytest.raises(ValueError, match="not bool"):
         normalize_fx_node({"effect": "rgb_split", "params": {"chroma_shift_px": True}})
+
+
+def test_halation_and_letterbox_bounds_compilation_and_cinema_35mm() -> None:
+    hal_low = normalize_fx_node(
+        {
+            "effect": "halation",
+            "params": {"HalationStrength": -0.25, "HalationRadius": 0.5},
+        }
+    )
+    assert hal_low.params["halation_strength"] == 0.0
+    assert hal_low.params["halation_radius"] == 2.0
+    hal_low_res = compile_fx_filtergraph([hal_low])
+    assert hal_low_res.active_effects == ["halation"]
+    assert hal_low_res.filtergraph.startswith("format=rgb24,split[hal0_base][hal0_src];")
+    assert "gblur=sigma=2.00:steps=2[hal0_blur]" in hal_low_res.filtergraph
+    assert "blend=all_mode=screen:all_opacity=0.0000,format=yuv420p" in hal_low_res.filtergraph
+
+    hal_high = normalize_fx_node(
+        {
+            "effect": "halation",
+            "params": {"halation_strength": 1.8, "halation_radius": 45.0},
+        }
+    )
+    assert hal_high.params["halation_strength"] == 1.0
+    assert hal_high.params["halation_radius"] == 20.0
+    hal_high_res = compile_fx_filtergraph([hal_high])
+    assert "gblur=sigma=20.00:steps=2[hal0_blur]" in hal_high_res.filtergraph
+    assert "all_opacity=1.0000" in hal_high_res.filtergraph
+
+    for raw_ratio, expected_ratio, expected_frac in (
+        ("2.39", "2.39", "0.1281"),
+        (2.35, "2.35", "0.1217"),
+        ("1.85", "1.85", "0.0195"),
+        (2.0, "2.00", "0.0556"),
+    ):
+        lb_node = normalize_fx_node({"effect": "letterbox", "params": {"Ratio": raw_ratio}})
+        assert lb_node.params["ratio"] == expected_ratio
+        lb_res = compile_fx_filtergraph([lb_node])
+        assert lb_res.active_effects == ["letterbox"]
+        assert f"round(ih*{expected_frac})" in lb_res.filtergraph
+        assert "format=rgb24" not in lb_res.filtergraph
+
+    cinema = compile_preset_filtergraph("cinema_35mm", duration_seconds=6.0)
+    assert cinema.active_effects == ["halation", "letterbox", "film_grain"]
+    assert "lutrgb=" in cinema.filtergraph
+    assert "round(ih*0.1281)" in cinema.filtergraph
+    assert "noise=alls=14:allf=t+u" in cinema.filtergraph
+
+    with pytest.raises(ValueError, match="finite"):
+        normalize_fx_node({"effect": "halation", "params": {"halation_strength": float("nan")}})
+    with pytest.raises(ValueError, match="finite"):
+        normalize_fx_node({"effect": "halation", "params": {"halation_radius": float("inf")}})
+    with pytest.raises(ValueError, match="not bool"):
+        normalize_fx_node({"effect": "halation", "params": {"halation_strength": True}})
+    with pytest.raises(ValueError, match="not bool"):
+        normalize_fx_node({"effect": "letterbox", "params": {"ratio": True}})
+    for bad_ratio in ("1.33", "2.39;rm -rf /", 4.0):
+        with pytest.raises(ValueError, match="Unsupported value"):
+            normalize_fx_node({"effect": "letterbox", "params": {"ratio": bad_ratio}})
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_letterbox_and_halation_pixel_output_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    w, h = 320, 180
+    lb = compile_fx_filtergraph([FxNode(effect="letterbox", params={"ratio": "2.39"})])
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c=#ffffff:s={w}x{h}:d=0.04:r=25",
+        "-vf",
+        lb.filtergraph,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+    buf = proc.stdout
+    assert len(buf) == w * h * 3
+    top_black = sum(1 for y in range(h // 2) if buf[(y * w + w // 2) * 3] < 20)
+    bot_black = sum(1 for y in range(h // 2, h) if buf[(y * w + w // 2) * 3] < 20)
+    mid_off = ((h // 2) * w + w // 2) * 3
+    assert top_black == bot_black == 23
+    assert buf[mid_off] > 235
+
+    # Verify halation executes cleanly across keyframed and non-keyframed pipelines
+    hal = compile_fx_filtergraph(
+        [
+            FxNode(effect="halation", params={"halation_strength": 0.7, "halation_radius": 12.0}),
+            FxNode(effect="letterbox", params={"ratio": "2.39"}),
+            FxNode(effect="film_grain", params={"strength": 14.0}),
+        ]
+    )
+    proc_hal = subprocess.run(
+        [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=duration=0.2:size={w}x{h}:rate=25",
+            "-vf",
+            hal.filtergraph,
+            "-frames:v",
+            "2",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert proc_hal.returncode == 0, proc_hal.stderr

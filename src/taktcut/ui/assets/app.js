@@ -2279,6 +2279,13 @@ const FX_PARAM_FALLBACK = {
   ],
   rgb_split: [
     { name: "chroma_shift_px", label: "Chroma Shift", kind: "int", default: 4, min_val: 0, max_val: 12, step: 1 }
+  ],
+  halation: [
+    { name: "halation_strength", label: "Halation Strength", kind: "float", default: 0.55, min_val: 0, max_val: 1, step: 0.05 },
+    { name: "halation_radius", label: "Halation Radius", kind: "float", default: 10, min_val: 2, max_val: 20, step: 0.5 }
+  ],
+  letterbox: [
+    { name: "ratio", label: "Aspect Ratio", kind: "enum", default: "2.39", unit: ":1", options: ["2.39", "2.35", "1.85", "2.00"] }
   ]
 };
 
@@ -2322,6 +2329,11 @@ const FX_PRESET_FALLBACK = {
     { effect: "optical_glow", enabled: true, params: { glow_intensity: 0.55, glow_radius: 20 } },
     { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 3 } },
     { effect: "vignette", enabled: true, params: { angle_rad: 0.42 } }
+  ],
+  cinema_35mm: [
+    { effect: "halation", enabled: true, params: { halation_strength: 0.55, halation_radius: 10 } },
+    { effect: "letterbox", enabled: true, params: { ratio: "2.39" } },
+    { effect: "film_grain", enabled: true, params: { strength: 14 } }
   ]
 };
 
@@ -2335,8 +2347,16 @@ const FX_DISPLAY_TITLES = {
   vignette: "S_Vignette",
   film_grain: "S_FilmGrain",
   optical_glow: "S_OpticalGlow",
-  rgb_split: "S_RGBSplit"
+  rgb_split: "S_RGBSplit",
+  halation: "S_Halation",
+  letterbox: "S_Letterbox"
 };
+
+function getFxParamLabel(spec) {
+  const key = `fx.param.${spec.name}`;
+  const translated = t(key);
+  return translated !== key ? translated : spec.label;
+}
 
 function getFxSpecs(effect) {
   if (state.fxSpecs && state.fxSpecs[effect]) return state.fxSpecs[effect];
@@ -2738,7 +2758,8 @@ function renderFxStack() {
     for (const spec of specs) {
       const row = dom("div", "fx-param-row");
       const inputId = `fx-node-${nodeIdx}-${spec.name}`;
-      const label = dom("label", "fx-param-label", spec.label);
+      const labelText = getFxParamLabel(spec);
+      const label = dom("label", "fx-param-label", labelText);
       label.setAttribute("for", inputId);
 
       const curVal = node.params[spec.name] !== undefined ? node.params[spec.name] : spec.default;
@@ -2760,6 +2781,30 @@ function renderFxStack() {
         });
         colorWrap.replaceChildren(colorInput, hexReadout);
         row.replaceChildren(label, colorWrap, dom("span", "mono", "HEX"));
+      } else if (spec.kind === "enum") {
+        const options = Array.isArray(spec.options) && spec.options.length > 0
+          ? spec.options
+          : [String(spec.default)];
+        const selectEl = dom("select", "input-select mono");
+        selectEl.id = inputId;
+        selectEl.setAttribute("aria-label", labelText);
+        const curStr = String(curVal);
+        const optEls = options.map((optVal) => {
+          const opt = dom("option", "", `${optVal}${spec.unit || ""}`);
+          opt.value = String(optVal);
+          if (String(optVal) === curStr) opt.selected = true;
+          return opt;
+        });
+        selectEl.replaceChildren(...optEls);
+        const badgeEl = dom("span", "mono nle-tag", `${curStr}${spec.unit || ""}`);
+        selectEl.addEventListener("change", () => {
+          node.params[spec.name] = selectEl.value;
+          badgeEl.textContent = `${selectEl.value}${spec.unit || ""}`;
+          state.fxActivePresetId = "";
+          redrawActiveCanvases();
+          scheduleFxCompile();
+        });
+        row.replaceChildren(label, selectEl, badgeEl);
       } else {
         const slider = dom("input");
         slider.type = "range";
@@ -2775,7 +2820,7 @@ function renderFxStack() {
         numInput.max = String(spec.max_val ?? 1);
         numInput.step = String(spec.step ?? 0.01);
         numInput.value = String(curVal);
-        numInput.setAttribute("aria-label", `${spec.label} value`);
+        numInput.setAttribute("aria-label", `${labelText} value`);
 
         slider.addEventListener("input", () => {
           const val = Number.parseFloat(slider.value);

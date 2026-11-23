@@ -309,7 +309,7 @@ function compileFxClient(nodes, opts = {}) {
   }
   const pixFmt = opts.pix_fmt || "yuv420p";
   const dur = Math.max(0.1, Number(opts.duration_seconds || 10));
-  const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split"].includes(n.effect));
+  const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split", "halation"].includes(n.effect));
   const segs = [];
   let totalWeight = 0;
   if (ckActive && ckCompiled) {
@@ -317,7 +317,7 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55 };
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2 };
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -360,6 +360,23 @@ function compileFxClient(nodes, opts = {}) {
     } else if (n.effect === "rgb_split") {
       const px = Math.round(Math.min(12, Math.max(0, Number(p.chroma_shift_px ?? 4))));
       segs.push(`rgbashift=rh=${px}:bh=${-px}`);
+    } else if (n.effect === "halation") {
+      const strength = Math.min(1, Math.max(0, Number(p.halation_strength ?? 0.55))).toFixed(4);
+      const radius = Math.min(20, Math.max(2, Number(p.halation_radius ?? 10))).toFixed(2);
+      segs.push(
+        `split[hal${idx}_base][hal${idx}_src];[hal${idx}_src]lutrgb=r='if(gte(val,155),min(255,(val-155)*2.4000),0)':g='if(gte(val,155),min(255,(val-155)*0.8200),0)':b='if(gte(val,155),min(255,(val-155)*0.1800),0)',gblur=sigma=${radius}:steps=2[hal${idx}_blur];[hal${idx}_base][hal${idx}_blur]blend=all_mode=screen:all_opacity=${strength}`
+      );
+    } else if (n.effect === "letterbox") {
+      const allowedRatios = new Set(["2.39", "2.35", "1.85", "2.00"]);
+      const rawRatio = Number.parseFloat(String(p.ratio ?? "2.39"));
+      const ratioKey = Number.isFinite(rawRatio) && allowedRatios.has(rawRatio.toFixed(2))
+        ? rawRatio.toFixed(2)
+        : "2.39";
+      const ratioVal = Number.parseFloat(ratioKey);
+      const barFrac = Math.max(0, (1 - (16 / 9) / ratioVal) / 2).toFixed(4);
+      segs.push(
+        `drawbox=x=0:y=0:w=iw:h='round(ih*${barFrac})':color=black@1:t=fill,drawbox=x=0:y='ih-round(ih*${barFrac})':w=iw:h='round(ih*${barFrac})':color=black@1:t=fill`
+      );
     }
   });
   if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);
@@ -693,7 +710,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.9",
+      version: "0.1.10",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -1159,8 +1176,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.9",
-          latest_version: "0.1.9",
+          current_version: "0.1.10",
+          latest_version: "0.1.10",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -1365,7 +1382,7 @@ export function createApiClient() {
         }
         const project = {
           ...rawProj,
-          app_version: rawProj.app_version || "0.1.9",
+          app_version: rawProj.app_version || "0.1.10",
           saved_at: rawProj.saved_at || new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
         };
         const projectJson = JSON.stringify(project, null, 2) + "\n";

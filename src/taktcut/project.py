@@ -18,6 +18,7 @@ from taktcut.fx import (
     FxNode,
     _canonicalize_param_keys,
     _validate_hex_color,
+    normalize_enum_fx_param,
     normalize_fx_node,
 )
 from taktcut.models import (
@@ -283,6 +284,9 @@ def _validate_fx_node_strict(raw_node: FxNode | dict[str, Any]) -> FxNode:
         raw_val = canonical[spec.name]
         if spec.kind == "color":
             _validate_hex_color(raw_val)
+            continue
+        if spec.kind == "enum":
+            normalize_enum_fx_param(raw_val, spec)
             continue
         if isinstance(raw_val, bool) or not isinstance(raw_val, int | float):
             raise ValueError(f"FX param {spec.name!r} must be a finite number, got {raw_val!r}")

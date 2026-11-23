@@ -525,3 +525,56 @@ def test_project_fairlight_loudness_and_dialogue_eq_roundtrip(tmp_path: Path) ->
         bad_payload["delivery"][bad_field] = bad_val
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_fx_halation_letterbox_cinema_35mm_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    proj.fx.nodes = [
+        FxNode(
+            effect="halation",
+            enabled=True,
+            params={"halation_strength": 0.65, "halation_radius": 12.5},
+        ),
+        FxNode(
+            effect="letterbox",
+            enabled=True,
+            params={"ratio": "2.39"},
+        ),
+        FxNode(
+            effect="film_grain",
+            enabled=True,
+            params={"strength": 14.0},
+        ),
+    ]
+    proj.fx.active_preset_id = "cinema_35mm"
+
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.fx.active_preset_id == "cinema_35mm"
+    assert [n.effect for n in loaded.fx.nodes] == ["halation", "letterbox", "film_grain"]
+    assert loaded.fx.nodes[0].params["halation_strength"] == pytest.approx(0.65)
+    assert loaded.fx.nodes[0].params["halation_radius"] == pytest.approx(12.5)
+    assert loaded.fx.nodes[1].params["ratio"] == "2.39"
+
+    proj_path = tmp_path / "cinema_35mm.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.fx.nodes[1].params["ratio"] == "2.39"
+
+    for bad_strength in (-0.1, 1.5, True):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["halation_strength"] = bad_strength
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_radius in (1.0, 25.0):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["halation_radius"] = bad_radius
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_ratio in ("1.33", "2.39;whoami", 99, False):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][1]["params"]["ratio"] = bad_ratio
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
