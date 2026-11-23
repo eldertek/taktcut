@@ -1,20 +1,22 @@
 # taktcut
 
 [![CI](https://github.com/eldertek/taktcut/actions/workflows/ci.yml/badge.svg)](https://github.com/eldertek/taktcut/actions/workflows/ci.yml)
-[![Release v0.1.13](https://img.shields.io/badge/release-v0.1.13-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.13)
+[![Release v0.1.14](https://img.shields.io/badge/release-v0.1.14-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.14)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-e68442.svg)](LICENSE)
 
-Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
+Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, SMPTE Timecode Burn-In & Client-Review Watermark, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
 
-`taktcut` (`v0.1.13`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
+`taktcut` (`v0.1.14`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
 
 - **1-Click Desktop Download (Windows / macOS / Linux)**: [https://eclipse-technology.eu/taktcut/](https://eclipse-technology.eu/taktcut/)
 - **Live Browser Demo**: [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)
 
 ![taktcut Web Studio GUI](docs/screenshot-desktop.png)
 
-## What's New in v0.1.13
+## What's New in v0.1.14
+
+- **SMPTE Timecode Burn-In & Client-Review Watermark**: Added DaVinci-style **SMPTE Timecode Burn-In** (`off`, `top_left`, `bottom_center`, `bottom_right`) and **Client-Review Watermark** overlay (custom text up to 40 characters with `DRAFT - CLIENT REVIEW` / `CONFIDENTIAL` quick presets and `0.15` to `0.80` opacity control) across the Deliver UI, `RenderPlan`, Remote Render Node, and `.taktcut.json` project state.
 
 - **20 Boris FX Sapphire-Inspired FX & Chroma Key**: Added `S_HueSatBright` (`hue_shift`), `S_FlipFlop` (`mirror_flip`), `S_Mosaic` (`mosaic_pixelate`), and `S_Invert` (`invert_negative`) plus 1-click presets `neon_shift` and `retro_arcade` alongside `S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `S_Shake` Handheld (`camera_shake`), `S_LensDistortion`, `S_ScanLines`, `S_Sharpen`, `cinema_35mm` / `action_handheld` / `retro_vhs` presets, keyframe curves, and **Chroma Key (Green/Blue Screen)** with real-time Canvas preview and deterministic FFmpeg filtergraph compilation.
 - **DaVinci Dynamic Zoom / Ken Burns**: Real-time Canvas motion preview, Timeline Inspector selector (`slow_zoom_in`, `slow_zoom_out`, `pan_left_to_right`, `pan_right_to_left`), and deterministic FFmpeg filtergraph compilation.
@@ -92,7 +94,7 @@ Six docked workstation pages:
 2. **FX**: 20 Boris FX Sapphire-inspired GPU/FFmpeg FX (`S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `S_Shake` Handheld, `S_LensDistortion`, `S_ScanLines`, `S_Sharpen`, `S_HueSatBright`, `S_FlipFlop`, `S_Mosaic`, `S_Invert`), **Split-Screen Wipe (Before/After)**, **DaVinci Still Gallery (`Shift+S`)**, **Chroma Key**, keyframe curve editor, and 1-click presets (`cinema_35mm`, `action_handheld`, `retro_vhs`, `neon_shift`, `retro_arcade`, etc.).
 3. **Titles**: Interactive Titles & Lower-Thirds generator plus **SRT / VTT Subtitles** cue editor and burn-in controls.
 4. **Color**: Interactive **Lift / Gamma / Gain** DaVinci Color Wheels & Primary Bars, Rec.709 **Split-Screen Wipe (Before/After)** monitor, **DaVinci Still Gallery (`Shift+S`)**, live **RGB Parade / Luma Waveform / Vectorscope**, `.cdl` import, and 3D `.cube` LUT baking.
-5. **Deliver**: One-click Delivery Presets, Aspect Ratio framing (`16:9`, `9:16`, `1:1`, `4:5`), host `NVENC`/CPU encoder probe, **Remote GPU Render Node (`NVENC`)** dispatch, deterministic Rec.709 FFmpeg render planning & execution, studio LUT linking, and Fairlight EBU R128 loudness (`-14/-16/-23 LUFS`) + Dialogue EQ.
+5. **Deliver**: One-click Delivery Presets, Aspect Ratio framing (`16:9`, `9:16`, `1:1`, `4:5`), **SMPTE Timecode Burn-In** & **Client-Review Watermark** overlays, host `NVENC`/CPU encoder probe, **Remote GPU Render Node (`NVENC`)** dispatch, deterministic Rec.709 FFmpeg render planning & execution, studio LUT linking, and Fairlight EBU R128 loudness (`-14/-16/-23 LUFS`) + Dialogue EQ.
 6. **Broadcast QA**: `ffprobe` CFR/faststart audit, EBU R128 LUFS/dBTP gauges, and start/mid/end frame signalstats verification.
 
 Static frontend assets (`src/taktcut/ui/assets/`) also run standalone on static web hosting (via relative imports, `window.__TAKTCUT_CONFIG__`, and a client-side demo adapter), as hosted at [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/).
