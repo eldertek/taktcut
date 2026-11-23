@@ -7,6 +7,7 @@ import {
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
   drawColorWarperCanvas,
+  drawCompoundMiniMapCanvas,
   drawFramesCanvas,
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
@@ -59,6 +60,7 @@ import {
   COLOR_WARPER_HUE_LABELS,
   COLOR_WARPER_PRESETS_CLIENT,
   COLOR_WARPER_SAT_RINGS,
+  COMPOUND_COLOR_TAGS,
   CURVE_CHANNELS,
   DELIVERY_PRESETS,
   DYNAMIC_ZOOM_DEFAULT,
@@ -72,8 +74,10 @@ import {
   LOUDNESS_PRESET_LUFS,
   MARKER_COLOR_HEX,
   MAX_COLOR_NODES,
+  MAX_COMPOUND_NESTING_DEPTH,
   MAX_CURVE_POINTS,
   PLANAR_TRACKER_PRESETS_CLIENT,
+  PRECOMP_BLEND_MODES,
   QUALIFIER_PRESETS,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
@@ -141,18 +145,23 @@ import {
   clampSplitWipePercent,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
+  compileCompoundFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
+  compoundClipToTimelineDoc,
+  computeCompoundDepthClient,
   computeInOutRangeMetrics,
   computeRetimeRampSummary,
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
+  countCompoundClipsInDocument,
   countSyncLockedTracks,
+  createCompoundClipInDocument,
   createDefaultColorCurves,
   createDefaultColorNodeTree,
   createDefaultColorWarper,
@@ -161,6 +170,7 @@ import {
   createDefaultQualifier,
   createEmptyTransformKeyframes,
   createStillRecord,
+  decomposeCompoundClipInDocument,
   deleteMarkerInDocument,
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
@@ -181,6 +191,7 @@ import {
   findClipIndex,
   findMagneticSnap,
   findTrackAndClip,
+  flattenAllCompoundsInDocument,
   formatCmx3600Edl,
   formatFcpxmlTimeline,
   formatFfmetadataFromMarkers,
@@ -277,6 +288,7 @@ import {
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   toggleTrackSyncLockInDocument,
+  updateCompoundSubsequenceInDocument,
   trimClipInDocument,
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
@@ -459,6 +471,7 @@ const state = {
   timelineDragFixedMaxFrame: null,
   timelineUndoStack: [],
   timelineRedoStack: [],
+  compoundStack: [],
   tfGraphParam: "zoom_pct",
   tfGraphMode: "value",
   tfGraphSelectedKfIdx: 0,
@@ -1333,6 +1346,7 @@ function setTimelineData(payload) {
   state.timelineIndexColor = "all";
   state.timelineUndoStack = [];
   state.timelineRedoStack = [];
+  state.compoundStack = [];
   state.timelineActiveSnapFrame = null;
   state.timelineActiveSnapKind = null;
   state.timelineBladePreview = null;
@@ -1445,6 +1459,7 @@ function renderTimelineUI() {
   renderTimelineIssues();
   renderMediaPool();
   renderTimelineIndex();
+  renderPrecompBreadcrumbBar();
   renderDeliverChaptersPreview();
   updateDeliverSizeEstimate();
   if (state.activeTab === "timeline") {
@@ -3538,6 +3553,7 @@ function renderTimelineSelection() {
   if (!sel) {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
     renderTimelineClipLabelInspector();
+    renderTimelineCompoundInspector();
     renderTimelineEditNudgeInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
@@ -3580,6 +3596,7 @@ function renderTimelineSelection() {
       ["Source Path", c.source_path || t("common.none")]
     ]);
     renderTimelineClipLabelInspector();
+    renderTimelineCompoundInspector();
     renderTimelineEditNudgeInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
@@ -3599,6 +3616,7 @@ function renderTimelineSelection() {
     ["Note", mk.note || t("common.none")]
   ]);
   renderTimelineClipLabelInspector();
+  renderTimelineCompoundInspector();
   renderTimelineMarkerInspector();
   renderTimelineTransformInspector();
   renderTimelineAudioInspector();
@@ -10741,6 +10759,21 @@ function updateTimelineToolbarUI() {
   if (redoBtn) {
     redoBtn.disabled = state.timelineRedoStack.length === 0;
   }
+  const cmpCreateBtn = byId("btn-timeline-compound-create");
+  const cmpFlattenBtn = byId("btn-timeline-compound-flatten");
+  const cmpCount = countCompoundClipsInDocument(state.timelineDoc);
+  const hasIoRange =
+    state.ioRange &&
+    Number.isInteger(state.ioRange.in_frame) &&
+    Number.isInteger(state.ioRange.out_frame) &&
+    state.ioRange.out_frame > state.ioRange.in_frame;
+  const hasClipSel = Boolean(getSelectedClipRef());
+  if (cmpCreateBtn) {
+    cmpCreateBtn.disabled = !state.timelineDoc || (!hasIoRange && !hasClipSel);
+  }
+  if (cmpFlattenBtn) {
+    cmpFlattenBtn.disabled = !state.timelineDoc || cmpCount === 0;
+  }
   if (toolBadge) {
     const modeLabel = getTimelineToolLabel(tool);
     const snapLabel = state.timelineSnapEnabled ? " | SNAP (N)" : "";
@@ -11489,6 +11522,9 @@ function handleTransportKeydown(ev) {
     if (onPlayheadTab && !ev.ctrlKey && !ev.metaKey && lower === "x") {
       ev.preventDefault();
       clearInOutAction();
+    } else if (state.activeTab === "timeline" && !ev.ctrlKey && !ev.metaKey && lower === "g") {
+      ev.preventDefault();
+      createCompoundClipAction();
     } else if (state.activeTab === "color" && !ev.ctrlKey && !ev.metaKey && lower === "o") {
       ev.preventDefault();
       addOutsideColorNodeAction();
@@ -17483,6 +17519,7 @@ function wireEvents() {
   document.addEventListener("keydown", handleTransportKeydown);
   window.addEventListener("resize", redrawActiveCanvases);
   wireFairlightAudioRackEvents();
+  wireCompoundInspectorEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -17984,6 +18021,455 @@ async function bootstrap() {
     loadTransitionsCatalog(),
     loadRenderPresetsCatalog()
   ]);
+}
+
+// =========================================================================
+// CYCLE #92: COMPOUND CLIP / NESTED SUB-SEQUENCE & PRE-COMP EDITOR UI
+// =========================================================================
+
+function renderPrecompBreadcrumbBar() {
+  const bar = byId("precomp-breadcrumb-bar");
+  const trail = byId("precomp-breadcrumb-trail");
+  const depthPill = byId("precomp-depth-pill");
+  if (!bar || !trail) return;
+
+  const stack = Array.isArray(state.compoundStack) ? state.compoundStack : [];
+  if (stack.length === 0) {
+    bar.classList.add("is-hidden");
+    trail.replaceChildren();
+    return;
+  }
+
+  bar.classList.remove("is-hidden");
+  const nodes = [];
+  const rootName = (stack[0].parentDoc && stack[0].parentDoc.name) || "Main Cut";
+  const rootBtn = dom("button", "precomp-crumb-btn mono", rootName);
+  rootBtn.type = "button";
+  rootBtn.addEventListener("click", () => exitCompoundLevelAction(0));
+  nodes.push(rootBtn);
+
+  stack.forEach((entry, idx) => {
+    nodes.push(dom("span", "precomp-crumb-sep mono", ">"));
+    const isLast = idx === stack.length - 1;
+    const label = entry.compoundName || `Compound ${idx + 1}`;
+    const btn = dom(
+      "button",
+      `precomp-crumb-btn mono${isLast ? " is-current" : ""}`,
+      label
+    );
+    btn.type = "button";
+    if (isLast) {
+      btn.setAttribute("aria-current", "page");
+    } else {
+      btn.addEventListener("click", () => exitCompoundLevelAction(idx + 1));
+    }
+    nodes.push(btn);
+  });
+
+  trail.replaceChildren(...nodes);
+  if (depthPill && state.timelineDoc) {
+    const vCount = (state.timelineDoc.tracks || []).filter((tr) => tr.kind === "video").length;
+    const aCount = (state.timelineDoc.tracks || []).filter((tr) => tr.kind === "audio").length;
+    depthPill.textContent = `DEPTH ${stack.length} | ${vCount}V+${aCount}A`;
+  }
+}
+
+function renderTimelineCompoundInspector() {
+  const badge = byId("clip-compound-badge");
+  const createBtn = byId("btn-compound-create-sel");
+  const openBtn = byId("btn-compound-open-precomp");
+  const decompBtn = byId("btn-compound-decompose");
+  const nameInput = byId("compound-name-input");
+  const blendSelect = byId("compound-blend-mode");
+  const collapseCheck = byId("compound-collapse-transforms");
+  const tagGroup = byId("compound-color-tag-group");
+  const miniCanvas = byId("compound-precomp-canvas");
+  const fgPreview = byId("compound-filtergraph-preview");
+
+  const info = getSelectedClipTrack();
+  const clip = info ? info.clip : null;
+  const sub = clip && clip.compound_subsequence ? clip.compound_subsequence : null;
+  const isCmp = Boolean(sub);
+
+  const hasIo =
+    state.ioRange &&
+    Number.isInteger(state.ioRange.in_frame) &&
+    Number.isInteger(state.ioRange.out_frame) &&
+    state.ioRange.out_frame > state.ioRange.in_frame;
+
+  if (createBtn) {
+    createBtn.disabled = !state.timelineDoc || (!hasIo && !info);
+  }
+  if (openBtn) {
+    openBtn.disabled = !isCmp;
+  }
+  if (decompBtn) {
+    decompBtn.disabled = !isCmp;
+  }
+
+  if (badge) {
+    if (isCmp) {
+      const trkCount = (sub.tracks || []).length;
+      const clpCount = (sub.tracks || []).reduce((acc, tr) => acc + (tr.clips || []).length, 0);
+      badge.textContent = `CMP ${trkCount}T/${clpCount}C`;
+      badge.className = "nle-tag mono is-snap";
+    } else {
+      badge.textContent = clip ? "SINGLE" : "--";
+      badge.className = "nle-tag mono";
+    }
+  }
+
+  if (nameInput) {
+    nameInput.disabled = !isCmp;
+    if (document.activeElement !== nameInput) {
+      nameInput.value = isCmp ? sub.name || clip.name || "" : "";
+    }
+  }
+  if (blendSelect) {
+    blendSelect.disabled = !isCmp;
+    blendSelect.value = isCmp ? sub.precomp_blend_mode || "normal" : "normal";
+  }
+  if (collapseCheck) {
+    collapseCheck.disabled = !isCmp;
+    collapseCheck.checked = isCmp ? sub.collapse_transforms !== false : true;
+  }
+  if (tagGroup) {
+    const activeTag = isCmp ? sub.color_tag || "amber" : "amber";
+    for (const pill of tagGroup.querySelectorAll("[data-compound-color-tag]")) {
+      const tagVal = pill.getAttribute("data-compound-color-tag");
+      const active = isCmp && tagVal === activeTag;
+      pill.disabled = !isCmp;
+      pill.classList.toggle("is-active", active);
+      pill.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+  }
+
+  if (miniCanvas) {
+    drawCompoundMiniMapCanvas(miniCanvas, isCmp ? clip : null, {
+      emptyLabel: t("timeline.compound.title")
+    });
+  }
+
+  if (fgPreview) {
+    if (isCmp) {
+      try {
+        const compiled = compileCompoundFiltergraphClient(sub, {
+          speed_rate: clip.speed_rate,
+          master_gain_db: clip.audio_gain_db
+        });
+        fgPreview.textContent =
+          compiled.filter_complex ||
+          `${compiled.video_track_count}V + ${compiled.audio_track_count}A (${compiled.duration_s.toFixed(2)}s)`;
+      } catch (err) {
+        fgPreview.textContent = err.message;
+      }
+    } else {
+      fgPreview.textContent = t("timeline.compound.idleHint");
+    }
+  }
+}
+
+async function createCompoundClipAction() {
+  if (!state.timelineDoc) return false;
+  const currentDepth = (state.compoundStack || []).length;
+  if (currentDepth >= MAX_COMPOUND_NESTING_DEPTH) {
+    showBanner(`Max nesting depth (${MAX_COMPOUND_NESTING_DEPTH}) reached.`, "error");
+    return false;
+  }
+
+  const hasIo =
+    state.ioRange &&
+    Number.isInteger(state.ioRange.in_frame) &&
+    Number.isInteger(state.ioRange.out_frame) &&
+    state.ioRange.out_frame > state.ioRange.in_frame;
+  const info = getSelectedClipTrack();
+  if (!hasIo && !info) {
+    showBanner(t("timeline.compound.idleHint"), "info");
+    return false;
+  }
+
+  const preSnap = captureTimelineSnapshot();
+  const payload = {
+    op: "create",
+    document: state.timelineDoc,
+    include_audio: true,
+    precomp_blend_mode: "normal",
+    collapse_transforms: true,
+    color_tag: "amber"
+  };
+  if (hasIo) {
+    payload.in_frame = state.ioRange.in_frame;
+    payload.out_frame = state.ioRange.out_frame;
+  } else if (info) {
+    payload.target_clips = [
+      {
+        track_kind: info.ref.trackKind,
+        track_index: info.ref.trackIndex,
+        clip_index: info.ref.clipIndex
+      }
+    ];
+  }
+
+  try {
+    const res = await api.compoundTimeline(payload);
+    if (!res.changed) {
+      showBanner(res.detail || "No clips nested.", "info");
+      return false;
+    }
+    const nextDoc = res.document;
+    const found = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    const nextSel = found ? { kind: "clip", data: found.clip } : null;
+    if (hasIo) {
+      state.ioRange = { in_frame: null, out_frame: null };
+      state.ioLoopEnabled = false;
+      updateIoRangeUI();
+    }
+    commitTimelineMutation(nextDoc, nextSel, preSnap);
+    showBanner(
+      t("timeline.compound.created")
+        .replace("{name}", found ? found.clip.name : res.compound_id)
+        .replace("{tracks}", String(res.nested_track_count))
+        .replace("{clips}", String(res.nested_clip_count)),
+      "success"
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+async function decomposeSelectedCompoundAction() {
+  const info = getSelectedClipTrack();
+  if (!info || !info.clip || !info.clip.compound_subsequence) return false;
+  const preSnap = captureTimelineSnapshot();
+  const cmpName = info.clip.name;
+  try {
+    const res = await api.compoundTimeline({
+      op: "decompose",
+      document: state.timelineDoc,
+      track_kind: info.ref.trackKind,
+      track_index: info.ref.trackIndex,
+      clip_index: info.ref.clipIndex
+    });
+    if (!res.changed) {
+      showBanner(res.detail || "Unable to decompose.", "info");
+      return false;
+    }
+    const nextDoc = res.document;
+    const placed = findTrackAndClip(nextDoc, res.track_kind, res.track_index, res.clip_index);
+    commitTimelineMutation(nextDoc, placed ? { kind: "clip", data: placed.clip } : null, preSnap);
+    showBanner(
+      t("timeline.compound.decomposed")
+        .replace("{name}", cmpName)
+        .replace("{clips}", String(res.nested_clip_count)),
+      "success"
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+async function flattenAllCompoundsAction() {
+  if (!state.timelineDoc) return false;
+  const cmpBefore = countCompoundClipsInDocument(state.timelineDoc);
+  if (cmpBefore === 0) return false;
+  const preSnap = captureTimelineSnapshot();
+  try {
+    const res = await api.compoundTimeline({
+      op: "flatten_all",
+      document: state.timelineDoc
+    });
+    if (!res.changed) return false;
+    commitTimelineMutation(res.document, null, preSnap);
+    showBanner(
+      t("timeline.compound.flattened").replace("{count}", String(cmpBefore)),
+      "success"
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+function stepIntoCompoundClipAction(trackKind, trackIndex, clipIndex) {
+  if (!state.timelineDoc) return false;
+  const found = findTrackAndClip(state.timelineDoc, trackKind, trackIndex, clipIndex);
+  if (!found || !found.clip || !found.clip.compound_subsequence) return false;
+  stopPlayback();
+
+  const subDoc = compoundClipToTimelineDoc(found.clip, state.timelineDoc.fps);
+  state.compoundStack.push({
+    parentDoc: cloneTimelineDoc(state.timelineDoc),
+    parentSelected: state.timelineSelected ? cloneTimelineDoc(state.timelineSelected) : null,
+    parentPlayhead: state.playheadFrame,
+    trackKind,
+    trackIndex,
+    clipIndex,
+    compoundId: found.clip.compound_subsequence.id,
+    compoundName: found.clip.compound_subsequence.name
+  });
+
+  state.timelineDoc = subDoc;
+  state.timelineValidation = validateTimelineClient(subDoc);
+  state.timelineUndoStack = [];
+  state.timelineRedoStack = [];
+  state.timelineMaxFrame = computeTimelineMaxFrame(subDoc);
+  state.playheadFrame = 0;
+  state.ioRange = { in_frame: null, out_frame: null };
+  state.ioLoopEnabled = false;
+  let firstSubClip = null;
+  for (const trk of subDoc.tracks || []) {
+    if (trk.clips && trk.clips.length > 0) {
+      firstSubClip = trk.clips[0];
+      break;
+    }
+  }
+  state.timelineSelected = firstSubClip ? { kind: "clip", data: firstSubClip } : null;
+  updateIoRangeUI();
+  renderTimelineUI();
+  showBanner(
+    t("timeline.compound.entered").replace("{name}", found.clip.compound_subsequence.name),
+    "info"
+  );
+  return true;
+}
+
+function exitCompoundLevelAction(targetDepth = null) {
+  if (!Array.isArray(state.compoundStack) || state.compoundStack.length === 0) return false;
+  stopPlayback();
+  const destLen =
+    targetDepth === null || targetDepth === undefined
+      ? state.compoundStack.length - 1
+      : Math.max(0, Math.min(state.compoundStack.length - 1, Number(targetDepth)));
+
+  let exitedName = state.timelineDoc ? state.timelineDoc.name : "Pre-Comp";
+  while (state.compoundStack.length > destLen) {
+    const frame = state.compoundStack.pop();
+    exitedName = frame.compoundName || exitedName;
+    const upd = updateCompoundSubsequenceInDocument(
+      frame.parentDoc,
+      frame.trackKind,
+      frame.trackIndex,
+      frame.clipIndex,
+      state.timelineDoc
+    );
+    state.timelineDoc = upd.doc || frame.parentDoc;
+    const refind = findTrackAndClip(
+      state.timelineDoc,
+      frame.trackKind,
+      frame.trackIndex,
+      frame.clipIndex
+    );
+    state.timelineSelected = refind
+      ? { kind: "clip", data: refind.clip }
+      : frame.parentSelected;
+    state.playheadFrame = Number.isFinite(frame.parentPlayhead) ? frame.parentPlayhead : 0;
+  }
+
+  state.timelineValidation = validateTimelineClient(state.timelineDoc);
+  state.timelineUndoStack = [];
+  state.timelineRedoStack = [];
+  state.timelineMaxFrame = computeTimelineMaxFrame(state.timelineDoc);
+  state.playheadFrame = Math.min(state.playheadFrame, state.timelineMaxFrame);
+  state.ioRange = { in_frame: null, out_frame: null };
+  state.ioLoopEnabled = false;
+  updateIoRangeUI();
+  renderTimelineUI();
+  showBanner(t("timeline.compound.exited").replace("{name}", exitedName), "success");
+  return true;
+}
+
+function updateSelectedCompoundPropsAction(opts = {}) {
+  const info = getSelectedClipTrack();
+  if (!info || !info.clip || !info.clip.compound_subsequence || !state.timelineDoc) return false;
+  const preSnap = captureTimelineSnapshot();
+  try {
+    const res = updateCompoundSubsequenceInDocument(
+      state.timelineDoc,
+      info.ref.trackKind,
+      info.ref.trackIndex,
+      info.ref.clipIndex,
+      null,
+      opts
+    );
+    if (!res.changed) return false;
+    const nextFound = findTrackAndClip(
+      res.doc,
+      info.ref.trackKind,
+      info.ref.trackIndex,
+      info.ref.clipIndex
+    );
+    commitTimelineMutation(
+      res.doc,
+      nextFound ? { kind: "clip", data: nextFound.clip } : null,
+      preSnap
+    );
+    return true;
+  } catch (err) {
+    showBanner(err.message, "error");
+    return false;
+  }
+}
+
+function wireCompoundInspectorEvents() {
+  byId("btn-timeline-compound-create")?.addEventListener("click", createCompoundClipAction);
+  byId("btn-compound-create-sel")?.addEventListener("click", createCompoundClipAction);
+  byId("btn-timeline-compound-flatten")?.addEventListener("click", flattenAllCompoundsAction);
+  byId("btn-compound-decompose")?.addEventListener("click", decomposeSelectedCompoundAction);
+  byId("btn-precomp-exit")?.addEventListener("click", () => exitCompoundLevelAction(null));
+  byId("btn-compound-open-precomp")?.addEventListener("click", () => {
+    const info = getSelectedClipTrack();
+    if (info && info.clip && info.clip.compound_subsequence) {
+      stepIntoCompoundClipAction(info.ref.trackKind, info.ref.trackIndex, info.ref.clipIndex);
+    }
+  });
+  byId("compound-precomp-canvas")?.addEventListener("click", () => {
+    const info = getSelectedClipTrack();
+    if (info && info.clip && info.clip.compound_subsequence) {
+      stepIntoCompoundClipAction(info.ref.trackKind, info.ref.trackIndex, info.ref.clipIndex);
+    }
+  });
+  byId("compound-name-input")?.addEventListener("change", (ev) => {
+    const val = String(ev.target.value || "").trim();
+    if (val) updateSelectedCompoundPropsAction({ name: val });
+  });
+  byId("compound-blend-mode")?.addEventListener("change", (ev) => {
+    const val = String(ev.target.value || "normal");
+    if (PRECOMP_BLEND_MODES.includes(val)) {
+      updateSelectedCompoundPropsAction({ precomp_blend_mode: val });
+    }
+  });
+  byId("compound-collapse-transforms")?.addEventListener("change", (ev) => {
+    updateSelectedCompoundPropsAction({ collapse_transforms: Boolean(ev.target.checked) });
+  });
+  const tagGroup = byId("compound-color-tag-group");
+  if (tagGroup) {
+    for (const pill of tagGroup.querySelectorAll("[data-compound-color-tag]")) {
+      pill.addEventListener("click", () => {
+        const tag = pill.getAttribute("data-compound-color-tag");
+        if (COMPOUND_COLOR_TAGS.includes(tag)) {
+          updateSelectedCompoundPropsAction({ color_tag: tag });
+        }
+      });
+    }
+  }
+  const tlCanvas = byId("timeline-canvas");
+  if (tlCanvas) {
+    tlCanvas.addEventListener("dblclick", (ev) => {
+      if (!state.timelineDoc) return;
+      const rect = tlCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      const hit = hitTestTimeline(x, y, { includeTrim: false, includeFade: false });
+      if (hit && hit.kind === "clip" && hit.box && hit.box.data && hit.box.data.compound_subsequence) {
+        stepIntoCompoundClipAction(hit.box.trackKind, hit.box.trackIndex, hit.box.clipIndex);
+      }
+    });
+  }
 }
 
 bootstrap();

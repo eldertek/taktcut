@@ -9596,6 +9596,279 @@ def test_fairlight_fft_analyzer_and_transient_marker_snapper_parity_and_ui(
         thread.join(timeout=5)
 
 
+def test_ui_compound_clip_api_and_playwright_live_e2e(tmp_path: Path) -> None:
+    """Verify /api/timeline/compound API, JS parity, Pre-Comp Editor, EN/FR, and 375px/1440px."""
+    from taktcut.ui.samples import build_sample_timeline
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+    try:
+        doc = build_sample_timeline("clean").model_dump(mode="json")
+
+        # 1. API create compound from In/Out range
+        c_status, _, c_raw = _http_call(
+            f"{base_url}/api/timeline/compound",
+            method="POST",
+            payload={
+                "op": "create",
+                "document": doc,
+                "in_frame": 25,
+                "out_frame": 125,
+                "name": "API Showreel PreComp",
+                "precomp_blend_mode": "screen",
+                "collapse_transforms": True,
+                "color_tag": "violet",
+            },
+        )
+        assert c_status == 200
+        created = json.loads(c_raw.decode("utf-8"))
+        assert created["changed"] is True
+        assert created["op"] == "create_compound"
+        assert created["max_depth"] == 1
+        assert not any(
+            issue["kind"] in ("overlap", "zero_duration", "fps_mismatch")
+            for issue in created["validation"]["issues"]
+        )
+
+        # 2. API compile FFmpeg filtergraph
+        f_status, _, f_raw = _http_call(
+            f"{base_url}/api/timeline/compound",
+            method="POST",
+            payload={
+                "op": "compile",
+                "document": created["document"],
+                "track_kind": created["track_kind"],
+                "track_index": created["track_index"],
+                "clip_index": created["clip_index"],
+            },
+        )
+        assert f_status == 200
+        compiled = json.loads(f_raw.decode("utf-8"))["compile"]
+        assert "blend=all_mode=screen" in compiled["filter_complex"]
+        assert "amix=" in compiled["filter_complex"]
+
+        # 3. API decompose round-trip
+        d_status, _, d_raw = _http_call(
+            f"{base_url}/api/timeline/compound",
+            method="POST",
+            payload={
+                "op": "decompose",
+                "document": created["document"],
+                "track_kind": created["track_kind"],
+                "track_index": created["track_index"],
+                "clip_index": created["clip_index"],
+            },
+        )
+        assert d_status == 200
+        decomposed = json.loads(d_raw.decode("utf-8"))
+        assert decomposed["changed"] is True
+        assert decomposed["max_depth"] == 0
+
+        # 4. API invalid op returns 400
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/timeline/compound",
+            method="POST",
+            payload={"op": "invalid_op", "document": doc},
+        )
+        assert bad_status == 400
+
+        # 5. Node.js demo_adapter.js static-demo parity
+        node_bin = shutil.which("node")
+        if node_bin:
+            assets_dir = (
+                Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+            )
+            demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+            script = (
+                f"import {{ createApiClient }} from {json.dumps(demo_uri)};\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const client = createApiClient();\n"
+                f"const doc = {json.dumps(doc)};\n"
+                "const created = await client.compoundTimeline({"
+                "  op: 'create', document: doc, in_frame: 25, out_frame: 125,"
+                "  name: 'API Showreel PreComp', precomp_blend_mode: 'screen',"
+                "  collapse_transforms: true, color_tag: 'violet'"
+                "});\n"
+                "if (!created.changed || created.max_depth !== 1) throw new Error('create fail');\n"
+                "const compiled = await client.compoundTimeline({"
+                "  op: 'compile', document: created.document,"
+                "  track_kind: created.track_kind, track_index: created.track_index,"
+                "  clip_index: created.clip_index"
+                "});\n"
+                "if (!compiled.compile.filter_complex.includes('blend=all_mode=screen')) "
+                "throw new Error('compile fail');\n"
+                "const flat = await client.compoundTimeline({"
+                "  op: 'flatten_all', document: created.document"
+                "});\n"
+                "if (!flat.changed || flat.max_depth !== 0) throw new Error('flatten fail');\n"
+                "console.log('COMPOUND_PARITY_OK');\n"
+            )
+            proc = subprocess.run(
+                [node_bin, "--input-type=module", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, proc.stderr
+            assert "COMPOUND_PARITY_OK" in proc.stdout
+
+        # 6. Live Playwright verification at 1440x900 & 375x812 (EN + FR)
+        sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_function(
+                    "() => document.getElementById('btn-compound-create-sel') !== null"
+                )
+                page.wait_for_function(
+                    "() => document.getElementById('btn-compound-create-sel').disabled === false"
+                )
+
+                # Create Compound Clip from selected clip via Inspector button
+                page.click("#btn-compound-create-sel")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-compound-badge')?.textContent || '')"
+                    ".startsWith('CMP ')"
+                )
+                assert page.locator("#btn-compound-open-precomp").is_disabled() is False
+                assert page.locator("#btn-compound-decompose").is_disabled() is False
+                assert page.locator("#btn-timeline-compound-flatten").is_disabled() is False
+
+                # Check minimap canvas rendered non-empty pixels
+                mini_pixels = page.evaluate(
+                    "() => {"
+                    "  const c = document.getElementById('compound-precomp-canvas');"
+                    "  const ctx = c.getContext('2d');"
+                    "  const d = ctx.getImageData(0, 0, c.width, c.height).data;"
+                    "  let lit = 0;"
+                    "  for (let i = 0; i < d.length; i += 16) {"
+                    "    if (d[i] > 40 || d[i+1] > 40 || d[i+2] > 50) lit++;"
+                    "  }"
+                    "  return lit;"
+                    "}"
+                )
+                assert mini_pixels > 40
+
+                # Open Pre-Comp Editor -> verify breadcrumb bar appears
+                page.click("#btn-compound-open-precomp")
+                page.wait_for_function(
+                    "() => !document.getElementById('precomp-breadcrumb-bar')"
+                    ".classList.contains('is-hidden')"
+                )
+                assert "DEPTH 1" in (
+                    page.locator("#precomp-depth-pill").text_content() or ""
+                )
+
+                # Exit Pre-Comp Editor -> breadcrumb bar hides cleanly
+                page.click("#btn-precomp-exit")
+                page.wait_for_function(
+                    "() => document.getElementById('precomp-breadcrumb-bar')"
+                    ".classList.contains('is-hidden')"
+                )
+
+                # Change Blend Mode and Color Tag and verify UI state + minimap
+                page.select_option("#compound-blend-mode", "screen")
+                page.click("[data-compound-color-tag='violet']")
+                assert page.locator("#compound-blend-mode").input_value() == "screen"
+                assert (
+                    page.locator("[data-compound-color-tag='violet']")
+                    .get_attribute("aria-pressed")
+                    == "true"
+                )
+
+                # Decompose single-clip compound, then test multi-track I/O Range Compounding
+                page.click("#btn-compound-decompose")
+                page.wait_for_function(
+                    "() => document.getElementById('clip-compound-badge')"
+                    "?.textContent === 'SINGLE'"
+                )
+                page.click("#btn-tc-mark-in")
+                page.evaluate(
+                    "() => {"
+                    "  const s = document.getElementById('playhead-slider');"
+                    "  s.value = '125';"
+                    "  s.dispatchEvent(new Event('input', { bubbles: true }));"
+                    "}"
+                )
+                page.click("#btn-tc-mark-out")
+                page.click("#btn-timeline-compound-create")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-compound-badge')?.textContent || '')"
+                    ".includes('4T/')"
+                )
+                page.select_option("#compound-blend-mode", "screen")
+                assert "blend=all_mode=screen" in (
+                    page.locator("#compound-filtergraph-preview").text_content() or ""
+                )
+
+                # Switch to FR i18n and verify clean French labels without em/en dashes
+                page.click("#lang-fr")
+                assert "Plan Composé & Pré-Comp" in (
+                    page.locator("#timeline-compound-inspector").text_content() or ""
+                )
+                assert "Ouvrir Pré-Comp" in (
+                    page.locator("#btn-compound-open-precomp").text_content() or ""
+                )
+                assert "Décomposer" in (
+                    page.locator("#btn-compound-decompose").text_content() or ""
+                )
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in (
+                    "btn-timeline-compound-create",
+                    "btn-timeline-compound-flatten",
+                    "btn-compound-create-sel",
+                    "btn-compound-open-precomp",
+                    "btn-compound-decompose",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}')"
+                        ".getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                # Decompose back to single clips
+                page.click("#btn-compound-decompose")
+                page.wait_for_function(
+                    "() => document.getElementById('clip-compound-badge')?.textContent === 'SINGLE'"
+                )
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+
 
 
 

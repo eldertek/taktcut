@@ -4558,20 +4558,67 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         fadeTarget.trackIndex === trk.index &&
         fadeTarget.clipIndex === clipIndex;
 
+      const isCompound = Boolean(clip.compound_subsequence);
+      const cmpTagColors = {
+        amber: { fill: "#382812", border: "#f59e0b", strip: "#fbbf24", text: "#fde68a" },
+        violet: { fill: "#2a1e42", border: "#a78bfa", strip: "#c4b5fd", text: "#ede9fe" },
+        teal: { fill: "#123432", border: "#2dd4bf", strip: "#5eead4", text: "#ccfbf1" },
+        blue: { fill: "#172b4d", border: "#60a5fa", strip: "#93c5fd", text: "#dbeafe" }
+      };
+      const cmpTagKey =
+        isCompound && cmpTagColors[clip.compound_subsequence.color_tag]
+          ? clip.compound_subsequence.color_tag
+          : "amber";
+      const cmpPal = cmpTagColors[cmpTagKey];
+
       const baseFill = trackAudiblyMuted
         ? (isAudio ? "#1a2925" : "#1c2533")
-        : isAudio
-          ? clip.enabled ? "#1d4a40" : "#252529"
-          : clip.enabled ? "#264066" : "#252529";
+        : isCompound && clip.enabled
+          ? cmpPal.fill
+          : isAudio
+            ? clip.enabled ? "#1d4a40" : "#252529"
+            : clip.enabled ? "#264066" : "#252529";
       const borderCol = isSelected
         ? "#e68442"
         : trackAudiblyMuted
           ? "#3b3b44"
-          : isAudio ? "#347867" : "#446a9c";
+          : isCompound
+            ? cmpPal.border
+            : isAudio ? "#347867" : "#446a9c";
 
       ctx.fillStyle = baseFill;
       roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
       ctx.fill();
+
+      if (isCompound && drawW > 8) {
+        ctx.save();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+        ctx.clip();
+        ctx.fillStyle = cmpPal.strip;
+        ctx.fillRect(drawX, clipY, drawW, 3);
+        const subTracks = clip.compound_subsequence.tracks || [];
+        const subDur = Math.max(1, Number(clip.compound_subsequence.duration_frames || clip.duration_frames || 1));
+        const maxRows = Math.min(4, subTracks.length);
+        const rowAreaTop = clipY + clipH - 13;
+        const rowStep = maxRows > 0 ? Math.max(2, Math.floor(10 / maxRows)) : 2;
+        for (let rIdx = 0; rIdx < maxRows; rIdx++) {
+          const nTrk = subTracks[rIdx];
+          const barY = rowAreaTop + rIdx * rowStep;
+          ctx.fillStyle =
+            nTrk.kind === "video"
+              ? "rgba(255, 255, 255, 0.24)"
+              : "rgba(45, 212, 191, 0.28)";
+          for (const nClip of nTrk.clips || []) {
+            const nx0 = drawX + Math.max(0, (nClip.start_frame / subDur) * drawW);
+            const nw = Math.max(2, ((nClip.duration_frames || 0) / subDur) * drawW);
+            if (nx0 < drawX + drawW) {
+              ctx.fillRect(nx0, barY, Math.min(nw, drawX + drawW - nx0), Math.max(1.5, rowStep - 0.5));
+            }
+          }
+        }
+        ctx.restore();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+      }
 
       const labelColorId = normalizeClipLabelColor(clip.label_color);
       const labelMeta = CLIP_LABEL_COLORS[labelColorId];
@@ -4922,6 +4969,13 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
             ? ` | ${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)}dB`
             : "";
           const muteTag = trackAudiblyMuted ? " | MUTED" : "";
+          const cmpSub = clip.compound_subsequence;
+          const cmpCount = cmpSub
+            ? (cmpSub.tracks || []).reduce((acc, t) => acc + (t.clips || []).length, 0)
+            : 0;
+          const cmpTag = cmpSub
+            ? ` | CMP ${(cmpSub.tracks || []).length}T/${cmpCount}C`
+            : "";
           const retimeTag = hasRetime && speedBadgeW === 0
             ? ` | ${formatRetimeBadgeText(
                 retimeNorm.speedRate,
@@ -4931,7 +4985,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
               )}`
             : "";
           ctx.fillText(
-            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${gainTag}${muteTag}${retimeTag}`,
+            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${cmpTag}${gainTag}${muteTag}${retimeTag}`,
             textStartX + 2,
             rowY + 32
           );
@@ -8143,4 +8197,110 @@ export function hitTestFairlightFftBand(canvas, clientX, clientY) {
     }
   }
   return -1;
+}
+
+export function drawCompoundMiniMapCanvas(canvas, clip, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width, height } = setupCanvas(canvas, 112);
+
+  ctx.fillStyle = "#101116";
+  ctx.fillRect(0, 0, width, height);
+
+  const sub = clip && clip.compound_subsequence ? clip.compound_subsequence : null;
+  if (!sub) {
+    ctx.strokeStyle = "#262833";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+    ctx.fillStyle = "#7a7b88";
+    ctx.font = "10.5px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      opts.emptyLabel || "No Compound Clip selected",
+      width * 0.5,
+      height * 0.5
+    );
+    return null;
+  }
+
+  const tagMap = {
+    amber: "#f59e0b",
+    violet: "#a78bfa",
+    teal: "#2dd4bf",
+    blue: "#60a5fa"
+  };
+  const accent = tagMap[sub.color_tag] || "#f59e0b";
+
+  // Top summary header
+  const headerH = 22;
+  ctx.fillStyle = "#171820";
+  ctx.fillRect(0, 0, width, headerH);
+  ctx.fillStyle = accent;
+  ctx.fillRect(0, 0, width, 2);
+
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#e5e7eb";
+  const blendStr = String(sub.precomp_blend_mode || "normal").toUpperCase();
+  const colStr = sub.collapse_transforms !== false ? "CR:ON" : "CR:OFF";
+  ctx.fillText(`${sub.name} | ${blendStr} | ${colStr}`, 8, headerH * 0.5 + 1);
+
+  const tracks = Array.isArray(sub.tracks) ? sub.tracks : [];
+  const totalDur = Math.max(1, Number(sub.duration_frames || 1));
+  const bodyTop = headerH + 4;
+  const bodyH = Math.max(20, height - bodyTop - 6);
+  const labelW = 34;
+  const plotX = labelW + 4;
+  const plotW = Math.max(40, width - plotX - 8);
+
+  if (tracks.length === 0) {
+    ctx.fillStyle = "#7a7b88";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText("(empty subsequence)", plotX, bodyTop + bodyH * 0.5);
+    return { width, height };
+  }
+
+  const rowH = Math.min(20, Math.max(10, Math.floor(bodyH / tracks.length) - 2));
+  tracks.forEach((trk, idx) => {
+    const ry = bodyTop + idx * (rowH + 2);
+    if (ry + rowH > height - 2) return;
+    const isAud = trk.kind === "audio";
+    ctx.fillStyle = isAud ? "#5eead4" : "#93c5fd";
+    ctx.font = "700 8.5px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${isAud ? "A" : "V"}${trk.index}`, 6, ry + rowH * 0.5);
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
+    ctx.fillRect(plotX, ry, plotW, rowH);
+
+    for (const nc of trk.clips || []) {
+      const x0 = plotX + Math.max(0, (nc.start_frame / totalDur) * plotW);
+      const cw = Math.max(3, ((nc.duration_frames || 0) / totalDur) * plotW);
+      const isNestedCmp = Boolean(nc.compound_subsequence);
+      ctx.fillStyle = isNestedCmp
+        ? "rgba(245, 158, 11, 0.55)"
+        : isAud
+          ? "rgba(45, 212, 191, 0.45)"
+          : "rgba(96, 165, 250, 0.48)";
+      ctx.fillRect(x0, ry + 1, Math.min(cw, plotX + plotW - x0), Math.max(4, rowH - 2));
+      ctx.strokeStyle = isNestedCmp ? "#fbbf24" : isAud ? "#2dd4bf" : "#60a5fa";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0 + 0.5, ry + 1.5, Math.max(2, Math.min(cw, plotX + plotW - x0) - 1), Math.max(3, rowH - 3));
+    }
+  });
+
+  // Nested markers ticks
+  for (const mk of sub.markers || []) {
+    const mx = plotX + Math.max(0, Math.min(plotW, (mk.frame / totalDur) * plotW));
+    ctx.strokeStyle = "#fbbf24";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(mx, bodyTop);
+    ctx.lineTo(mx, height - 4);
+    ctx.stroke();
+  }
+
+  return { width, height };
 }

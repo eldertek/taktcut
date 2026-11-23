@@ -406,6 +406,57 @@
                 </div>
               </div>
 
+              <div id="timeline-compound-inspector" class="compound-inspector-dock" role="region" aria-label="Compound Clip and Pre-Comp Editor">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.compound.title">Compound Clip &amp; Pre-Comp</span>
+                  <span id="clip-compound-badge" class="nle-tag mono">SINGLE</span>
+                </div>
+                <div class="compound-action-row">
+                  <button type="button" id="btn-compound-create-sel" class="btn btn-mini btn-primary" title="Nest selected clip or In/Out range into a Compound Clip (Alt+G)">
+                    <span data-i18n="timeline.compound.createBtn">+ Compound</span>
+                    <span class="kbd-chip mono">Alt+G</span>
+                  </button>
+                  <button type="button" id="btn-compound-open-precomp" class="btn btn-mini" disabled data-i18n="timeline.compound.openPrecomp">Open Pre-Comp</button>
+                  <button type="button" id="btn-compound-decompose" class="btn btn-mini btn-danger-mini" disabled data-i18n="timeline.compound.decompose">Decompose</button>
+                </div>
+                <div id="compound-props-grid" class="compound-props-grid mono">
+                  <div class="compound-prop-row">
+                    <label for="compound-name-input" data-i18n="timeline.compound.name">Pre-Comp Name</label>
+                    <input type="text" id="compound-name-input" class="input-control mono" maxlength="120" placeholder="Compound Clip 1" disabled>
+                  </div>
+                  <div class="compound-prop-two">
+                    <div class="compound-prop-col">
+                      <label for="compound-blend-mode" data-i18n="timeline.compound.blendMode">Blend Mode</label>
+                      <select id="compound-blend-mode" class="input-control mono" disabled aria-label="Pre-Comp blend mode">
+                        <option value="normal" data-i18n="timeline.compound.blendNormal">Normal</option>
+                        <option value="screen" data-i18n="timeline.compound.blendScreen">Screen</option>
+                        <option value="multiply" data-i18n="timeline.compound.blendMultiply">Multiply</option>
+                        <option value="overlay" data-i18n="timeline.compound.blendOverlay">Overlay</option>
+                      </select>
+                    </div>
+                    <div class="compound-prop-col compound-collapse-col">
+                      <label class="check-label compound-collapse-label">
+                        <input type="checkbox" id="compound-collapse-transforms" checked disabled>
+                        <span data-i18n="timeline.compound.collapse">Collapse Transforms</span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="compound-color-row">
+                    <span class="compound-color-label" data-i18n="timeline.compound.tag">Pre-Comp Tag</span>
+                    <div id="compound-color-tag-group" class="compound-color-tag-group" role="group" aria-label="Compound color tag">
+                      <button type="button" class="btn btn-mini compound-color-pill is-active" data-compound-color-tag="amber" aria-pressed="true" disabled>Amber</button>
+                      <button type="button" class="btn btn-mini compound-color-pill" data-compound-color-tag="violet" aria-pressed="false" disabled>Violet</button>
+                      <button type="button" class="btn btn-mini compound-color-pill" data-compound-color-tag="teal" aria-pressed="false" disabled>Teal</button>
+                      <button type="button" class="btn btn-mini compound-color-pill" data-compound-color-tag="blue" aria-pressed="false" disabled>Blue</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="compound-minimap-well">
+                  <canvas id="compound-precomp-canvas" class="compound-minimap-canvas" aria-label="Nested Pre-Comp Multi-Track Layer Mini-Map"></canvas>
+                </div>
+                <div id="compound-filtergraph-preview" class="code-box compound-filtergraph-preview mono" aria-live="polite" data-i18n="timeline.compound.idleHint">Select a clip or set In/Out range and click + Compound (Alt+G) to nest multi-track layers.</div>
+              </div>
+
               <div id="timeline-marker-inspector" class="marker-inspector-dock is-hidden">
                 <div class="pane-subheader">
                   <span data-i18n="timeline.marker.editorTitle">Selected Marker</span>
@@ -1195,11 +1246,35 @@
                 </button>
               </div>
 
+              <div class="tl-tool-group" role="group" aria-label="Compound clips and nesting">
+                <button type="button" id="btn-timeline-compound-create" class="btn btn-mini tl-compound-btn" title="Create Compound Clip from selection or In/Out range (Alt+G)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <rect x="2" y="3" width="12" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                    <rect x="2" y="9" width="12" height="4" rx="1" fill="currentColor" opacity="0.75"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.compound">+ Compound</span>
+                  <span class="kbd-chip mono">Alt+G</span>
+                </button>
+                <button type="button" id="btn-timeline-compound-flatten" class="btn btn-mini tl-compound-btn" disabled title="Flatten / Decompose all Compound Clips in sequence">
+                  <span data-i18n="timeline.tool.flattenAll">Flatten All</span>
+                </button>
+              </div>
+
               <div class="tl-zoom-group">
                 <label class="inline-label" for="timeline-zoom" data-i18n="timeline.viewer.zoom">Zoom</label>
                 <input type="range" id="timeline-zoom" min="1" max="6" step="0.25" value="1">
                 <span id="timeline-zoom-label" class="mono nle-tag">1.0x</span>
               </div>
+            </div>
+          </div>
+          <div id="precomp-breadcrumb-bar" class="precomp-breadcrumb-bar is-hidden" role="navigation" aria-label="Pre-Comp Hierarchy Breadcrumb">
+            <div class="precomp-breadcrumb-left">
+              <span class="nle-tag mono precomp-mode-pill" data-i18n="timeline.compound.precompBadge">PRE-COMP EDITOR</span>
+              <div id="precomp-breadcrumb-trail" class="precomp-breadcrumb-trail mono"></div>
+            </div>
+            <div class="precomp-breadcrumb-right">
+              <span id="precomp-depth-pill" class="nle-tag mono">DEPTH 1</span>
+              <button type="button" id="btn-precomp-exit" class="btn btn-mini btn-primary" data-i18n="timeline.compound.exitPrecomp">Save &amp; Exit Pre-Comp</button>
             </div>
           </div>
           <div class="pane-body-tight">

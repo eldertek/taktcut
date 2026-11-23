@@ -8915,3 +8915,922 @@ export function detectAudioTransientsClient(doc, rawConfig = {}, options = {}) {
     ffmpeg_filter: `${prefix}highpass=f=${loHz.toFixed(1)},lowpass=f=${hiHz.toFixed(1)},astats=metadata=1:reset=1,ebur128=metadata=1`
   };
 }
+
+// =========================================================================
+// CYCLE #92: MULTI-TRACK COMPOUND CLIP / NESTED SUB-SEQUENCE & PRE-COMP
+// =========================================================================
+
+export const MAX_COMPOUND_NESTING_DEPTH = 4;
+export const PRECOMP_BLEND_MODES = ["normal", "screen", "multiply", "overlay"];
+export const COMPOUND_COLOR_TAGS = ["amber", "violet", "teal", "blue"];
+
+function cloneCompoundJson(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function slugifyCompoundIdClient(raw) {
+  const cleaned = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned ? cleaned.slice(0, 48) : "compound_clip";
+}
+
+function normalizePrecompBlendModeClient(raw) {
+  const cleaned = String(raw || "normal").trim().toLowerCase();
+  return PRECOMP_BLEND_MODES.includes(cleaned) ? cleaned : "normal";
+}
+
+function normalizeCompoundColorTagClient(raw) {
+  const cleaned = String(raw || "amber").trim().toLowerCase();
+  return COMPOUND_COLOR_TAGS.includes(cleaned) ? cleaned : "amber";
+}
+
+function conformSourceFramesClient(tlFrames, sourceFps, timelineFps) {
+  if (!sourceFps || !timelineFps) return tlFrames;
+  const sNum = Number(sourceFps.num || 0);
+  const sDen = Number(sourceFps.den || 1);
+  const tNum = Number(timelineFps.num || 0);
+  const tDen = Number(timelineFps.den || 1);
+  if (sNum <= 0 || sDen <= 0 || tNum <= 0 || tDen <= 0) return tlFrames;
+  if (sNum * tDen === tNum * sDen) return tlFrames;
+  return Math.round(tlFrames * ((sNum / sDen) / (tNum / tDen)));
+}
+
+export function computeCompoundDepthClient(clip) {
+  if (!clip || !clip.compound_subsequence || !Array.isArray(clip.compound_subsequence.tracks)) {
+    return 0;
+  }
+  let maxChild = 0;
+  for (const trk of clip.compound_subsequence.tracks) {
+    for (const child of trk.clips || []) {
+      const d = computeCompoundDepthClient(child);
+      if (d > maxChild) maxChild = d;
+    }
+  }
+  return 1 + maxChild;
+}
+
+export function computeDocumentCompoundDepthClient(doc) {
+  if (!doc || !Array.isArray(doc.tracks)) return 0;
+  let maxDepth = 0;
+  for (const trk of doc.tracks) {
+    for (const clip of trk.clips || []) {
+      const d = computeCompoundDepthClient(clip);
+      if (d > maxDepth) maxDepth = d;
+    }
+  }
+  return maxDepth;
+}
+
+export function countCompoundClipsInDocument(doc) {
+  if (!doc || !Array.isArray(doc.tracks)) return 0;
+  let count = 0;
+  for (const trk of doc.tracks) {
+    for (const clip of trk.clips || []) {
+      if (clip && clip.compound_subsequence) count += 1;
+    }
+  }
+  return count;
+}
+
+function nextCompoundNameAndIdClient(doc, requestedName) {
+  const existingIds = new Set();
+  let existingCount = 0;
+  for (const trk of doc.tracks || []) {
+    for (const clip of trk.clips || []) {
+      if (clip && clip.compound_subsequence) {
+        existingCount += 1;
+        if (clip.compound_subsequence.id) existingIds.add(clip.compound_subsequence.id);
+      }
+    }
+  }
+  const baseName =
+    typeof requestedName === "string" && requestedName.trim()
+      ? requestedName.trim().slice(0, 120)
+      : `Compound Clip ${existingCount + 1}`;
+  const baseId = slugifyCompoundIdClient(baseName);
+  let candId = baseId;
+  let suffix = 2;
+  while (existingIds.has(candId)) {
+    candId = `${baseId}_${suffix}`;
+    suffix += 1;
+  }
+  return { name: baseName, id: candId };
+}
+
+function clipsOverlapRangeClient(clips, startFrame, endFrame) {
+  for (const c of clips || []) {
+    if (!c || (c.duration_frames || 0) <= 0) continue;
+    const cEnd = c.start_frame + c.duration_frames;
+    if (c.start_frame < endFrame && cEnd > startFrame) return true;
+  }
+  return false;
+}
+
+function findOrCreateFreeTrackClient(doc, kind, preferredIndex, startFrame, endFrame) {
+  const sameKind = (doc.tracks || [])
+    .filter((t) => t.kind === kind)
+    .sort((a, b) => a.index - b.index);
+  for (const trk of sameKind) {
+    if (trk.index === preferredIndex && !clipsOverlapRangeClient(trk.clips, startFrame, endFrame)) {
+      return trk;
+    }
+  }
+  for (const trk of sameKind) {
+    if (trk.index >= preferredIndex && !clipsOverlapRangeClient(trk.clips, startFrame, endFrame)) {
+      return trk;
+    }
+  }
+  for (const trk of sameKind) {
+    if (!clipsOverlapRangeClient(trk.clips, startFrame, endFrame)) {
+      return trk;
+    }
+  }
+  const nextIndex = sameKind.reduce((mx, t) => Math.max(mx, t.index), 0) + 1;
+  const prefix = kind === "video" ? "V" : "A";
+  const newTrack = {
+    index: nextIndex,
+    kind,
+    name: `${prefix}${nextIndex}`,
+    muted: false,
+    solo: false,
+    rec_armed: false,
+    sync_locked: false,
+    volume_db: 0.0,
+    pan: 0.0,
+    clips: []
+  };
+  doc.tracks.push(newTrack);
+  return newTrack;
+}
+
+function sortTracksCanonicalClient(doc) {
+  for (const trk of doc.tracks || []) {
+    trk.clips.sort(
+      (a, b) =>
+        a.start_frame - b.start_frame ||
+        a.duration_frames - b.duration_frames ||
+        String(a.name || "").localeCompare(String(b.name || ""))
+    );
+  }
+  doc.tracks.sort((a, b) => {
+    const ka = a.kind === "video" ? 0 : 1;
+    const kb = b.kind === "video" ? 0 : 1;
+    return ka - kb || a.index - b.index;
+  });
+}
+
+function sliceClipToWindowClient(clip, winStart, winEnd, timelineFps) {
+  const cStart = clip.start_frame;
+  const cEnd = cStart + clip.duration_frames;
+  const ovStart = Math.max(cStart, winStart);
+  const ovEnd = Math.min(cEnd, winEnd);
+  if (ovEnd <= ovStart) {
+    return { left: cloneCompoundJson(clip), mid: null, right: null };
+  }
+  let left = null;
+  if (ovStart > cStart) {
+    left = cloneCompoundJson(clip);
+    left.duration_frames = ovStart - cStart;
+  }
+  const midOff = ovStart - cStart;
+  const midSrcDelta = conformSourceFramesClient(midOff, clip.source_fps, timelineFps);
+  const mid = cloneCompoundJson(clip);
+  mid.start_frame = ovStart;
+  mid.duration_frames = ovEnd - ovStart;
+  mid.source_in_frame = Math.max(0, (clip.source_in_frame || 0) + midSrcDelta);
+
+  let right = null;
+  if (cEnd > ovEnd) {
+    const rOff = ovEnd - cStart;
+    const rSrcDelta = conformSourceFramesClient(rOff, clip.source_fps, timelineFps);
+    right = cloneCompoundJson(clip);
+    right.start_frame = ovEnd;
+    right.duration_frames = cEnd - ovEnd;
+    right.source_in_frame = Math.max(0, (clip.source_in_frame || 0) + rSrcDelta);
+  }
+  return { left, mid, right };
+}
+
+function buildSubsequenceFromCollectedClient({
+  compId,
+  compName,
+  fps,
+  width,
+  height,
+  rangeStart,
+  rangeEnd,
+  collectedTracks,
+  markers,
+  precompBlendMode,
+  collapseTransforms,
+  colorTag
+}) {
+  const ordered = [...collectedTracks].sort((a, b) => {
+    const ka = a.kind === "video" ? 0 : 1;
+    const kb = b.kind === "video" ? 0 : 1;
+    return ka - kb || a.origIndex - b.origIndex;
+  });
+  const nestedTracks = [];
+  let vIdx = 0;
+  let aIdx = 0;
+  for (const item of ordered) {
+    if (!item.clips || item.clips.length === 0) continue;
+    let newIdx;
+    if (item.kind === "video") {
+      vIdx += 1;
+      newIdx = vIdx;
+    } else {
+      aIdx += 1;
+      newIdx = aIdx;
+    }
+    const shifted = item.clips.map((c) => {
+      const copy = cloneCompoundJson(c);
+      copy.start_frame = Math.max(0, copy.start_frame - rangeStart);
+      copy.track_index = newIdx;
+      return copy;
+    });
+    shifted.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+    const prefix = item.kind === "video" ? "V" : "A";
+    nestedTracks.push({
+      index: newIdx,
+      kind: item.kind,
+      name: item.origName || `${prefix}${newIdx}`,
+      muted: false,
+      solo: false,
+      rec_armed: false,
+      sync_locked: false,
+      volume_db: 0.0,
+      pan: 0.0,
+      clips: shifted
+    });
+  }
+  const nestedMarkers = (markers || []).map((mk) => {
+    const copy = cloneCompoundJson(mk);
+    copy.frame = Math.max(0, (copy.frame || 0) - rangeStart);
+    return copy;
+  });
+  return {
+    id: compId,
+    name: compName,
+    fps: cloneCompoundJson(fps || { num: 25, den: 1 }),
+    width: Number.isFinite(Number(width)) ? Number(width) : 1920,
+    height: Number.isFinite(Number(height)) ? Number(height) : 1080,
+    duration_frames: Math.max(1, rangeEnd - rangeStart),
+    tracks: nestedTracks,
+    markers: nestedMarkers,
+    precomp_blend_mode: precompBlendMode,
+    collapse_transforms: Boolean(collapseTransforms),
+    color_tag: colorTag
+  };
+}
+
+export function createCompoundClipInDocument(doc, opts = {}) {
+  if (!doc) {
+    return { changed: false, op: "create_compound", detail: "No timeline loaded.", doc };
+  }
+  const nextDoc = cloneCompoundJson(doc);
+  const blendMode = normalizePrecompBlendModeClient(opts.precomp_blend_mode);
+  const collapseTransforms = opts.collapse_transforms !== undefined ? Boolean(opts.collapse_transforms) : true;
+  const colorTag = normalizeCompoundColorTagClient(opts.color_tag);
+  const includeAudio = opts.include_audio !== undefined ? Boolean(opts.include_audio) : true;
+  const { name: compName, id: compId } = nextCompoundNameAndIdClient(nextDoc, opts.name);
+
+  const hasRange =
+    opts.in_frame !== undefined &&
+    opts.in_frame !== null &&
+    opts.out_frame !== undefined &&
+    opts.out_frame !== null;
+
+  let sub;
+  let rangeStart = 0;
+  let rangeEnd = 1;
+  let anchorKind = "video";
+  let preferredIdx = 1;
+  let totalNested = 0;
+
+  if (hasRange) {
+    const inF = Math.round(Number(opts.in_frame));
+    const outF = Math.round(Number(opts.out_frame));
+    if (inF < 0 || outF <= inF) {
+      throw new Error(`Invalid compound range [${inF}, ${outF})`);
+    }
+    const collected = [];
+    let maxChildDepth = 0;
+    let foundAnchorIdx = null;
+    for (const trk of nextDoc.tracks || []) {
+      if (!includeAudio && trk.kind === "audio") continue;
+      const remaining = [];
+      const extracted = [];
+      for (const clip of trk.clips || []) {
+        if ((clip.duration_frames || 0) <= 0) {
+          remaining.push(clip);
+          continue;
+        }
+        const cEnd = clip.start_frame + clip.duration_frames;
+        if (clip.start_frame < outF && cEnd > inF) {
+          const cd = computeCompoundDepthClient(clip);
+          if (cd > maxChildDepth) maxChildDepth = cd;
+          const sliced = sliceClipToWindowClient(clip, inF, outF, nextDoc.fps);
+          if (sliced.left) remaining.push(sliced.left);
+          if (sliced.mid) {
+            extracted.push(sliced.mid);
+            totalNested += 1;
+          }
+          if (sliced.right) remaining.push(sliced.right);
+        } else {
+          remaining.push(clip);
+        }
+      }
+      trk.clips = remaining;
+      if (extracted.length > 0) {
+        collected.push({ kind: trk.kind, origIndex: trk.index, origName: trk.name, clips: extracted });
+        if (trk.kind === "video" && (foundAnchorIdx === null || trk.index < foundAnchorIdx)) {
+          anchorKind = "video";
+          foundAnchorIdx = trk.index;
+        } else if (trk.kind === "audio" && foundAnchorIdx === null) {
+          anchorKind = "audio";
+          foundAnchorIdx = trk.index;
+        }
+      }
+    }
+    if (totalNested === 0) {
+      return {
+        changed: false,
+        op: "create_compound",
+        detail: "No clips overlap the selected In/Out range.",
+        doc: cloneCompoundJson(doc)
+      };
+    }
+    if (1 + maxChildDepth > MAX_COMPOUND_NESTING_DEPTH) {
+      throw new Error(`Compound nesting depth exceeds maximum (${MAX_COMPOUND_NESTING_DEPTH})`);
+    }
+    const extractedMarkers = [];
+    const keptMarkers = [];
+    for (const mk of nextDoc.markers || []) {
+      if (mk.frame >= inF && mk.frame < outF) {
+        extractedMarkers.push(mk);
+      } else {
+        keptMarkers.push(mk);
+      }
+    }
+    nextDoc.markers = keptMarkers;
+    sub = buildSubsequenceFromCollectedClient({
+      compId,
+      compName,
+      fps: nextDoc.fps,
+      width: nextDoc.width,
+      height: nextDoc.height,
+      rangeStart: inF,
+      rangeEnd: outF,
+      collectedTracks: collected,
+      markers: extractedMarkers,
+      precompBlendMode: blendMode,
+      collapseTransforms,
+      colorTag
+    });
+    rangeStart = inF;
+    rangeEnd = outF;
+    preferredIdx = foundAnchorIdx !== null ? foundAnchorIdx : 1;
+  } else {
+    const refs = Array.isArray(opts.target_clips) ? opts.target_clips : [];
+    if (refs.length === 0) {
+      return {
+        changed: false,
+        op: "create_compound",
+        detail: "Select at least one clip or set an In/Out range.",
+        doc: cloneCompoundJson(doc)
+      };
+    }
+    const selMap = new Map();
+    for (const ref of refs) {
+      if (!ref) continue;
+      const k = ref.track_kind === "audio" ? "audio" : "video";
+      const ti = Number(ref.track_index || 1);
+      const ci = Number(ref.clip_index);
+      const key = `${k}:${ti}`;
+      if (!selMap.has(key)) selMap.set(key, new Set());
+      selMap.get(key).add(ci);
+    }
+    const picked = [];
+    let maxChildDepth = 0;
+    for (const trk of nextDoc.tracks || []) {
+      const idxs = selMap.get(`${trk.kind}:${trk.index}`);
+      if (!idxs) continue;
+      for (const ci of idxs) {
+        if (ci >= 0 && ci < (trk.clips || []).length) {
+          const clip = trk.clips[ci];
+          if ((clip.duration_frames || 0) > 0) {
+            picked.push({ trk, clip });
+            const cd = computeCompoundDepthClient(clip);
+            if (cd > maxChildDepth) maxChildDepth = cd;
+          }
+        }
+      }
+    }
+    if (picked.length === 0) {
+      return {
+        changed: false,
+        op: "create_compound",
+        detail: "No valid clips matched selection.",
+        doc: cloneCompoundJson(doc)
+      };
+    }
+    if (1 + maxChildDepth > MAX_COMPOUND_NESTING_DEPTH) {
+      throw new Error(`Compound nesting depth exceeds maximum (${MAX_COMPOUND_NESTING_DEPTH})`);
+    }
+    rangeStart = Math.min(...picked.map((p) => p.clip.start_frame));
+    rangeEnd = Math.max(...picked.map((p) => p.clip.start_frame + p.clip.duration_frames));
+    const hasVideo = picked.some((p) => p.trk.kind === "video");
+    anchorKind = hasVideo ? "video" : "audio";
+    preferredIdx = Math.min(...picked.filter((p) => p.trk.kind === anchorKind).map((p) => p.trk.index));
+
+    const collected = [];
+    for (const trk of nextDoc.tracks || []) {
+      const idxs = selMap.get(`${trk.kind}:${trk.index}`);
+      if (!idxs) continue;
+      const extracted = [];
+      const remaining = [];
+      (trk.clips || []).forEach((clip, idx) => {
+        if (idxs.has(idx) && (clip.duration_frames || 0) > 0) {
+          extracted.push(clip);
+          totalNested += 1;
+        } else {
+          remaining.push(clip);
+        }
+      });
+      trk.clips = remaining;
+      if (extracted.length > 0) {
+        collected.push({ kind: trk.kind, origIndex: trk.index, origName: trk.name, clips: extracted });
+      }
+    }
+    sub = buildSubsequenceFromCollectedClient({
+      compId,
+      compName,
+      fps: nextDoc.fps,
+      width: nextDoc.width,
+      height: nextDoc.height,
+      rangeStart,
+      rangeEnd,
+      collectedTracks: collected,
+      markers: [],
+      precompBlendMode: blendMode,
+      collapseTransforms,
+      colorTag
+    });
+  }
+
+  const targetTrack = findOrCreateFreeTrackClient(
+    nextDoc,
+    anchorKind,
+    preferredIdx,
+    rangeStart,
+    rangeEnd
+  );
+  const compClip = {
+    name: compName,
+    track_index: targetTrack.index,
+    media_type: anchorKind,
+    start_frame: rangeStart,
+    duration_frames: sub.duration_frames,
+    source_in_frame: 0,
+    source_path: `compound://${compId}`,
+    media_ref: compId,
+    source_fps: cloneCompoundJson(nextDoc.fps || { num: 25, den: 1 }),
+    enabled: true,
+    audio_gain_db: 0.0,
+    fade_in_s: 0.0,
+    fade_out_s: 0.0,
+    speed_rate: 1.0,
+    reverse: false,
+    compound_subsequence: sub
+  };
+  targetTrack.clips.push(compClip);
+  sortTracksCanonicalClient(nextDoc);
+  const newClipIdx = targetTrack.clips.indexOf(compClip);
+
+  return {
+    changed: true,
+    op: "create_compound",
+    compound_id: compId,
+    track_kind: anchorKind,
+    track_index: targetTrack.index,
+    clip_index: newClipIdx,
+    nested_clip_count: totalNested,
+    nested_track_count: sub.tracks.length,
+    max_depth: computeDocumentCompoundDepthClient(nextDoc),
+    detail: `Created Compound Clip '${compName}' (${sub.tracks.length}T / ${totalNested}C).`,
+    doc: nextDoc,
+    clip: compClip
+  };
+}
+
+export function decomposeCompoundClipInDocument(
+  doc,
+  trackKind = "video",
+  trackIndex = 1,
+  clipIndex = 0
+) {
+  if (!doc) {
+    return { changed: false, op: "decompose_compound", detail: "No timeline loaded.", doc };
+  }
+  const nextDoc = cloneCompoundJson(doc);
+  const targetTrack = (nextDoc.tracks || []).find(
+    (t) => t.kind === trackKind && t.index === trackIndex
+  );
+  if (!targetTrack || clipIndex < 0 || clipIndex >= (targetTrack.clips || []).length) {
+    return {
+      changed: false,
+      op: "decompose_compound",
+      detail: "Selected clip slot was not found.",
+      doc: cloneCompoundJson(doc)
+    };
+  }
+  const compClip = targetTrack.clips[clipIndex];
+  const sub = compClip ? compClip.compound_subsequence : null;
+  if (!sub) {
+    return {
+      changed: false,
+      op: "decompose_compound",
+      detail: "Selected clip is not a Compound Clip.",
+      doc: cloneCompoundJson(doc)
+    };
+  }
+
+  targetTrack.clips.splice(clipIndex, 1);
+  const compSpeed = Math.max(0.1, Number(compClip.speed_rate || 1.0));
+  const compGain = Number(compClip.audio_gain_db || 0.0);
+  const compEnabled = compClip.enabled !== false;
+  const visStart = Math.max(0, Number(compClip.source_in_frame || 0));
+  const visSpan = Math.max(1, Math.round(Number(compClip.duration_frames || 1) * compSpeed));
+  const visEnd = visStart + visSpan;
+
+  let unpackedCount = 0;
+  let focusClip = null;
+  let focusKind = trackKind;
+  let focusTidx = trackIndex;
+
+  const sortedNestedTracks = [...(sub.tracks || [])].sort((a, b) => {
+    const ka = a.kind === "video" ? 0 : 1;
+    const kb = b.kind === "video" ? 0 : 1;
+    return ka - kb || a.index - b.index;
+  });
+
+  for (const nTrk of sortedNestedTracks) {
+    for (const nClip of nTrk.clips || []) {
+      if ((nClip.duration_frames || 0) <= 0) continue;
+      const nEnd = nClip.start_frame + nClip.duration_frames;
+      const ovStart = Math.max(nClip.start_frame, visStart);
+      const ovEnd = Math.min(nEnd, visEnd);
+      if (ovEnd <= ovStart) continue;
+
+      const leftTrim = ovStart - nClip.start_frame;
+      const srcDelta = conformSourceFramesClient(leftTrim, nClip.source_fps, sub.fps);
+      const parentStart = compClip.start_frame + Math.round((ovStart - visStart) / compSpeed);
+      const parentDur = Math.max(1, Math.round((ovEnd - ovStart) / compSpeed));
+      const parentEnd = parentStart + parentDur;
+
+      const prefIdx =
+        nTrk.kind === targetTrack.kind && nTrk.index === 1 ? targetTrack.index : nTrk.index;
+      const destTrack = findOrCreateFreeTrackClient(
+        nextDoc,
+        nTrk.kind,
+        prefIdx,
+        parentStart,
+        parentEnd
+      );
+      const placed = cloneCompoundJson(nClip);
+      placed.track_index = destTrack.index;
+      placed.start_frame = parentStart;
+      placed.duration_frames = parentDur;
+      placed.source_in_frame = Math.max(0, (nClip.source_in_frame || 0) + srcDelta);
+      placed.enabled = nClip.enabled !== false && compEnabled;
+      placed.audio_gain_db = clampNum((Number(nClip.audio_gain_db || 0) + compGain), -24, 12);
+      if (compSpeed !== 1.0) {
+        placed.speed_rate = clampNum(
+          Number((Number(nClip.speed_rate || 1.0) * compSpeed).toFixed(4)),
+          0.1,
+          16.0
+        );
+      }
+      destTrack.clips.push(placed);
+      unpackedCount += 1;
+      if (!focusClip) {
+        focusClip = placed;
+        focusKind = destTrack.kind;
+        focusTidx = destTrack.index;
+      }
+    }
+  }
+
+  for (const mk of sub.markers || []) {
+    if (mk.frame >= visStart && mk.frame < visEnd) {
+      const mkCopy = cloneCompoundJson(mk);
+      mkCopy.frame = compClip.start_frame + Math.round((mk.frame - visStart) / compSpeed);
+      nextDoc.markers = nextDoc.markers || [];
+      nextDoc.markers.push(mkCopy);
+    }
+  }
+  sortTracksCanonicalClient(nextDoc);
+  if (Array.isArray(nextDoc.markers)) {
+    nextDoc.markers.sort((a, b) => a.frame - b.frame || String(a.name).localeCompare(String(b.name)));
+  }
+
+  let focusCidx = 0;
+  if (focusClip) {
+    const fTrk = nextDoc.tracks.find((t) => t.kind === focusKind && t.index === focusTidx);
+    if (fTrk) focusCidx = Math.max(0, fTrk.clips.indexOf(focusClip));
+  }
+
+  return {
+    changed: true,
+    op: "decompose_compound",
+    compound_id: sub.id,
+    track_kind: focusKind,
+    track_index: focusTidx,
+    clip_index: focusCidx,
+    nested_clip_count: unpackedCount,
+    nested_track_count: (sub.tracks || []).length,
+    max_depth: computeDocumentCompoundDepthClient(nextDoc),
+    detail: `Decomposed '${sub.name}' into ${unpackedCount} clip(s).`,
+    doc: nextDoc,
+    clip: focusClip
+  };
+}
+
+export function compoundClipToTimelineDoc(clip, fallbackFps) {
+  const sub = clip ? clip.compound_subsequence : null;
+  if (!sub) {
+    throw new Error("Clip does not contain a CompoundSubSequence.");
+  }
+  return {
+    name: sub.name || clip.name || "Pre-Comp",
+    source_format: "drt",
+    fps: cloneCompoundJson(sub.fps || fallbackFps || { num: 25, den: 1 }),
+    width: sub.width || 1920,
+    height: sub.height || 1080,
+    start_frame: 0,
+    tracks: cloneCompoundJson(sub.tracks || []),
+    markers: cloneCompoundJson(sub.markers || []),
+    color_space_tags: [],
+    lut_refs: [],
+    warnings: []
+  };
+}
+
+export function updateCompoundSubsequenceInDocument(
+  doc,
+  trackKind = "video",
+  trackIndex = 1,
+  clipIndex = 0,
+  subDoc = null,
+  opts = {}
+) {
+  if (!doc) {
+    return { changed: false, op: "update_compound", detail: "No timeline loaded.", doc };
+  }
+  const nextDoc = cloneCompoundJson(doc);
+  const targetTrack = (nextDoc.tracks || []).find(
+    (t) => t.kind === trackKind && t.index === trackIndex
+  );
+  if (!targetTrack || clipIndex < 0 || clipIndex >= (targetTrack.clips || []).length) {
+    return {
+      changed: false,
+      op: "update_compound",
+      detail: "Target Compound Clip slot not found.",
+      doc: cloneCompoundJson(doc)
+    };
+  }
+  const compClip = targetTrack.clips[clipIndex];
+  if (!compClip || !compClip.compound_subsequence) {
+    return {
+      changed: false,
+      op: "update_compound",
+      detail: "Target clip is not a Compound Clip.",
+      doc: cloneCompoundJson(doc)
+    };
+  }
+  const sub = cloneCompoundJson(compClip.compound_subsequence);
+  if (subDoc && typeof subDoc === "object") {
+    if (Array.isArray(subDoc.tracks)) {
+      let maxEnd = 1;
+      for (const trk of subDoc.tracks) {
+        for (const c of trk.clips || []) {
+          const endF = (c.start_frame || 0) + (c.duration_frames || 0);
+          if (endF > maxEnd) maxEnd = endF;
+        }
+      }
+      sub.tracks = cloneCompoundJson(subDoc.tracks);
+      sub.markers = cloneCompoundJson(subDoc.markers || []);
+      sub.duration_frames = Math.max(1, maxEnd);
+      if (typeof subDoc.name === "string" && subDoc.name.trim()) {
+        sub.name = subDoc.name.trim().slice(0, 120);
+      }
+    }
+  }
+  if (opts.precomp_blend_mode !== undefined && opts.precomp_blend_mode !== null) {
+    sub.precomp_blend_mode = normalizePrecompBlendModeClient(opts.precomp_blend_mode);
+  }
+  if (opts.collapse_transforms !== undefined && opts.collapse_transforms !== null) {
+    sub.collapse_transforms = Boolean(opts.collapse_transforms);
+  }
+  if (opts.color_tag !== undefined && opts.color_tag !== null) {
+    sub.color_tag = normalizeCompoundColorTagClient(opts.color_tag);
+  }
+  if (typeof opts.name === "string" && opts.name.trim()) {
+    sub.name = opts.name.trim().slice(0, 120);
+  }
+
+  compClip.compound_subsequence = sub;
+  compClip.name = sub.name;
+  const depth = computeDocumentCompoundDepthClient(nextDoc);
+  if (depth > MAX_COMPOUND_NESTING_DEPTH) {
+    throw new Error(`Compound nesting depth (${depth}) exceeds maximum (${MAX_COMPOUND_NESTING_DEPTH})`);
+  }
+  const nestedCount = (sub.tracks || []).reduce((acc, t) => acc + (t.clips || []).length, 0);
+  return {
+    changed: true,
+    op: "update_compound",
+    compound_id: sub.id,
+    track_kind: trackKind,
+    track_index: trackIndex,
+    clip_index: clipIndex,
+    nested_clip_count: nestedCount,
+    nested_track_count: (sub.tracks || []).length,
+    max_depth: depth,
+    detail: `Updated Pre-Comp '${sub.name}' (${(sub.tracks || []).length}T / ${nestedCount}C).`,
+    doc: nextDoc,
+    clip: compClip
+  };
+}
+
+export function flattenAllCompoundsInDocument(doc) {
+  if (!doc) {
+    return { changed: false, op: "flatten_all", detail: "No timeline loaded.", doc };
+  }
+  let working = cloneCompoundJson(doc);
+  let flattened = 0;
+  let guard = 0;
+  while (guard < 128) {
+    guard += 1;
+    let found = null;
+    for (const trk of working.tracks || []) {
+      const clips = trk.clips || [];
+      for (let idx = 0; idx < clips.length; idx += 1) {
+        if (clips[idx] && clips[idx].compound_subsequence) {
+          found = { kind: trk.kind, index: trk.index, clipIndex: idx };
+          break;
+        }
+      }
+      if (found) break;
+    }
+    if (!found) break;
+    const res = decomposeCompoundClipInDocument(
+      working,
+      found.kind,
+      found.index,
+      found.clipIndex
+    );
+    if (!res.changed) break;
+    working = res.doc;
+    flattened += 1;
+  }
+  const totalClips = (working.tracks || []).reduce((acc, t) => acc + (t.clips || []).length, 0);
+  return {
+    changed: flattened > 0,
+    op: "flatten_all",
+    compound_id: "",
+    track_kind: "video",
+    track_index: 1,
+    clip_index: 0,
+    nested_clip_count: totalClips,
+    nested_track_count: (working.tracks || []).length,
+    max_depth: computeDocumentCompoundDepthClient(working),
+    detail:
+      flattened > 0
+        ? `Flattened ${flattened} Compound Clip(s) into ${(working.tracks || []).length} track(s).`
+        : "No Compound Clips present in timeline.",
+    doc: working
+  };
+}
+
+export function compileCompoundFiltergraphClient(sub, opts = {}) {
+  if (!sub) {
+    throw new Error("CompoundSubSequence is required.");
+  }
+  const speedRate = Number(opts.speed_rate || 1.0);
+  if (!Number.isFinite(speedRate) || speedRate <= 0) {
+    throw new Error("speed_rate must be positive");
+  }
+  const masterGainDb = Number(opts.master_gain_db || 0.0);
+  const fpsNum = Number((sub.fps && sub.fps.num) || 25);
+  const fpsDen = Number((sub.fps && sub.fps.den) || 1);
+  const fpsVal = fpsNum / Math.max(1, fpsDen);
+  const fpsStr = fpsDen === 1 ? String(fpsNum) : `${fpsNum}/${fpsDen}`;
+  const durS = ((Number(sub.duration_frames || 1) / fpsVal) / speedRate).toFixed(3);
+  const width = sub.width > 0 ? sub.width : 1920;
+  const height = sub.height > 0 ? sub.height : 1080;
+  const blendMode = normalizePrecompBlendModeClient(sub.precomp_blend_mode);
+  const collapseTransforms = sub.collapse_transforms !== false;
+
+  const videoTracks = (sub.tracks || [])
+    .filter((t) => t.kind === "video" && !t.muted)
+    .sort((a, b) => a.index - b.index);
+  const audioTracks = (sub.tracks || [])
+    .filter((t) => t.kind === "audio" && !t.muted)
+    .sort((a, b) => a.index - b.index);
+
+  const stages = [];
+  const warnings = [];
+  const totalNestedClips = (sub.tracks || []).reduce((acc, t) => acc + (t.clips || []).length, 0);
+
+  let videoLabel = null;
+  if (videoTracks.length > 0) {
+    const baseTag = "cmp_base";
+    stages.push(`color=c=black:s=${width}x${height}:r=${fpsStr}:d=${durS}[${baseTag}]`);
+    let currentV = baseTag;
+    let vIdx = 0;
+    let layerIdx = 0;
+    for (const trk of videoTracks) {
+      for (const clip of trk.clips || []) {
+        if (clip.enabled === false || (clip.duration_frames || 0) <= 0) continue;
+        const t0 = ((clip.start_frame / fpsVal) / speedRate).toFixed(3);
+        const t1 = (((clip.start_frame + clip.duration_frames) / fpsVal) / speedRate).toFixed(3);
+        const inS = ((clip.source_in_frame || 0) / fpsVal).toFixed(3);
+        const srcDur = ((clip.duration_frames / fpsVal) / speedRate).toFixed(3);
+        const prepTag = `cmp_v${layerIdx}`;
+        if (clip.compound_subsequence) {
+          warnings.push(`Nested sub-comp '${clip.name}' flattened at compositing stage ${layerIdx}`);
+        }
+        stages.push(
+          `[${vIdx}:v]trim=start=${inS}:duration=${srcDur},setpts=PTS-STARTPTS+${t0}/TB,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[${prepTag}]`
+        );
+        const outTag = `cmp_comp${layerIdx}`;
+        if (blendMode === "normal" || layerIdx === 0) {
+          stages.push(
+            `[${currentV}][${prepTag}]overlay=x=0:y=0:eof_action=pass:enable='between(t,${t0},${t1})'[${outTag}]`
+          );
+        } else {
+          stages.push(
+            `[${currentV}][${prepTag}]blend=all_mode=${blendMode}:all_opacity=1.0:enable='between(t,${t0},${t1})'[${outTag}]`
+          );
+        }
+        currentV = outTag;
+        vIdx += 1;
+        layerIdx += 1;
+      }
+    }
+    if (layerIdx > 0 && !collapseTransforms) {
+      const rasterTag = "cmp_raster";
+      stages.push(`[${currentV}]format=yuv420p[${rasterTag}]`);
+      currentV = rasterTag;
+    }
+    videoLabel = `[${currentV}]`;
+  }
+
+  let audioLabel = null;
+  const audioBuses = [];
+  let aIdx = 0;
+  for (const trk of audioTracks) {
+    for (const clip of trk.clips || []) {
+      if (clip.enabled === false || (clip.duration_frames || 0) <= 0) continue;
+      const inS = ((clip.source_in_frame || 0) / fpsVal).toFixed(3);
+      const srcDur = ((clip.duration_frames / fpsVal) / speedRate).toFixed(3);
+      const delayMs = Math.max(0, Math.round(((clip.start_frame / fpsVal) / speedRate) * 1000));
+      const effGain = clampNum(
+        Number(clip.audio_gain_db || 0) + Number(trk.volume_db || 0) + masterGainDb,
+        -24,
+        12
+      );
+      const busTag = `cmp_a${aIdx}`;
+      stages.push(
+        `[${aIdx}:a]atrim=start=${inS}:duration=${srcDur},asetpts=PTS-STARTPTS,volume=${effGain.toFixed(2)}dB,adelay=${delayMs}|${delayMs}[${busTag}]`
+      );
+      audioBuses.push(`[${busTag}]`);
+      aIdx += 1;
+    }
+  }
+  if (audioBuses.length === 1) {
+    audioLabel = audioBuses[0];
+  } else if (audioBuses.length > 1) {
+    stages.push(`${audioBuses.join("")}amix=inputs=${audioBuses.length}:normalize=0[cmp_amix]`);
+    audioLabel = "[cmp_amix]";
+  }
+
+  return {
+    compound_id: sub.id,
+    name: sub.name,
+    duration_s: Number(durS),
+    video_track_count: videoTracks.length,
+    audio_track_count: audioTracks.length,
+    total_nested_clips: totalNestedClips,
+    precomp_blend_mode: blendMode,
+    collapse_transforms: collapseTransforms,
+    filter_complex: stages.join(";"),
+    video_map_label: videoLabel,
+    audio_map_label: audioLabel,
+    warnings
+  };
+}

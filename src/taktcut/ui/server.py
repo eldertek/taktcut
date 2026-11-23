@@ -62,6 +62,15 @@ from taktcut.color import (
     parse_cube_lut,
     parse_cube_lut_text,
 )
+from taktcut.compound import (
+    ALLOWED_COMPOUND_OPS,
+    CompoundClipRef,
+    compile_compound_filtergraph,
+    create_compound_clip,
+    decompose_compound_clip,
+    flatten_all_compounds,
+    update_compound_subsequence,
+)
 from taktcut.drp import export_otio, load_timeline, validate_timeline
 from taktcut.fx import (
     CHROMA_KEY_BLEND_MAX,
@@ -89,6 +98,8 @@ from taktcut.fx import (
     list_stabilizer_presets,
 )
 from taktcut.models import (
+    ALLOWED_COMPOUND_COLOR_TAGS,
+    ALLOWED_PRECOMP_BLEND_MODES,
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     TRANSFORM_BORDER_FEATHER_MAX,
     TRANSFORM_BORDER_FEATHER_MIN,
@@ -106,10 +117,13 @@ from taktcut.models import (
     AscCdlParams,
     AudioOnlyFormatId,
     ClipTransformParams,
+    CompoundColorTag,
+    CompoundSubSequence,
     DialogueEqPresetId,
     ExportFpsOption,
     HardwareCapabilities,
     LoudnessPresetId,
+    PrecompBlendMode,
     RationalFrameRate,
     RenderProfile,
     TimecodeBurnInPosition,
@@ -1701,6 +1715,202 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "sync_locked_tracks": edit_res.sync_locked_tracks,
                     "detail": edit_res.detail,
                     "document": edit_res.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/compound":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_op = payload.get("op")
+            op_clean = raw_op.strip().lower() if isinstance(raw_op, str) else ""
+            if op_clean not in ALLOWED_COMPOUND_OPS:
+                allowed_ops = ", ".join(ALLOWED_COMPOUND_OPS)
+                raise ValueError(
+                    f"Unsupported compound op {raw_op!r}; expected one of: {allowed_ops}"
+                )
+
+            raw_kind = str(payload.get("track_kind", "video")).strip().lower()
+            if raw_kind not in ("video", "audio"):
+                raise ValueError("track_kind must be 'video' or 'audio'")
+            cmp_track_kind: Literal["video", "audio"] = "video" if raw_kind == "video" else "audio"
+
+            raw_tidx = payload.get("track_index", 1)
+            if isinstance(raw_tidx, bool) or not isinstance(raw_tidx, int) or raw_tidx < 1:
+                raise ValueError("track_index must be a positive integer")
+            raw_cidx = payload.get("clip_index", 0)
+            if isinstance(raw_cidx, bool) or not isinstance(raw_cidx, int) or raw_cidx < 0:
+                raise ValueError("clip_index must be a non-negative integer")
+
+            if op_clean == "compile":
+                target_clip = None
+                for trk in doc.tracks:
+                    if trk.kind == cmp_track_kind and trk.index == raw_tidx:
+                        if 0 <= raw_cidx < len(trk.clips):
+                            target_clip = trk.clips[raw_cidx]
+                        break
+                if target_clip is None or target_clip.compound_subsequence is None:
+                    raise ValueError("Selected clip is not a Compound Clip")
+                cmp_compiled = compile_compound_filtergraph(
+                    target_clip.compound_subsequence,
+                    speed_rate=target_clip.speed_rate,
+                    master_gain_db=target_clip.audio_gain_db,
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "op": "compile",
+                        "compile": cmp_compiled.model_dump(mode="json"),
+                    },
+                )
+                return
+
+            if op_clean == "create":
+                raw_targets = payload.get("target_clips")
+                targets: list[CompoundClipRef] | None = None
+                if raw_targets is not None:
+                    if not isinstance(raw_targets, list):
+                        raise ValueError("target_clips must be a list")
+                    targets = [CompoundClipRef.model_validate(item) for item in raw_targets]
+                raw_in = payload.get("in_frame")
+                raw_out = payload.get("out_frame")
+                in_frame_val: int | None = None
+                out_frame_val: int | None = None
+                if raw_in is not None or raw_out is not None:
+                    if (
+                        isinstance(raw_in, bool)
+                        or not isinstance(raw_in, int)
+                        or isinstance(raw_out, bool)
+                        or not isinstance(raw_out, int)
+                    ):
+                        raise ValueError("in_frame and out_frame must both be integers")
+                    in_frame_val = raw_in
+                    out_frame_val = raw_out
+
+                raw_name = payload.get("name")
+                comp_name = raw_name if isinstance(raw_name, str) else None
+                raw_inc_audio = payload.get("include_audio", True)
+                if not isinstance(raw_inc_audio, bool):
+                    raise ValueError("include_audio must be a boolean")
+                raw_blend = str(payload.get("precomp_blend_mode", "normal")).strip().lower()
+                if raw_blend not in ALLOWED_PRECOMP_BLEND_MODES:
+                    raise ValueError(f"Unsupported precomp_blend_mode {raw_blend!r}")
+                blend_val: PrecompBlendMode = (
+                    "screen"
+                    if raw_blend == "screen"
+                    else "multiply"
+                    if raw_blend == "multiply"
+                    else "overlay"
+                    if raw_blend == "overlay"
+                    else "normal"
+                )
+                raw_collapse = payload.get("collapse_transforms", True)
+                if not isinstance(raw_collapse, bool):
+                    raise ValueError("collapse_transforms must be a boolean")
+                raw_tag = str(payload.get("color_tag", "amber")).strip().lower()
+                if raw_tag not in ALLOWED_COMPOUND_COLOR_TAGS:
+                    raise ValueError(f"Unsupported color_tag {raw_tag!r}")
+                tag_val: CompoundColorTag = (
+                    "violet"
+                    if raw_tag == "violet"
+                    else "teal"
+                    if raw_tag == "teal"
+                    else "blue"
+                    if raw_tag == "blue"
+                    else "amber"
+                )
+
+                cmp_res = create_compound_clip(
+                    doc,
+                    target_clips=targets,
+                    in_frame=in_frame_val,
+                    out_frame=out_frame_val,
+                    name=comp_name,
+                    include_audio=raw_inc_audio,
+                    precomp_blend_mode=blend_val,
+                    collapse_transforms=raw_collapse,
+                    color_tag=tag_val,
+                )
+            elif op_clean == "decompose":
+                cmp_res = decompose_compound_clip(
+                    doc,
+                    track_kind=cmp_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                )
+            elif op_clean == "update":
+                raw_sub_doc = payload.get("sub_document")
+                sub_doc_model: TimelineDocument | CompoundSubSequence | None = None
+                if isinstance(raw_sub_doc, dict):
+                    if "source_format" in raw_sub_doc:
+                        sub_doc_model = TimelineDocument.model_validate(raw_sub_doc)
+                    else:
+                        sub_doc_model = CompoundSubSequence.model_validate(raw_sub_doc)
+                blend_opt: PrecompBlendMode | None = None
+                if "precomp_blend_mode" in payload and payload["precomp_blend_mode"] is not None:
+                    rb = str(payload["precomp_blend_mode"]).strip().lower()
+                    if rb not in ALLOWED_PRECOMP_BLEND_MODES:
+                        raise ValueError(f"Unsupported precomp_blend_mode {rb!r}")
+                    blend_opt = (
+                        "screen"
+                        if rb == "screen"
+                        else "multiply"
+                        if rb == "multiply"
+                        else "overlay"
+                        if rb == "overlay"
+                        else "normal"
+                    )
+                collapse_opt: bool | None = None
+                if "collapse_transforms" in payload and payload["collapse_transforms"] is not None:
+                    rc = payload["collapse_transforms"]
+                    if not isinstance(rc, bool):
+                        raise ValueError("collapse_transforms must be a boolean")
+                    collapse_opt = rc
+                tag_opt: CompoundColorTag | None = None
+                if "color_tag" in payload and payload["color_tag"] is not None:
+                    rt = str(payload["color_tag"]).strip().lower()
+                    if rt not in ALLOWED_COMPOUND_COLOR_TAGS:
+                        raise ValueError(f"Unsupported color_tag {rt!r}")
+                    tag_opt = (
+                        "violet"
+                        if rt == "violet"
+                        else "teal"
+                        if rt == "teal"
+                        else "blue"
+                        if rt == "blue"
+                        else "amber"
+                    )
+                raw_upd_name = payload.get("name")
+                upd_name = raw_upd_name if isinstance(raw_upd_name, str) else None
+                cmp_res = update_compound_subsequence(
+                    doc,
+                    track_kind=cmp_track_kind,
+                    track_index=raw_tidx,
+                    clip_index=raw_cidx,
+                    sub_doc=sub_doc_model,
+                    precomp_blend_mode=blend_opt,
+                    collapse_transforms=collapse_opt,
+                    color_tag=tag_opt,
+                    name=upd_name,
+                )
+            else:
+                cmp_res = flatten_all_compounds(doc)
+
+            val = validate_timeline(cmp_res.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": cmp_res.changed,
+                    "op": cmp_res.op,
+                    "compound_id": cmp_res.compound_id,
+                    "track_kind": cmp_res.track_kind,
+                    "track_index": cmp_res.track_index,
+                    "clip_index": cmp_res.clip_index,
+                    "nested_clip_count": cmp_res.nested_clip_count,
+                    "nested_track_count": cmp_res.nested_track_count,
+                    "max_depth": cmp_res.max_depth,
+                    "detail": cmp_res.detail,
+                    "document": cmp_res.document.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                 },
             )

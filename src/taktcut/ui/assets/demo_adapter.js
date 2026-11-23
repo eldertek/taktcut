@@ -33,6 +33,7 @@ import {
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileColorNodeChainClient,
+  compileCompoundFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
@@ -48,8 +49,11 @@ import {
   computeRetimeRampSummary,
   countSyncLockedTracks,
   createColorNode,
+  createCompoundClipInDocument,
+  decomposeCompoundClipInDocument,
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
+  flattenAllCompoundsInDocument,
   getDeliveryPresetClient,
   normalizeFairlightAudioParams,
   normalizeRetimeProcess,
@@ -63,6 +67,7 @@ import {
   slideClipInDocument,
   slipClipInDocument,
   toggleTrackSyncLockInDocument,
+  updateCompoundSubsequenceInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -2945,6 +2950,81 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/timeline/edit", { method: "POST", body: payload });
+    },
+    async compoundTimeline(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const op = String((payload && payload.op) || "").trim().toLowerCase();
+        const tkKind = payload && payload.track_kind === "audio" ? "audio" : "video";
+        const tkIdx = Number.isInteger(payload && payload.track_index) ? payload.track_index : 1;
+        const cIdx = Number.isInteger(payload && payload.clip_index) ? payload.clip_index : 0;
+
+        if (op === "compile") {
+          const trk = (doc.tracks || []).find((t) => t.kind === tkKind && t.index === tkIdx);
+          const clip = trk && Array.isArray(trk.clips) ? trk.clips[cIdx] : null;
+          if (!clip || !clip.compound_subsequence) {
+            throw new Error("Selected clip is not a Compound Clip");
+          }
+          return {
+            op: "compile",
+            compile: compileCompoundFiltergraphClient(clip.compound_subsequence, {
+              speed_rate: clip.speed_rate,
+              master_gain_db: clip.audio_gain_db
+            })
+          };
+        }
+
+        let res;
+        if (op === "create") {
+          res = createCompoundClipInDocument(doc, {
+            target_clips: payload && payload.target_clips,
+            in_frame: payload && payload.in_frame,
+            out_frame: payload && payload.out_frame,
+            name: payload && payload.name,
+            include_audio: payload && payload.include_audio,
+            precomp_blend_mode: payload && payload.precomp_blend_mode,
+            collapse_transforms: payload && payload.collapse_transforms,
+            color_tag: payload && payload.color_tag
+          });
+        } else if (op === "decompose") {
+          res = decomposeCompoundClipInDocument(doc, tkKind, tkIdx, cIdx);
+        } else if (op === "update") {
+          res = updateCompoundSubsequenceInDocument(
+            doc,
+            tkKind,
+            tkIdx,
+            cIdx,
+            payload && payload.sub_document,
+            {
+              precomp_blend_mode: payload && payload.precomp_blend_mode,
+              collapse_transforms: payload && payload.collapse_transforms,
+              color_tag: payload && payload.color_tag,
+              name: payload && payload.name
+            }
+          );
+        } else if (op === "flatten_all") {
+          res = flattenAllCompoundsInDocument(doc);
+        } else {
+          throw new Error(`Unsupported compound op: ${op}`);
+        }
+        const nextDoc = res.doc || doc;
+        return {
+          changed: Boolean(res.changed),
+          op: res.op,
+          compound_id: res.compound_id || "",
+          track_kind: res.track_kind || tkKind,
+          track_index: res.track_index || tkIdx,
+          clip_index: res.clip_index !== undefined ? res.clip_index : cIdx,
+          nested_clip_count: res.nested_clip_count || 0,
+          nested_track_count: res.nested_track_count || 0,
+          max_depth: res.max_depth || 0,
+          detail: res.detail || "",
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc)
+        };
+      }
+      return requestJson("/api/timeline/compound", { method: "POST", body: payload });
     }
   };
 }

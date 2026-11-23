@@ -1227,6 +1227,7 @@ class TimelineClip(BaseModel):
     retime_ramp_points: list[RetimeSpeedPoint] = Field(default_factory=list)
     transition_out: ClipTransition | None = None
     transform: ClipTransformParams | None = None
+    compound_subsequence: CompoundSubSequence | None = None
 
     @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", "speed_rate", mode="before")
     @classmethod
@@ -1278,6 +1279,96 @@ class TimelineClip(BaseModel):
     def end_frame_exclusive(self) -> int:
         return self.start_frame + self.duration_frames
 
+    @property
+    def is_compound(self) -> bool:
+        return self.compound_subsequence is not None
+
+
+MAX_COMPOUND_NESTING_DEPTH: int = 4
+
+PrecompBlendMode = Literal["normal", "screen", "multiply", "overlay"]
+ALLOWED_PRECOMP_BLEND_MODES: tuple[PrecompBlendMode, ...] = (
+    "normal",
+    "screen",
+    "multiply",
+    "overlay",
+)
+
+CompoundColorTag = Literal["amber", "violet", "teal", "blue"]
+ALLOWED_COMPOUND_COLOR_TAGS: tuple[CompoundColorTag, ...] = (
+    "amber",
+    "violet",
+    "teal",
+    "blue",
+)
+
+
+class CompoundSubSequence(BaseModel):
+    """Nested multi-track sub-sequence for DaVinci Compound Clips and AE Pre-Comps."""
+
+    id: str
+    name: str
+    fps: RationalFrameRate
+    width: int = Field(default=1920, ge=0)
+    height: int = Field(default=1080, ge=0)
+    duration_frames: int = Field(ge=1)
+    tracks: list[TimelineTrack] = Field(default_factory=list)
+    markers: list[TimelineMarker] = Field(default_factory=list)
+    precomp_blend_mode: PrecompBlendMode = "normal"
+    collapse_transforms: bool = True
+    color_tag: CompoundColorTag = "amber"
+
+    @field_validator("id", "name", mode="before")
+    @classmethod
+    def _validate_nonempty_label(cls, raw: Any, info: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"{info.field_name} must be a string, got {raw!r}")
+        cleaned = raw.strip()
+        if not cleaned:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return cleaned[:120]
+
+    @field_validator("precomp_blend_mode", mode="before")
+    @classmethod
+    def _validate_blend_mode(cls, raw: Any) -> PrecompBlendMode:
+        if raw is None or raw == "":
+            return "normal"
+        cleaned = str(raw).strip().lower()
+        if cleaned == "normal":
+            return "normal"
+        if cleaned == "screen":
+            return "screen"
+        if cleaned == "multiply":
+            return "multiply"
+        if cleaned == "overlay":
+            return "overlay"
+        allowed = ", ".join(ALLOWED_PRECOMP_BLEND_MODES)
+        raise ValueError(f"Unsupported precomp_blend_mode {raw!r}; expected one of: {allowed}")
+
+    @field_validator("color_tag", mode="before")
+    @classmethod
+    def _validate_color_tag(cls, raw: Any) -> CompoundColorTag:
+        if raw is None or raw == "":
+            return "amber"
+        cleaned = str(raw).strip().lower()
+        if cleaned == "amber":
+            return "amber"
+        if cleaned == "violet":
+            return "violet"
+        if cleaned == "teal":
+            return "teal"
+        if cleaned == "blue":
+            return "blue"
+        allowed = ", ".join(ALLOWED_COMPOUND_COLOR_TAGS)
+        raise ValueError(f"Unsupported color_tag {raw!r}; expected one of: {allowed}")
+
+    @field_validator("collapse_transforms", mode="before")
+    @classmethod
+    def _validate_collapse_transforms(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"collapse_transforms must be a boolean, got {raw!r}")
+        return raw
+
 
 TRACK_VOLUME_DB_MIN: float = -48.0
 TRACK_VOLUME_DB_MAX: float = 12.0
@@ -1326,6 +1417,12 @@ class TimelineDocument(BaseModel):
     color_space_tags: list[str] = Field(default_factory=list)
     lut_refs: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+CompoundSubSequence.model_rebuild()
+TimelineClip.model_rebuild()
+TimelineTrack.model_rebuild()
+TimelineDocument.model_rebuild()
 
 
 class GapIssue(BaseModel):
