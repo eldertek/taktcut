@@ -97,7 +97,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.6"
+    assert health["version"] == "0.1.7"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -842,9 +842,19 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-tc-clear-io",
         "btn-tc-loop-io",
         "timeline-io-range-pill",
+        "timeline-transform-inspector",
+        "clip-transform-badge",
+        "btn-clip-transform-reset-all",
+        "clip-transform-presets",
+        "clip-transform-zoom-range",
+        "clip-transform-posx-range",
+        "clip-transform-posy-range",
+        "clip-transform-rot-range",
+        "clip-transform-opacity-range",
+        "render-use-clip-transform",
     ):
         assert elem_id in html_text
-    assert "v0.1.6" in html_text
+    assert "v0.1.7" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -2165,3 +2175,60 @@ def test_ui_project_export_and_import_roundtrip(ui_server: tuple[str, Path]) -> 
         payload={"project": project_payload, "out_path": "../escape.taktcut.json"},
     )
     assert trav_status == 403
+
+
+def test_ui_transform_compile_and_render_plan_endpoint(ui_server: tuple[str, Path]) -> None:
+    base_url, workspace = ui_server
+    media_file = workspace / "inputs" / "clip_xf.mp4"
+    media_file.parent.mkdir(parents=True, exist_ok=True)
+    media_file.write_bytes(b"placeholder")
+
+    ok_status, _, ok_raw = _http_call(
+        f"{base_url}/api/transform/compile",
+        method="POST",
+        payload={
+            "zoom_pct": 28.0,
+            "pos_x_pct": 32.0,
+            "pos_y_pct": 32.0,
+            "rotation_deg": -10.0,
+            "opacity_pct": 90.0,
+            "pix_fmt": "yuv420p",
+        },
+    )
+    assert ok_status == 200
+    compiled = json.loads(ok_raw.decode("utf-8"))
+    assert compiled["is_identity"] is False
+    assert "overlay=" in compiled["filtergraph"]
+    assert "rotate=" in compiled["filtergraph"]
+    assert compiled["ffmpeg_vf_args"][0] == "-vf"
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/transform/compile",
+        method="POST",
+        payload={"zoom_pct": 450.0},
+    )
+    assert bad_status == 400
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": "inputs/clip_xf.mp4",
+            "output_path": "renders/clip_xf_out.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "prefer_hw": False,
+            "transform_params": {
+                "zoom_pct": 115.0,
+                "pos_x_pct": 0.0,
+                "pos_y_pct": 0.0,
+                "rotation_deg": 0.0,
+                "opacity_pct": 100.0,
+            },
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan = json.loads(plan_raw.decode("utf-8"))["plan"]
+    assert plan["video_filter"] is not None
+    assert "scale=w=ceil(iw*1.150000/2)*2" in plan["video_filter"]

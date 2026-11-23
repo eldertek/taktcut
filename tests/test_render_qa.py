@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from taktcut.color import bake_cdl_to_cube
 from taktcut.models import (
     AscCdlParams,
+    ClipTransformParams,
     HardwareCapabilities,
     RationalFrameRate,
     RenderProfile,
@@ -31,6 +32,8 @@ from taktcut.render import (
     compile_framing_filter_result,
     compile_retime_filter,
     compile_retime_filter_result,
+    compile_transform_filter,
+    compile_transform_filter_result,
     execute_render_plan,
     get_delivery_preset,
     list_aspect_presets,
@@ -599,3 +602,93 @@ def test_delivery_presets_produce_valid_safe_render_plans(tmp_path: Path) -> Non
     assert draft_probe.height == 720
     assert draft_probe.video_codec == "h264"
     assert draft_probe.has_faststart is True
+
+
+def test_compile_transform_filter_and_real_ffmpeg_smoke(tmp_path: Path) -> None:
+    identity = ClipTransformParams()
+    assert identity.is_identity() is True
+    assert compile_transform_filter(identity) is None
+    identity_res = compile_transform_filter_result(identity)
+    assert identity_res.is_identity is True
+    assert identity_res.filtergraph == ""
+    assert identity_res.ffmpeg_vf_args == []
+
+    # PiP Bottom-Right preset
+    pip = ClipTransformParams(zoom_pct=28.0, pos_x_pct=32.0, pos_y_pct=32.0)
+    assert pip.is_identity() is False
+    pip_fg = compile_transform_filter(pip)
+    assert pip_fg is not None
+    assert "scale=w=ceil(iw*0.280000/2)*2:h=ceil(ih*0.280000/2)*2" in pip_fg
+    assert "overlay=x=(W-w)/2+W*(0.3200):y=(H-h)/2+H*(0.3200)" in pip_fg
+
+    # Zoom + Rotation + Opacity
+    xf = ClipTransformParams(
+        zoom_pct=115.0,
+        pos_x_pct=-15.0,
+        pos_y_pct=10.0,
+        rotation_deg=25.0,
+        opacity_pct=75.0,
+    )
+    xf_res = compile_transform_filter_result(xf, pix_fmt="yuv420p")
+    assert xf_res.is_identity is False
+    assert xf_res.ffmpeg_vf_args[0] == "-vf"
+    assert "rotate=" in xf_res.filtergraph
+    assert "colorchannelmixer=aa=0.7500" in xf_res.filtergraph
+    assert xf_res.filtergraph.endswith(",format=yuv420p")
+
+    # Zero opacity compiles to black drawbox
+    zero_op = ClipTransformParams(opacity_pct=0.0)
+    zero_fg = compile_transform_filter(zero_op)
+    assert zero_fg == "drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,setsar=1"
+
+    # Strict validation bounds
+    for bad_kwargs in (
+        {"zoom_pct": 9.9},
+        {"zoom_pct": 300.1},
+        {"pos_x_pct": -100.1},
+        {"pos_x_pct": 100.1},
+        {"pos_y_pct": -101.0},
+        {"pos_y_pct": 101.0},
+        {"rotation_deg": -180.1},
+        {"rotation_deg": 180.1},
+        {"opacity_pct": -0.1},
+        {"opacity_pct": 100.1},
+        {"zoom_pct": float("nan")},
+        {"zoom_pct": True},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            ClipTransformParams(**bad_kwargs)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError):
+        compile_transform_filter(pip, pix_fmt="yuv420p;evil")
+
+    # Real FFmpeg smoke test with transformed clip render
+    src = tmp_path / "transform_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "transform_pip_rot.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        transform_params=ClipTransformParams(
+            zoom_pct=28.0,
+            pos_x_pct=32.0,
+            pos_y_pct=32.0,
+            rotation_deg=-12.0,
+            opacity_pct=85.0,
+        ),
+        prefer_hw=False,
+    )
+    assert plan.video_filter is not None
+    assert "overlay=" in plan.video_filter
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0
+
+    probe = probe_media(out)
+    assert probe.width == 640
+    assert probe.height == 360
+    assert probe.video_codec == "h264"
+    assert probe.pix_fmt == "yuv420p"
+    assert probe.is_cfr is True

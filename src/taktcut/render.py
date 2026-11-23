@@ -19,6 +19,7 @@ from taktcut.color import (
 )
 from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
+    ClipTransformParams,
     HardwareCapabilities,
     RationalFrameRate,
     RenderPlan,
@@ -650,6 +651,95 @@ def compile_framing_filter_result(params: FramingParams) -> FramingCompileResult
     )
 
 
+ALLOWED_TRANSFORM_PIX_FMTS: frozenset[str] = frozenset(
+    {"yuv420p", "yuv422p10le", "yuv444p", "rgba", "rgb24"}
+)
+
+
+class TransformCompileResult(BaseModel):
+    """Compiled FFmpeg clip motion transform filtergraph and validated parameters."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_identity: bool
+    params: ClipTransformParams
+
+
+def compile_transform_filter(
+    params: ClipTransformParams,
+    *,
+    pix_fmt: str | None = None,
+) -> str | None:
+    """Compile validated ClipTransformParams into a safe FFmpeg transform filtergraph."""
+    if pix_fmt is not None and pix_fmt not in ALLOWED_TRANSFORM_PIX_FMTS:
+        raise ValueError(f"Unsupported pixel format: {pix_fmt!r}")
+    if params.is_identity():
+        return None
+
+    if params.opacity_pct <= 1e-6:
+        parts = ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill", "setsar=1"]
+        if pix_fmt is not None:
+            parts.append(f"format={pix_fmt}")
+        return ",".join(parts)
+
+    fg_steps: list[str] = []
+    if not math.isclose(params.zoom_pct, 100.0, abs_tol=1e-4):
+        zoom_scale = params.zoom_pct / 100.0
+        fg_steps.append(
+            f"scale=w=ceil(iw*{zoom_scale:.6f}/2)*2:h=ceil(ih*{zoom_scale:.6f}/2)*2:flags=lanczos"
+        )
+
+    has_rot = not math.isclose(params.rotation_deg, 0.0, abs_tol=1e-4)
+    has_opacity = not math.isclose(params.opacity_pct, 100.0, abs_tol=1e-4)
+    if has_rot or has_opacity:
+        fg_steps.append("format=yuva420p")
+    if has_rot:
+        rad = params.rotation_deg * math.pi / 180.0
+        fg_steps.append(f"rotate={rad:.6f}:ow=rotw({rad:.6f}):oh=roth({rad:.6f}):c=black@0")
+    if has_opacity:
+        alpha = params.opacity_pct / 100.0
+        fg_steps.append(f"colorchannelmixer=aa={alpha:.4f}")
+
+    dx = params.pos_x_pct / 100.0
+    dy = params.pos_y_pct / 100.0
+    x_expr = "(W-w)/2" if math.isclose(dx, 0.0, abs_tol=1e-6) else f"(W-w)/2+W*({dx:.4f})"
+    y_expr = "(H-h)/2" if math.isclose(dy, 0.0, abs_tol=1e-6) else f"(H-h)/2+H*({dy:.4f})"
+
+    fg_chain = ",".join(fg_steps)
+    if fg_chain:
+        graph = (
+            "split[xf_bg][xf_fg];"
+            "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
+            f"[xf_fg]{fg_chain}[xf_ov];"
+            f"[xf_blk][xf_ov]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+        )
+    else:
+        graph = (
+            "split[xf_bg][xf_fg];"
+            "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
+            f"[xf_blk][xf_fg]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+        )
+
+    if pix_fmt is not None:
+        graph = f"{graph},format={pix_fmt}"
+    return graph
+
+
+def compile_transform_filter_result(
+    params: ClipTransformParams,
+    *,
+    pix_fmt: str | None = None,
+) -> TransformCompileResult:
+    """Compile clip transform parameters into structured filtergraph and argv slice."""
+    fg = compile_transform_filter(params, pix_fmt=pix_fmt) or ""
+    return TransformCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_identity=(fg == ""),
+        params=params,
+    )
+
+
 def _probe_media_duration_s(media_path: Path) -> float | None:
     """Best-effort ffprobe container duration lookup for real files."""
     ffprobe_bin = shutil.which("ffprobe")
@@ -785,6 +875,7 @@ def build_render_plan(
     subtitle_track: SubtitleTrackParams | None = None,
     audio_params: ClipAudioParams | None = None,
     retime_params: ClipRetimeParams | None = None,
+    transform_params: ClipTransformParams | None = None,
     framing: FramingParams | None = None,
     clip_duration_s: float | None = None,
     target_lufs: float | None = None,
@@ -894,11 +985,17 @@ def build_render_plan(
             target_width, target_height = effective_framing.target_dimensions()
             framing_mode = effective_framing.mode
 
+    transform_vf: str | None = None
+    if transform_params is not None and not transform_params.is_identity():
+        transform_vf = compile_transform_filter(transform_params, pix_fmt=pix_fmt)
+
     vf_parts: list[str] = []
     if retime_vf is not None:
         vf_parts.append(retime_vf)
     if framing_vf is not None:
         vf_parts.append(framing_vf)
+    if transform_vf is not None:
+        vf_parts.append(transform_vf)
     if chroma_key is not None and chroma_key.is_active():
         ck_fg = compile_chroma_key_filter(chroma_key, pix_fmt=pix_fmt)
         if ck_fg:

@@ -17,6 +17,7 @@ from taktcut.models import (
     AscCdlParams,
     BpmBeatTick,
     BpmGridConfig,
+    ClipTransformParams,
     ClipTransition,
     CubeLutInfo,
     GapIssue,
@@ -61,11 +62,14 @@ from taktcut.render import (
     FramingCompileResult,
     FramingParams,
     RetimeCompileResult,
+    TransformCompileResult,
     compile_audio_filter,
     compile_framing_filter,
     compile_framing_filter_result,
     compile_retime_filter,
     compile_retime_filter_result,
+    compile_transform_filter,
+    compile_transform_filter_result,
     get_delivery_preset,
     list_aspect_presets,
     list_delivery_presets,
@@ -98,7 +102,7 @@ from taktcut.transitions import (
     list_transition_presets,
 )
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 __all__ = [
     "__version__",
@@ -116,6 +120,7 @@ __all__ = [
     "ChromaKeyPresetId",
     "ClipAudioParams",
     "ClipRetimeParams",
+    "ClipTransformParams",
     "ClipTransition",
     "compile_audio_filter",
     "compile_chroma_key",
@@ -126,6 +131,8 @@ __all__ = [
     "compile_retime_filter_result",
     "compile_subtitles",
     "compile_subtitles_filter",
+    "compile_transform_filter",
+    "compile_transform_filter_result",
     "compile_transition_filter",
     "compile_transition_filter_result",
     "compute_bpm_beat_frames",
@@ -183,6 +190,7 @@ __all__ = [
     "TimelineMarker",
     "TimelineTrack",
     "TimelineValidationResult",
+    "TransformCompileResult",
     "TransitionCompileResult",
     "TransitionParams",
     "TransitionPreset",

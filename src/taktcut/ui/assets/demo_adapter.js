@@ -6,6 +6,7 @@ import {
   compileAudioFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
+  compileTransformFilterClient,
   compileTransitionFilterClient,
   getDeliveryPresetClient,
   validateTimelineClient
@@ -672,7 +673,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.6",
+      version: "0.1.7",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -942,6 +943,12 @@ export function createApiClient() {
             framingMode = compiledFraming.params.mode;
           }
         }
+        if (body.transform_params) {
+          const compiledTransform = compileTransformFilterClient(body.transform_params, pixFmt);
+          if (!compiledTransform.is_identity && compiledTransform.filtergraph) {
+            vfParts.push(compiledTransform.filtergraph);
+          }
+        }
         if (body.chroma_key) {
           const compiledCk = compileChromaKeyClient(body.chroma_key, { pix_fmt: pixFmt });
           if (compiledCk.is_active && compiledCk.filtergraph) {
@@ -1105,8 +1112,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.6",
-          latest_version: "0.1.6",
+          current_version: "0.1.7",
+          latest_version: "0.1.7",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -1129,6 +1136,15 @@ export function createApiClient() {
         return compileRetimeFilterClient(payload.retime_params || payload);
       }
       return requestJson("/api/retime/compile", { method: "POST", body: payload });
+    },
+    async compileTransformFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileTransformFilterClient(
+          payload.transform_params || payload,
+          payload.pix_fmt || null
+        );
+      }
+      return requestJson("/api/transform/compile", { method: "POST", body: payload });
     },
     async getFramingPresets() {
       if (resolvedMode === "static-demo") {
@@ -1292,7 +1308,7 @@ export function createApiClient() {
         }
         const project = {
           ...rawProj,
-          app_version: rawProj.app_version || "0.1.6",
+          app_version: rawProj.app_version || "0.1.7",
           saved_at: rawProj.saved_at || new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
         };
         const projectJson = JSON.stringify(project, null, 2) + "\n";

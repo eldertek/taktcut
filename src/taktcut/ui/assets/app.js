@@ -27,6 +27,18 @@ import {
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
+  TRANSFORM_OPACITY_DEFAULT,
+  TRANSFORM_OPACITY_MAX,
+  TRANSFORM_OPACITY_MIN,
+  TRANSFORM_POS_DEFAULT,
+  TRANSFORM_POS_MAX,
+  TRANSFORM_POS_MIN,
+  TRANSFORM_ROT_DEFAULT,
+  TRANSFORM_ROT_MAX,
+  TRANSFORM_ROT_MIN,
+  TRANSFORM_ZOOM_DEFAULT,
+  TRANSFORM_ZOOM_MAX,
+  TRANSFORM_ZOOM_MIN,
   TRANSITION_DURATION_DEFAULT_S,
   TRANSITION_DURATION_MAX_S,
   TRANSITION_DURATION_MIN_S,
@@ -45,13 +57,17 @@ import {
   findTrackAndClip,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
+  formatTransformBadgeText,
   getAspectRatioPreset,
   getClipTrimBounds,
+  getTransformPresetClient,
   getTransitionPresetName,
   hasSplittableClipAtFrame,
+  isClipTransformIdentity,
   isTrackAudiblyMuted,
   normalizeClipAudio,
   normalizeClipRetime,
+  normalizeClipTransform,
   normalizeClipTransition,
   normalizeInOutRange,
   normalizeMarkerColor,
@@ -65,6 +81,7 @@ import {
   trimClipInDocument,
   updateClipAudioInDocument,
   updateClipRetimeInDocument,
+  updateClipTransformInDocument,
   updateClipTransitionInDocument,
   updateMarkerInDocument,
   validateTimelineClient
@@ -831,6 +848,18 @@ function getSelectedClipRetimePayload() {
   };
 }
 
+function getSelectedClipTransformPayload() {
+  const doc = state.timelineDoc;
+  const info = getSelectedClipTrack();
+  if (!doc || !info) return null;
+  const norm = normalizeClipTransform(info.clip);
+  const isIdentity = isClipTransformIdentity(norm);
+  return {
+    isIdentity,
+    transform_params: norm
+  };
+}
+
 function toggleTrackMuteAction(trackKind, trackIndex) {
   if (!state.timelineDoc) return;
   const res = toggleTrackMuteInDocument(state.timelineDoc, trackKind, trackIndex);
@@ -1048,6 +1077,113 @@ function renderTimelineRetimeInspector() {
   }
 }
 
+function renderTimelineTransformInspector() {
+  const ctrlBox = byId("clip-transform-controls");
+  const badge = byId("clip-transform-badge");
+  const rstAllBtn = byId("btn-clip-transform-reset-all");
+  const sendBtn = byId("btn-clip-transform-to-deliver");
+  const zoomRange = byId("clip-transform-zoom-range");
+  const zoomNum = byId("clip-transform-zoom-num");
+  const zoomRst = byId("btn-clip-transform-zoom-reset");
+  const posXRange = byId("clip-transform-posx-range");
+  const posXNum = byId("clip-transform-posx-num");
+  const posXRst = byId("btn-clip-transform-posx-reset");
+  const posYRange = byId("clip-transform-posy-range");
+  const posYNum = byId("clip-transform-posy-num");
+  const posYRst = byId("btn-clip-transform-posy-reset");
+  const rotRange = byId("clip-transform-rot-range");
+  const rotNum = byId("clip-transform-rot-num");
+  const rotRst = byId("btn-clip-transform-rot-reset");
+  const opRange = byId("clip-transform-opacity-range");
+  const opNum = byId("clip-transform-opacity-num");
+  const opRst = byId("btn-clip-transform-opacity-reset");
+  const presetBtns = document.querySelectorAll(".transform-preset-btn");
+
+  if (!ctrlBox) return;
+
+  const info = getSelectedClipTrack();
+  const hasVideoClip = Boolean(info && info.clip && info.clip.media_type !== "audio");
+  ctrlBox.classList.toggle("is-disabled", !hasVideoClip);
+  for (const el of [
+    rstAllBtn,
+    sendBtn,
+    zoomRange,
+    zoomNum,
+    zoomRst,
+    posXRange,
+    posXNum,
+    posXRst,
+    posYRange,
+    posYNum,
+    posYRst,
+    rotRange,
+    rotNum,
+    rotRst,
+    opRange,
+    opNum,
+    opRst,
+    ...presetBtns
+  ]) {
+    if (el) el.disabled = !hasVideoClip;
+  }
+
+  if (!hasVideoClip) {
+    if (zoomRange) zoomRange.value = String(TRANSFORM_ZOOM_DEFAULT);
+    if (zoomNum && document.activeElement !== zoomNum) zoomNum.value = TRANSFORM_ZOOM_DEFAULT.toFixed(1);
+    if (posXRange) posXRange.value = String(TRANSFORM_POS_DEFAULT);
+    if (posXNum && document.activeElement !== posXNum) posXNum.value = TRANSFORM_POS_DEFAULT.toFixed(1);
+    if (posYRange) posYRange.value = String(TRANSFORM_POS_DEFAULT);
+    if (posYNum && document.activeElement !== posYNum) posYNum.value = TRANSFORM_POS_DEFAULT.toFixed(1);
+    if (rotRange) rotRange.value = String(TRANSFORM_ROT_DEFAULT);
+    if (rotNum && document.activeElement !== rotNum) rotNum.value = TRANSFORM_ROT_DEFAULT.toFixed(1);
+    if (opRange) opRange.value = String(TRANSFORM_OPACITY_DEFAULT);
+    if (opNum && document.activeElement !== opNum) opNum.value = TRANSFORM_OPACITY_DEFAULT.toFixed(1);
+    for (const btn of presetBtns) {
+      btn.classList.remove("is-active");
+      btn.setAttribute("aria-pressed", "false");
+    }
+    if (badge) {
+      badge.textContent = info ? "AUDIO ONLY" : "NO CLIP";
+      badge.className = "nle-tag mono";
+    }
+    return;
+  }
+
+  const norm = normalizeClipTransform(info.clip);
+  if (zoomRange) zoomRange.value = String(norm.zoom_pct);
+  if (zoomNum && document.activeElement !== zoomNum) zoomNum.value = norm.zoom_pct.toFixed(1);
+  if (posXRange) posXRange.value = String(norm.pos_x_pct);
+  if (posXNum && document.activeElement !== posXNum) posXNum.value = norm.pos_x_pct.toFixed(1);
+  if (posYRange) posYRange.value = String(norm.pos_y_pct);
+  if (posYNum && document.activeElement !== posYNum) posYNum.value = norm.pos_y_pct.toFixed(1);
+  if (rotRange) rotRange.value = String(norm.rotation_deg);
+  if (rotNum && document.activeElement !== rotNum) rotNum.value = norm.rotation_deg.toFixed(1);
+  if (opRange) opRange.value = String(norm.opacity_pct);
+  if (opNum && document.activeElement !== opNum) opNum.value = norm.opacity_pct.toFixed(1);
+
+  for (const btn of presetBtns) {
+    const pid = btn.getAttribute("data-transform-preset") || "";
+    const preset = getTransformPresetClient(pid);
+    const isMatch = Boolean(
+      preset &&
+        Math.abs(preset.zoom_pct - norm.zoom_pct) < 0.1 &&
+        Math.abs(preset.pos_x_pct - norm.pos_x_pct) < 0.1 &&
+        Math.abs(preset.pos_y_pct - norm.pos_y_pct) < 0.1 &&
+        Math.abs(preset.rotation_deg - norm.rotation_deg) < 0.1 &&
+        Math.abs(preset.opacity_pct - norm.opacity_pct) < 0.1
+    );
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+
+  const isIdentity = isClipTransformIdentity(norm);
+  if (rstAllBtn) rstAllBtn.disabled = isIdentity;
+  if (badge) {
+    badge.textContent = formatTransformBadgeText(norm);
+    badge.className = isIdentity ? "nle-tag mono" : "nle-tag mono is-active";
+  }
+}
+
 function renderTimelineTransitionInspector() {
   const ctrlBox = byId("clip-transition-controls");
   const badge = byId("clip-transition-badge");
@@ -1191,6 +1327,7 @@ function renderTimelineSelection() {
   if (!sel) {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
     renderTimelineMarkerInspector();
+    renderTimelineTransformInspector();
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
     renderTimelineTransitionInspector();
@@ -1200,6 +1337,7 @@ function renderTimelineSelection() {
     const c = sel.data;
     const norm = normalizeClipAudio(c);
     const retimeNorm = normalizeClipRetime(c);
+    const transformNorm = normalizeClipTransform(c);
     const transNorm = normalizeClipTransition(c);
     const srcFps = c.source_fps
       ? c.source_fps.den === 1
@@ -1209,6 +1347,7 @@ function renderTimelineSelection() {
     const gainLabel = `${norm.gainDb >= 0 ? "+" : ""}${norm.gainDb.toFixed(1)} dB`;
     const fadeLabel = `In ${norm.fadeInS.toFixed(2)}s / Out ${norm.fadeOutS.toFixed(2)}s`;
     const retimeLabel = formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse);
+    const transformLabel = c.media_type === "audio" ? "N/A" : formatTransformBadgeText(transformNorm);
     const transLabel = transNorm
       ? `${getTransitionPresetName(transNorm.preset)} (${transNorm.duration_s.toFixed(2)}s)`
       : t("common.none");
@@ -1217,6 +1356,7 @@ function renderTimelineSelection() {
       ["Name", c.name],
       ["Track", `${c.media_type === "audio" ? "A" : "V"}${c.track_index}`],
       ["Range", `${c.start_frame}f .. ${c.start_frame + c.duration_frames}f (${c.duration_frames}f)`],
+      ["Transform", transformLabel],
       ["Retime", retimeLabel],
       ["Transition", transLabel],
       ["Audio", `${gainLabel} | ${fadeLabel}`],
@@ -1224,6 +1364,7 @@ function renderTimelineSelection() {
       ["Source Path", c.source_path || t("common.none")]
     ]);
     renderTimelineMarkerInspector();
+    renderTimelineTransformInspector();
     renderTimelineAudioInspector();
     renderTimelineRetimeInspector();
     renderTimelineTransitionInspector();
@@ -1239,6 +1380,7 @@ function renderTimelineSelection() {
     ["Note", mk.note || t("common.none")]
   ]);
   renderTimelineMarkerInspector();
+  renderTimelineTransformInspector();
   renderTimelineAudioInspector();
   renderTimelineRetimeInspector();
   renderTimelineTransitionInspector();
@@ -1498,6 +1640,7 @@ function serializeFullProjectState() {
       use_studio_subtitles: chk("render-use-studio-subtitles", false),
       use_clip_audio: chk("render-use-clip-audio", true),
       use_clip_retime: chk("render-use-clip-retime", true),
+      use_clip_transform: chk("render-use-clip-transform", true),
       prefer_hw: chk("render-prefer-hw", true)
     }
   };
@@ -1663,6 +1806,7 @@ function applyFullProjectState(project, validation) {
   setChk("render-use-studio-subtitles", del.use_studio_subtitles);
   setChk("render-use-clip-audio", del.use_clip_audio !== false);
   setChk("render-use-clip-retime", del.use_clip_retime !== false);
+  setChk("render-use-clip-transform", del.use_clip_transform !== false);
   setChk("render-prefer-hw", del.prefer_hw !== false);
 
   syncFramingControlsUI();
@@ -3525,6 +3669,12 @@ async function buildOrExecuteRender(execute) {
     const retimeParamsPayload =
       clipRetimeInfo && !clipRetimeInfo.isIdentity ? clipRetimeInfo.retime_params : null;
 
+    const useClipTransformEl = byId("render-use-clip-transform");
+    const clipTransformInfo =
+      useClipTransformEl && useClipTransformEl.checked ? getSelectedClipTransformPayload() : null;
+    const transformParamsPayload =
+      clipTransformInfo && !clipTransformInfo.isIdentity ? clipTransformInfo.transform_params : null;
+
     const useFramingEl = byId("render-use-framing");
     const framingPayload =
       useFramingEl && useFramingEl.checked
@@ -3555,6 +3705,7 @@ async function buildOrExecuteRender(execute) {
         subtitle_track: subtitlePayload,
         audio_params: audioParamsPayload,
         retime_params: retimeParamsPayload,
+        transform_params: transformParamsPayload,
         framing: framingPayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
@@ -3606,6 +3757,7 @@ async function buildOrExecuteRender(execute) {
       subtitle_track: subtitlePayload,
       audio_params: audioParamsPayload,
       retime_params: retimeParamsPayload,
+      transform_params: transformParamsPayload,
       framing: framingPayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
@@ -5642,6 +5794,227 @@ function wireClipRetimeInspector() {
   }
 }
 
+function wireClipTransformInspector() {
+  const rstAllBtn = byId("btn-clip-transform-reset-all");
+  const sendBtn = byId("btn-clip-transform-to-deliver");
+  const presetBtns = document.querySelectorAll(".transform-preset-btn");
+
+  const fields = [
+    {
+      field: "zoom_pct",
+      rangeId: "clip-transform-zoom-range",
+      numId: "clip-transform-zoom-num",
+      rstId: "btn-clip-transform-zoom-reset",
+      min: TRANSFORM_ZOOM_MIN,
+      max: TRANSFORM_ZOOM_MAX,
+      def: TRANSFORM_ZOOM_DEFAULT
+    },
+    {
+      field: "pos_x_pct",
+      rangeId: "clip-transform-posx-range",
+      numId: "clip-transform-posx-num",
+      rstId: "btn-clip-transform-posx-reset",
+      min: TRANSFORM_POS_MIN,
+      max: TRANSFORM_POS_MAX,
+      def: TRANSFORM_POS_DEFAULT
+    },
+    {
+      field: "pos_y_pct",
+      rangeId: "clip-transform-posy-range",
+      numId: "clip-transform-posy-num",
+      rstId: "btn-clip-transform-posy-reset",
+      min: TRANSFORM_POS_MIN,
+      max: TRANSFORM_POS_MAX,
+      def: TRANSFORM_POS_DEFAULT
+    },
+    {
+      field: "rotation_deg",
+      rangeId: "clip-transform-rot-range",
+      numId: "clip-transform-rot-num",
+      rstId: "btn-clip-transform-rot-reset",
+      min: TRANSFORM_ROT_MIN,
+      max: TRANSFORM_ROT_MAX,
+      def: TRANSFORM_ROT_DEFAULT
+    },
+    {
+      field: "opacity_pct",
+      rangeId: "clip-transform-opacity-range",
+      numId: "clip-transform-opacity-num",
+      rstId: "btn-clip-transform-opacity-reset",
+      min: TRANSFORM_OPACITY_MIN,
+      max: TRANSFORM_OPACITY_MAX,
+      def: TRANSFORM_OPACITY_DEFAULT
+    }
+  ];
+
+  const liveUpdateTransform = (patch) => {
+    const info = getSelectedClipTrack();
+    if (!info || info.clip.media_type === "audio") return;
+    const res = updateClipTransformInDocument(
+      state.timelineDoc,
+      info.ref.trackKind,
+      info.ref.trackIndex,
+      info.ref.clipIndex,
+      patch
+    );
+    if (!res.changed) return;
+    state.timelineDoc = res.doc;
+    state.timelineSelected = { kind: "clip", data: res.clip };
+    renderTimelineSelection();
+    if (state.activeTab === "timeline") redrawActiveCanvases();
+  };
+
+  for (const btn of presetBtns) {
+    btn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info || info.clip.media_type === "audio") return;
+      const pid = btn.getAttribute("data-transform-preset") || "";
+      const preset = getTransformPresetClient(pid);
+      if (!preset) return;
+      const res = updateClipTransformInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        {
+          zoom_pct: preset.zoom_pct,
+          pos_x_pct: preset.pos_x_pct,
+          pos_y_pct: preset.pos_y_pct,
+          rotation_deg: preset.rotation_deg,
+          opacity_pct: preset.opacity_pct
+        }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  for (const spec of fields) {
+    const rangeEl = byId(spec.rangeId);
+    const numEl = byId(spec.numId);
+    const rstEl = byId(spec.rstId);
+    let dragSnap = null;
+
+    if (rangeEl) {
+      rangeEl.addEventListener("pointerdown", () => {
+        dragSnap = captureTimelineSnapshot();
+      });
+      rangeEl.addEventListener("input", () => {
+        const val = Number.parseFloat(rangeEl.value);
+        if (!Number.isFinite(val)) return;
+        if (!dragSnap) dragSnap = captureTimelineSnapshot();
+        liveUpdateTransform({ [spec.field]: val });
+      });
+      rangeEl.addEventListener("change", () => {
+        const val = Number.parseFloat(rangeEl.value);
+        if (Number.isFinite(val) && dragSnap) {
+          const info = getSelectedClipTrack();
+          if (info && info.clip.media_type !== "audio") {
+            pushUndoSnapshot(dragSnap);
+            updateTimelineToolbarUI();
+          }
+        }
+        dragSnap = null;
+      });
+    }
+
+    if (numEl) {
+      numEl.addEventListener("focus", () => {
+        dragSnap = captureTimelineSnapshot();
+      });
+      numEl.addEventListener("input", () => {
+        const val = Number.parseFloat(numEl.value);
+        if (Number.isFinite(val) && val >= spec.min && val <= spec.max) {
+          if (!dragSnap) dragSnap = captureTimelineSnapshot();
+          liveUpdateTransform({ [spec.field]: val });
+        }
+      });
+      numEl.addEventListener("change", () => {
+        const raw = Number.parseFloat(numEl.value);
+        const info = getSelectedClipTrack();
+        if (!info || info.clip.media_type === "audio") return;
+        if (!Number.isFinite(raw)) {
+          renderTimelineTransformInspector();
+          dragSnap = null;
+          return;
+        }
+        const clamped = Math.min(spec.max, Math.max(spec.min, raw));
+        const baseDoc = dragSnap && dragSnap.doc ? dragSnap.doc : state.timelineDoc;
+        const baseRef =
+          dragSnap && dragSnap.selected && dragSnap.selected.kind === "clip"
+            ? findClipIndex(baseDoc, dragSnap.selected.data)
+            : info.ref;
+        if (baseRef) {
+          const res = updateClipTransformInDocument(
+            baseDoc,
+            baseRef.trackKind,
+            baseRef.trackIndex,
+            baseRef.clipIndex,
+            { [spec.field]: clamped }
+          );
+          if (res.changed) {
+            commitTimelineMutation(res.doc, { kind: "clip", data: res.clip }, dragSnap);
+          } else {
+            renderTimelineSelection();
+          }
+        }
+        numEl.value = clamped.toFixed(1);
+        dragSnap = null;
+      });
+    }
+
+    if (rstEl) {
+      rstEl.addEventListener("click", () => {
+        const info = getSelectedClipTrack();
+        if (!info || info.clip.media_type === "audio") return;
+        const res = updateClipTransformInDocument(
+          state.timelineDoc,
+          info.ref.trackKind,
+          info.ref.trackIndex,
+          info.ref.clipIndex,
+          { [spec.field]: spec.def }
+        );
+        if (res.changed) {
+          commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+        }
+      });
+    }
+  }
+
+  if (rstAllBtn) {
+    rstAllBtn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info || info.clip.media_type === "audio") return;
+      const res = updateClipTransformInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        {
+          zoom_pct: TRANSFORM_ZOOM_DEFAULT,
+          pos_x_pct: TRANSFORM_POS_DEFAULT,
+          pos_y_pct: TRANSFORM_POS_DEFAULT,
+          rotation_deg: TRANSFORM_ROT_DEFAULT,
+          opacity_pct: TRANSFORM_OPACITY_DEFAULT
+        }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (sendBtn) {
+    sendBtn.addEventListener("click", () => {
+      const chk = byId("render-use-clip-transform");
+      if (chk) chk.checked = true;
+      switchTab("render");
+      showBanner("Selected clip motion transform linked to Deliver page.", "success");
+    });
+  }
+}
+
 function wireClipTransitionInspector() {
   const presetSel = byId("clip-transition-preset");
   const durRange = byId("clip-transition-dur-range");
@@ -6197,6 +6570,7 @@ function wireEvents() {
   bindTimelineCanvasScrub(byId("timeline-canvas"));
   wireClipAudioInspector();
   wireClipRetimeInspector();
+  wireClipTransformInspector();
   wireClipTransitionInspector();
   wireTimelineMarkerAndBpmControls();
 

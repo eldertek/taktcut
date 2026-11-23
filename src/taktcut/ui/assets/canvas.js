@@ -4,10 +4,13 @@ import {
   computeInOutRangeMetrics,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
+  formatTransformBadgeText,
   getAspectRatioPreset,
   getTransitionPresetName,
   getTransitionShortTag,
+  isClipTransformIdentity,
   normalizeClipRetime,
+  normalizeClipTransform,
   normalizeClipTransition
 } from "./timeline_ops.js";
 
@@ -438,6 +441,10 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
     const retimeSlateTag = isRetimed
       ? ` | ${formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse)}`
       : "";
+    const transformNorm = normalizeClipTransform(top.clip);
+    const transformSlateTag = !isClipTransformIdentity(transformNorm)
+      ? ` | XF ${formatTransformBadgeText(transformNorm)}`
+      : "";
     ctx.fillStyle = "#d8d8de";
     ctx.font = "600 11px ui-monospace, monospace";
     ctx.fillText(fitCanvasText(ctx, `${top.track}: ${top.clip.name}`, textMaxW), slateX + 7, slateY + 14);
@@ -446,7 +453,7 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
     ctx.fillText(
       fitCanvasText(
         ctx,
-        `SRC+${relOffset}f${retimeSlateTag} | ${doc.width}x${doc.height} | ${activeClips.length} active layer(s)`,
+        `SRC+${relOffset}f${retimeSlateTag}${transformSlateTag} | ${doc.width}x${doc.height} | ${activeClips.length} active layer(s)`,
         textMaxW
       ),
       slateX + 7,
@@ -1001,31 +1008,74 @@ function applyChromaKeyOnBuffer(bctx, bw, bh, ckState, matteView) {
 }
 
 function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips, framingMode, srcAspect, targetAspect, ckState = null) {
-  if (ckState && ckState.enabled) {
-    drawStudioKeyerPlate(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips, ckState);
+  const renderSceneLayer = (layerClips, allowKeyerPlate) => {
+    if (allowKeyerPlate && ckState && ckState.enabled) {
+      drawStudioKeyerPlate(targetCtx, bufW, bufH, doc, playheadFrame, cdl, layerClips, ckState);
+      return;
+    }
+    if (framingMode === "fit" && Math.abs(targetAspect - srcAspect) > 0.015) {
+      targetCtx.fillStyle = "#000000";
+      targetCtx.fillRect(0, 0, bufW, bufH);
+      let innerW = bufW;
+      let innerH = innerW / srcAspect;
+      if (innerH > bufH) {
+        innerH = bufH;
+        innerW = innerH * srcAspect;
+      }
+      const ix = Math.floor((bufW - innerW) / 2);
+      const iy = Math.floor((bufH - innerH) / 2);
+      targetCtx.save();
+      targetCtx.beginPath();
+      targetCtx.rect(ix, iy, innerW, innerH);
+      targetCtx.clip();
+      targetCtx.translate(ix, iy);
+      drawBaseProgramScene(targetCtx, innerW, innerH, doc, playheadFrame, cdl, layerClips);
+      targetCtx.restore();
+      return;
+    }
+    drawBaseProgramScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, layerClips);
+  };
+
+  if (!Array.isArray(clips) || clips.length === 0) {
+    renderSceneLayer([], true);
     return;
   }
-  if (framingMode === "fit" && Math.abs(targetAspect - srcAspect) > 0.015) {
-    targetCtx.fillStyle = "#000000";
-    targetCtx.fillRect(0, 0, bufW, bufH);
-    let innerW = bufW;
-    let innerH = innerW / srcAspect;
-    if (innerH > bufH) {
-      innerH = bufH;
-      innerW = innerH * srcAspect;
+
+  targetCtx.fillStyle = "#000000";
+  targetCtx.fillRect(0, 0, bufW, bufH);
+
+  for (let idx = 0; idx < clips.length; idx += 1) {
+    const layer = clips[idx];
+    const isTop = idx === clips.length - 1;
+    const tf = normalizeClipTransform(layer && layer.clip ? layer.clip : null);
+    const alpha = clamp01(tf.opacity_pct / 100.0);
+    if (alpha <= 0.0001) {
+      continue;
     }
-    const ix = Math.floor((bufW - innerW) / 2);
-    const iy = Math.floor((bufH - innerH) / 2);
+
     targetCtx.save();
     targetCtx.beginPath();
-    targetCtx.rect(ix, iy, innerW, innerH);
+    targetCtx.rect(0, 0, bufW, bufH);
     targetCtx.clip();
-    targetCtx.translate(ix, iy);
-    drawBaseProgramScene(targetCtx, innerW, innerH, doc, playheadFrame, cdl, clips);
+    targetCtx.globalAlpha *= alpha;
+
+    if (!isClipTransformIdentity(tf)) {
+      const cx = bufW * 0.5 + (tf.pos_x_pct / 100.0) * bufW;
+      const cy = bufH * 0.5 + (tf.pos_y_pct / 100.0) * bufH;
+      targetCtx.translate(cx, cy);
+      if (Math.abs(tf.rotation_deg) > 1e-4) {
+        targetCtx.rotate((tf.rotation_deg * Math.PI) / 180.0);
+      }
+      const scale = tf.zoom_pct / 100.0;
+      if (Math.abs(scale - 1.0) > 1e-4) {
+        targetCtx.scale(scale, scale);
+      }
+      targetCtx.translate(-bufW * 0.5, -bufH * 0.5);
+    }
+
+    renderSceneLayer(clips.slice(0, idx + 1), isTop);
     targetCtx.restore();
-    return;
   }
-  drawBaseProgramScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips);
 }
 
 export function drawProgramMonitorCanvas(
@@ -2033,12 +2083,14 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 
       const retimeNorm = normalizeClipRetime(clip);
       const hasRetime = Math.abs(retimeNorm.speedRate - 1.0) > 0.005 || retimeNorm.reverse;
+      const transformNorm = !isAudio ? normalizeClipTransform(clip) : null;
+      const hasTransform = Boolean(transformNorm && !isClipTransformIdentity(transformNorm));
       let speedBadgeW = 0;
+      const rightReserve = showFadeHandles ? 14 : 5;
       if (hasRetime && drawW >= 42) {
         const badgeText = formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse);
         ctx.font = "700 9px ui-monospace, monospace";
         const measuredW = Math.ceil(ctx.measureText(badgeText).width) + 8;
-        const rightReserve = showFadeHandles ? 14 : 5;
         if (measuredW + rightReserve + 18 <= drawW) {
           speedBadgeW = measuredW;
           const badgeX = drawX + drawW - rightReserve - speedBadgeW;
@@ -2056,9 +2108,31 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           ctx.fillText(badgeText, badgeX + 4, badgeY + 10);
         }
       }
+      let transformBadgeW = 0;
+      if (hasTransform && drawW >= 48) {
+        const tfText = `XF ${Math.round(transformNorm.zoom_pct)}%`;
+        ctx.font = "700 9px ui-monospace, monospace";
+        const measuredTfW = Math.ceil(ctx.measureText(tfText).width) + 8;
+        const usedRight = rightReserve + (speedBadgeW > 0 ? speedBadgeW + 4 : 0);
+        if (measuredTfW + usedRight + 18 <= drawW) {
+          transformBadgeW = measuredTfW + (speedBadgeW > 0 ? 4 : 0);
+          const badgeX = drawX + drawW - usedRight - measuredTfW;
+          const badgeY = clipY + 3;
+          const badgeH = 14;
+          ctx.fillStyle = "rgba(82, 139, 255, 0.24)";
+          roundRectPath(ctx, badgeX, badgeY, measuredTfW, badgeH, 2);
+          ctx.fill();
+          ctx.strokeStyle = "#528bff";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = "#b8d0ff";
+          ctx.fillText(tfText, badgeX + 4, badgeY + 10);
+        }
+      }
 
       if (drawW > 34) {
-        const textClipW = Math.max(8, drawW - 8 - (speedBadgeW > 0 ? speedBadgeW + 10 : 0));
+        const badgesOffset = speedBadgeW + transformBadgeW;
+        const textClipW = Math.max(8, drawW - 8 - (badgesOffset > 0 ? badgesOffset + 10 : 0));
         ctx.save();
         ctx.beginPath();
         ctx.rect(drawX + 4, clipY, textClipW, clipH);

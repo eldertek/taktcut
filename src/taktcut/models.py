@@ -251,6 +251,48 @@ class ClipTransition(BaseModel):
         return cleaned
 
 
+TRANSFORM_ZOOM_MIN: float = 10.0
+TRANSFORM_ZOOM_MAX: float = 300.0
+TRANSFORM_POS_MIN: float = -100.0
+TRANSFORM_POS_MAX: float = 100.0
+TRANSFORM_ROT_MIN: float = -180.0
+TRANSFORM_ROT_MAX: float = 180.0
+TRANSFORM_OPACITY_MIN: float = 0.0
+TRANSFORM_OPACITY_MAX: float = 100.0
+
+
+class ClipTransformParams(BaseModel):
+    """Per-clip 2D motion transform (zoom, position, rotation, opacity) with strict bounds."""
+
+    zoom_pct: float = Field(default=100.0, ge=TRANSFORM_ZOOM_MIN, le=TRANSFORM_ZOOM_MAX)
+    pos_x_pct: float = Field(default=0.0, ge=TRANSFORM_POS_MIN, le=TRANSFORM_POS_MAX)
+    pos_y_pct: float = Field(default=0.0, ge=TRANSFORM_POS_MIN, le=TRANSFORM_POS_MAX)
+    rotation_deg: float = Field(default=0.0, ge=TRANSFORM_ROT_MIN, le=TRANSFORM_ROT_MAX)
+    opacity_pct: float = Field(default=100.0, ge=TRANSFORM_OPACITY_MIN, le=TRANSFORM_OPACITY_MAX)
+
+    @field_validator(
+        "zoom_pct",
+        "pos_x_pct",
+        "pos_y_pct",
+        "rotation_deg",
+        "opacity_pct",
+        mode="before",
+    )
+    @classmethod
+    def _validate_finite_transform_float(cls, raw: Any, info: Any) -> float:
+        return _check_finite_number(raw, str(info.field_name))
+
+    def is_identity(self) -> bool:
+        """Return True when zoom is 100%, position/rotation are 0, and opacity is 100%."""
+        return (
+            math.isclose(self.zoom_pct, 100.0, abs_tol=1e-6)
+            and math.isclose(self.pos_x_pct, 0.0, abs_tol=1e-6)
+            and math.isclose(self.pos_y_pct, 0.0, abs_tol=1e-6)
+            and math.isclose(self.rotation_deg, 0.0, abs_tol=1e-6)
+            and math.isclose(self.opacity_pct, 100.0, abs_tol=1e-6)
+        )
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -270,6 +312,7 @@ class TimelineClip(BaseModel):
     speed_rate: float = Field(default=1.0, ge=0.25, le=4.0)
     reverse: bool = False
     transition_out: ClipTransition | None = None
+    transform: ClipTransformParams | None = None
 
     @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", "speed_rate", mode="before")
     @classmethod

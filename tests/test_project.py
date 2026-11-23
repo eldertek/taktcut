@@ -12,6 +12,7 @@ from taktcut.color import ColorGradeParams
 from taktcut.fx import ChromaKeyParams, FxNode, Keyframe
 from taktcut.models import (
     BpmGridConfig,
+    ClipTransformParams,
     ClipTransition,
     RationalFrameRate,
     RenderProfile,
@@ -72,6 +73,13 @@ def _build_full_test_project() -> TaktcutProject:
                         source_fps=fps_25,
                         speed_rate=1.25,
                         reverse=False,
+                        transform=ClipTransformParams(
+                            zoom_pct=28.0,
+                            pos_x_pct=32.0,
+                            pos_y_pct=32.0,
+                            rotation_deg=-15.0,
+                            opacity_pct=85.0,
+                        ),
                         transition_out=ClipTransition(
                             preset="fadeblack",
                             duration_s=0.75,
@@ -252,6 +260,7 @@ def _build_full_test_project() -> TaktcutProject:
             use_studio_subtitles=True,
             use_clip_audio=True,
             use_clip_retime=True,
+            use_clip_transform=True,
             prefer_hw=False,
         ),
     )
@@ -284,6 +293,11 @@ def test_project_lossless_roundtrip_json_and_disk(tmp_path: Path) -> None:
     assert loaded.model_dump(mode="json") == saved.model_dump(mode="json")
 
     # Spot-check nested edit properties
+    assert loaded.timeline.tracks[0].clips[0].transform is not None
+    assert loaded.timeline.tracks[0].clips[0].transform.zoom_pct == pytest.approx(28.0)
+    assert loaded.timeline.tracks[0].clips[0].transform.pos_x_pct == pytest.approx(32.0)
+    assert loaded.timeline.tracks[0].clips[0].transform.rotation_deg == pytest.approx(-15.0)
+    assert loaded.timeline.tracks[0].clips[0].transform.opacity_pct == pytest.approx(85.0)
     assert loaded.timeline.tracks[0].clips[0].transition_out is not None
     assert loaded.timeline.tracks[0].clips[0].transition_out.preset == "fadeblack"
     assert loaded.timeline.tracks[0].clips[1].reverse is True
@@ -369,6 +383,12 @@ def _mutated_dict(mutator: Any) -> dict[str, Any]:
         lambda d: d["delivery"].__setitem__("target_lufs", 2.0),
         lambda d: d["delivery"].__setitem__("input_path", "bad\x00.mp4"),
         lambda d: d["timeline"]["tracks"][0]["clips"][0].__setitem__("speed_rate", 10.0),
+        lambda d: d["timeline"]["tracks"][0]["clips"][0]["transform"].__setitem__(
+            "zoom_pct", 500.0
+        ),
+        lambda d: d["timeline"]["tracks"][0]["clips"][0]["transform"].__setitem__(
+            "rotation_deg", 270.0
+        ),
         lambda d: d["timeline"]["tracks"][1]["clips"][0].__setitem__("audio_gain_db", 48.0),
     ],
 )

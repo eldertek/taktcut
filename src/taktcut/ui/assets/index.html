@@ -231,6 +231,54 @@
                 </div>
               </div>
 
+              <div id="timeline-transform-inspector" class="transform-inspector-dock">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.transform.title">Clip Motion Transform</span>
+                  <div class="viewer-controls">
+                    <span id="clip-transform-badge" class="nle-tag mono">100% | 0,0</span>
+                    <button type="button" id="btn-clip-transform-reset-all" class="btn btn-mini" data-i18n="timeline.transform.resetAll">Reset Transform</button>
+                    <button type="button" id="btn-clip-transform-to-deliver" class="btn btn-mini" data-i18n="timeline.transform.sendDeliver">Use in Deliver</button>
+                  </div>
+                </div>
+                <div id="clip-transform-controls" class="transform-ctrl-box mono">
+                  <div id="clip-transform-presets" class="transform-preset-strip" role="group" aria-label="Transform Presets">
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="full_frame" aria-pressed="false" data-i18n="timeline.transform.presetFull">Full Frame</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="pip_bottom_right" aria-pressed="false" data-i18n="timeline.transform.presetPip">PiP Bottom-Right</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="zoom_punch_115" aria-pressed="false" data-i18n="timeline.transform.presetPunch">Zoom Punch 115%</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-transform-zoom-range" data-i18n="timeline.transform.zoom">Zoom (%)</label>
+                    <input type="range" id="clip-transform-zoom-range" min="10" max="300" step="1" value="100">
+                    <input type="number" id="clip-transform-zoom-num" class="input-num" min="10" max="300" step="1" value="100.0" aria-label="Clip zoom percentage">
+                    <button type="button" id="btn-clip-transform-zoom-reset" class="btn btn-mini" aria-label="Reset clip zoom">Rst</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-transform-posx-range" data-i18n="timeline.transform.posX">Pos X (%)</label>
+                    <input type="range" id="clip-transform-posx-range" min="-100" max="100" step="0.5" value="0">
+                    <input type="number" id="clip-transform-posx-num" class="input-num" min="-100" max="100" step="0.5" value="0.0" aria-label="Clip horizontal position percentage">
+                    <button type="button" id="btn-clip-transform-posx-reset" class="btn btn-mini" aria-label="Reset clip horizontal position">Rst</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-transform-posy-range" data-i18n="timeline.transform.posY">Pos Y (%)</label>
+                    <input type="range" id="clip-transform-posy-range" min="-100" max="100" step="0.5" value="0">
+                    <input type="number" id="clip-transform-posy-num" class="input-num" min="-100" max="100" step="0.5" value="0.0" aria-label="Clip vertical position percentage">
+                    <button type="button" id="btn-clip-transform-posy-reset" class="btn btn-mini" aria-label="Reset clip vertical position">Rst</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-transform-rot-range" data-i18n="timeline.transform.rotation">Rotation (deg)</label>
+                    <input type="range" id="clip-transform-rot-range" min="-180" max="180" step="0.5" value="0">
+                    <input type="number" id="clip-transform-rot-num" class="input-num" min="-180" max="180" step="0.5" value="0.0" aria-label="Clip rotation in degrees">
+                    <button type="button" id="btn-clip-transform-rot-reset" class="btn btn-mini" aria-label="Reset clip rotation">Rst</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-transform-opacity-range" data-i18n="timeline.transform.opacity">Opacity (%)</label>
+                    <input type="range" id="clip-transform-opacity-range" min="0" max="100" step="1" value="100">
+                    <input type="number" id="clip-transform-opacity-num" class="input-num" min="0" max="100" step="1" value="100.0" aria-label="Clip opacity percentage">
+                    <button type="button" id="btn-clip-transform-opacity-reset" class="btn btn-mini" aria-label="Reset clip opacity">Rst</button>
+                  </div>
+                </div>
+              </div>
+
               <div id="timeline-audio-inspector" class="audio-inspector-dock">
                 <div class="pane-subheader">
                   <span data-i18n="timeline.audio.title">Clip Audio &amp; Track Mixer</span>
@@ -1270,6 +1318,10 @@
                   <span data-i18n="render.check.clipRetime">Apply selected clip speed / retime (setpts + atempo + reverse)</span>
                 </label>
                 <label class="check-label">
+                  <input type="checkbox" id="render-use-clip-transform" checked>
+                  <span data-i18n="render.check.clipTransform">Apply selected clip motion transform (zoom / pos / rot / opacity)</span>
+                </label>
+                <label class="check-label">
                   <input type="checkbox" id="render-prefer-hw" checked>
                   <span data-i18n="render.check.preferHw">Prefer GPU NVENC encoder (fallback to CPU libx264/libx265)</span>
                 </label>
@@ -1431,7 +1483,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | I/O: In/Out | Alt+X: Clear I/O | A/B: Select/Blade | N: Snap | M: Marker | ?: Shortcuts</span>
       </span>
-      <span id="version-badge">v0.1.6</span>
+      <span id="version-badge">v0.1.7</span>
     </footer>
   </div>
 

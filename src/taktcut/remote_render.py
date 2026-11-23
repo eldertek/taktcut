@@ -33,6 +33,7 @@ from taktcut.color import ColorGradeParams, bake_cdl_to_cube, parse_cube_lut
 from taktcut.fx import ChromaKeyParams, FxNode, compile_fx_filtergraph
 from taktcut.models import (
     AscCdlParams,
+    ClipTransformParams,
     HardwareCapabilities,
     RationalFrameRate,
     RenderPlan,
@@ -228,6 +229,7 @@ class RemoteRenderJobRequest(BaseModel):
     subtitle_track: SubtitleTrackParams | None = None
     audio_params: ClipAudioParams | None = None
     retime_params: ClipRetimeParams | None = None
+    transform_params: ClipTransformParams | None = None
     framing: FramingParams | None = None
     clip_duration_s: float | None = None
 
@@ -504,6 +506,7 @@ class RemoteRenderState:
             subtitle_track=req.subtitle_track,
             audio_params=req.audio_params,
             retime_params=req.retime_params,
+            transform_params=req.transform_params,
             framing=req.framing,
             clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,

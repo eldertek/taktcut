@@ -62,6 +62,7 @@ from taktcut.fx import (
 )
 from taktcut.models import (
     AscCdlParams,
+    ClipTransformParams,
     HardwareCapabilities,
     RationalFrameRate,
     RenderProfile,
@@ -95,6 +96,7 @@ from taktcut.render import (
     compile_audio_filter_result,
     compile_framing_filter_result,
     compile_retime_filter_result,
+    compile_transform_filter_result,
     execute_render_plan,
     list_aspect_presets,
     list_delivery_presets,
@@ -391,6 +393,40 @@ def _build_retime_params_from_payload(
             {
                 "speed_rate": payload.get("speed_rate", 1.0),
                 "reverse": rev_raw,
+            }
+        )
+    return None
+
+
+def _build_transform_params_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> ClipTransformParams | None:
+    raw_transform = payload.get("transform_params")
+    if raw_transform is None:
+        raw_transform = payload.get("transform")
+    if raw_transform is not None:
+        if not isinstance(raw_transform, dict):
+            raise ValueError("'transform_params' must be a JSON object")
+        return ClipTransformParams.model_validate(
+            {
+                "zoom_pct": raw_transform.get("zoom_pct", 100.0),
+                "pos_x_pct": raw_transform.get("pos_x_pct", 0.0),
+                "pos_y_pct": raw_transform.get("pos_y_pct", 0.0),
+                "rotation_deg": raw_transform.get("rotation_deg", 0.0),
+                "opacity_pct": raw_transform.get("opacity_pct", 100.0),
+            }
+        )
+
+    if allow_top_level:
+        return ClipTransformParams.model_validate(
+            {
+                "zoom_pct": payload.get("zoom_pct", 100.0),
+                "pos_x_pct": payload.get("pos_x_pct", 0.0),
+                "pos_y_pct": payload.get("pos_y_pct", 0.0),
+                "rotation_deg": payload.get("rotation_deg", 0.0),
+                "opacity_pct": payload.get("opacity_pct", 100.0),
             }
         )
     return None
@@ -1396,6 +1432,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
+            transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
 
             title_overlay_obj: TitleOverlayParams | None = None
@@ -1429,6 +1466,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 subtitle_track=subtitle_track_obj,
                 audio_params=audio_params,
                 retime_params=retime_params,
+                transform_params=transform_params,
                 framing=framing_params,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
@@ -1565,6 +1603,18 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             assert retime_params is not None
             compiled_retime = compile_retime_filter_result(retime_params)
             self._send_json(HTTPStatus.OK, compiled_retime.model_dump(mode="json"))
+            return
+
+        if route == "/api/transform/compile":
+            transform_params = _build_transform_params_from_payload(payload, allow_top_level=True)
+            assert transform_params is not None
+            raw_pix_fmt = payload.get("pix_fmt")
+            pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            compiled_transform = compile_transform_filter_result(
+                transform_params,
+                pix_fmt=pix_fmt,
+            )
+            self._send_json(HTTPStatus.OK, compiled_transform.model_dump(mode="json"))
             return
 
         if route == "/api/framing/compile":
@@ -1784,6 +1834,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
+            transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
             title_overlay_remote: TitleOverlayParams | None = None
             if isinstance(payload.get("title_overlay"), dict):
@@ -1813,6 +1864,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 subtitle_track=subtitle_track_remote,
                 audio_params=audio_params,
                 retime_params=retime_params,
+                transform_params=transform_params,
                 framing=framing_params,
                 clip_duration_s=clip_duration_s,
             )

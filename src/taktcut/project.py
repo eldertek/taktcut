@@ -160,6 +160,7 @@ class ProjectDeliveryState(BaseModel):
     use_studio_subtitles: bool = False
     use_clip_audio: bool = True
     use_clip_retime: bool = True
+    use_clip_transform: bool = True
     prefer_hw: bool = True
 
     @field_validator("video_crf", mode="before")
@@ -213,6 +214,7 @@ class ProjectDeliveryState(BaseModel):
         "use_studio_subtitles",
         "use_clip_audio",
         "use_clip_retime",
+        "use_clip_transform",
         "prefer_hw",
         mode="before",
     )

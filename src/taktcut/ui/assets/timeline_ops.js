@@ -5,6 +5,18 @@ export const AUDIO_FADE_S_MIN = 0;
 export const AUDIO_FADE_S_MAX = 5;
 export const RETIME_SPEED_MIN = 0.25;
 export const RETIME_SPEED_MAX = 4.0;
+export const TRANSFORM_ZOOM_MIN = 10.0;
+export const TRANSFORM_ZOOM_MAX = 300.0;
+export const TRANSFORM_ZOOM_DEFAULT = 100.0;
+export const TRANSFORM_POS_MIN = -100.0;
+export const TRANSFORM_POS_MAX = 100.0;
+export const TRANSFORM_POS_DEFAULT = 0.0;
+export const TRANSFORM_ROT_MIN = -180.0;
+export const TRANSFORM_ROT_MAX = 180.0;
+export const TRANSFORM_ROT_DEFAULT = 0.0;
+export const TRANSFORM_OPACITY_MIN = 0.0;
+export const TRANSFORM_OPACITY_MAX = 100.0;
+export const TRANSFORM_OPACITY_DEFAULT = 100.0;
 export const TRANSITION_DURATION_MIN_S = 0.1;
 export const TRANSITION_DURATION_MAX_S = 2.0;
 export const TRANSITION_DURATION_DEFAULT_S = 0.5;
@@ -32,6 +44,39 @@ export const TRANSITION_PRESETS = [
   { id: "wipeleft", name: "Wipe Left", shortTag: "WIPE L" },
   { id: "slideright", name: "Slide Right", shortTag: "SLIDE R" },
   { id: "zoomin", name: "Smooth Zoom", shortTag: "ZOOM" }
+];
+
+export const TRANSFORM_PRESETS = [
+  {
+    id: "full_frame",
+    label: "Full Frame",
+    label_fr: "Plein Cadre",
+    zoom_pct: 100.0,
+    pos_x_pct: 0.0,
+    pos_y_pct: 0.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0
+  },
+  {
+    id: "pip_bottom_right",
+    label: "PiP Bottom-Right",
+    label_fr: "PiP Bas-Droite",
+    zoom_pct: 28.0,
+    pos_x_pct: 32.0,
+    pos_y_pct: 32.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0
+  },
+  {
+    id: "zoom_punch_115",
+    label: "Zoom Punch 115%",
+    label_fr: "Zoom Punch 115%",
+    zoom_pct: 115.0,
+    pos_x_pct: 0.0,
+    pos_y_pct: 0.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0
+  }
 ];
 
 export const ASPECT_RATIO_PRESETS = [
@@ -304,6 +349,133 @@ export function compileRetimeFilterClient(params) {
     ffmpeg_af_args: audioFiltergraph ? ["-af", audioFiltergraph] : [],
     is_identity: isIdentity,
     params: { speed_rate: speedRate, reverse }
+  };
+}
+
+export function normalizeClipTransform(clipOrTransform) {
+  const src =
+    clipOrTransform && clipOrTransform.transform && typeof clipOrTransform.transform === "object"
+      ? clipOrTransform.transform
+      : clipOrTransform &&
+          (clipOrTransform.zoom_pct !== undefined ||
+            clipOrTransform.pos_x_pct !== undefined ||
+            clipOrTransform.pos_y_pct !== undefined ||
+            clipOrTransform.rotation_deg !== undefined ||
+            clipOrTransform.opacity_pct !== undefined)
+        ? clipOrTransform
+        : {};
+  const numOr = (raw, fallback) =>
+    raw !== undefined && raw !== null && Number.isFinite(Number(raw)) ? Number(raw) : fallback;
+  const zoom = clampNum(numOr(src.zoom_pct, TRANSFORM_ZOOM_DEFAULT), TRANSFORM_ZOOM_MIN, TRANSFORM_ZOOM_MAX);
+  const posX = clampNum(numOr(src.pos_x_pct, TRANSFORM_POS_DEFAULT), TRANSFORM_POS_MIN, TRANSFORM_POS_MAX);
+  const posY = clampNum(numOr(src.pos_y_pct, TRANSFORM_POS_DEFAULT), TRANSFORM_POS_MIN, TRANSFORM_POS_MAX);
+  const rot = clampNum(numOr(src.rotation_deg, TRANSFORM_ROT_DEFAULT), TRANSFORM_ROT_MIN, TRANSFORM_ROT_MAX);
+  const opacity = clampNum(
+    numOr(src.opacity_pct, TRANSFORM_OPACITY_DEFAULT),
+    TRANSFORM_OPACITY_MIN,
+    TRANSFORM_OPACITY_MAX
+  );
+  return {
+    zoom_pct: Number(zoom.toFixed(1)),
+    pos_x_pct: Number(posX.toFixed(1)),
+    pos_y_pct: Number(posY.toFixed(1)),
+    rotation_deg: Number(rot.toFixed(1)),
+    opacity_pct: Number(opacity.toFixed(1))
+  };
+}
+
+export function isClipTransformIdentity(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return (
+    Math.abs(norm.zoom_pct - 100.0) <= 1e-4 &&
+    Math.abs(norm.pos_x_pct) <= 1e-4 &&
+    Math.abs(norm.pos_y_pct) <= 1e-4 &&
+    Math.abs(norm.rotation_deg) <= 1e-4 &&
+    Math.abs(norm.opacity_pct - 100.0) <= 1e-4
+  );
+}
+
+export function getTransformPresetClient(presetId) {
+  const clean = typeof presetId === "string" ? presetId.trim().toLowerCase() : "";
+  return TRANSFORM_PRESETS.find((p) => p.id === clean) || null;
+}
+
+export function formatTransformBadgeText(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  if (isClipTransformIdentity(norm)) {
+    return "100% | 0,0";
+  }
+  const parts = [`${Math.round(norm.zoom_pct)}%`];
+  if (Math.abs(norm.pos_x_pct) > 0.05 || Math.abs(norm.pos_y_pct) > 0.05) {
+    const sx = norm.pos_x_pct >= 0 ? `+${Math.round(norm.pos_x_pct)}` : `${Math.round(norm.pos_x_pct)}`;
+    const sy = norm.pos_y_pct >= 0 ? `+${Math.round(norm.pos_y_pct)}` : `${Math.round(norm.pos_y_pct)}`;
+    parts.push(`(${sx},${sy})`);
+  }
+  if (Math.abs(norm.rotation_deg) > 0.05) {
+    parts.push(`${norm.rotation_deg.toFixed(0)}deg`);
+  }
+  if (Math.abs(norm.opacity_pct - 100.0) > 0.05) {
+    parts.push(`${Math.round(norm.opacity_pct)}%OP`);
+  }
+  return parts.join(" ");
+}
+
+export function compileTransformFilterClient(params, pixFmt = null) {
+  const norm = normalizeClipTransform(params);
+  const isIdentity = isClipTransformIdentity(norm);
+  if (isIdentity) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      is_identity: true,
+      params: norm
+    };
+  }
+  if (norm.opacity_pct <= 1e-6) {
+    const parts = ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill", "setsar=1"];
+    if (pixFmt) parts.push(`format=${pixFmt}`);
+    const fg = parts.join(",");
+    return {
+      filtergraph: fg,
+      ffmpeg_vf_args: ["-vf", fg],
+      is_identity: false,
+      params: norm
+    };
+  }
+  const fgSteps = [];
+  if (Math.abs(norm.zoom_pct - 100.0) > 1e-4) {
+    const zScale = norm.zoom_pct / 100.0;
+    fgSteps.push(
+      `scale=w=ceil(iw*${zScale.toFixed(6)}/2)*2:h=ceil(ih*${zScale.toFixed(6)}/2)*2:flags=lanczos`
+    );
+  }
+  const hasRot = Math.abs(norm.rotation_deg) > 1e-4;
+  const hasOpacity = Math.abs(norm.opacity_pct - 100.0) > 1e-4;
+  if (hasRot || hasOpacity) {
+    fgSteps.push("format=yuva420p");
+  }
+  if (hasRot) {
+    const rad = (norm.rotation_deg * Math.PI) / 180.0;
+    fgSteps.push(`rotate=${rad.toFixed(6)}:ow=rotw(${rad.toFixed(6)}):oh=roth(${rad.toFixed(6)}):c=black@0`);
+  }
+  if (hasOpacity) {
+    const alpha = norm.opacity_pct / 100.0;
+    fgSteps.push(`colorchannelmixer=aa=${alpha.toFixed(4)}`);
+  }
+  const dx = norm.pos_x_pct / 100.0;
+  const dy = norm.pos_y_pct / 100.0;
+  const xExpr = Math.abs(dx) <= 1e-6 ? "(W-w)/2" : `(W-w)/2+W*(${dx.toFixed(4)})`;
+  const yExpr = Math.abs(dy) <= 1e-6 ? "(H-h)/2" : `(H-h)/2+H*(${dy.toFixed(4)})`;
+  const fgChain = fgSteps.join(",");
+  let graph = fgChain
+    ? `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_fg]${fgChain}[xf_ov];[xf_blk][xf_ov]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`
+    : `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_blk][xf_fg]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+  if (pixFmt) graph = `${graph},format=${pixFmt}`;
+  return {
+    filtergraph: graph,
+    ffmpeg_vf_args: ["-vf", graph],
+    is_identity: false,
+    params: norm
   };
 }
 
@@ -831,7 +1003,8 @@ function _buildSplitClipPair(clip, cut, fps, fpsRate) {
     fade_out_s: 0,
     speed_rate: retimeNorm.speedRate,
     reverse: retimeNorm.reverse,
-    transition_out: null
+    transition_out: null,
+    transform: clip.transform ? { ...clip.transform } : null
   };
   const rightClip = {
     ...clip,
@@ -843,7 +1016,8 @@ function _buildSplitClipPair(clip, cut, fps, fpsRate) {
     fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2)),
     speed_rate: retimeNorm.speedRate,
     reverse: retimeNorm.reverse,
-    transition_out: clip.transition_out ? { ...clip.transition_out } : null
+    transition_out: clip.transition_out ? { ...clip.transition_out } : null,
+    transform: clip.transform ? { ...clip.transform } : null
   };
   return { leftClip, rightClip };
 }
@@ -991,6 +1165,45 @@ export function updateClipRetimeInDocument(doc, trackKind, trackIndex, clipIndex
   if (!found) return { doc, clip: null, changed: false };
   found.clip.speed_rate = nextSpeed;
   found.clip.reverse = nextReverse;
+  return { doc: nextDoc, clip: found.clip, changed: true };
+}
+
+export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIndex, patch) {
+  const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!foundOrig) return { doc, clip: null, changed: false };
+  const origNorm = normalizeClipTransform(foundOrig.clip);
+  const p = patch || {};
+  const nextRaw = {
+    zoom_pct: p.zoom_pct !== undefined ? Number(p.zoom_pct) : origNorm.zoom_pct,
+    pos_x_pct: p.pos_x_pct !== undefined ? Number(p.pos_x_pct) : origNorm.pos_x_pct,
+    pos_y_pct: p.pos_y_pct !== undefined ? Number(p.pos_y_pct) : origNorm.pos_y_pct,
+    rotation_deg: p.rotation_deg !== undefined ? Number(p.rotation_deg) : origNorm.rotation_deg,
+    opacity_pct: p.opacity_pct !== undefined ? Number(p.opacity_pct) : origNorm.opacity_pct
+  };
+  if (
+    !Number.isFinite(nextRaw.zoom_pct) ||
+    !Number.isFinite(nextRaw.pos_x_pct) ||
+    !Number.isFinite(nextRaw.pos_y_pct) ||
+    !Number.isFinite(nextRaw.rotation_deg) ||
+    !Number.isFinite(nextRaw.opacity_pct)
+  ) {
+    return { doc, clip: null, changed: false };
+  }
+  const nextNorm = normalizeClipTransform(nextRaw);
+  const unchanged =
+    Math.abs(nextNorm.zoom_pct - origNorm.zoom_pct) < 1e-4 &&
+    Math.abs(nextNorm.pos_x_pct - origNorm.pos_x_pct) < 1e-4 &&
+    Math.abs(nextNorm.pos_y_pct - origNorm.pos_y_pct) < 1e-4 &&
+    Math.abs(nextNorm.rotation_deg - origNorm.rotation_deg) < 1e-4 &&
+    Math.abs(nextNorm.opacity_pct - origNorm.opacity_pct) < 1e-4;
+  if (unchanged) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) return { doc, clip: null, changed: false };
+  found.clip.transform = isClipTransformIdentity(nextNorm) ? null : nextNorm;
   return { doc: nextDoc, clip: found.clip, changed: true };
 }
 

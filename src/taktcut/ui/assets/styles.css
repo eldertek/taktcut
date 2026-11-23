@@ -2044,6 +2044,62 @@ input[type="range"] {
   color: #ffd166;
 }
 
+/* CLIP MOTION TRANSFORM INSPECTOR */
+.transform-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.transform-inspector-dock .pane-subheader {
+  flex-wrap: wrap;
+}
+
+#clip-transform-badge {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
+.transform-ctrl-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.transform-ctrl-box.is-disabled {
+  opacity: 0.55;
+}
+
+.transform-preset-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.transform-preset-btn {
+  text-align: center;
+  white-space: normal;
+  line-height: 1.2;
+}
+
+.transform-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: var(--accent-amber-bright);
+}
+
 /* CLIP SPEED / RETIME INSPECTOR */
 .retime-inspector-dock {
   display: flex;
@@ -2784,6 +2840,12 @@ input[type="range"] {
   }
   .retime-preset-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .transform-preset-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .transform-preset-btn {
+    min-height: 44px;
   }
   .transition-select-row {
     grid-template-columns: minmax(0, 1fr);
