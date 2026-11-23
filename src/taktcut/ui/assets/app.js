@@ -2301,6 +2301,13 @@ const FX_PARAM_FALLBACK = {
   ],
   lens_distortion: [
     { name: "k1", label: "Distortion (k1)", kind: "float", default: -0.22, min_val: -0.50, max_val: 0.50, step: 0.02 }
+  ],
+  scanlines: [
+    { name: "line_spacing_px", label: "Line Spacing", kind: "int", default: 4, min_val: 2, max_val: 12, step: 1, unit: "px" },
+    { name: "opacity", label: "Opacity", kind: "float", default: 0.45, min_val: 0.10, max_val: 0.90, step: 0.05 }
+  ],
+  unsharp_mask: [
+    { name: "sharpen_amount", label: "Sharpen Amount", kind: "float", default: 1.20, min_val: 0.20, max_val: 3.00, step: 0.10 }
   ]
 };
 
@@ -2354,6 +2361,11 @@ const FX_PRESET_FALLBACK = {
     { effect: "camera_shake", enabled: true, params: { amplitude_px: 10.0, frequency_hz: 5.5 } },
     { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 2 } },
     { effect: "vignette", enabled: true, params: { angle_rad: 0.52 } }
+  ],
+  retro_vhs: [
+    { effect: "scanlines", enabled: true, params: { line_spacing_px: 4, opacity: 0.45 } },
+    { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 4 } },
+    { effect: "film_grain", enabled: true, params: { strength: 18.0 } }
   ]
 };
 
@@ -2371,7 +2383,9 @@ const FX_DISPLAY_TITLES = {
   halation: "S_Halation",
   letterbox: "S_Letterbox",
   camera_shake: "S_Shake Handheld",
-  lens_distortion: "S_LensDistortion"
+  lens_distortion: "S_LensDistortion",
+  scanlines: "S_ScanLines",
+  unsharp_mask: "S_Sharpen"
 };
 
 function getFxParamLabel(spec) {

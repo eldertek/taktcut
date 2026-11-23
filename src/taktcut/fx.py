@@ -24,6 +24,8 @@ FxType = Literal[
     "letterbox",
     "camera_shake",
     "lens_distortion",
+    "scanlines",
+    "unsharp_mask",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -41,6 +43,8 @@ FX_TYPES: tuple[FxType, ...] = (
     "letterbox",
     "camera_shake",
     "lens_distortion",
+    "scanlines",
+    "unsharp_mask",
 )
 
 LETTERBOX_RATIOS: tuple[str, ...] = ("2.39", "2.35", "1.85", "2.00")
@@ -110,6 +114,9 @@ _PARAM_ALIASES: dict[str, str] = {
     "AmplitudePx": "amplitude_px",
     "FrequencyHz": "frequency_hz",
     "K1": "k1",
+    "LineSpacingPx": "line_spacing_px",
+    "Opacity": "opacity",
+    "SharpenAmount": "sharpen_amount",
 }
 
 
@@ -477,6 +484,38 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             step=0.02,
         ),
     ),
+    "scanlines": (
+        FxParamSpec(
+            name="line_spacing_px",
+            label="Line Spacing",
+            kind="int",
+            default=4,
+            min_val=2,
+            max_val=12,
+            step=1,
+            unit="px",
+        ),
+        FxParamSpec(
+            name="opacity",
+            label="Opacity",
+            kind="float",
+            default=0.45,
+            min_val=0.10,
+            max_val=0.90,
+            step=0.05,
+        ),
+    ),
+    "unsharp_mask": (
+        FxParamSpec(
+            name="sharpen_amount",
+            label="Sharpen Amount",
+            kind="float",
+            default=1.20,
+            min_val=0.20,
+            max_val=3.00,
+            step=0.10,
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -494,6 +533,8 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "letterbox": 0.20,
     "camera_shake": 0.65,
     "lens_distortion": 0.55,
+    "scanlines": 0.25,
+    "unsharp_mask": 0.45,
 }
 
 
@@ -1022,6 +1063,38 @@ FX_PRESETS: tuple[FxPreset, ...] = (
                 enabled=True,
                 params={
                     "angle_rad": 0.52,
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="retro_vhs",
+        name="Retro VHS CRT",
+        category="Retro",
+        description=(
+            "CRT horizontal scanlines combined with VHS RGB channel split and analog tape grain."
+        ),
+        nodes=[
+            FxNode(
+                effect="scanlines",
+                enabled=True,
+                params={
+                    "line_spacing_px": 4,
+                    "opacity": 0.45,
+                },
+            ),
+            FxNode(
+                effect="rgb_split",
+                enabled=True,
+                params={
+                    "chroma_shift_px": 4,
+                },
+            ),
+            FxNode(
+                effect="film_grain",
+                enabled=True,
+                params={
+                    "strength": 18.0,
                 },
             ),
         ],
@@ -1623,6 +1696,17 @@ def _compile_lens_distortion(params: dict[str, float | int | str]) -> str:
     return f"lenscorrection=cx=0.5:cy=0.5:k1={k1:.4f}:k2=0"
 
 
+def _compile_scanlines(params: dict[str, float | int | str]) -> str:
+    spacing = round(_clamp_num(float(params["line_spacing_px"]), 2.0, 12.0))
+    opacity = _clamp_num(float(params["opacity"]), 0.10, 0.90)
+    return f"drawgrid=w=0:h={spacing}:t=1:c=black@{opacity:.4f}"
+
+
+def _compile_unsharp_mask(params: dict[str, float | int | str]) -> str:
+    amount = _clamp_num(float(params["sharpen_amount"]), 0.20, 3.00)
+    return f"unsharp=5:5:{amount:.4f}:5:5:0.0"
+
+
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
     """Return all built-in Chroma Key / Green Screen Studio presets."""
     return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
@@ -1811,6 +1895,12 @@ def compile_fx_filtergraph(
             segments.append(_compile_camera_shake(node.params, node.keyframes))
         elif node.effect == "lens_distortion":
             seg = _compile_lens_distortion(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "scanlines":
+            seg = _compile_scanlines(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "unsharp_mask":
+            seg = _compile_unsharp_mask(node.params)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb or ck_active:

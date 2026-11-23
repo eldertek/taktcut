@@ -317,7 +317,7 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55 };
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55, scanlines: 0.25, unsharp_mask: 0.45 };
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -390,6 +390,13 @@ function compileFxClient(nodes, opts = {}) {
     } else if (n.effect === "lens_distortion") {
       const k1 = Math.min(0.5, Math.max(-0.5, Number(p.k1 ?? -0.22)));
       segs.push(`lenscorrection=cx=0.5:cy=0.5:k1=${k1.toFixed(4)}:k2=0`);
+    } else if (n.effect === "scanlines") {
+      const spacing = Math.round(Math.min(12, Math.max(2, Number(p.line_spacing_px ?? 4))));
+      const opacity = Math.min(0.9, Math.max(0.1, Number(p.opacity ?? 0.45)));
+      segs.push(`drawgrid=w=0:h=${spacing}:t=1:c=black@${opacity.toFixed(4)}`);
+    } else if (n.effect === "unsharp_mask") {
+      const amount = Math.min(3.0, Math.max(0.2, Number(p.sharpen_amount ?? 1.2)));
+      segs.push(`unsharp=5:5:${amount.toFixed(4)}:5:5:0.0`);
     }
   });
   if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);

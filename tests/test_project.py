@@ -653,3 +653,67 @@ def test_project_fx_camera_shake_lens_distortion_action_handheld_roundtrip(
         bad_payload["fx"]["nodes"][1]["params"]["k1"] = bad_k1
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_fx_scanlines_unsharp_mask_retro_vhs_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    proj.fx.nodes = [
+        FxNode(
+            effect="scanlines",
+            enabled=True,
+            params={"line_spacing_px": 4, "opacity": 0.45},
+        ),
+        FxNode(
+            effect="unsharp_mask",
+            enabled=True,
+            params={"sharpen_amount": 1.35},
+        ),
+        FxNode(
+            effect="rgb_split",
+            enabled=True,
+            params={"chroma_shift_px": 4},
+        ),
+        FxNode(
+            effect="film_grain",
+            enabled=True,
+            params={"strength": 18.0},
+        ),
+    ]
+    proj.fx.active_preset_id = "retro_vhs"
+
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.fx.active_preset_id == "retro_vhs"
+    assert [n.effect for n in loaded.fx.nodes] == [
+        "scanlines",
+        "unsharp_mask",
+        "rgb_split",
+        "film_grain",
+    ]
+    assert loaded.fx.nodes[0].params["line_spacing_px"] == 4
+    assert loaded.fx.nodes[0].params["opacity"] == pytest.approx(0.45)
+    assert loaded.fx.nodes[1].params["sharpen_amount"] == pytest.approx(1.35)
+
+    proj_path = tmp_path / "retro_vhs.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.fx.nodes[0].params["line_spacing_px"] == 4
+    assert disk_loaded.fx.nodes[1].params["sharpen_amount"] == pytest.approx(1.35)
+
+    for bad_spacing in (1, 13, True):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["line_spacing_px"] = bad_spacing
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_opacity in (0.05, 0.95, False):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["opacity"] = bad_opacity
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_amount in (0.1, 3.5, True):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][1]["params"]["sharpen_amount"] = bad_amount
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

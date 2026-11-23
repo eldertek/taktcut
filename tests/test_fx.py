@@ -164,9 +164,10 @@ def test_ten_presets_compile_and_lookup() -> None:
         "Anamorphic Dream",
         "35mm Cinema Halation",
         "Action Handheld",
+        "Retro VHS CRT",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 12
+    assert len(FX_PRESETS) == 13
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -269,7 +270,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 12
+    assert len(p_data["presets"]) == 13
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -1089,3 +1090,120 @@ def test_camera_shake_lens_distortion_and_action_handheld_execute_in_real_ffmpeg
             check=False,
         )
         assert proc.returncode == 0, f"FFmpeg rejected {res.active_effects}: {proc.stderr}"
+
+
+def test_scanlines_unsharp_mask_bounds_and_retro_vhs() -> None:
+    assert len(FX_TYPES) == 16
+    assert "scanlines" in FX_TYPES
+    assert "unsharp_mask" in FX_TYPES
+
+    sl_low = normalize_fx_node(
+        {
+            "effect": "scanlines",
+            "params": {"LineSpacingPx": 0, "Opacity": 0.01},
+        }
+    )
+    assert sl_low.params["line_spacing_px"] == 2
+    assert isinstance(sl_low.params["line_spacing_px"], int)
+    assert sl_low.params["opacity"] == pytest.approx(0.10)
+    sl_low_res = compile_fx_filtergraph([sl_low])
+    assert sl_low_res.active_effects == ["scanlines"]
+    assert sl_low_res.filtergraph == "drawgrid=w=0:h=2:t=1:c=black@0.1000"
+
+    sl_high = normalize_fx_node(
+        {
+            "effect": "scanlines",
+            "params": {"line_spacing_px": 25, "opacity": 1.8},
+        }
+    )
+    assert sl_high.params["line_spacing_px"] == 12
+    assert sl_high.params["opacity"] == pytest.approx(0.90)
+    assert compile_fx_filtergraph([sl_high]).filtergraph == "drawgrid=w=0:h=12:t=1:c=black@0.9000"
+
+    um_low = normalize_fx_node({"effect": "unsharp_mask", "params": {"SharpenAmount": -1.0}})
+    assert um_low.params["sharpen_amount"] == pytest.approx(0.20)
+    um_low_res = compile_fx_filtergraph([um_low])
+    assert um_low_res.active_effects == ["unsharp_mask"]
+    assert um_low_res.filtergraph == "unsharp=5:5:0.2000:5:5:0.0"
+
+    um_high = normalize_fx_node({"effect": "unsharp_mask", "params": {"sharpen_amount": 9.5}})
+    assert um_high.params["sharpen_amount"] == pytest.approx(3.00)
+    assert compile_fx_filtergraph([um_high]).filtergraph == "unsharp=5:5:3.0000:5:5:0.0"
+
+    kf_res = compile_fx_filtergraph(
+        [
+            FxNode(
+                effect="scanlines",
+                params={"line_spacing_px": 4, "opacity": 0.50},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=2.0, value=1.0)],
+            )
+        ]
+    )
+    assert kf_res.keyframed_effects == ["scanlines"]
+    assert "drawgrid=w=0:h=4:t=1:c=black@0.5000" in kf_res.filtergraph
+    assert "blend=all_expr=" in kf_res.filtergraph
+
+    retro = compile_preset_filtergraph("retro_vhs", duration_seconds=6.0)
+    assert retro.active_effects == ["scanlines", "rgb_split", "film_grain"]
+    assert "drawgrid=w=0:h=4:t=1:c=black@0.4500" in retro.filtergraph
+    assert "rgbashift=rh=4:bh=-4" in retro.filtergraph
+    assert "noise=alls=18:allf=t+u" in retro.filtergraph
+
+    for bad_node in (
+        {"effect": "scanlines", "params": {"line_spacing_px": float("nan")}},
+        {"effect": "scanlines", "params": {"opacity": float("inf")}},
+        {"effect": "scanlines", "params": {"line_spacing_px": True}},
+        {"effect": "unsharp_mask", "params": {"sharpen_amount": float("nan")}},
+        {"effect": "unsharp_mask", "params": {"sharpen_amount": False}},
+    ):
+        with pytest.raises(ValueError):
+            normalize_fx_node(bad_node)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_scanlines_unsharp_mask_and_retro_vhs_execute_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    w, h = 320, 180
+
+    for stack in (
+        [FxNode(effect="scanlines", params={"line_spacing_px": 4, "opacity": 0.45})],
+        [
+            FxNode(
+                effect="scanlines",
+                params={"line_spacing_px": 6, "opacity": 0.65},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=0.2, value=1.0)],
+            )
+        ],
+        [FxNode(effect="unsharp_mask", params={"sharpen_amount": 1.6})],
+        get_fx_preset("retro_vhs").nodes,
+    ):
+        res = compile_fx_filtergraph(stack, duration_seconds=0.2, width=w, height=h, fps=25.0)
+        proc = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc=duration=0.2:size={w}x{h}:rate=25",
+                "-vf",
+                res.filtergraph,
+                "-frames:v",
+                "3",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        assert proc.returncode == 0, (
+            f"FFmpeg rejected {res.active_effects}: "
+            f"{proc.stderr.decode('utf-8', errors='replace')}"
+        )
+        assert len(proc.stdout) == 3 * w * h * 3

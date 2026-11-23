@@ -1502,6 +1502,56 @@ export function drawProgramMonitorCanvas(
         }
       }
 
+      // Apply S_Sharpen broadcast unsharp mask convolution on frame buffer
+      const unsharpNodes = pActiveFx.filter((n) => n.effect === "unsharp_mask");
+      if (unsharpNodes.length > 0 && bw >= 3 && bh >= 3 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        let totalSharpen = 0;
+        for (const uNode of unsharpNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(uNode, tSec));
+          if (mul <= 0.0001) continue;
+          const up = uNode.params || {};
+          const rawAmt = Math.min(3.0, Math.max(0.2, Number(up.sharpen_amount ?? 1.2)));
+          totalSharpen += rawAmt * mul;
+        }
+        if (totalSharpen > 0.01) {
+          const srcImg = bctx.getImageData(0, 0, bw, bh);
+          const outImg = bctx.createImageData(bw, bh);
+          const s = srcImg.data;
+          const d = outImg.data;
+          const gain = Math.min(2.6, totalSharpen * 0.65);
+          const stride = bw * 4;
+          for (let y = 0; y < bh; y++) {
+            const rowOff = y * stride;
+            if (y === 0 || y === bh - 1) {
+              for (let x = 0; x < stride; x++) d[rowOff + x] = s[rowOff + x];
+              continue;
+            }
+            for (let x = 0; x < bw; x++) {
+              const oi = rowOff + x * 4;
+              if (x === 0 || x === bw - 1) {
+                d[oi] = s[oi];
+                d[oi + 1] = s[oi + 1];
+                d[oi + 2] = s[oi + 2];
+                d[oi + 3] = s[oi + 3];
+                continue;
+              }
+              const upI = oi - stride;
+              const dnI = oi + stride;
+              const ltI = oi - 4;
+              const rtI = oi + 4;
+              for (let c = 0; c < 3; c++) {
+                const center = s[oi + c];
+                const blur4 = (s[upI + c] + s[dnI + c] + s[ltI + c] + s[rtI + c]) * 0.25;
+                const val = center + (center - blur4) * gain;
+                d[oi + c] = val < 0 ? 0 : val > 255 ? 255 : Math.round(val);
+              }
+              d[oi + 3] = s[oi + 3];
+            }
+          }
+          bctx.putImageData(outImg, 0, 0);
+        }
+      }
+
       if (pCkActive && pCkMatteView === "final") {
         drawTransparencyCheckerboard(ctx, fx, fy, frameW, frameH);
       }
@@ -1801,6 +1851,19 @@ export function drawProgramMonitorCanvas(
           ctx.globalCompositeOperation = "screen";
           ctx.fillStyle = hGrad;
           ctx.fillRect(fx, fy, frameW, frameH);
+          ctx.restore();
+        }
+      } else if (node.effect === "scanlines") {
+        const spacing = Math.round(Math.min(12, Math.max(2, Number(p.line_spacing_px ?? 4))));
+        const opacity = Math.min(0.9, Math.max(0.1, Number(p.opacity ?? 0.45))) * Math.min(1, kfMul);
+        if (opacity > 0.005) {
+          const stepPx = Math.max(2, Math.round(spacing * Math.max(0.5, frameH / 360)));
+          const lineH = stepPx >= 6 ? 2 : 1;
+          ctx.save();
+          ctx.fillStyle = `rgba(0, 0, 0, ${opacity.toFixed(3)})`;
+          for (let y = fy; y < fy + frameH; y += stepPx) {
+            ctx.fillRect(fx, y, frameW, lineH);
+          }
           ctx.restore();
         }
       } else if (node.effect === "letterbox") {

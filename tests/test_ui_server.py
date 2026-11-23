@@ -2967,7 +2967,7 @@ def test_ui_sapphire_halation_letterbox_cinema_35mm_endpoints_and_assets(
     assert 'data-fx-add="halation"' in html_text
     assert 'data-fx-add="letterbox"' in html_text
     assert 'data-fx-preset="cinema_35mm"' in html_text
-    assert "14 FX" in html_text
+    assert "16 FX" in html_text
 
     for asset_name in (
         "index.html",
@@ -3122,7 +3122,7 @@ def test_ui_sapphire_camera_shake_lens_distortion_action_handheld_endpoints_and_
     assert 'data-fx-add="camera_shake"' in html_text
     assert 'data-fx-add="lens_distortion"' in html_text
     assert 'data-fx-preset="action_handheld"' in html_text
-    assert "14 FX" in html_text
+    assert "16 FX" in html_text
 
     i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
     for key in (
@@ -3137,6 +3137,82 @@ def test_ui_sapphire_camera_shake_lens_distortion_action_handheld_endpoints_and_
 
     css_text = (assets_dir / "styles.css").read_text(encoding="utf-8")
     assert "#panel-fx .fx-preset-btn" in css_text
+
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "demo_adapter.js",
+        "i18n.js",
+        "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+
+def test_ui_sapphire_scanlines_unsharp_mask_retro_vhs_endpoints_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/fx/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    preset_ids = {p["id"] for p in presets_data["presets"]}
+    assert "retro_vhs" in preset_ids
+    assert "scanlines" in presets_data["specs"]
+    assert "unsharp_mask" in presets_data["specs"]
+
+    compile_status, _, compile_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={"preset_id": "retro_vhs", "duration_seconds": 6.0},
+    )
+    assert compile_status == 200
+    compiled = json.loads(compile_raw.decode("utf-8"))
+    assert compiled["active_effects"] == ["scanlines", "rgb_split", "film_grain"]
+    assert "drawgrid=w=0:h=4:t=1:c=black@0.4500" in compiled["filtergraph"]
+    assert "rgbashift=rh=4:bh=-4" in compiled["filtergraph"]
+    assert "noise=alls=18:allf=t+u" in compiled["filtergraph"]
+
+    unsharp_status, _, unsharp_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={
+            "nodes": [
+                {
+                    "effect": "unsharp_mask",
+                    "enabled": True,
+                    "params": {"sharpen_amount": 1.5},
+                }
+            ],
+            "duration_seconds": 4.0,
+        },
+    )
+    assert unsharp_status == 200
+    unsharp_compiled = json.loads(unsharp_raw.decode("utf-8"))
+    assert unsharp_compiled["filtergraph"] == "unsharp=5:5:1.5000:5:5:0.0"
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'data-fx-add="scanlines"' in html_text
+    assert 'data-fx-add="unsharp_mask"' in html_text
+    assert 'data-fx-preset="retro_vhs"' in html_text
+    assert "16 FX" in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "fx.preset.retroVhs",
+        "fx.add.scanlines",
+        "fx.add.unsharp_mask",
+        "fx.param.line_spacing_px",
+        "fx.param.opacity",
+        "fx.param.sharpen_amount",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
 
     for asset_name in (
         "index.html",
