@@ -26,6 +26,7 @@ OTIO_EXPORT_SUFFIXES: frozenset[str] = frozenset({".otio", ".otioz"})
 LUT_SUFFIXES: frozenset[str] = frozenset({".cube"})
 CDL_SUFFIXES: frozenset[str] = frozenset({".cdl", ".cc", ".ccc", ".xml"})
 SUBTITLE_SUFFIXES: frozenset[str] = frozenset({".srt", ".vtt"})
+PROJECT_SUFFIXES: frozenset[str] = frozenset({".json"})
 MEDIA_SUFFIXES: frozenset[str] = frozenset(
     {".mp4", ".mov", ".m4v", ".mkv", ".mxf", ".webm", ".wav", ".aac", ".mp3"}
 )
@@ -114,13 +115,16 @@ def confine_workspace_path(
 
 def sanitize_download_filename(raw_name: str | None, default_stem: str, suffix: str) -> str:
     """Produce a safe basename for Content-Disposition downloads."""
+    clean_suffix = (suffix if suffix.startswith(".") else f".{suffix}").lower()
     base = Path(raw_name or "").name
-    stem = Path(base).stem if base else default_stem
+    if base.lower().endswith(clean_suffix):
+        stem = base[: -len(clean_suffix)]
+    else:
+        stem = Path(base).stem if base else default_stem
     safe_stem = re.sub(r"[^A-Za-z0-9._-]", "_", stem).strip("._-")
     if not safe_stem:
         safe_stem = default_stem
-    clean_suffix = suffix if suffix.startswith(".") else f".{suffix}"
-    return f"{safe_stem}{clean_suffix.lower()}"
+    return f"{safe_stem}{clean_suffix}"
 
 
 def scan_workspace_files(

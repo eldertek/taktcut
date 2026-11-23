@@ -186,6 +186,42 @@ body {
   cursor: wait;
 }
 
+.project-action-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.btn-project-action {
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+}
+
+.btn-project-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-blue);
+}
+
+.btn-project-primary {
+  background: var(--accent-amber-soft);
+  border: 1px solid var(--accent-amber);
+  color: #f4a46b;
+}
+
+.btn-project-primary:hover {
+  background: var(--accent-amber);
+  color: #111114;
+}
+
+.btn-project-primary:hover .kbd-chip {
+  background: rgba(17, 17, 20, 0.25);
+  border-color: rgba(17, 17, 20, 0.45);
+  color: #111114;
+}
+
 /* TAGS & STATUS */
 .nle-tag {
   display: inline-flex;

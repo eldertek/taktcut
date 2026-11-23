@@ -1355,6 +1355,333 @@ async function loadSampleTimeline(preset) {
   }
 }
 
+/* FULL PROJECT SAVE & LOAD (.taktcut.json, taktcut.project.v1) */
+function serializeFullProjectState() {
+  if (!state.timelineDoc) {
+    throw new Error("Load or inspect a timeline before saving a project.");
+  }
+  const profileEl = byId("render-profile");
+  const profile = profileEl ? profileEl.value : "web_h264";
+  const isProres = profile === "prores_hq";
+  const containerEl = byId("render-container");
+  const container = containerEl && containerEl.value === "mov" ? "mov" : "mp4";
+  const crfEl = byId("render-crf");
+  const crfRaw = crfEl ? crfEl.value.trim() : "";
+  const videoCrf = !isProres && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
+  const audioEl = byId("render-audio-bitrate");
+  const audioRaw = audioEl ? audioEl.value : "192";
+  const audioBitrateKbps = !isProres && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
+  const fpsEl = byId("render-fps");
+  const fpsStr = (fpsEl && fpsEl.value.trim()) || "25";
+  const lufsEl = byId("render-lufs");
+  const lufsRaw = lufsEl ? lufsEl.value.trim() : "";
+  const parsedLufs = lufsRaw !== "" ? Number.parseFloat(lufsRaw) : null;
+  const targetLufs = parsedLufs !== null && Number.isFinite(parsedLufs) ? parsedLufs : null;
+
+  const aspectSpec = getAspectRatioPreset(state.framing.preset);
+  const framingWidth = Number.isInteger(state.renderConfig.targetWidth)
+    ? state.renderConfig.targetWidth
+    : aspectSpec.width;
+  const framingHeight = Number.isInteger(state.renderConfig.targetHeight)
+    ? state.renderConfig.targetHeight
+    : aspectSpec.height;
+
+  const validSubCues = (state.subtitleTrack.cues || [])
+    .filter((c) => String(c.text || "").trim().length > 0 && Number(c.end_s) > Number(c.start_s))
+    .map((c, idx) => ({
+      index: idx + 1,
+      start_s: Number(c.start_s),
+      end_s: Number(c.end_s),
+      text: String(c.text)
+    }));
+
+  const chk = (id, fallback = false) => {
+    const el = byId(id);
+    return el ? Boolean(el.checked) : fallback;
+  };
+  const txt = (id, fallback = "") => {
+    const el = byId(id);
+    return el ? el.value.trim() : fallback;
+  };
+
+  return {
+    schema_version: "taktcut.project.v1",
+    project_name: String(state.timelineDoc.name || "Untitled_Project").slice(0, 160),
+    timeline: cloneTimelineDoc(state.timelineDoc),
+    playhead_frame: Math.max(0, Math.round(state.playheadFrame || 0)),
+    timeline_zoom: Math.min(6, Math.max(1, Number(state.timelineZoom || 1.0))),
+    snap_enabled: Boolean(state.timelineSnapEnabled),
+    bpm_grid: {
+      enabled: Boolean(state.bpmGrid.enabled),
+      bpm: Number(state.bpmGrid.bpm ?? BPM_DEFAULT),
+      offset_s: Number(state.bpmGrid.offset_s ?? 0.0)
+    },
+    color: {
+      grade: {
+        ...cloneGradeParams(state.colorGrade),
+        preserve_lightness: Boolean(state.colorGrade.preserve_lightness)
+      },
+      active_preset_id: String(state.colorActivePresetId || ""),
+      wipe_ratio: Math.min(1, Math.max(0, Number(state.wipeRatio ?? 0.5))),
+      scope_mode: ["parade", "waveform", "vectorscope"].includes(state.colorScopeMode)
+        ? state.colorScopeMode
+        : "parade"
+    },
+    fx: {
+      nodes: serializeFxStackForApi(false),
+      bypass_all: Boolean(state.fxBypassAll),
+      active_preset_id: String(state.fxActivePresetId || ""),
+      chroma_key: serializeChromaKeyForApi(false),
+      chroma_key_matte_view: state.chromaKey.matteView === "alpha_matte" ? "alpha_matte" : "final"
+    },
+    title_overlay: cloneTitleParams(state.titleOverlay),
+    subtitle_track: {
+      enabled: Boolean(state.subtitleTrack.enabled),
+      style: state.subtitleTrack.style || "clean_white",
+      font_size: Number(state.subtitleTrack.font_size ?? 34),
+      margin_bottom_pct: Number(state.subtitleTrack.margin_bottom_pct ?? 0.08),
+      cues: validSubCues
+    },
+    framing: {
+      framing: {
+        preset: state.framing.preset,
+        mode: state.framing.mode === "fit" ? "fit" : "fill",
+        pan_x: 0.0,
+        pan_y: 0.0,
+        enabled: true,
+        target_width: framingWidth,
+        target_height: framingHeight
+      },
+      safe_guides: {
+        enabled: Boolean(state.framing.safeGuides),
+        action_safe: Boolean(state.framing.guides.actionSafe),
+        title_safe: Boolean(state.framing.guides.titleSafe),
+        social_hud: Boolean(state.framing.guides.socialHud)
+      }
+    },
+    delivery: {
+      delivery_preset: state.activeDeliveryPresetId || null,
+      profile,
+      container,
+      video_crf: videoCrf,
+      audio_bitrate_kbps: audioBitrateKbps,
+      encoder_preset: !isProres ? state.renderConfig.encoderPreset || "medium" : null,
+      fps: fpsStr,
+      target_lufs: targetLufs,
+      lut_path: txt("render-lut-path", ""),
+      input_path: txt("render-input-path", ".taktcut-samples/sample_rec709.mp4"),
+      output_path: txt("render-output-path", "renders/delivery_web.mp4"),
+      use_framing: chk("render-use-framing", false),
+      use_studio_cdl: chk("render-use-studio-cdl", false),
+      use_studio_fx: chk("render-use-studio-fx", false),
+      use_studio_title: chk("render-use-studio-title", false),
+      use_studio_subtitles: chk("render-use-studio-subtitles", false),
+      use_clip_audio: chk("render-use-clip-audio", true),
+      use_clip_retime: chk("render-use-clip-retime", true),
+      prefer_hw: chk("render-prefer-hw", true)
+    }
+  };
+}
+
+function applyFullProjectState(project, validation) {
+  stopPlayback();
+  const tlValidation = validation || validateTimelineClient(project.timeline);
+  setTimelineData({ document: project.timeline, validation: tlValidation });
+
+  state.timelineZoom = Math.min(6, Math.max(1, Number(project.timeline_zoom ?? 1.0)));
+  const zoomEl = byId("timeline-zoom");
+  const zoomLabelEl = byId("timeline-zoom-label");
+  if (zoomEl) zoomEl.value = String(state.timelineZoom);
+  if (zoomLabelEl) zoomLabelEl.textContent = `${state.timelineZoom.toFixed(1)}x`;
+
+  state.timelineSnapEnabled = project.snap_enabled !== false;
+  const bpm = project.bpm_grid || {};
+  state.bpmGrid = {
+    enabled: Boolean(bpm.enabled),
+    bpm: Number(bpm.bpm ?? BPM_DEFAULT),
+    offset_s: Number(bpm.offset_s ?? 0.0)
+  };
+  setPlayhead(Number(project.playhead_frame ?? 0));
+
+  // Color state
+  const col = project.color || {};
+  if (col.grade) {
+    state.colorGrade = {
+      ...cloneGradeParams(col.grade),
+      preserve_lightness: Boolean(col.grade.preserve_lightness)
+    };
+  }
+  state.colorActivePresetId = String(col.active_preset_id || "");
+  state.wipeRatio = Number(col.wipe_ratio ?? 0.5);
+  state.colorScopeMode = ["parade", "waveform", "vectorscope"].includes(col.scope_mode)
+    ? col.scope_mode
+    : "parade";
+  const wipeSlider = byId("cdl-wipe-slider");
+  const wipeLabel = byId("cdl-wipe-label");
+  if (wipeSlider) wipeSlider.value = String(state.wipeRatio);
+  if (wipeLabel) wipeLabel.textContent = `${Math.round(state.wipeRatio * 100)}%`;
+  for (const btn of document.querySelectorAll("[data-scope-mode]")) {
+    const active = btn.getAttribute("data-scope-mode") === state.colorScopeMode;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  syncColorInputsFromState();
+
+  // FX & Chroma Key state
+  const fx = project.fx || {};
+  state.fxStack = Array.isArray(fx.nodes)
+    ? fx.nodes.map((node) => ({
+        effect: node.effect,
+        enabled: node.enabled !== false,
+        params: { ...(node.params || {}) },
+        keyframes: Array.isArray(node.keyframes) ? node.keyframes.map((k) => ({ ...k })) : [],
+        kfOpen: Array.isArray(node.keyframes) && node.keyframes.length > 0
+      }))
+    : [];
+  state.fxBypassAll = Boolean(fx.bypass_all);
+  state.fxActivePresetId = String(fx.active_preset_id || "");
+  const ck = fx.chroma_key || {};
+  state.chromaKey = {
+    enabled: Boolean(ck.enabled),
+    preset: ck.preset || "studio_green",
+    key_color: String(ck.key_color || "#00b140").toLowerCase(),
+    similarity: Number(ck.similarity ?? 0.18),
+    blend: Number(ck.blend ?? 0.08),
+    despill: ck.despill !== false,
+    despill_type: ck.despill_type === "blue" ? "blue" : "green",
+    matteView: fx.chroma_key_matte_view === "alpha_matte" ? "alpha_matte" : "final"
+  };
+  syncChromaKeyControlsFromState();
+  renderFxStack();
+
+  // Title Overlay state
+  if (project.title_overlay) {
+    state.titleOverlay = cloneTitleParams(project.title_overlay);
+  }
+  syncTitleInputsFromState();
+
+  // Subtitles state
+  const sub = project.subtitle_track || {};
+  state.subtitleTrack = {
+    enabled: sub.enabled !== false,
+    style: sub.style || "clean_white",
+    font_size: Number(sub.font_size ?? 34),
+    margin_bottom_pct: Number(sub.margin_bottom_pct ?? 0.08),
+    cues: Array.isArray(sub.cues)
+      ? sub.cues.map((c, idx) => ({
+          index: idx + 1,
+          start_s: Number(c.start_s),
+          end_s: Number(c.end_s),
+          text: String(c.text || "")
+        }))
+      : []
+  };
+  const subRawEl = byId("subtitle-raw-input");
+  if (subRawEl) {
+    subRawEl.value = state.subtitleTrack.cues.length > 0
+      ? formatCuesAsSrtLocal(state.subtitleTrack.cues)
+      : "";
+  }
+  syncSubtitleControlsFromState();
+
+  // Framing & Safe Guides state
+  const frWrap = project.framing || {};
+  const frParams = frWrap.framing || {};
+  const sg = frWrap.safe_guides || {};
+  const aspectSpec = getAspectRatioPreset(frParams.preset || "16:9");
+  state.framing = {
+    preset: aspectSpec.id,
+    mode: frParams.mode === "fit" ? "fit" : "fill",
+    safeGuides: Boolean(sg.enabled),
+    guides: {
+      actionSafe: sg.action_safe !== false,
+      titleSafe: sg.title_safe !== false,
+      socialHud: sg.social_hud !== false
+    }
+  };
+
+  // Delivery state
+  const del = project.delivery || {};
+  state.activeDeliveryPresetId = del.delivery_preset || null;
+  state.renderConfig.targetWidth = Number.isInteger(frParams.target_width)
+    ? frParams.target_width
+    : aspectSpec.width;
+  state.renderConfig.targetHeight = Number.isInteger(frParams.target_height)
+    ? frParams.target_height
+    : aspectSpec.height;
+  state.renderConfig.encoderPreset = del.encoder_preset || "medium";
+
+  const setVal = (id, val) => {
+    const el = byId(id);
+    if (el && val !== undefined && val !== null) el.value = String(val);
+  };
+  const setChk = (id, flag) => {
+    const el = byId(id);
+    if (el) el.checked = Boolean(flag);
+  };
+
+  setVal("render-profile", del.profile || "web_h264");
+  syncDeliverProfileControlsState();
+  setVal("render-container", del.container || (del.profile === "prores_hq" ? "mov" : "mp4"));
+  if (del.profile !== "prores_hq" && del.video_crf !== null && del.video_crf !== undefined) {
+    setVal("render-crf", del.video_crf);
+  }
+  if (del.profile !== "prores_hq" && del.audio_bitrate_kbps) {
+    setVal("render-audio-bitrate", del.audio_bitrate_kbps);
+  }
+  setVal("render-fps", del.fps || "25");
+  setVal("render-lufs", del.target_lufs !== null && del.target_lufs !== undefined ? del.target_lufs : "");
+  setVal("render-lut-path", del.lut_path || "");
+  setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
+  setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
+  setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
+
+  setChk("render-use-framing", del.use_framing);
+  setChk("render-use-studio-cdl", del.use_studio_cdl);
+  setChk("render-use-studio-fx", del.use_studio_fx);
+  setChk("render-use-studio-title", del.use_studio_title);
+  setChk("render-use-studio-subtitles", del.use_studio_subtitles);
+  setChk("render-use-clip-audio", del.use_clip_audio !== false);
+  setChk("render-use-clip-retime", del.use_clip_retime !== false);
+  setChk("render-prefer-hw", del.prefer_hw !== false);
+
+  syncFramingControlsUI();
+  renderDeliveryPresetStrip();
+  updateTimelineToolbarUI();
+  renderTimelineUI();
+  redrawActiveCanvases();
+
+  compileColorNow();
+  compileFxNow();
+  compileTitleNow();
+  compileSubtitlesNow();
+}
+
+async function saveProjectAction() {
+  try {
+    const projectPayload = serializeFullProjectState();
+    const res = await api.exportProject({ project: projectPayload });
+    const filename = res.filename || "project.taktcut.json";
+    const jsonText = res.project_json || JSON.stringify(res.project, null, 2);
+    triggerBlobDownload(new Blob([jsonText], { type: "application/json; charset=utf-8" }), filename);
+    showBanner(t("project.saved").replace("{name}", filename), "success");
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+async function openProjectFromFile(file) {
+  try {
+    const text = await file.text();
+    const res = await api.importProject({ project_json: text });
+    applyFullProjectState(res.project, res.validation);
+    const label = res.project.project_name || file.name;
+    showBanner(t("project.loaded").replace("{name}", label), "success");
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
 /* PAGE 2: SAPPHIRE FX LIBRARY, EFFECT CONTROLS & LIVE COMPILER */
 const FX_PARAM_FALLBACK = {
   glow: [
@@ -3492,7 +3819,8 @@ function updateTimelineToolbarUI() {
     bpmInput.value = String(state.bpmGrid.bpm);
   }
   if (offsetInput && document.activeElement !== offsetInput) {
-    offsetInput.value = Number(state.bpmGrid.offset_s).toFixed(1);
+    const off = Number(state.bpmGrid.offset_s);
+    offsetInput.value = Number.isInteger(off * 10) ? off.toFixed(1) : String(Number(off.toFixed(3)));
   }
   if (splitBtn) {
     const selClip =
@@ -3836,9 +4164,14 @@ function isEditableTarget(target) {
 
 function handleTransportKeydown(ev) {
   if (ev.defaultPrevented) return;
+  const lower = ev.key.toLowerCase();
+  if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey && lower === "s") {
+    ev.preventDefault();
+    saveProjectAction();
+    return;
+  }
   if (isEditableTarget(ev.target)) return;
 
-  const lower = ev.key.toLowerCase();
   if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
     if (state.activeTab === "timeline") {
       if (lower === "z" && !ev.shiftKey) {
@@ -5344,6 +5677,19 @@ function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   const updateBtn = byId("update-banner-btn");
   if (updateBtn) updateBtn.addEventListener("click", applyStudioUpdate);
+  const saveProjBtn = byId("btn-save-project");
+  if (saveProjBtn) saveProjBtn.addEventListener("click", saveProjectAction);
+  const openProjBtn = byId("btn-open-project");
+  const projFileInput = byId("project-file-input");
+  if (openProjBtn && projFileInput) {
+    openProjBtn.addEventListener("click", () => projFileInput.click());
+    projFileInput.addEventListener("change", async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      await openProjectFromFile(file);
+      ev.target.value = "";
+    });
+  }
   byId("lang-en").addEventListener("click", () => setLanguage("en"));
   byId("lang-fr").addEventListener("click", () => setLanguage("fr"));
 

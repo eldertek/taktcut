@@ -672,7 +672,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.5",
+      version: "0.1.6",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -1105,8 +1105,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.5",
-          latest_version: "0.1.5",
+          current_version: "0.1.6",
+          latest_version: "0.1.6",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -1280,6 +1280,64 @@ export function createApiClient() {
         throw new Error("Remote Render Node requires the local studio server.");
       }
       return requestJson(`/api/remote/jobs/${encodeURIComponent(jobId)}`);
+    },
+    async exportProject(payload) {
+      if (resolvedMode === "static-demo") {
+        const rawProj = payload && payload.project ? payload.project : payload || {};
+        if (!rawProj || typeof rawProj !== "object" || rawProj.schema_version !== "taktcut.project.v1") {
+          throw new Error("Unsupported or missing project schema_version; expected 'taktcut.project.v1'");
+        }
+        if (!rawProj.timeline || typeof rawProj.timeline !== "object") {
+          throw new Error("Project timeline is required");
+        }
+        const project = {
+          ...rawProj,
+          app_version: rawProj.app_version || "0.1.6",
+          saved_at: rawProj.saved_at || new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
+        };
+        const projectJson = JSON.stringify(project, null, 2) + "\n";
+        const stem = String(project.project_name || "project").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._-]+|[._-]+$/g, "") || "project";
+        return {
+          schema_version: "taktcut.project.v1",
+          filename: `${stem}.taktcut.json`,
+          project,
+          project_json: projectJson,
+          bytes_written: projectJson.length,
+          saved_path: null
+        };
+      }
+      return requestJson("/api/project/export", { method: "POST", body: payload });
+    },
+    async importProject(payload) {
+      if (resolvedMode === "static-demo") {
+        let proj = null;
+        if (payload && typeof payload.project_json === "string") {
+          try {
+            proj = JSON.parse(payload.project_json);
+          } catch (err) {
+            throw new Error(`Malformed project JSON: ${err.message}`);
+          }
+        } else if (payload && payload.project && typeof payload.project === "object") {
+          proj = payload.project;
+        } else {
+          throw new Error("Provide 'project_json' or 'project' payload");
+        }
+        if (!proj || typeof proj !== "object" || Array.isArray(proj)) {
+          throw new Error("Project JSON root must be an object");
+        }
+        if (proj.schema_version !== "taktcut.project.v1") {
+          throw new Error(`Unsupported or missing project schema_version: ${proj.schema_version}`);
+        }
+        if (!proj.timeline || typeof proj.timeline !== "object") {
+          throw new Error("Project timeline is required");
+        }
+        return {
+          schema_version: "taktcut.project.v1",
+          project: proj,
+          validation: validateTimelineClient(proj.timeline)
+        };
+      }
+      return requestJson("/api/project/import", { method: "POST", body: payload });
     },
     async applyUpdate() {
       if (resolvedMode === "static-demo") {

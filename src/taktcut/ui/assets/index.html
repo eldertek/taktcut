@@ -20,6 +20,16 @@
       </div>
 
       <div class="menubar-right">
+        <div class="project-action-group" role="group" aria-label="Project file actions">
+          <button type="button" id="btn-open-project" class="btn btn-mini btn-project-action" title="Open Project (.taktcut.json)">
+            <span data-i18n="topbar.btn.openProject">Open Project</span>
+          </button>
+          <button type="button" id="btn-save-project" class="btn btn-mini btn-project-primary" title="Save Project (.taktcut.json, Ctrl+S)">
+            <span data-i18n="topbar.btn.saveProject">Save Project</span>
+            <span class="kbd-chip mono">Ctrl+S</span>
+          </button>
+          <input type="file" id="project-file-input" class="is-hidden" accept=".taktcut.json,.json,application/json">
+        </div>
         <button type="button" id="update-banner-btn" class="btn-update mono is-hidden" aria-live="polite"></button>
         <div class="workspace-pill" id="workspace-pill" title="">
           <span class="pill-label" data-i18n="topbar.workspace">WS</span>
@@ -1395,9 +1405,9 @@
       <span id="runtime-mode-pill">LOCAL STUDIO</span>
       <span id="transport-shortcut-hint" class="statusbar-hint">
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
-        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | M: Marker | Ctrl+Z/Y: Undo/Redo</span>
+        <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | A/B: Select/Blade | N: Snap | M: Marker | Ctrl+Z/Y: Undo/Redo | Ctrl+S: Save Project</span>
       </span>
-      <span id="version-badge">v0.1.5</span>
+      <span id="version-badge">v0.1.6</span>
     </footer>
   </div>
 

@@ -97,7 +97,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.5"
+    assert health["version"] == "0.1.6"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -828,9 +828,12 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "render-crf",
         "render-audio-bitrate",
         "render-resolution",
+        "btn-save-project",
+        "btn-open-project",
+        "project-file-input",
     ):
         assert elem_id in html_text
-    assert "v0.1.5" in html_text
+    assert "v0.1.6" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -858,6 +861,8 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Fondu Enchaîné (fade)"' in i18n_text
     assert '"Volet Gauche (wipeleft)"' in i18n_text
     assert '"statusbar.shortcuts"' in i18n_text
+    assert '"Sauver Projet"' in i18n_text
+    assert '"Ouvrir Projet"' in i18n_text
     assert "innerHTML" not in i18n_text
     for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
         asset_text = _http_call(f"{base_url}{asset_path}")[2].decode("utf-8")
@@ -1856,6 +1861,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert page.locator("#render-output-path").input_value().endswith(".mov")
                 assert page.locator("#render-crf").is_disabled() is True
 
+                # Verify Save Project / Open Project controls and round-trip in top bar
+                assert page.locator("#btn-save-project").is_visible() is True
+                assert page.locator("#btn-open-project").is_visible() is True
+
                 assert not errors, f"Console/page errors at {width}x{height}: {errors}"
                 assert not bad_http, f"HTTP errors at {width}x{height}: {bad_http}"
                 ctx.close()
@@ -1864,3 +1873,198 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
         if "Executable doesn't exist" in str(exc):
             pytest.skip("Playwright Chromium browser binary unavailable")
         raise
+
+
+def test_ui_project_export_and_import_roundtrip(ui_server: tuple[str, Path]) -> None:
+    base_url, workspace = ui_server
+
+    s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
+    assert s_status == 200
+    sample_doc = json.loads(s_raw.decode("utf-8"))["document"]
+
+    project_payload = {
+        "schema_version": "taktcut.project.v1",
+        "project_name": "Studio_Session_01",
+        "timeline": sample_doc,
+        "playhead_frame": 125,
+        "timeline_zoom": 2.0,
+        "snap_enabled": False,
+        "bpm_grid": {"enabled": True, "bpm": 132.0, "offset_s": 0.25},
+        "color": {
+            "grade": {
+                "lift": [-0.05, 0.0, 0.05],
+                "gamma": [0.02, 0.0, -0.02],
+                "gain": [0.08, 0.02, -0.06],
+                "contrast": 1.15,
+                "saturation": 1.2,
+                "temperature": 0.1,
+                "preserve_lightness": True,
+            },
+            "active_preset_id": "",
+            "wipe_ratio": 0.6,
+            "scope_mode": "waveform",
+        },
+        "fx": {
+            "nodes": [
+                {
+                    "effect": "glow",
+                    "enabled": True,
+                    "params": {
+                        "brightness": 1.1,
+                        "width": 20.0,
+                        "threshold": 0.4,
+                        "tint": "#ffd8a8",
+                    },
+                    "keyframes": [{"time_s": 0.0, "value": 0.5, "easing": "linear"}],
+                }
+            ],
+            "bypass_all": False,
+            "active_preset_id": "",
+            "chroma_key": {
+                "preset": "studio_green",
+                "key_color": "#00b140",
+                "similarity": 0.2,
+                "blend": 0.08,
+                "despill": True,
+                "despill_type": "green",
+                "enabled": True,
+            },
+            "chroma_key_matte_view": "alpha_matte",
+        },
+        "title_overlay": {
+            "preset_id": "broadcast_lower_third",
+            "title": "MARC DUPONT",
+            "subtitle": "Director",
+            "position": "bottom-left",
+            "accent_color": "#e68442",
+            "start_s": 1.0,
+            "end_s": 4.5,
+            "font_size": 36,
+            "box_opacity": 0.85,
+            "enabled": True,
+        },
+        "subtitle_track": {
+            "cues": [{"index": 1, "start_s": 0.5, "end_s": 2.5, "text": "Bonjour Studio"}],
+            "style": "yellow_broadcast",
+            "font_size": 36,
+            "margin_bottom_pct": 0.09,
+            "enabled": True,
+        },
+        "framing": {
+            "framing": {
+                "preset": "9:16",
+                "mode": "fit",
+                "pan_x": 0.0,
+                "pan_y": 0.0,
+                "enabled": True,
+                "target_width": 1080,
+                "target_height": 1920,
+            },
+            "safe_guides": {
+                "enabled": True,
+                "action_safe": True,
+                "title_safe": True,
+                "social_hud": False,
+            },
+        },
+        "delivery": {
+            "delivery_preset": "reels_tiktok_9_16",
+            "profile": "web_h264",
+            "container": "mp4",
+            "video_crf": 18,
+            "audio_bitrate_kbps": 192,
+            "encoder_preset": "medium",
+            "fps": "25",
+            "target_lufs": -14.0,
+            "lut_path": "",
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/reels_tiktok_9_16.mp4",
+            "use_framing": True,
+            "use_studio_cdl": True,
+            "use_studio_fx": True,
+            "use_studio_title": True,
+            "use_studio_subtitles": True,
+            "use_clip_audio": True,
+            "use_clip_retime": True,
+            "prefer_hw": True,
+        },
+    }
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/project/export",
+        method="POST",
+        payload={
+            "project": project_payload,
+            "out_path": "projects/Studio_Session_01.taktcut.json",
+        },
+    )
+    assert ex_status == 200
+    ex_data = json.loads(ex_raw.decode("utf-8"))
+    assert ex_data["schema_version"] == "taktcut.project.v1"
+    assert ex_data["filename"] == "Studio_Session_01.taktcut.json"
+    assert ex_data["saved_path"] == "projects/Studio_Session_01.taktcut.json"
+    assert (workspace / "projects" / "Studio_Session_01.taktcut.json").is_file()
+
+    # Import back from raw project_json string
+    im_status, _, im_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={"project_json": ex_data["project_json"]},
+    )
+    assert im_status == 200
+    im_data = json.loads(im_raw.decode("utf-8"))
+    assert im_data["project"] == ex_data["project"]
+    assert im_data["validation"]["valid"] is True
+
+    # Import back from workspace path and base64
+    path_status, _, path_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={"path": "projects/Studio_Session_01.taktcut.json"},
+    )
+    assert path_status == 200
+    assert json.loads(path_raw.decode("utf-8"))["project"] == ex_data["project"]
+
+    b64_status, _, b64_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={
+            "content_base64": base64.b64encode(ex_data["project_json"].encode("utf-8")).decode(
+                "ascii"
+            )
+        },
+    )
+    assert b64_status == 200
+    assert json.loads(b64_raw.decode("utf-8"))["project"] == ex_data["project"]
+
+    # Reject malformed JSON, NaN, bad schema, out-of-bounds, and path traversal
+    for bad_body in (
+        {"project_json": "{corrupted json"},
+        {"project_json": '{"schema_version": "taktcut.project.v1", "playhead_frame": NaN}'},
+        {"project_json": json.dumps({"schema_version": "bad.v9"})},
+        {
+            "project_json": json.dumps(
+                {**ex_data["project"], "bpm_grid": {"enabled": True, "bpm": 999.0, "offset_s": 0.0}}
+            )
+        },
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/project/import",
+            method="POST",
+            payload=bad_body,
+        )
+        assert bad_status == 400
+
+    raw_bad_status, _, _ = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        raw_bytes=b"{not valid json",
+    )
+    assert raw_bad_status == 400
+
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/project/export",
+        method="POST",
+        payload={"project": project_payload, "out_path": "../escape.taktcut.json"},
+    )
+    assert trav_status == 403

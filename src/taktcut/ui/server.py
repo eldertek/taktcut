@@ -67,6 +67,15 @@ from taktcut.models import (
     RenderProfile,
     TimelineDocument,
 )
+from taktcut.project import (
+    PROJECT_FILE_SUFFIX,
+    PROJECT_SCHEMA_VERSION,
+    export_project_dict,
+    export_project_json,
+    load_project_file,
+    parse_project_json,
+    validate_project_payload,
+)
 from taktcut.qa import run_qa_gate
 from taktcut.remote_render import (
     MAX_REMOTE_JOB_BYTES,
@@ -136,6 +145,7 @@ from taktcut.ui.security import (
     LUT_SUFFIXES,
     MEDIA_SUFFIXES,
     OTIO_EXPORT_SUFFIXES,
+    PROJECT_SUFFIXES,
     SUBTITLE_SUFFIXES,
     TIMELINE_SUFFIXES,
     PathConfinementError,
@@ -1051,6 +1061,101 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 mime,
                 raw_bytes,
                 extra_headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+            )
+            return
+
+        if route == "/api/project/export":
+            raw_project = payload.get("project")
+            if raw_project is None:
+                project_input = {
+                    k: v for k, v in payload.items() if k not in {"out_path", "filename"}
+                }
+            else:
+                if not isinstance(raw_project, dict):
+                    raise ValueError("'project' must be a JSON object")
+                project_input = raw_project
+
+            exported_dict = export_project_dict(project_input, stamp_metadata=True)
+            project_json = export_project_json(exported_dict, stamp_metadata=False)
+            raw_name = payload.get("filename") or exported_dict.get("project_name") or "project"
+            if not isinstance(raw_name, str):
+                raise ValueError("filename must be a string")
+            filename = sanitize_download_filename(raw_name, "project", PROJECT_FILE_SUFFIX)
+
+            project_saved_rel: str | None = None
+            raw_out = payload.get("out_path")
+            if raw_out is not None and str(raw_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_out),
+                    must_exist=False,
+                    allowed_suffixes=PROJECT_SUFFIXES,
+                )
+                if not out_file.name.lower().endswith(PROJECT_FILE_SUFFIX):
+                    raise ValueError(
+                        f"Project output file must end with {PROJECT_FILE_SUFFIX!r}"
+                    )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(project_json, encoding="utf-8")
+                project_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "schema_version": PROJECT_SCHEMA_VERSION,
+                    "filename": filename,
+                    "project": exported_dict,
+                    "project_json": project_json,
+                    "bytes_written": len(project_json.encode("utf-8")),
+                    "saved_path": project_saved_rel,
+                },
+            )
+            return
+
+        if route == "/api/project/import":
+            if "project_json" in payload and payload["project_json"] is not None:
+                raw_json = payload["project_json"]
+                if not isinstance(raw_json, str):
+                    raise ValueError("project_json must be a string")
+                project_obj = parse_project_json(raw_json)
+            elif "content_base64" in payload and payload["content_base64"] is not None:
+                b64_raw = payload["content_base64"]
+                if not isinstance(b64_raw, str):
+                    raise ValueError("content_base64 must be a string")
+                try:
+                    decoded = base64.b64decode(b64_raw, validate=True)
+                except binascii.Error as exc:
+                    raise ValueError("Invalid base64 project payload") from exc
+                project_obj = parse_project_json(decoded)
+            elif "project" in payload and payload["project"] is not None:
+                project_obj = validate_project_payload(payload["project"])
+            elif isinstance(payload.get("path"), str) and payload["path"].strip():
+                confined = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    payload["path"],
+                    must_exist=True,
+                    allowed_suffixes=PROJECT_SUFFIXES,
+                )
+                if not confined.name.lower().endswith(PROJECT_FILE_SUFFIX):
+                    raise ValueError(
+                        f"Project file must end with {PROJECT_FILE_SUFFIX!r}"
+                    )
+                project_obj = load_project_file(confined)
+            elif "schema_version" in payload:
+                project_obj = validate_project_payload(payload)
+            else:
+                raise ValueError(
+                    "Provide 'project_json', 'content_base64', 'project', or workspace 'path'"
+                )
+
+            val = validate_timeline(project_obj.timeline)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "schema_version": PROJECT_SCHEMA_VERSION,
+                    "project": project_obj.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
             )
             return
 

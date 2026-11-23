@@ -1,0 +1,378 @@
+"""Unit tests for full .taktcut.json project serialization and strict validation."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from taktcut.color import ColorGradeParams
+from taktcut.fx import ChromaKeyParams, FxNode, Keyframe
+from taktcut.models import (
+    BpmGridConfig,
+    ClipTransition,
+    RationalFrameRate,
+    RenderProfile,
+    TimelineClip,
+    TimelineDocument,
+    TimelineMarker,
+    TimelineTrack,
+)
+from taktcut.project import (
+    PROJECT_MAX_BYTES,
+    PROJECT_SCHEMA_VERSION,
+    ProjectColorState,
+    ProjectDeliveryState,
+    ProjectFramingState,
+    ProjectFxState,
+    ProjectSafeGuides,
+    TaktcutProject,
+    export_project_dict,
+    export_project_json,
+    load_project_file,
+    parse_project_json,
+    save_project_file,
+    validate_project_payload,
+)
+from taktcut.render import FramingParams
+from taktcut.subtitles import SubtitleCue, SubtitleTrackParams
+from taktcut.titles import TitleOverlayParams
+
+
+def _build_full_test_project() -> TaktcutProject:
+    fps_25 = RationalFrameRate(num=25, den=1)
+    timeline = TimelineDocument(
+        name="Master_Commercial_25p",
+        source_format="drt",
+        fps=fps_25,
+        width=1920,
+        height=1080,
+        start_frame=0,
+        color_space_tags=["Rec.709 / Gamma 2.4"],
+        lut_refs=["luts/editorial.cube"],
+        tracks=[
+            TimelineTrack(
+                index=1,
+                kind="video",
+                name="V1 Picture",
+                muted=False,
+                solo=False,
+                clips=[
+                    TimelineClip(
+                        name="Shot_01",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=0,
+                        duration_frames=125,
+                        source_in_frame=12,
+                        source_path="media/shot_01.mov",
+                        media_ref="m-01",
+                        source_fps=fps_25,
+                        speed_rate=1.25,
+                        reverse=False,
+                        transition_out=ClipTransition(
+                            preset="fadeblack",
+                            duration_s=0.75,
+                            include_audio=True,
+                            audio_curve="qsin",
+                        ),
+                    ),
+                    TimelineClip(
+                        name="Shot_02",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=125,
+                        duration_frames=150,
+                        source_in_frame=0,
+                        source_path="media/shot_02.mov",
+                        media_ref="m-02",
+                        source_fps=fps_25,
+                        speed_rate=0.5,
+                        reverse=True,
+                    ),
+                ],
+            ),
+            TimelineTrack(
+                index=1,
+                kind="audio",
+                name="A1 Dialogue",
+                muted=False,
+                solo=True,
+                clips=[
+                    TimelineClip(
+                        name="VO_Main",
+                        track_index=1,
+                        media_type="audio",
+                        start_frame=0,
+                        duration_frames=275,
+                        source_in_frame=0,
+                        source_path="audio/vo_main.wav",
+                        media_ref="a-01",
+                        audio_gain_db=-2.5,
+                        fade_in_s=0.35,
+                        fade_out_s=0.80,
+                    ),
+                ],
+            ),
+        ],
+        markers=[
+            TimelineMarker(
+                name="Drop Beat",
+                frame=75,
+                duration_frames=1,
+                color="Gold",
+                note="Sync cut on beat 4",
+            ),
+        ],
+    )
+
+    return TaktcutProject(
+        project_name="Master_Commercial_25p",
+        timeline=timeline,
+        playhead_frame=125,
+        timeline_zoom=2.5,
+        snap_enabled=False,
+        bpm_grid=BpmGridConfig(enabled=True, bpm=134.5, offset_s=-0.25),
+        color=ProjectColorState(
+            grade=ColorGradeParams(
+                lift=(-0.08, 0.01, 0.10),
+                gamma=(0.02, 0.0, -0.03),
+                gain=(0.12, 0.04, -0.09),
+                contrast=1.16,
+                saturation=1.22,
+                temperature=0.18,
+                preserve_lightness=True,
+            ),
+            active_preset_id="",
+            wipe_ratio=0.65,
+            scope_mode="vectorscope",
+        ),
+        fx=ProjectFxState(
+            nodes=[
+                FxNode(
+                    effect="glow",
+                    enabled=True,
+                    params={
+                        "brightness": 1.1,
+                        "width": 24.0,
+                        "threshold": 0.42,
+                        "tint": "#ffd2a0",
+                    },
+                    keyframes=[
+                        Keyframe(time_s=0.0, value=0.2, easing="ease_in"),
+                        Keyframe(time_s=2.5, value=1.0, easing="ease_out"),
+                    ],
+                ),
+                FxNode(
+                    effect="shake",
+                    enabled=False,
+                    params={
+                        "amplitude": 12.0,
+                        "frequency": 8.0,
+                        "motion_blur": 0.4,
+                        "seed": 101,
+                    },
+                ),
+            ],
+            bypass_all=False,
+            active_preset_id="",
+            chroma_key=ChromaKeyParams(
+                preset="custom",
+                key_color="#12b850",
+                similarity=0.24,
+                blend=0.11,
+                despill=True,
+                despill_type="green",
+                enabled=True,
+            ),
+            chroma_key_matte_view="alpha_matte",
+        ),
+        title_overlay=TitleOverlayParams(
+            preset_id="center_title_card",
+            title="STUDIO SHOWREEL",
+            subtitle="REC.709 MASTER",
+            position="center",
+            accent_color="#689cff",
+            start_s=0.5,
+            end_s=4.5,
+            font_size=44,
+            box_opacity=0.85,
+            enabled=True,
+        ),
+        subtitle_track=SubtitleTrackParams(
+            cues=[
+                SubtitleCue(index=1, start_s=0.4, end_s=2.2, text="Opening title line"),
+                SubtitleCue(
+                    index=2,
+                    start_s=2.6,
+                    end_s=5.0,
+                    text="Second caption line\nWith line break",
+                ),
+            ],
+            style="boxed_social",
+            font_size=38,
+            margin_bottom_pct=0.10,
+            enabled=True,
+        ),
+        framing=ProjectFramingState(
+            framing=FramingParams(
+                preset="9:16",
+                mode="fit",
+                pan_x=0.15,
+                pan_y=-0.10,
+                enabled=True,
+                target_width=1080,
+                target_height=1920,
+            ),
+            safe_guides=ProjectSafeGuides(
+                enabled=True,
+                action_safe=True,
+                title_safe=False,
+                social_hud=True,
+            ),
+        ),
+        delivery=ProjectDeliveryState(
+            delivery_preset="reels_tiktok_9_16",
+            profile=RenderProfile.WEB_H264,
+            container="mp4",
+            video_crf=19,
+            audio_bitrate_kbps=256,
+            encoder_preset="slow",
+            fps="25",
+            target_lufs=-14.0,
+            lut_path="luts/editorial.cube",
+            input_path=".taktcut-samples/sample_rec709.mp4",
+            output_path="renders/reels_master.mp4",
+            use_framing=True,
+            use_studio_cdl=False,
+            use_studio_fx=True,
+            use_studio_title=True,
+            use_studio_subtitles=True,
+            use_clip_audio=True,
+            use_clip_retime=True,
+            prefer_hw=False,
+        ),
+    )
+
+
+def test_project_lossless_roundtrip_json_and_disk(tmp_path: Path) -> None:
+    original = _build_full_test_project()
+    raw_json = export_project_json(original)
+    parsed = parse_project_json(raw_json)
+
+    assert parsed.schema_version == PROJECT_SCHEMA_VERSION
+    assert parsed.app_version != ""
+    assert parsed.saved_at.endswith("Z")
+
+    # Compare all domain fields losslessly against stamped original
+    stamped = TaktcutProject.model_validate(
+        {
+            **original.model_dump(mode="json"),
+            "app_version": parsed.app_version,
+            "saved_at": parsed.saved_at,
+        }
+    )
+    assert parsed.model_dump(mode="json") == stamped.model_dump(mode="json")
+
+    # Verify disk save & load round-trip
+    project_file = tmp_path / "projects" / "Master_Commercial_25p.taktcut.json"
+    saved = save_project_file(original, project_file)
+    assert project_file.is_file()
+    loaded = load_project_file(project_file)
+    assert loaded.model_dump(mode="json") == saved.model_dump(mode="json")
+
+    # Spot-check nested edit properties
+    assert loaded.timeline.tracks[0].clips[0].transition_out is not None
+    assert loaded.timeline.tracks[0].clips[0].transition_out.preset == "fadeblack"
+    assert loaded.timeline.tracks[0].clips[1].reverse is True
+    assert loaded.timeline.tracks[1].solo is True
+    assert loaded.timeline.tracks[1].clips[0].audio_gain_db == pytest.approx(-2.5)
+    assert loaded.bpm_grid.bpm == pytest.approx(134.5)
+    assert loaded.color.grade.preserve_lightness is True
+    assert loaded.color.scope_mode == "vectorscope"
+    assert len(loaded.fx.nodes) == 2
+    assert len(loaded.fx.nodes[0].keyframes) == 2
+    assert loaded.fx.chroma_key.key_color == "#12b850"
+    assert loaded.fx.chroma_key_matte_view == "alpha_matte"
+    assert loaded.title_overlay.position == "center"
+    assert len(loaded.subtitle_track.cues) == 2
+    assert loaded.framing.framing.preset == "9:16"
+    assert loaded.framing.safe_guides.title_safe is False
+    assert loaded.delivery.delivery_preset == "reels_tiktok_9_16"
+    assert loaded.delivery.audio_bitrate_kbps == 256
+
+
+@pytest.mark.parametrize(
+    "raw_payload",
+    [
+        "",
+        "   \n  ",
+        "{not valid json",
+        "[]",
+        '"just a string"',
+        b"\xff\xfe\x00\x01",
+        '{"schema_version": "taktcut.project.v1", "playhead_frame": NaN}',
+        '{"schema_version": "taktcut.project.v1", "timeline_zoom": Infinity}',
+    ],
+)
+def test_project_rejects_malformed_json_and_nan(raw_payload: str | bytes) -> None:
+    with pytest.raises(ValueError):
+        parse_project_json(raw_payload)
+
+
+def test_project_rejects_oversized_payload() -> None:
+    oversized = "{" + " " * (PROJECT_MAX_BYTES + 10) + "}"
+    with pytest.raises(ValueError, match="maximum size"):
+        parse_project_json(oversized)
+
+
+def _mutated_dict(mutator: Any) -> dict[str, Any]:
+    base = export_project_dict(_build_full_test_project())
+    mutator(base)
+    return base
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda d: d.pop("schema_version"),
+        lambda d: d.__setitem__("schema_version", "taktcut.project.v2"),
+        lambda d: d.__setitem__("unexpected_extra_key", 123),
+        lambda d: d.__setitem__("project_name", "   "),
+        lambda d: d.__setitem__("project_name", "bad\x00name"),
+        lambda d: d.__setitem__("playhead_frame", -5),
+        lambda d: d.__setitem__("playhead_frame", True),
+        lambda d: d.__setitem__("timeline_zoom", 9.5),
+        lambda d: d.__setitem__("snap_enabled", "yes"),
+        lambda d: d["bpm_grid"].__setitem__("bpm", 400.0),
+        lambda d: d["bpm_grid"].__setitem__("offset_s", -25.0),
+        lambda d: d["color"].__setitem__("wipe_ratio", 1.5),
+        lambda d: d["color"]["grade"].__setitem__("contrast", 3.5),
+        lambda d: d["color"]["grade"].__setitem__("lift", [-1.5, 0.0, 0.0]),
+        lambda d: d["fx"]["nodes"][0]["params"].__setitem__("brightness", 99.0),
+        lambda d: d["fx"]["nodes"][0]["params"].__setitem__("unknown_param", 1.0),
+        lambda d: d["fx"]["nodes"][0]["params"].__setitem__("tint", "not-a-hex"),
+        lambda d: d["fx"]["chroma_key"].__setitem__("similarity", 0.99),
+        lambda d: d["fx"]["chroma_key"].__setitem__("key_color", "#123"),
+        lambda d: d["fx"]["chroma_key"].__setitem__("despill", "true"),
+        lambda d: d["title_overlay"].__setitem__("end_s", 0.1),
+        lambda d: d["title_overlay"].__setitem__("font_size", 250),
+        lambda d: d["subtitle_track"].__setitem__("font_size", 200),
+        lambda d: d["subtitle_track"]["cues"][0].__setitem__("text", "<script>alert(1)</script>"),
+        lambda d: d["framing"]["framing"].__setitem__("pan_x", 2.0),
+        lambda d: d["framing"]["safe_guides"].__setitem__("enabled", 1),
+        lambda d: d["delivery"].__setitem__("video_crf", 99),
+        lambda d: d["delivery"].__setitem__("video_crf", True),
+        lambda d: d["delivery"].__setitem__("fps", "0/0"),
+        lambda d: d["delivery"].__setitem__("target_lufs", 2.0),
+        lambda d: d["delivery"].__setitem__("input_path", "bad\x00.mp4"),
+        lambda d: d["timeline"]["tracks"][0]["clips"][0].__setitem__("speed_rate", 10.0),
+        lambda d: d["timeline"]["tracks"][1]["clips"][0].__setitem__("audio_gain_db", 48.0),
+    ],
+)
+def test_project_rejects_corrupted_and_out_of_bounds_fields(mutator: Any) -> None:
+    bad = _mutated_dict(mutator)
+    with pytest.raises((ValueError, ValidationError)):
+        validate_project_payload(bad)

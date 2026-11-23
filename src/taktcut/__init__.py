@@ -35,6 +35,22 @@ from taktcut.models import (
     TimelineValidationResult,
     compute_bpm_beat_frames,
 )
+from taktcut.project import (
+    PROJECT_FILE_SUFFIX,
+    PROJECT_SCHEMA_VERSION,
+    ProjectColorState,
+    ProjectDeliveryState,
+    ProjectFramingState,
+    ProjectFxState,
+    ProjectSafeGuides,
+    TaktcutProject,
+    export_project_dict,
+    export_project_json,
+    load_project_file,
+    parse_project_json,
+    save_project_file,
+    validate_project_payload,
+)
 from taktcut.render import (
     AspectRatioPreset,
     ClipAudioParams,
@@ -82,7 +98,7 @@ from taktcut.transitions import (
     list_transition_presets,
 )
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 __all__ = [
     "__version__",
@@ -119,6 +135,8 @@ __all__ = [
     "DeliveryPresetId",
     "DespillType",
     "EncoderPresetId",
+    "export_project_dict",
+    "export_project_json",
     "export_srt",
     "export_vtt",
     "find_adjacent_cut_junctions",
@@ -135,20 +153,31 @@ __all__ = [
     "list_chroma_key_presets",
     "list_delivery_presets",
     "list_transition_presets",
+    "load_project_file",
     "LoudnessReport",
     "MARKER_COLOR_PRESETS",
+    "parse_project_json",
     "parse_srt",
     "parse_vtt",
+    "PROJECT_FILE_SUFFIX",
+    "PROJECT_SCHEMA_VERSION",
+    "ProjectColorState",
+    "ProjectDeliveryState",
+    "ProjectFramingState",
+    "ProjectFxState",
+    "ProjectSafeGuides",
     "QaReport",
     "RationalFrameRate",
     "RenderPlan",
     "RenderProfile",
     "RenderResult",
     "RetimeCompileResult",
+    "save_project_file",
     "StreamProbe",
     "SubtitleCompileResult",
     "SubtitleCue",
     "SubtitleTrackParams",
+    "TaktcutProject",
     "TimelineClip",
     "TimelineDocument",
     "TimelineMarker",
@@ -157,4 +186,5 @@ __all__ = [
     "TransitionCompileResult",
     "TransitionParams",
     "TransitionPreset",
+    "validate_project_payload",
 ]
