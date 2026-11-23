@@ -187,6 +187,7 @@ LoudnessPresetId = Literal["off", "youtube_14", "reels_16", "broadcast_23"]
 DialogueEqPresetId = Literal["off", "voice_clarity", "podcast_warm", "derumble"]
 TimecodeBurnInPosition = Literal["off", "top_left", "bottom_center", "bottom_right"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
+AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
 
 ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "off",
@@ -195,6 +196,12 @@ ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "bottom_right",
 )
 ALLOWED_EXPORT_FPS: tuple[ExportFpsOption, ...] = ("source", "24", "25", "30", "60")
+ALLOWED_AUDIO_ONLY_FORMATS: tuple[AudioOnlyFormatId, ...] = (
+    "off",
+    "wav24",
+    "mp3_320",
+    "aac_256",
+)
 YADIF_DEINTERLACE_FILTER: str = "yadif=mode=0:parity=-1:deint=0"
 
 REVIEW_WATERMARK_MAX_LEN: int = 40
@@ -510,6 +517,7 @@ class RenderPlan(BaseModel):
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
+    audio_only_format: AudioOnlyFormatId = "off"
     target_width: int | None = None
     target_height: int | None = None
     framing_mode: str | None = None
@@ -535,6 +543,19 @@ class RenderPlan(BaseModel):
         if not isinstance(raw, bool):
             raise ValueError(f"deinterlace must be a boolean, got {raw!r}")
         return raw
+
+    @field_validator("audio_only_format", mode="before")
+    @classmethod
+    def _validate_plan_audio_only_format(cls, raw: Any) -> AudioOnlyFormatId:
+        if not isinstance(raw, str):
+            raise ValueError(f"audio_only_format must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_AUDIO_ONLY_FORMATS:
+            allowed = ", ".join(ALLOWED_AUDIO_ONLY_FORMATS)
+            raise ValueError(
+                f"Unsupported audio_only_format {raw!r}; expected one of: {allowed}"
+            )
+        return cleaned
 
 
 class RenderResult(BaseModel):

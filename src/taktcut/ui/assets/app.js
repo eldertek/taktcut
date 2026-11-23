@@ -2036,6 +2036,7 @@ function serializeFullProjectState() {
       review_watermark_opacity: Number(byId("render-watermark-opacity")?.value ?? 0.35),
       export_fps: txt("render-export-fps", "source") || "source",
       deinterlace: chk("render-deinterlace", false),
+      audio_only_format: txt("render-audio-only-format", "off") || "off",
       lut_path: txt("render-lut-path", ""),
       input_path: txt("render-input-path", ".taktcut-samples/sample_rec709.mp4"),
       output_path: txt("render-output-path", "renders/delivery_web.mp4"),
@@ -2189,6 +2190,7 @@ function applyFullProjectState(project, validation) {
   };
 
   setVal("render-profile", del.profile || "web_h264");
+  setVal("render-audio-only-format", del.audio_only_format || "off");
   syncDeliverProfileControlsState();
   setVal("render-container", del.container || (del.profile === "prores_hq" ? "mov" : "mp4"));
   if (del.profile !== "prores_hq" && del.video_crf !== null && del.video_crf !== undefined) {
@@ -2196,6 +2198,9 @@ function applyFullProjectState(project, validation) {
   }
   if (del.profile !== "prores_hq" && del.audio_bitrate_kbps) {
     setVal("render-audio-bitrate", del.audio_bitrate_kbps);
+  }
+  if (del.audio_only_format && del.audio_only_format !== "off") {
+    syncDeliverProfileControlsState();
   }
   setVal("render-fps", del.fps || "25");
   setVal("render-lufs", del.target_lufs !== null && del.target_lufs !== undefined ? del.target_lufs : "");
@@ -4415,15 +4420,25 @@ function syncDeliverProfileControlsState() {
   const containerEl = byId("render-container");
   const crfEl = byId("render-crf");
   const audioEl = byId("render-audio-bitrate");
+  const audioOnlyEl = byId("render-audio-only-format");
   if (!profileEl) return;
   const prof = profileEl.value;
+  const audioOnlyFmt = audioOnlyEl ? audioOnlyEl.value : "off";
+  const isAudioOnly = audioOnlyFmt !== "off";
   const isProres = prof === "prores_hq";
+
+  profileEl.disabled = isAudioOnly;
   if (containerEl) {
-    containerEl.value = isProres ? "mov" : "mp4";
+    containerEl.disabled = isAudioOnly;
+    if (!isAudioOnly) {
+      containerEl.value = isProres ? "mov" : "mp4";
+    }
   }
   if (crfEl) {
-    crfEl.disabled = isProres;
-    if (isProres) {
+    crfEl.disabled = isProres || isAudioOnly;
+    if (isAudioOnly) {
+      crfEl.placeholder = "N/A (Audio-Only)";
+    } else if (isProres) {
       crfEl.value = "";
       crfEl.placeholder = "N/A (ProRes)";
     } else {
@@ -4434,12 +4449,38 @@ function syncDeliverProfileControlsState() {
     }
   }
   if (audioEl) {
-    audioEl.disabled = isProres;
-    if (isProres) {
+    audioEl.disabled = isProres || isAudioOnly;
+    if (audioOnlyFmt === "wav24") {
+      audioEl.value = "pcm_s24le";
+    } else if (audioOnlyFmt === "mp3_320") {
+      audioEl.value = "320";
+    } else if (audioOnlyFmt === "aac_256") {
+      audioEl.value = "256";
+    } else if (isProres) {
       audioEl.value = "pcm_s24le";
     } else if (audioEl.value === "pcm_s24le") {
       audioEl.value = "192";
     }
+  }
+}
+
+function syncAudioOnlyOutputPath() {
+  const audioOnlyEl = byId("render-audio-only-format");
+  const outEl = byId("render-output-path");
+  const profileEl = byId("render-profile");
+  if (!audioOnlyEl || !outEl) return;
+  const fmt = audioOnlyEl.value || "off";
+  const cur = outEl.value.trim() || "renders/delivery_web.mp4";
+  const stem = cur.replace(/\.(mp4|mov|m4v|mkv|mxf|webm|wav|aac|mp3)$/i, "");
+  if (fmt === "wav24") {
+    outEl.value = `${stem}.wav`;
+  } else if (fmt === "mp3_320") {
+    outEl.value = `${stem}.mp3`;
+  } else if (fmt === "aac_256") {
+    outEl.value = `${stem}.aac`;
+  } else {
+    const ext = profileEl && profileEl.value === "prores_hq" ? "mov" : "mp4";
+    outEl.value = `${stem}.${ext}`;
   }
 }
 
@@ -4556,6 +4597,9 @@ function updateDeliverSizeEstimate() {
   const audioBitrateKbps =
     profile !== "prores_hq" && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
 
+  const audioOnlyEl = byId("render-audio-only-format");
+  const audioOnlyFormat = audioOnlyEl ? audioOnlyEl.value : "off";
+
   const est = estimateRenderFileSize({
     durationS,
     codec: profile,
@@ -4563,7 +4607,8 @@ function updateDeliverSizeEstimate() {
     height,
     fps: effectiveFps,
     crf,
-    audioBitrateKbps
+    audioBitrateKbps,
+    audioOnlyFormat
   });
 
   badgeEl.textContent = est.formattedSize;
@@ -4575,6 +4620,24 @@ function updateDeliverSizeEstimate() {
   if (detailEl) {
     if (est.warning === "invalid_duration") {
       detailEl.textContent = t("render.estimate.invalidDuration");
+    } else if (audioOnlyFormat !== "off") {
+      const scopeLabel =
+        scope === "io" ? t("render.estimate.scopeIo") : t("render.estimate.scopeTimeline");
+      const audioOnlyLabel =
+        audioOnlyFormat === "wav24"
+          ? "WAV 24-bit 48 kHz"
+          : audioOnlyFormat === "mp3_320"
+            ? "MP3 320 kbps"
+            : "AAC 256 kbps";
+      const parts = [
+        `${durationS.toFixed(1)}s (${scopeLabel})`,
+        t("render.label.audioOnly"),
+        audioOnlyLabel
+      ];
+      if (est.warning === "large_file") {
+        parts.push(t("render.estimate.largeFile"));
+      }
+      detailEl.textContent = parts.join(" | ");
     } else {
       const scopeLabel =
         scope === "io" ? t("render.estimate.scopeIo") : t("render.estimate.scopeTimeline");
@@ -4633,6 +4696,8 @@ function applyDeliveryPreset(presetId) {
   const useFramingEl = byId("render-use-framing");
 
   if (profileEl) profileEl.value = preset.profile;
+  const audioOnlyEl = byId("render-audio-only-format");
+  if (audioOnlyEl) audioOnlyEl.value = "off";
   if (containerEl) containerEl.value = preset.container;
   if (outEl && preset.default_output_path) outEl.value = preset.default_output_path;
   if (crfEl) {
@@ -4885,6 +4950,8 @@ async function buildOrExecuteRender(execute) {
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
     const deinterlaceEl = byId("render-deinterlace");
     const deinterlace = deinterlaceEl ? Boolean(deinterlaceEl.checked) : false;
+    const audioOnlyEl = byId("render-audio-only-format");
+    const audioOnlyFormat = audioOnlyEl ? audioOnlyEl.value : "off";
 
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
@@ -4915,6 +4982,7 @@ async function buildOrExecuteRender(execute) {
         review_watermark_opacity: reviewWatermarkOpacity,
         export_fps: exportFps,
         deinterlace,
+        audio_only_format: audioOnlyFormat,
         prefer_hw: preferHw
       });
       renderRemoteJobTelemetry(submitData);
@@ -4974,6 +5042,7 @@ async function buildOrExecuteRender(execute) {
       review_watermark_opacity: reviewWatermarkOpacity,
       export_fps: exportFps,
       deinterlace,
+      audio_only_format: audioOnlyFormat,
       prefer_hw: preferHw,
       execute
     };
@@ -4981,27 +5050,40 @@ async function buildOrExecuteRender(execute) {
     const plan = data.plan;
     state.lastRenderCommand = data.shell_command || plan.argv.join(" ");
 
-    byId("render-encoder-badge").textContent = `${plan.encoder} / ${plan.pix_fmt}`;
+    const planIsAudioOnly = Boolean(plan.audio_only_format && plan.audio_only_format !== "off");
+    byId("render-encoder-badge").textContent = planIsAudioOnly
+      ? `${plan.encoder} / ${plan.audio_only_format}`
+      : `${plan.encoder} / ${plan.pix_fmt}`;
     byId("render-encoder-badge").className = "nle-tag is-active mono";
 
     const fpsLabel = plan.fps.den === 1 ? String(plan.fps.num) : `${plan.fps.num}/${plan.fps.den}`;
-    const rasterLabel =
-      plan.target_width && plan.target_height
+    const rasterLabel = planIsAudioOnly
+      ? "Audio-Only (-vn)"
+      : plan.target_width && plan.target_height
         ? `${plan.target_width}x${plan.target_height} (${plan.framing_mode || "fill"})`
         : "Source (Native)";
-    const qualityLabel =
-      plan.video_crf !== null && plan.video_crf !== undefined
+    const qualityLabel = planIsAudioOnly
+      ? "Audio-Only (-vn)"
+      : plan.video_crf !== null && plan.video_crf !== undefined
         ? `CRF ${plan.video_crf} (${plan.encoder_preset || "medium"})`
         : "ProRes 422 HQ (10-bit)";
-    const audioBitrateLabel = plan.audio_bitrate_kbps
-      ? `AAC ${plan.audio_bitrate_kbps} kbps`
-      : "PCM 24-bit 48 kHz";
+    const audioBitrateLabel =
+      plan.audio_only_format === "wav24"
+        ? "WAV PCM 24-bit 48 kHz"
+        : plan.audio_only_format === "mp3_320"
+          ? "MP3 320 kbps (libmp3lame)"
+          : plan.audio_only_format === "aac_256"
+            ? "AAC 256 kbps"
+            : plan.audio_bitrate_kbps
+              ? `AAC ${plan.audio_bitrate_kbps} kbps`
+              : "PCM 24-bit 48 kHz";
     const presetObj = plan.delivery_preset
       ? getDeliveryPresetsList().find((p) => p.id === plan.delivery_preset)
       : null;
     renderKv(byId("render-plan-kv"), [
       ["Preset", presetObj ? getDeliveryPresetLabel(presetObj) : t("render.presets.custom")],
       ["Profile", plan.profile],
+      [t("render.plan.audioOnly"), plan.audio_only_format || "off"],
       ["Encoder", plan.encoder],
       ["Target Raster", rasterLabel],
       ["Video Quality", qualityLabel],
@@ -8618,6 +8700,15 @@ function wireEvents() {
   if (renderAudioBitrateEl) {
     renderAudioBitrateEl.addEventListener("change", () => {
       markDeliverPresetCustom();
+      updateDeliverSizeEstimate();
+    });
+  }
+  const renderAudioOnlyEl = byId("render-audio-only-format");
+  if (renderAudioOnlyEl) {
+    renderAudioOnlyEl.addEventListener("change", () => {
+      markDeliverPresetCustom();
+      syncDeliverProfileControlsState();
+      syncAudioOnlyOutputPath();
       updateDeliverSizeEstimate();
     });
   }

@@ -2367,6 +2367,22 @@ export function estimateRenderFileSize(params = {}) {
     };
   }
 
+  const rawAudioOnly =
+    typeof src.audioOnlyFormat === "string" ? src.audioOnlyFormat.trim().toLowerCase() : "off";
+  if (rawAudioOnly === "wav24" || rawAudioOnly === "mp3_320" || rawAudioOnly === "aac_256") {
+    const audioOnlyKbps = rawAudioOnly === "wav24" ? 2304 : rawAudioOnly === "mp3_320" ? 320 : 256;
+    const estimatedBytes = Math.round(((audioOnlyKbps * 1000) / 8) * dur);
+    const estimatedMb = Number((estimatedBytes / 1_000_000).toFixed(2));
+    return {
+      estimatedBytes,
+      estimatedMb,
+      formattedSize: formatEstimatedByteSize(estimatedBytes),
+      videoBitrateKbps: 0,
+      audioBitrateKbps: audioOnlyKbps,
+      warning: estimatedMb >= 4000 ? "large_file" : null
+    };
+  }
+
   const rawCodec = typeof src.codec === "string" ? src.codec.trim().toLowerCase() : "h264";
   let codecKind = "h264";
   if (/prores/.test(rawCodec)) {

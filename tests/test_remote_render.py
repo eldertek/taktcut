@@ -298,6 +298,49 @@ def test_remote_node_client_and_ui_proxy_render_roundtrip(
     assert local_rendered.is_file()
     assert local_rendered.stat().st_size > 0
 
+    # Audio-only master job via remote render node (MP3 320 + Fairlight EQ & Loudness)
+    ao_status, _, ao_raw = _http_call(
+        f"{ui_url}/api/remote/jobs",
+        method="POST",
+        payload={
+            "remote_url": node_url,
+            "bearer_token": token,
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/remote_audio_master.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "dialogue_eq": "derumble",
+            "loudness_preset": "reels_16",
+            "audio_only_format": "mp3_320",
+            "prefer_hw": False,
+        },
+    )
+    assert ao_status == 202
+    ao_sub = json.loads(ao_raw.decode("utf-8"))
+    ao_job_id = ao_sub["job"]["job_id"]
+    ao_polled: dict[str, Any] = ao_sub
+    ao_deadline = time.monotonic() + 30.0
+    while ao_polled["job"]["status"] in {"queued", "running"} and time.monotonic() < ao_deadline:
+        time.sleep(0.15)
+        p_status, _, p_raw = _http_call(f"{ui_url}/api/remote/jobs/{ao_job_id}")
+        assert p_status == 200
+        ao_polled = json.loads(p_raw.decode("utf-8"))
+
+    assert ao_polled["job"]["status"] == "completed", ao_polled["job"].get("error")
+    assert ao_polled["job"]["plan"]["audio_only_format"] == "mp3_320"
+    assert ao_polled["job"]["plan"]["encoder"] == "libmp3lame"
+    assert ao_polled["job"]["plan"]["video_filter"] is None
+    assert (
+        ao_polled["job"]["plan"]["audio_filter"]
+        == "highpass=f=100,loudnorm=I=-16.0:TP=-1.0:LRA=11"
+    )
+    assert "-vn" in ao_polled["job"]["plan"]["argv"]
+    assert ao_polled["downloaded"] is True
+    assert ao_polled["local_output_path"] == "renders/remote_audio_master.mp3"
+    local_ao = studio_ws / "renders" / "remote_audio_master.mp3"
+    assert local_ao.is_file()
+    assert local_ao.stat().st_size > 0
+
 
 def test_remote_node_cli_help() -> None:
     proc = subprocess.run(

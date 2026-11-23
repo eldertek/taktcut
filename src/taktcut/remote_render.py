@@ -34,6 +34,7 @@ from taktcut.fx import ChromaKeyParams, FxNode, compile_fx_filtergraph
 from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     AscCdlParams,
+    AudioOnlyFormatId,
     ClipTransformParams,
     DialogueEqPresetId,
     ExportFpsOption,
@@ -52,6 +53,8 @@ from taktcut.render import (
     build_render_plan,
     execute_render_plan,
     probe_hardware_capabilities,
+    resolve_audio_only_output_path,
+    validate_audio_only_format,
     validate_deinterlace,
     validate_dialogue_eq,
     validate_export_fps,
@@ -238,6 +241,7 @@ class RemoteRenderJobRequest(BaseModel):
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
+    audio_only_format: AudioOnlyFormatId = "off"
     prefer_hw: bool = True
     chroma_key: ChromaKeyParams | None = None
     fx_stack: list[FxNode] = Field(default_factory=list)
@@ -286,6 +290,11 @@ class RemoteRenderJobRequest(BaseModel):
     @classmethod
     def _validate_deinterlace(cls, raw: Any) -> bool:
         return validate_deinterlace(raw)
+
+    @field_validator("audio_only_format", mode="before")
+    @classmethod
+    def _validate_audio_only_format(cls, raw: Any) -> AudioOnlyFormatId:
+        return validate_audio_only_format(raw)
 
     @field_validator("input_filename", "output_filename")
     @classmethod
@@ -509,6 +518,7 @@ class RemoteRenderState:
             must_exist=False,
             allowed_suffixes=MEDIA_SUFFIXES,
         )
+        out_file = resolve_audio_only_output_path(out_file, req.audio_only_format)
 
         is_prores = req.profile == RenderProfile.PRORES_HQ
         pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
@@ -571,6 +581,7 @@ class RemoteRenderState:
             review_watermark_opacity=req.review_watermark_opacity,
             export_fps=req.export_fps,
             deinterlace=req.deinterlace,
+            audio_only_format=req.audio_only_format,
             prefer_hw=req.prefer_hw,
             caps=caps,
         )
@@ -581,7 +592,7 @@ class RemoteRenderState:
             created_at=_utc_now_iso(),
             profile=req.profile,
             encoder=plan.encoder,
-            output_filename=req.output_filename,
+            output_filename=out_file.name,
             plan=plan,
             download_path=f"/api/remote/jobs/{job_id}/download",
         )

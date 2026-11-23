@@ -23,6 +23,7 @@ from taktcut.fx import (
 )
 from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
+    AudioOnlyFormatId,
     BpmGridConfig,
     DialogueEqPresetId,
     ExportFpsOption,
@@ -43,6 +44,7 @@ from taktcut.render import (
     DeliveryPresetId,
     EncoderPresetId,
     FramingParams,
+    validate_audio_only_format,
     validate_dialogue_eq,
     validate_export_fps,
     validate_loudness_preset,
@@ -170,6 +172,7 @@ class ProjectDeliveryState(BaseModel):
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
+    audio_only_format: AudioOnlyFormatId = "off"
     lut_path: str = ""
     input_path: str = ".taktcut-samples/sample_rec709.mp4"
     output_path: str = "renders/delivery_web.mp4"
@@ -238,6 +241,11 @@ class ProjectDeliveryState(BaseModel):
     @classmethod
     def _validate_export_fps(cls, raw: Any) -> ExportFpsOption:
         return validate_export_fps(raw)
+
+    @field_validator("audio_only_format", mode="before")
+    @classmethod
+    def _validate_audio_only_format(cls, raw: Any) -> AudioOnlyFormatId:
+        return validate_audio_only_format(raw)
 
     @field_validator("fps", mode="before")
     @classmethod

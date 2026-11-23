@@ -1788,6 +1788,29 @@ const hugeProres = estimateRenderFileSize({{
 assert.equal(hugeProres.warning, "large_file");
 assert.ok(hugeProres.formattedSize.endsWith(" GB"));
 
+const wav24_10s = estimateRenderFileSize({{
+  durationS: 10,
+  codec: "web_h264",
+  audioOnlyFormat: "wav24"
+}});
+assert.equal(wav24_10s.videoBitrateKbps, 0);
+assert.equal(wav24_10s.audioBitrateKbps, 2304);
+assert.equal(wav24_10s.estimatedBytes, 2880000);
+
+const mp3_10s = estimateRenderFileSize({{
+  durationS: 10,
+  audioOnlyFormat: "mp3_320"
+}});
+assert.equal(mp3_10s.videoBitrateKbps, 0);
+assert.equal(mp3_10s.audioBitrateKbps, 320);
+
+const aac_10s = estimateRenderFileSize({{
+  durationS: 10,
+  audioOnlyFormat: "aac_256"
+}});
+assert.equal(aac_10s.videoBitrateKbps, 0);
+assert.equal(aac_10s.audioBitrateKbps, 256);
+
 // framesToSmpteTimecode unit tests
 assert.equal(framesToSmpteTimecode(0, 25), "00:00:00:00");
 assert.equal(framesToSmpteTimecode(-42, 25), "00:00:00:00");
@@ -2982,6 +3005,43 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     f"Deliver export_fps/deinterlace overflow at {width}x{height}: "
                     f"{deint_render_overflow}px"
                 )
+
+                # Verify Deliver Audio-Only Master selector (#render-audio-only-format)
+                audio_only_sel = page.locator("#render-audio-only-format")
+                assert audio_only_sel.is_visible() is True
+                if width <= 820:
+                    ao_box = audio_only_sel.bounding_box()
+                    assert ao_box is not None and ao_box["height"] >= 44
+                audio_only_sel.select_option("wav24")
+                assert audio_only_sel.input_value() == "wav24"
+                assert page.locator("#render-profile").is_disabled() is True
+                assert page.locator("#render-crf").is_disabled() is True
+                assert (page.locator("#render-output-path").input_value() or "").endswith(".wav")
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('-vn') && "
+                    "(document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('pcm_s24le')"
+                )
+                ao_argv = page.locator("#render-argv-output").text_content() or ""
+                ao_kv = page.locator("#render-plan-kv").text_content() or ""
+                ao_badge = page.locator("#render-encoder-badge").text_content() or ""
+                assert "-vn" in ao_argv
+                assert "pcm_s24le" in ao_argv
+                assert "-c:v" not in ao_argv
+                assert "wav24" in ao_kv
+                assert "pcm_s24le / wav24" in ao_badge
+                ao_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert ao_overflow <= 0, (
+                    f"Deliver audio_only_format overflow at {width}x{height}: {ao_overflow}px"
+                )
+                audio_only_sel.select_option("off")
+                assert page.locator("#render-profile").is_disabled() is False
+                assert page.locator("#render-crf").is_disabled() is False
+                assert (page.locator("#render-output-path").input_value() or "").endswith(".mp4")
 
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
@@ -4250,7 +4310,6 @@ def test_ui_render_plan_export_fps_and_deinterlace_endpoint_and_assets(
                 f"En/em dash found in {asset_file.name}"
             )
 
-
 def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
     assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
     html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
@@ -4291,7 +4350,6 @@ def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
                 f"En/em dash found in {asset_file.name}"
             )
 
-
 def test_ui_deliver_size_estimate_assets() -> None:
     assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
     html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
@@ -4311,6 +4369,97 @@ def test_ui_deliver_size_estimate_assets() -> None:
     css_text = (assets_dir / "styles.css").read_text(encoding="utf-8")
     assert ".deliver-estimate-bar" in css_text
     assert ".deliver-estimate-badge" in css_text
+
+    for asset_file in assets_dir.iterdir():
+        if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:
+            content = asset_file.read_text(encoding="utf-8")
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_file.name}"
+            assert "\u2013" not in content and "\u2014" not in content, (
+                f"En/em dash found in {asset_file.name}"
+            )
+
+
+def test_ui_render_plan_audio_only_format_endpoint_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    expected_cases = [
+        ("off", "renders/ao_off.mp4", "libx264", None),
+        ("wav24", "renders/ao_wav.wav", "pcm_s24le", None),
+        ("mp3_320", "renders/ao_mp3.mp3", "libmp3lame", 320),
+        ("aac_256", "renders/ao_aac.aac", "aac", 256),
+    ]
+    for fmt, expected_out, expected_enc, expected_kbps in expected_cases:
+        status, _, raw = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": (
+                    f"renders/ao_{fmt.split('_')[0]}.mp4" if fmt != "off" else expected_out
+                ),
+                "profile": "web_h264",
+                "fps": "25",
+                "dialogue_eq": "voice_clarity",
+                "loudness_preset": "youtube_14",
+                "audio_only_format": fmt,
+                "prefer_hw": False,
+                "execute": False,
+            },
+        )
+        assert status == 200
+        plan = json.loads(raw.decode("utf-8"))["plan"]
+        assert plan["audio_only_format"] == fmt
+        assert plan["encoder"] == expected_enc
+        assert (
+            plan["audio_filter"]
+            == "highpass=f=80,equalizer=f=3000:t=q:w=1.2:g=3,loudnorm=I=-14.0:TP=-1.0:LRA=11"
+        )
+        if fmt != "off":
+            assert plan["output_path"].endswith(Path(expected_out).suffix)
+            assert plan["audio_bitrate_kbps"] == expected_kbps
+            assert plan["video_filter"] is None
+            assert plan["gop_frames"] == 0
+            assert plan["faststart"] is False
+            assert "-vn" in plan["argv"]
+            assert "-c:v" not in plan["argv"]
+        else:
+            assert "-vn" not in plan["argv"]
+            assert "-c:v" in plan["argv"]
+
+    for bad_payload in (
+        {"audio_only_format": "flac"},
+        {"audio_only_format": "ogg"},
+        {"audio_only_format": 320},
+        {"audio_only_format": "wav24;evil"},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": "renders/ao_bad.mp4",
+                "execute": False,
+                **bad_payload,
+            },
+        )
+        assert bad_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="render-audio-only-format"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.label.audioOnly",
+        "render.audioOnly.off",
+        "render.audioOnly.wav24",
+        "render.audioOnly.mp3_320",
+        "render.audioOnly.aac_256",
+        "render.plan.audioOnly",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
 
     for asset_file in assets_dir.iterdir():
         if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:

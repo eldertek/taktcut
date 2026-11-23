@@ -928,3 +928,26 @@ def test_project_delivery_export_fps_and_deinterlace_roundtrip(tmp_path: Path) -
         bad_payload["delivery"]["deinterlace"] = bad_deint
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_audio_only_format_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    assert proj.delivery.audio_only_format == "off"
+
+    for fmt in ("wav24", "mp3_320", "aac_256"):
+        proj.delivery.audio_only_format = fmt  # type: ignore[assignment]
+        raw_json = export_project_json(proj)
+        loaded = parse_project_json(raw_json)
+        assert loaded.delivery.audio_only_format == fmt
+
+    proj_path = tmp_path / "audio_master.taktcut.json"
+    proj.delivery.audio_only_format = "wav24"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.audio_only_format == "wav24"
+
+    for bad_fmt in ("", "flac", "ogg", "wav", 320, True, None):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["audio_only_format"] = bad_fmt
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

@@ -30,6 +30,7 @@ from taktcut.render import (
     build_render_plan,
     compile_audio_filter,
     compile_audio_filter_result,
+    compile_audio_only_ffmpeg_args,
     compile_auto_duck_filter,
     compile_auto_duck_filter_result,
     compile_deinterlace_filter,
@@ -50,6 +51,8 @@ from taktcut.render import (
     get_delivery_preset,
     list_aspect_presets,
     list_delivery_presets,
+    resolve_audio_only_output_path,
+    validate_audio_only_format,
     validate_deinterlace,
     validate_export_fps,
     validate_review_watermark_opacity,
@@ -1340,3 +1343,109 @@ def test_export_fps_and_deinterlace_validation_compile_and_real_ffmpeg_render(
         text=True,
     )
     assert ffprobe_proc.stdout.strip() == "progressive"
+
+
+def test_audio_only_format_validation_compile_and_real_ffmpeg_render(
+    tmp_path: Path,
+) -> None:
+    assert validate_audio_only_format("off") == "off"
+    for raw_fmt, expected in (
+        ("wav24", "wav24"),
+        (" WAV24 ", "wav24"),
+        ("mp3_320", "mp3_320"),
+        ("aac_256", "aac_256"),
+    ):
+        assert validate_audio_only_format(raw_fmt) == expected
+
+    for bad_fmt in ("", "flac", "wav", "ogg", "mp3", 320, True, None, "wav24;evil"):
+        with pytest.raises(ValueError):
+            validate_audio_only_format(bad_fmt)
+
+    assert resolve_audio_only_output_path(Path("renders/out.mp4"), "off") == Path("renders/out.mp4")
+    assert resolve_audio_only_output_path(Path("renders/out.mp4"), "wav24") == Path(
+        "renders/out.wav"
+    )
+    assert resolve_audio_only_output_path(Path("renders/out.mov"), "mp3_320") == Path(
+        "renders/out.mp3"
+    )
+    assert resolve_audio_only_output_path(Path("renders/out.mp4"), "aac_256") == Path(
+        "renders/out.aac"
+    )
+
+    assert compile_audio_only_ffmpeg_args("off") == []
+    assert compile_audio_only_ffmpeg_args("wav24") == [
+        "-c:a",
+        "pcm_s24le",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+    ]
+    assert compile_audio_only_ffmpeg_args("mp3_320") == [
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "320k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+    ]
+    assert compile_audio_only_ffmpeg_args("aac_256") == [
+        "-c:a",
+        "aac",
+        "-b:a",
+        "256k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+    ]
+
+    src_clip = tmp_path / "src_av.mp4"
+    _generate_synthetic_clip(src_clip)
+
+    expected_specs = [
+        ("wav24", ".wav", "pcm_s24le", None, "pcm_s24le"),
+        ("mp3_320", ".mp3", "libmp3lame", 320, "mp3"),
+        ("aac_256", ".aac", "aac", 256, "aac"),
+    ]
+    for fmt, ext, expected_enc, expected_kbps, expected_probe_codec in expected_specs:
+        plan = build_render_plan(
+            input_path=src_clip,
+            output_path=tmp_path / f"master_{fmt}.mp4",
+            profile=RenderProfile.WEB_H264,
+            fps=RationalFrameRate(num=25, den=1),
+            dialogue_eq="voice_clarity",
+            loudness_preset="youtube_14",
+            audio_only_format=fmt,  # type: ignore[arg-type]
+            prefer_hw=False,
+        )
+        assert plan.audio_only_format == fmt
+        assert plan.output_path.endswith(ext)
+        assert plan.encoder == expected_enc
+        assert plan.audio_bitrate_kbps == expected_kbps
+        assert plan.video_crf is None
+        assert plan.encoder_preset is None
+        assert plan.gop_frames == 0
+        assert plan.pix_fmt == "none"
+        assert plan.faststart is False
+        assert plan.video_filter is None
+        assert (
+            plan.audio_filter
+            == "highpass=f=80,equalizer=f=3000:t=q:w=1.2:g=3,loudnorm=I=-14.0:TP=-1.0:LRA=11"
+        )
+        assert "-vn" in plan.argv
+        assert "-c:v" not in plan.argv
+        assert "-af" in plan.argv
+
+        res = execute_render_plan(plan)
+        assert res.success is True, res.stderr_tail
+        assert res.bytes_written > 0
+
+        probe = probe_media(Path(plan.output_path))
+        assert probe.video_codec == ""
+        assert probe.width == 0
+        assert probe.height == 0
+        assert probe.audio_codec == expected_probe_codec
+        assert probe.audio_sample_rate == 48000

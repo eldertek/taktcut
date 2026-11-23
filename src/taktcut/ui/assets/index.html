@@ -1386,7 +1386,7 @@
                   </select>
                 </div>
               </div>
-              <div class="form-row-two">
+              <div class="form-row-three">
                 <div class="form-row">
                   <label for="render-crf" data-i18n="render.label.crf">Video Quality (CRF / CQ)</label>
                   <input type="number" id="render-crf" class="input-control mono" min="0" max="51" step="1" value="18" placeholder="18">
@@ -1401,6 +1401,15 @@
                     <option value="256">AAC 256 kbps</option>
                     <option value="320">AAC 320 kbps</option>
                     <option value="pcm_s24le">PCM 24-bit 48 kHz</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label for="render-audio-only-format" data-i18n="render.label.audioOnly">Audio-Only Master</label>
+                  <select id="render-audio-only-format" class="input-control mono">
+                    <option value="off" data-i18n="render.audioOnly.off" selected>Off (Video + Audio)</option>
+                    <option value="wav24" data-i18n="render.audioOnly.wav24">WAV 24-bit 48 kHz (.wav)</option>
+                    <option value="mp3_320" data-i18n="render.audioOnly.mp3_320">MP3 320 kbps (.mp3)</option>
+                    <option value="aac_256" data-i18n="render.audioOnly.aac_256">AAC 256 kbps (.aac)</option>
                   </select>
                 </div>
               </div>

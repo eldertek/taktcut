@@ -63,6 +63,7 @@ from taktcut.fx import (
 from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     AscCdlParams,
+    AudioOnlyFormatId,
     ClipTransformParams,
     DialogueEqPresetId,
     ExportFpsOption,
@@ -113,6 +114,8 @@ from taktcut.render import (
     list_aspect_presets,
     list_delivery_presets,
     probe_hardware_capabilities,
+    resolve_audio_only_output_path,
+    validate_audio_only_format,
     validate_deinterlace,
     validate_dialogue_eq,
     validate_export_fps,
@@ -455,6 +458,13 @@ def _extract_deinterlace(payload: dict[str, Any]) -> bool:
     if raw is None:
         return False
     return validate_deinterlace(raw)
+
+
+def _extract_audio_only_format(payload: dict[str, Any]) -> AudioOnlyFormatId:
+    raw = payload.get("audio_only_format")
+    if raw is None or raw == "":
+        return "off"
+    return validate_audio_only_format(raw)
 
 
 def _extract_review_watermark(payload: dict[str, Any]) -> tuple[str, float]:
@@ -1553,6 +1563,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
             export_fps = _extract_export_fps(payload)
             deinterlace = _extract_deinterlace(payload)
+            audio_only_format = _extract_audio_only_format(payload)
+            out_file = resolve_audio_only_output_path(out_file, audio_only_format)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1599,6 +1611,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 review_watermark_opacity=review_watermark_opacity,
                 export_fps=export_fps,
                 deinterlace=deinterlace,
+                audio_only_format=audio_only_format,
                 prefer_hw=prefer_hw,
                 caps=caps,
                 delivery_preset=delivery_preset,
@@ -1985,6 +1998,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
             export_fps = _extract_export_fps(payload)
             deinterlace = _extract_deinterlace(payload)
+            audio_only_format = _extract_audio_only_format(payload)
+            out_file = resolve_audio_only_output_path(out_file, audio_only_format)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -2026,6 +2041,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 review_watermark_opacity=review_watermark_opacity,
                 export_fps=export_fps,
                 deinterlace=deinterlace,
+                audio_only_format=audio_only_format,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
             job = client.submit_job(job_req)

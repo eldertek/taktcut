@@ -23,6 +23,7 @@ from taktcut.color import (
 )
 from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
+    ALLOWED_AUDIO_ONLY_FORMATS,
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
     ALLOWED_EXPORT_FPS,
     ALLOWED_TIMECODE_BURNIN,
@@ -31,6 +32,7 @@ from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_MAX,
     REVIEW_WATERMARK_OPACITY_MIN,
     YADIF_DEINTERLACE_FILTER,
+    AudioOnlyFormatId,
     ClipTransformParams,
     DialogueEqPresetId,
     DynamicZoomPresetId,
@@ -148,6 +150,53 @@ def validate_deinterlace(raw: Any) -> bool:
     if not isinstance(raw, bool):
         raise ValueError(f"deinterlace must be a boolean, got {raw!r}")
     return raw
+
+
+AUDIO_ONLY_FORMAT_SPECS: dict[str, tuple[str, str, int | None]] = {
+    "wav24": ("pcm_s24le", ".wav", None),
+    "mp3_320": ("libmp3lame", ".mp3", 320),
+    "aac_256": ("aac", ".aac", 256),
+}
+
+
+def validate_audio_only_format(raw: Any) -> AudioOnlyFormatId:
+    """Validate and normalize a Deliver audio-only master export format."""
+    if not isinstance(raw, str):
+        raise ValueError(f"audio_only_format must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned not in ALLOWED_AUDIO_ONLY_FORMATS:
+        allowed = ", ".join(ALLOWED_AUDIO_ONLY_FORMATS)
+        raise ValueError(
+            f"Unsupported audio_only_format {raw!r}; expected one of: {allowed}"
+        )
+    return cleaned
+
+
+def resolve_audio_only_output_path(
+    output_path: Path,
+    audio_only_format: AudioOnlyFormatId,
+) -> Path:
+    """Normalize output_path extension to match the selected audio-only master container."""
+    resolved = validate_audio_only_format(audio_only_format)
+    if resolved == "off":
+        return output_path
+    _, suffix, _ = AUDIO_ONLY_FORMAT_SPECS[resolved]
+    if output_path.suffix.lower() == suffix:
+        return output_path
+    return output_path.with_suffix(suffix)
+
+
+def compile_audio_only_ffmpeg_args(audio_only_format: AudioOnlyFormatId) -> list[str]:
+    """Compile deterministic FFmpeg audio codec arguments for an active audio-only master."""
+    resolved = validate_audio_only_format(audio_only_format)
+    if resolved == "off":
+        return []
+    codec, _, bitrate_kbps = AUDIO_ONLY_FORMAT_SPECS[resolved]
+    args: list[str] = ["-c:a", codec]
+    if bitrate_kbps is not None:
+        args.extend(["-b:a", f"{bitrate_kbps}k"])
+    args.extend(["-ar", "48000", "-ac", "2"])
+    return args
 
 
 def compile_deinterlace_filter(deinterlace: bool) -> str | None:
@@ -1419,6 +1468,7 @@ def build_render_plan(
     review_watermark_opacity: float | None = None,
     export_fps: ExportFpsOption | None = None,
     deinterlace: bool = False,
+    audio_only_format: AudioOnlyFormatId | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1445,6 +1495,11 @@ def build_render_plan(
         validate_export_fps(export_fps) if export_fps is not None else "source"
     )
     resolved_deinterlace: bool = validate_deinterlace(deinterlace)
+    resolved_audio_only: AudioOnlyFormatId = (
+        validate_audio_only_format(audio_only_format)
+        if audio_only_format is not None
+        else "off"
+    )
     resolved_profile = (
         profile
         if profile is not None
@@ -1467,8 +1522,15 @@ def build_render_plan(
     )
     validated_enc_preset = _validate_encoder_preset(encoder_preset)
 
+    is_audio_only = resolved_audio_only != "off"
+    effective_output_path = resolve_audio_only_output_path(output_path, resolved_audio_only)
+
     hw = caps or probe_hardware_capabilities(ffmpeg_bin=ffmpeg_bin, verify_nvenc_runtime=prefer_hw)
-    encoder = select_encoder(resolved_profile, hw, prefer_hw=prefer_hw)
+    encoder = (
+        AUDIO_ONLY_FORMAT_SPECS[resolved_audio_only][0]
+        if is_audio_only
+        else select_encoder(resolved_profile, hw, prefer_hw=prefer_hw)
+    )
     base_fps = fps or RationalFrameRate(num=25, den=1)
     target_fps = (
         RationalFrameRate(num=int(resolved_export_fps), den=1)
@@ -1639,6 +1701,53 @@ def build_render_plan(
             af_parts.append(f"loudnorm=I={validated_lufs:.1f}:TP=-1.0:LRA={lra:.1f}")
     audio_filter: str | None = ",".join(af_parts) if af_parts else None
 
+    if is_audio_only:
+        _, _, audio_only_kbps = AUDIO_ONLY_FORMAT_SPECS[resolved_audio_only]
+        audio_argv: list[str] = [
+            hw.ffmpeg_path,
+            "-hide_banner",
+            "-y",
+            "-i",
+            str(input_path),
+            "-map",
+            "0:a:0",
+            "-vn",
+        ]
+        if audio_filter is not None:
+            audio_argv.extend(["-af", audio_filter])
+        audio_argv.extend(compile_audio_only_ffmpeg_args(resolved_audio_only))
+        audio_argv.append(str(effective_output_path))
+        return RenderPlan(
+            input_path=str(input_path),
+            output_path=str(effective_output_path),
+            profile=resolved_profile,
+            encoder=encoder,
+            fps=target_fps,
+            gop_frames=0,
+            pix_fmt="none",
+            faststart=False,
+            delivery_preset=preset_obj.id if preset_obj is not None else None,
+            video_crf=None,
+            audio_bitrate_kbps=audio_only_kbps,
+            encoder_preset=None,
+            target_lufs=effective_lufs,
+            loudness_preset=resolved_loudness_preset,
+            dialogue_eq=resolved_dialogue_eq,
+            timecode_burnin=resolved_timecode_burnin,
+            review_watermark_text=resolved_watermark_text,
+            review_watermark_opacity=resolved_watermark_opacity,
+            export_fps=resolved_export_fps,
+            deinterlace=resolved_deinterlace,
+            audio_only_format=resolved_audio_only,
+            target_width=None,
+            target_height=None,
+            framing_mode=None,
+            lut_path=None,
+            video_filter=None,
+            audio_filter=audio_filter,
+            argv=audio_argv,
+        )
+
     argv: list[str] = [
         hw.ffmpeg_path,
         "-hide_banner",
@@ -1723,6 +1832,7 @@ def build_render_plan(
         review_watermark_opacity=resolved_watermark_opacity,
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
+        audio_only_format=resolved_audio_only,
         target_width=target_width,
         target_height=target_height,
         framing_mode=framing_mode,

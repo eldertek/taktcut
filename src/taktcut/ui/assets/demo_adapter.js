@@ -977,6 +977,27 @@ export function createApiClient() {
           throw new Error("deinterlace must be a boolean");
         }
         const deinterlace = Boolean(body.deinterlace);
+        const rawAudioOnly =
+          typeof body.audio_only_format === "string" && body.audio_only_format.trim() !== ""
+            ? body.audio_only_format.trim().toLowerCase()
+            : body.audio_only_format === undefined || body.audio_only_format === null
+              ? "off"
+              : null;
+        if (rawAudioOnly === null || !["off", "wav24", "mp3_320", "aac_256"].includes(rawAudioOnly)) {
+          throw new Error(`Unsupported audio_only_format '${body.audio_only_format}'`);
+        }
+        const audioOnlySpecs = {
+          wav24: { codec: "pcm_s24le", ext: ".wav", bitrateKbps: null },
+          mp3_320: { codec: "libmp3lame", ext: ".mp3", bitrateKbps: 320 },
+          aac_256: { codec: "aac", ext: ".aac", bitrateKbps: 256 }
+        };
+        const isAudioOnly = rawAudioOnly !== "off";
+        const resolvedOutputPath = isAudioOnly
+          ? String(body.output_path || "renders/master_audio").replace(
+              /\.(mp4|mov|m4v|mkv|mxf|webm|wav|aac|mp3)$/i,
+              ""
+            ) + audioOnlySpecs[rawAudioOnly].ext
+          : body.output_path;
         const fpsParts = String(body.fps || "25").split("/");
         const baseFpsNum = Number.parseInt(fpsParts[0], 10) || 25;
         const baseFpsDen = Number.parseInt(fpsParts[1] || "1", 10) || 1;
@@ -1164,6 +1185,57 @@ export function createApiClient() {
           }
         }
         const af = afParts.length > 0 ? afParts.join(",") : null;
+        if (isAudioOnly) {
+          const spec = audioOnlySpecs[rawAudioOnly];
+          const audioArgv = [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-i",
+            body.input_path,
+            "-map",
+            "0:a:0",
+            "-vn"
+          ];
+          if (af) audioArgv.push("-af", af);
+          audioArgv.push("-c:a", spec.codec);
+          if (spec.bitrateKbps !== null) audioArgv.push("-b:a", `${spec.bitrateKbps}k`);
+          audioArgv.push("-ar", "48000", "-ac", "2", resolvedOutputPath);
+          return {
+            plan: {
+              input_path: body.input_path,
+              output_path: resolvedOutputPath,
+              profile: resolvedProfile,
+              encoder: spec.codec,
+              fps: { num: fpsNum, den: fpsDen },
+              gop_frames: 0,
+              pix_fmt: "none",
+              faststart: false,
+              delivery_preset: presetObj ? presetObj.id : null,
+              video_crf: null,
+              audio_bitrate_kbps: spec.bitrateKbps,
+              encoder_preset: null,
+              target_lufs: effectiveLufs,
+              loudness_preset: fairlight.loudness_preset,
+              dialogue_eq: fairlight.dialogue_eq,
+              timecode_burnin: tcModeRaw,
+              review_watermark_text: rawWmText,
+              review_watermark_opacity: rawWmOpacity,
+              export_fps: rawExportFps,
+              deinterlace,
+              audio_only_format: rawAudioOnly,
+              target_width: null,
+              target_height: null,
+              framing_mode: null,
+              lut_path: null,
+              video_filter: null,
+              audio_filter: af,
+              argv: audioArgv
+            },
+            shell_command: audioArgv.join(" "),
+            result: null
+          };
+        }
         const fpsArg = fpsDen === 1 ? String(fpsNum) : `${fpsNum}/${fpsDen}`;
         const argv = [
           "ffmpeg",
@@ -1215,6 +1287,7 @@ export function createApiClient() {
             review_watermark_opacity: rawWmOpacity,
             export_fps: rawExportFps,
             deinterlace,
+            audio_only_format: "off",
             target_width: targetWidth,
             target_height: targetHeight,
             framing_mode: framingMode,
