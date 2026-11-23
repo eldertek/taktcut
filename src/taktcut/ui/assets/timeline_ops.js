@@ -41,6 +41,24 @@ export const TRANSFORM_ROT_DEFAULT = 0.0;
 export const TRANSFORM_OPACITY_MIN = 0.0;
 export const TRANSFORM_OPACITY_MAX = 100.0;
 export const TRANSFORM_OPACITY_DEFAULT = 100.0;
+export const DYNAMIC_ZOOM_DEFAULT = "off";
+export const DYNAMIC_ZOOM_DEFAULT_DURATION_S = 5.0;
+export const DYNAMIC_ZOOM_SCALE_FACTOR = 1.15;
+export const DYNAMIC_ZOOM_SCALE_DELTA = 0.15;
+export const ALLOWED_DYNAMIC_ZOOM_PRESETS = [
+  "off",
+  "slow_zoom_in",
+  "slow_zoom_out",
+  "pan_left_to_right",
+  "pan_right_to_left"
+];
+export const DYNAMIC_ZOOM_PRESETS = [
+  { id: "off", label: "Off", label_fr: "Désactivé", shortTag: "OFF" },
+  { id: "slow_zoom_in", label: "Slow Zoom In", label_fr: "Zoom Avant Lent", shortTag: "DZ IN" },
+  { id: "slow_zoom_out", label: "Slow Zoom Out", label_fr: "Zoom Arrière Lent", shortTag: "DZ OUT" },
+  { id: "pan_left_to_right", label: "Pan Left -> Right", label_fr: "Pan Gauche -> Droite", shortTag: "PAN L>R" },
+  { id: "pan_right_to_left", label: "Pan Right -> Left", label_fr: "Pan Droite -> Gauche", shortTag: "PAN R>L" }
+];
 export const TRANSITION_DURATION_MIN_S = 0.1;
 export const TRANSITION_DURATION_MAX_S = 2.0;
 export const TRANSITION_DURATION_DEFAULT_S = 0.5;
@@ -83,7 +101,8 @@ export const TRANSFORM_PRESETS = [
     pos_x_pct: 0.0,
     pos_y_pct: 0.0,
     rotation_deg: 0.0,
-    opacity_pct: 100.0
+    opacity_pct: 100.0,
+    dynamic_zoom: "off"
   },
   {
     id: "pip_bottom_right",
@@ -93,7 +112,8 @@ export const TRANSFORM_PRESETS = [
     pos_x_pct: 32.0,
     pos_y_pct: 32.0,
     rotation_deg: 0.0,
-    opacity_pct: 100.0
+    opacity_pct: 100.0,
+    dynamic_zoom: "off"
   },
   {
     id: "zoom_punch_115",
@@ -103,7 +123,8 @@ export const TRANSFORM_PRESETS = [
     pos_x_pct: 0.0,
     pos_y_pct: 0.0,
     rotation_deg: 0.0,
-    opacity_pct: 100.0
+    opacity_pct: 100.0,
+    dynamic_zoom: "off"
   }
 ];
 
@@ -380,6 +401,17 @@ export function compileRetimeFilterClient(params) {
   };
 }
 
+export function normalizeDynamicZoomPreset(raw) {
+  const cleaned = typeof raw === "string" ? raw.trim().toLowerCase() : DYNAMIC_ZOOM_DEFAULT;
+  return ALLOWED_DYNAMIC_ZOOM_PRESETS.includes(cleaned) ? cleaned : DYNAMIC_ZOOM_DEFAULT;
+}
+
+export function getDynamicZoomShortTag(presetId) {
+  const clean = normalizeDynamicZoomPreset(presetId);
+  const found = DYNAMIC_ZOOM_PRESETS.find((p) => p.id === clean);
+  return found ? found.shortTag : "OFF";
+}
+
 export function normalizeClipTransform(clipOrTransform) {
   const src =
     clipOrTransform && clipOrTransform.transform && typeof clipOrTransform.transform === "object"
@@ -389,7 +421,8 @@ export function normalizeClipTransform(clipOrTransform) {
             clipOrTransform.pos_x_pct !== undefined ||
             clipOrTransform.pos_y_pct !== undefined ||
             clipOrTransform.rotation_deg !== undefined ||
-            clipOrTransform.opacity_pct !== undefined)
+            clipOrTransform.opacity_pct !== undefined ||
+            clipOrTransform.dynamic_zoom !== undefined)
         ? clipOrTransform
         : {};
   const numOr = (raw, fallback) =>
@@ -403,24 +436,31 @@ export function normalizeClipTransform(clipOrTransform) {
     TRANSFORM_OPACITY_MIN,
     TRANSFORM_OPACITY_MAX
   );
+  const dynamicZoom = normalizeDynamicZoomPreset(src.dynamic_zoom);
   return {
     zoom_pct: Number(zoom.toFixed(1)),
     pos_x_pct: Number(posX.toFixed(1)),
     pos_y_pct: Number(posY.toFixed(1)),
     rotation_deg: Number(rot.toFixed(1)),
-    opacity_pct: Number(opacity.toFixed(1))
+    opacity_pct: Number(opacity.toFixed(1)),
+    dynamic_zoom: dynamicZoom
   };
 }
 
-export function isClipTransformIdentity(transformOrClip) {
+export function hasStaticClipTransform(transformOrClip) {
   const norm = normalizeClipTransform(transformOrClip);
-  return (
+  return !(
     Math.abs(norm.zoom_pct - 100.0) <= 1e-4 &&
     Math.abs(norm.pos_x_pct) <= 1e-4 &&
     Math.abs(norm.pos_y_pct) <= 1e-4 &&
     Math.abs(norm.rotation_deg) <= 1e-4 &&
     Math.abs(norm.opacity_pct - 100.0) <= 1e-4
   );
+}
+
+export function isClipTransformIdentity(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return !hasStaticClipTransform(norm) && norm.dynamic_zoom === DYNAMIC_ZOOM_DEFAULT;
 }
 
 export function getTransformPresetClient(presetId) {
@@ -445,10 +485,53 @@ export function formatTransformBadgeText(transformOrClip) {
   if (Math.abs(norm.opacity_pct - 100.0) > 0.05) {
     parts.push(`${Math.round(norm.opacity_pct)}%OP`);
   }
+  if (norm.dynamic_zoom && norm.dynamic_zoom !== DYNAMIC_ZOOM_DEFAULT) {
+    parts.push(getDynamicZoomShortTag(norm.dynamic_zoom));
+  }
   return parts.join(" ");
 }
 
-export function compileTransformFilterClient(params, pixFmt = null) {
+export function compileDynamicZoomFilterClient(presetId, clipDurationS = null) {
+  const clean = normalizeDynamicZoomPreset(presetId);
+  if (clean === DYNAMIC_ZOOM_DEFAULT) return null;
+  const durS =
+    clipDurationS !== null && clipDurationS !== undefined && Number.isFinite(Number(clipDurationS)) && Number(clipDurationS) > 0
+      ? Math.max(0.1, Number(clipDurationS))
+      : DYNAMIC_ZOOM_DEFAULT_DURATION_S;
+  const progressExpr = `min(1,t/${durS.toFixed(3)})`;
+  const scaleStr = DYNAMIC_ZOOM_SCALE_FACTOR.toFixed(2);
+  const deltaStr = DYNAMIC_ZOOM_SCALE_DELTA.toFixed(2);
+  if (clean === "slow_zoom_in") {
+    const scaleExpr = `1+${deltaStr}*${progressExpr}`;
+    return (
+      "split[dz_ref][dz_src];" +
+      `[dz_src]scale=w='trunc(iw*(${scaleExpr})/2)*2':h='trunc(ih*(${scaleExpr})/2)*2':eval=frame:flags=lanczos[dz_sc];` +
+      "[dz_ref][dz_sc]overlay=x='(W-w)/2':y='(H-h)/2':shortest=1,setsar=1"
+    );
+  }
+  if (clean === "slow_zoom_out") {
+    const scaleExpr = `${scaleStr}-${deltaStr}*${progressExpr}`;
+    return (
+      "split[dz_ref][dz_src];" +
+      `[dz_src]scale=w='trunc(iw*(${scaleExpr})/2)*2':h='trunc(ih*(${scaleExpr})/2)*2':eval=frame:flags=lanczos[dz_sc];` +
+      "[dz_ref][dz_sc]overlay=x='(W-w)/2':y='(H-h)/2':shortest=1,setsar=1"
+    );
+  }
+  if (clean === "pan_left_to_right") {
+    return (
+      `scale=w=ceil(iw*${scaleStr}/2)*2:h=ceil(ih*${scaleStr}/2)*2:flags=lanczos,` +
+      `crop=w=trunc(iw/${scaleStr}/2)*2:h=trunc(ih/${scaleStr}/2)*2:` +
+      `x='(iw-ow)*${progressExpr}':y='(ih-oh)/2',setsar=1`
+    );
+  }
+  return (
+    `scale=w=ceil(iw*${scaleStr}/2)*2:h=ceil(ih*${scaleStr}/2)*2:flags=lanczos,` +
+    `crop=w=trunc(iw/${scaleStr}/2)*2:h=trunc(ih/${scaleStr}/2)*2:` +
+    `x='(iw-ow)*(1-${progressExpr})':y='(ih-oh)/2',setsar=1`
+  );
+}
+
+export function compileTransformFilterClient(params, pixFmt = null, clipDurationS = null) {
   const norm = normalizeClipTransform(params);
   const isIdentity = isClipTransformIdentity(norm);
   if (isIdentity) {
@@ -463,6 +546,16 @@ export function compileTransformFilterClient(params, pixFmt = null) {
     const parts = ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill", "setsar=1"];
     if (pixFmt) parts.push(`format=${pixFmt}`);
     const fg = parts.join(",");
+    return {
+      filtergraph: fg,
+      ffmpeg_vf_args: ["-vf", fg],
+      is_identity: false,
+      params: norm
+    };
+  }
+  const dzGraph = compileDynamicZoomFilterClient(norm.dynamic_zoom, clipDurationS);
+  if (!hasStaticClipTransform(norm) && dzGraph) {
+    const fg = pixFmt ? `${dzGraph},format=${pixFmt}` : dzGraph;
     return {
       filtergraph: fg,
       ffmpeg_vf_args: ["-vf", fg],
@@ -498,6 +591,7 @@ export function compileTransformFilterClient(params, pixFmt = null) {
   let graph = fgChain
     ? `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_fg]${fgChain}[xf_ov];[xf_blk][xf_ov]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`
     : `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_blk][xf_fg]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+  if (dzGraph) graph = `${dzGraph},${graph}`;
   if (pixFmt) graph = `${graph},format=${pixFmt}`;
   return {
     filtergraph: graph,
@@ -1507,14 +1601,17 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
     pos_x_pct: p.pos_x_pct !== undefined ? Number(p.pos_x_pct) : origNorm.pos_x_pct,
     pos_y_pct: p.pos_y_pct !== undefined ? Number(p.pos_y_pct) : origNorm.pos_y_pct,
     rotation_deg: p.rotation_deg !== undefined ? Number(p.rotation_deg) : origNorm.rotation_deg,
-    opacity_pct: p.opacity_pct !== undefined ? Number(p.opacity_pct) : origNorm.opacity_pct
+    opacity_pct: p.opacity_pct !== undefined ? Number(p.opacity_pct) : origNorm.opacity_pct,
+    dynamic_zoom: p.dynamic_zoom !== undefined ? p.dynamic_zoom : origNorm.dynamic_zoom
   };
   if (
     !Number.isFinite(nextRaw.zoom_pct) ||
     !Number.isFinite(nextRaw.pos_x_pct) ||
     !Number.isFinite(nextRaw.pos_y_pct) ||
     !Number.isFinite(nextRaw.rotation_deg) ||
-    !Number.isFinite(nextRaw.opacity_pct)
+    !Number.isFinite(nextRaw.opacity_pct) ||
+    typeof nextRaw.dynamic_zoom !== "string" ||
+    !ALLOWED_DYNAMIC_ZOOM_PRESETS.includes(nextRaw.dynamic_zoom.trim().toLowerCase())
   ) {
     return { doc, clip: null, changed: false };
   }
@@ -1524,7 +1621,8 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
     Math.abs(nextNorm.pos_x_pct - origNorm.pos_x_pct) < 1e-4 &&
     Math.abs(nextNorm.pos_y_pct - origNorm.pos_y_pct) < 1e-4 &&
     Math.abs(nextNorm.rotation_deg - origNorm.rotation_deg) < 1e-4 &&
-    Math.abs(nextNorm.opacity_pct - origNorm.opacity_pct) < 1e-4;
+    Math.abs(nextNorm.opacity_pct - origNorm.opacity_pct) < 1e-4 &&
+    nextNorm.dynamic_zoom === origNorm.dynamic_zoom;
   if (unchanged) {
     return { doc, clip: foundOrig.clip, changed: false };
   }

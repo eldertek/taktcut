@@ -33,6 +33,7 @@ from taktcut.render import (
     compile_auto_duck_filter,
     compile_auto_duck_filter_result,
     compile_dialogue_eq_filter,
+    compile_dynamic_zoom_filter,
     compile_fairlight_audio_filter,
     compile_framing_filter,
     compile_framing_filter_result,
@@ -698,6 +699,145 @@ def test_compile_transform_filter_and_real_ffmpeg_smoke(tmp_path: Path) -> None:
     assert probe.height == 360
     assert probe.video_codec == "h264"
     assert probe.pix_fmt == "yuv420p"
+    assert probe.is_cfr is True
+
+
+def test_dynamic_zoom_validation_compile_and_real_ffmpeg(tmp_path: Path) -> None:
+    off_params = ClipTransformParams(dynamic_zoom="off")
+    assert off_params.is_identity() is True
+    assert off_params.has_static_transform() is False
+    assert compile_dynamic_zoom_filter("off") is None
+    assert compile_transform_filter(off_params) is None
+
+    # Normalization of whitespace & casing
+    normalized = ClipTransformParams(dynamic_zoom="  Slow_Zoom_In  ")  # type: ignore[arg-type]
+    assert normalized.dynamic_zoom == "slow_zoom_in"
+    assert normalized.is_identity() is False
+    assert normalized.has_static_transform() is False
+
+    # Invalid dynamic_zoom & clip_duration_s rejection
+    for bad_dz in ("fast_zoom", "", "zoompan", 123, True, None):
+        with pytest.raises((ValidationError, ValueError)):
+            ClipTransformParams(dynamic_zoom=bad_dz)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        compile_dynamic_zoom_filter("slow_zoom_in", clip_duration_s=0.0)
+    with pytest.raises(ValueError):
+        compile_dynamic_zoom_filter("slow_zoom_in", clip_duration_s=-1.0)
+
+    # Filter compilation checks
+    fg_in = compile_transform_filter(ClipTransformParams(dynamic_zoom="slow_zoom_in"))
+    assert fg_in is not None
+    assert "eval=frame" in fg_in
+    assert "overlay=" in fg_in
+
+    fg_pan = compile_transform_filter(
+        ClipTransformParams(dynamic_zoom="pan_left_to_right"),
+        pix_fmt="yuv420p",
+        clip_duration_s=2.0,
+    )
+    assert fg_pan is not None
+    assert "crop=" in fg_pan
+    assert "t/2.000" in fg_pan
+    assert fg_pan.endswith(",format=yuv420p")
+
+    # Combined dynamic zoom + static transform
+    fg_combo = compile_transform_filter(
+        ClipTransformParams(
+            zoom_pct=90.0,
+            rotation_deg=5.0,
+            opacity_pct=85.0,
+            dynamic_zoom="slow_zoom_out",
+        ),
+        pix_fmt="yuv420p",
+    )
+    assert fg_combo is not None
+    assert "[dz_sc]" in fg_combo
+    assert "[xf_ov]" in fg_combo
+    assert "rotate=" in fg_combo
+
+    # Real FFmpeg render + pixel motion check across all 4 active presets
+    src = tmp_path / "dz_src.mp4"
+    _generate_synthetic_clip(src)
+    frame_bytes = 640 * 360 * 3
+    for preset in (
+        "slow_zoom_in",
+        "slow_zoom_out",
+        "pan_left_to_right",
+        "pan_right_to_left",
+    ):
+        out = tmp_path / f"dz_{preset}.mp4"
+        plan = build_render_plan(
+            input_path=src,
+            output_path=out,
+            profile=RenderProfile.WEB_H264,
+            fps=RationalFrameRate(num=25, den=1),
+            transform_params=ClipTransformParams(dynamic_zoom=preset),  # type: ignore[arg-type]
+            clip_duration_s=2.0,
+            prefer_hw=False,
+        )
+        assert plan.video_filter is not None
+        result = execute_render_plan(plan)
+        assert result.success is True, f"{preset} failed: {result.stderr_tail}"
+        probe = probe_media(out)
+        assert probe.width == 640
+        assert probe.height == 360
+        assert probe.video_codec == "h264"
+        assert probe.pix_fmt == "yuv420p"
+        assert probe.is_cfr is True
+
+        raw_proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(out),
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        raw = raw_proc.stdout
+        assert len(raw) >= 50 * frame_bytes
+        first_frame = raw[:frame_bytes]
+        last_frame = raw[49 * frame_bytes : 50 * frame_bytes]
+        diff_bytes = sum(1 for a, b in zip(first_frame, last_frame, strict=True) if a != b)
+        assert diff_bytes > 5000, f"{preset} showed insufficient pixel motion ({diff_bytes})"
+
+
+def test_dynamic_zoom_combined_with_static_transform_real_ffmpeg(tmp_path: Path) -> None:
+    src = tmp_path / "dz_combo_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "dz_combo_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        transform_params=ClipTransformParams(
+            zoom_pct=85.0,
+            pos_x_pct=-5.0,
+            pos_y_pct=5.0,
+            rotation_deg=4.0,
+            opacity_pct=90.0,
+            dynamic_zoom="slow_zoom_in",
+        ),
+        clip_duration_s=2.0,
+        prefer_hw=False,
+    )
+    assert plan.video_filter is not None
+    assert "[dz_sc]" in plan.video_filter
+    assert "[xf_ov]" in plan.video_filter
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    probe = probe_media(out)
+    assert probe.width == 640
+    assert probe.height == 360
     assert probe.is_cfr is True
 
 

@@ -981,7 +981,11 @@ export function createApiClient() {
           }
         }
         if (body.transform_params) {
-          const compiledTransform = compileTransformFilterClient(body.transform_params, pixFmt);
+          const compiledTransform = compileTransformFilterClient(
+            body.transform_params,
+            pixFmt,
+            body.clip_duration_s || null
+          );
           if (!compiledTransform.is_identity && compiledTransform.filtergraph) {
             vfParts.push(compiledTransform.filtergraph);
           }
@@ -1215,7 +1219,8 @@ export function createApiClient() {
       if (resolvedMode === "static-demo") {
         return compileTransformFilterClient(
           payload.transform_params || payload,
-          payload.pix_fmt || null
+          payload.pix_fmt || null,
+          payload.clip_duration_s || null
         );
       }
       return requestJson("/api/transform/compile", { method: "POST", body: payload });

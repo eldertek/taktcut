@@ -262,15 +262,31 @@ TRANSFORM_ROT_MAX: float = 180.0
 TRANSFORM_OPACITY_MIN: float = 0.0
 TRANSFORM_OPACITY_MAX: float = 100.0
 
+DynamicZoomPresetId = Literal[
+    "off",
+    "slow_zoom_in",
+    "slow_zoom_out",
+    "pan_left_to_right",
+    "pan_right_to_left",
+]
+ALLOWED_DYNAMIC_ZOOM_PRESETS: tuple[DynamicZoomPresetId, ...] = (
+    "off",
+    "slow_zoom_in",
+    "slow_zoom_out",
+    "pan_left_to_right",
+    "pan_right_to_left",
+)
+
 
 class ClipTransformParams(BaseModel):
-    """Per-clip 2D motion transform (zoom, position, rotation, opacity) with strict bounds."""
+    """Per-clip 2D motion transform (zoom, position, rotation, opacity, dynamic zoom)."""
 
     zoom_pct: float = Field(default=100.0, ge=TRANSFORM_ZOOM_MIN, le=TRANSFORM_ZOOM_MAX)
     pos_x_pct: float = Field(default=0.0, ge=TRANSFORM_POS_MIN, le=TRANSFORM_POS_MAX)
     pos_y_pct: float = Field(default=0.0, ge=TRANSFORM_POS_MIN, le=TRANSFORM_POS_MAX)
     rotation_deg: float = Field(default=0.0, ge=TRANSFORM_ROT_MIN, le=TRANSFORM_ROT_MAX)
     opacity_pct: float = Field(default=100.0, ge=TRANSFORM_OPACITY_MIN, le=TRANSFORM_OPACITY_MAX)
+    dynamic_zoom: DynamicZoomPresetId = "off"
 
     @field_validator(
         "zoom_pct",
@@ -284,15 +300,30 @@ class ClipTransformParams(BaseModel):
     def _validate_finite_transform_float(cls, raw: Any, info: Any) -> float:
         return _check_finite_number(raw, str(info.field_name))
 
-    def is_identity(self) -> bool:
-        """Return True when zoom is 100%, position/rotation are 0, and opacity is 100%."""
-        return (
+    @field_validator("dynamic_zoom", mode="before")
+    @classmethod
+    def _validate_dynamic_zoom(cls, raw: Any) -> DynamicZoomPresetId:
+        if not isinstance(raw, str):
+            raise ValueError(f"dynamic_zoom must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_DYNAMIC_ZOOM_PRESETS:
+            allowed = ", ".join(ALLOWED_DYNAMIC_ZOOM_PRESETS)
+            raise ValueError(f"Unsupported dynamic_zoom preset {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    def has_static_transform(self) -> bool:
+        """Return True when static zoom/position/rotation/opacity differ from identity."""
+        return not (
             math.isclose(self.zoom_pct, 100.0, abs_tol=1e-6)
             and math.isclose(self.pos_x_pct, 0.0, abs_tol=1e-6)
             and math.isclose(self.pos_y_pct, 0.0, abs_tol=1e-6)
             and math.isclose(self.rotation_deg, 0.0, abs_tol=1e-6)
             and math.isclose(self.opacity_pct, 100.0, abs_tol=1e-6)
         )
+
+    def is_identity(self) -> bool:
+        """Return True when static transform is identity and dynamic_zoom is 'off'."""
+        return not self.has_static_transform() and self.dynamic_zoom == "off"
 
 
 class TimelineClip(BaseModel):

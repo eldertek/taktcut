@@ -38,6 +38,7 @@ import {
   BPM_OFFSET_MAX_S,
   BPM_OFFSET_MIN_S,
   DELIVERY_PRESETS,
+  DYNAMIC_ZOOM_DEFAULT,
   LOUDNESS_PRESET_LUFS,
   MARKER_COLOR_HEX,
   RETIME_SPEED_MAX,
@@ -1470,6 +1471,7 @@ function renderTimelineTransformInspector() {
   const opRange = byId("clip-transform-opacity-range");
   const opNum = byId("clip-transform-opacity-num");
   const opRst = byId("btn-clip-transform-opacity-reset");
+  const dzSel = byId("clip-transform-dynamic-zoom");
   const presetBtns = document.querySelectorAll(".transform-preset-btn");
 
   if (!ctrlBox) return;
@@ -1495,6 +1497,7 @@ function renderTimelineTransformInspector() {
     opRange,
     opNum,
     opRst,
+    dzSel,
     ...presetBtns
   ]) {
     if (el) el.disabled = !hasVideoClip;
@@ -1511,6 +1514,7 @@ function renderTimelineTransformInspector() {
     if (rotNum && document.activeElement !== rotNum) rotNum.value = TRANSFORM_ROT_DEFAULT.toFixed(1);
     if (opRange) opRange.value = String(TRANSFORM_OPACITY_DEFAULT);
     if (opNum && document.activeElement !== opNum) opNum.value = TRANSFORM_OPACITY_DEFAULT.toFixed(1);
+    if (dzSel) dzSel.value = DYNAMIC_ZOOM_DEFAULT;
     for (const btn of presetBtns) {
       btn.classList.remove("is-active");
       btn.setAttribute("aria-pressed", "false");
@@ -1533,6 +1537,7 @@ function renderTimelineTransformInspector() {
   if (rotNum && document.activeElement !== rotNum) rotNum.value = norm.rotation_deg.toFixed(1);
   if (opRange) opRange.value = String(norm.opacity_pct);
   if (opNum && document.activeElement !== opNum) opNum.value = norm.opacity_pct.toFixed(1);
+  if (dzSel) dzSel.value = norm.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT;
 
   for (const btn of presetBtns) {
     const pid = btn.getAttribute("data-transform-preset") || "";
@@ -1543,7 +1548,8 @@ function renderTimelineTransformInspector() {
         Math.abs(preset.pos_x_pct - norm.pos_x_pct) < 0.1 &&
         Math.abs(preset.pos_y_pct - norm.pos_y_pct) < 0.1 &&
         Math.abs(preset.rotation_deg - norm.rotation_deg) < 0.1 &&
-        Math.abs(preset.opacity_pct - norm.opacity_pct) < 0.1
+        Math.abs(preset.opacity_pct - norm.opacity_pct) < 0.1 &&
+        (preset.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT) === (norm.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT)
     );
     btn.classList.toggle("is-active", isMatch);
     btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
@@ -6830,6 +6836,7 @@ function wireClipRetimeInspector() {
 function wireClipTransformInspector() {
   const rstAllBtn = byId("btn-clip-transform-reset-all");
   const sendBtn = byId("btn-clip-transform-to-deliver");
+  const dzSel = byId("clip-transform-dynamic-zoom");
   const presetBtns = document.querySelectorAll(".transform-preset-btn");
 
   const fields = [
@@ -6914,8 +6921,26 @@ function wireClipTransformInspector() {
           pos_x_pct: preset.pos_x_pct,
           pos_y_pct: preset.pos_y_pct,
           rotation_deg: preset.rotation_deg,
-          opacity_pct: preset.opacity_pct
+          opacity_pct: preset.opacity_pct,
+          dynamic_zoom: preset.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT
         }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (dzSel) {
+    dzSel.addEventListener("change", () => {
+      const info = getSelectedClipTrack();
+      if (!info || info.clip.media_type === "audio") return;
+      const res = updateClipTransformInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { dynamic_zoom: dzSel.value }
       );
       if (res.changed) {
         commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
@@ -7029,7 +7054,8 @@ function wireClipTransformInspector() {
           pos_x_pct: TRANSFORM_POS_DEFAULT,
           pos_y_pct: TRANSFORM_POS_DEFAULT,
           rotation_deg: TRANSFORM_ROT_DEFAULT,
-          opacity_pct: TRANSFORM_OPACITY_DEFAULT
+          opacity_pct: TRANSFORM_OPACITY_DEFAULT,
+          dynamic_zoom: DYNAMIC_ZOOM_DEFAULT
         }
       );
       if (res.changed) {

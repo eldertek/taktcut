@@ -99,6 +99,9 @@ def _build_full_test_project() -> TaktcutProject:
                         source_fps=fps_25,
                         speed_rate=0.5,
                         reverse=True,
+                        transform=ClipTransformParams(
+                            dynamic_zoom="pan_left_to_right",
+                        ),
                     ),
                 ],
             ),
@@ -298,6 +301,9 @@ def test_project_lossless_roundtrip_json_and_disk(tmp_path: Path) -> None:
     assert loaded.timeline.tracks[0].clips[0].transform.pos_x_pct == pytest.approx(32.0)
     assert loaded.timeline.tracks[0].clips[0].transform.rotation_deg == pytest.approx(-15.0)
     assert loaded.timeline.tracks[0].clips[0].transform.opacity_pct == pytest.approx(85.0)
+    assert loaded.timeline.tracks[0].clips[0].transform.dynamic_zoom == "off"
+    assert loaded.timeline.tracks[0].clips[1].transform is not None
+    assert loaded.timeline.tracks[0].clips[1].transform.dynamic_zoom == "pan_left_to_right"
     assert loaded.timeline.tracks[0].clips[0].transition_out is not None
     assert loaded.timeline.tracks[0].clips[0].transition_out.preset == "fadeblack"
     assert loaded.timeline.tracks[0].clips[1].reverse is True
@@ -390,6 +396,9 @@ def _mutated_dict(mutator: Any) -> dict[str, Any]:
         ),
         lambda d: d["timeline"]["tracks"][0]["clips"][0]["transform"].__setitem__(
             "rotation_deg", 270.0
+        ),
+        lambda d: d["timeline"]["tracks"][0]["clips"][0]["transform"].__setitem__(
+            "dynamic_zoom", "invalid_ken_burns"
         ),
         lambda d: d["timeline"]["tracks"][1]["clips"][0].__setitem__("audio_gain_db", 48.0),
         lambda d: d["auto_duck"].__setitem__("threshold_db", -2.0),

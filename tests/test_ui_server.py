@@ -848,6 +848,7 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "clip-transform-badge",
         "btn-clip-transform-reset-all",
         "clip-transform-presets",
+        "clip-transform-dynamic-zoom",
         "clip-transform-zoom-range",
         "clip-transform-posx-range",
         "clip-transform-posy-range",
@@ -2679,6 +2680,43 @@ def test_ui_transform_compile_and_render_plan_endpoint(ui_server: tuple[str, Pat
     assert plan["video_filter"] is not None
     assert "scale=w=ceil(iw*1.150000/2)*2" in plan["video_filter"]
 
+    # Dynamic Zoom / Ken Burns endpoints
+    dz_status, _, dz_raw = _http_call(
+        f"{base_url}/api/transform/compile",
+        method="POST",
+        payload={"dynamic_zoom": "slow_zoom_in", "pix_fmt": "yuv420p"},
+    )
+    assert dz_status == 200
+    dz_compiled = json.loads(dz_raw.decode("utf-8"))
+    assert dz_compiled["is_identity"] is False
+    assert dz_compiled["params"]["dynamic_zoom"] == "slow_zoom_in"
+    assert "eval=frame" in dz_compiled["filtergraph"]
+
+    bad_dz_status, _, _ = _http_call(
+        f"{base_url}/api/transform/compile",
+        method="POST",
+        payload={"dynamic_zoom": "bogus_ken_burns"},
+    )
+    assert bad_dz_status == 400
+
+    dz_plan_status, _, dz_plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": "inputs/clip_xf.mp4",
+            "output_path": "renders/clip_dz_out.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "prefer_hw": False,
+            "transform_params": {"dynamic_zoom": "pan_right_to_left"},
+            "execute": False,
+        },
+    )
+    assert dz_plan_status == 200
+    dz_plan = json.loads(dz_plan_raw.decode("utf-8"))["plan"]
+    assert dz_plan["video_filter"] is not None
+    assert "crop=" in dz_plan["video_filter"]
+
 
 def test_ui_auto_duck_compile_and_vu_meter_assets(ui_server: tuple[str, Path]) -> None:
     base_url, _ = ui_server
@@ -2995,3 +3033,48 @@ def test_ui_render_plan_dry_run_without_ffmpeg(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_ui_dynamic_zoom_assets_and_i18n_parity(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+    html_status, _, html_raw = _http_call(f"{base_url}/")
+    assert html_status == 200
+    html_text = html_raw.decode("utf-8")
+    for preset in (
+        "off",
+        "slow_zoom_in",
+        "slow_zoom_out",
+        "pan_left_to_right",
+        "pan_right_to_left",
+    ):
+        assert f'value="{preset}"' in html_text
+
+    for asset in ("timeline_ops.js", "app.js", "demo_adapter.js", "i18n.js", "styles.css"):
+        status, _, raw = _http_call(f"{base_url}/{asset}")
+        assert status == 200
+        text = raw.decode("utf-8")
+        assert "\u2013" not in text and "\u2014" not in text
+        if asset.endswith(".js"):
+            assert "innerHTML" not in text
+
+    _, _, ops_raw = _http_call(f"{base_url}/timeline_ops.js")
+    ops_text = ops_raw.decode("utf-8")
+    assert "compileDynamicZoomFilterClient" in ops_text
+    assert "DYNAMIC_ZOOM_PRESETS" in ops_text
+
+    _, _, i18n_raw = _http_call(f"{base_url}/i18n.js")
+    i18n_text = i18n_raw.decode("utf-8")
+    for key in (
+        "timeline.transform.dynamicZoom",
+        "timeline.transform.dzOff",
+        "timeline.transform.dzSlowIn",
+        "timeline.transform.dzSlowOut",
+        "timeline.transform.dzPanL2R",
+        "timeline.transform.dzPanR2L",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    _, _, css_raw = _http_call(f"{base_url}/styles.css")
+    css_text = css_raw.decode("utf-8")
+    assert ".transform-dz-row" in css_text
+    assert "max-width: 820px" in css_text

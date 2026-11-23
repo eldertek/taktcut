@@ -20,8 +20,10 @@ from taktcut.color import (
 )
 from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
+    ALLOWED_DYNAMIC_ZOOM_PRESETS,
     ClipTransformParams,
     DialogueEqPresetId,
+    DynamicZoomPresetId,
     HardwareCapabilities,
     LoudnessPresetId,
     RationalFrameRate,
@@ -916,6 +918,73 @@ def compile_framing_filter_result(params: FramingParams) -> FramingCompileResult
 ALLOWED_TRANSFORM_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "yuv444p", "rgba", "rgb24"}
 )
+DYNAMIC_ZOOM_DEFAULT_DURATION_S: float = 5.0
+DYNAMIC_ZOOM_SCALE_FACTOR: float = 1.15
+DYNAMIC_ZOOM_SCALE_DELTA: float = 0.15
+
+
+def compile_dynamic_zoom_filter(
+    preset: DynamicZoomPresetId | str,
+    *,
+    clip_duration_s: float | None = None,
+) -> str | None:
+    """Compile a Ken Burns / Dynamic Zoom preset into a deterministic FFmpeg filtergraph."""
+    if not isinstance(preset, str):
+        raise ValueError(f"dynamic_zoom must be a string, got {preset!r}")
+    cleaned = preset.strip().lower()
+    if cleaned not in ALLOWED_DYNAMIC_ZOOM_PRESETS:
+        allowed = ", ".join(ALLOWED_DYNAMIC_ZOOM_PRESETS)
+        raise ValueError(f"Unsupported dynamic_zoom preset {preset!r}; expected one of: {allowed}")
+    if cleaned == "off":
+        return None
+
+    dur_s = DYNAMIC_ZOOM_DEFAULT_DURATION_S
+    if clip_duration_s is not None:
+        if (
+            isinstance(clip_duration_s, bool)
+            or not isinstance(clip_duration_s, (int, float))
+            or not math.isfinite(float(clip_duration_s))
+            or float(clip_duration_s) <= 0.0
+            or float(clip_duration_s) > CLIP_DURATION_MAX_S
+        ):
+            raise ValueError(
+                f"clip_duration_s must be within (0, {CLIP_DURATION_MAX_S}], "
+                f"got {clip_duration_s!r}"
+            )
+        dur_s = max(0.1, float(clip_duration_s))
+
+    progress_expr = f"min(1,t/{dur_s:.3f})"
+    scale_str = f"{DYNAMIC_ZOOM_SCALE_FACTOR:.2f}"
+    delta_str = f"{DYNAMIC_ZOOM_SCALE_DELTA:.2f}"
+
+    if cleaned == "slow_zoom_in":
+        scale_expr = f"1+{delta_str}*{progress_expr}"
+        return (
+            "split[dz_ref][dz_src];"
+            f"[dz_src]scale=w='trunc(iw*({scale_expr})/2)*2':"
+            f"h='trunc(ih*({scale_expr})/2)*2':eval=frame:flags=lanczos[dz_sc];"
+            "[dz_ref][dz_sc]overlay=x='(W-w)/2':y='(H-h)/2':shortest=1,setsar=1"
+        )
+    if cleaned == "slow_zoom_out":
+        scale_expr = f"{scale_str}-{delta_str}*{progress_expr}"
+        return (
+            "split[dz_ref][dz_src];"
+            f"[dz_src]scale=w='trunc(iw*({scale_expr})/2)*2':"
+            f"h='trunc(ih*({scale_expr})/2)*2':eval=frame:flags=lanczos[dz_sc];"
+            "[dz_ref][dz_sc]overlay=x='(W-w)/2':y='(H-h)/2':shortest=1,setsar=1"
+        )
+    if cleaned == "pan_left_to_right":
+        return (
+            f"scale=w=ceil(iw*{scale_str}/2)*2:h=ceil(ih*{scale_str}/2)*2:flags=lanczos,"
+            f"crop=w=trunc(iw/{scale_str}/2)*2:h=trunc(ih/{scale_str}/2)*2:"
+            f"x='(iw-ow)*{progress_expr}':y='(ih-oh)/2',setsar=1"
+        )
+    # pan_right_to_left
+    return (
+        f"scale=w=ceil(iw*{scale_str}/2)*2:h=ceil(ih*{scale_str}/2)*2:flags=lanczos,"
+        f"crop=w=trunc(iw/{scale_str}/2)*2:h=trunc(ih/{scale_str}/2)*2:"
+        f"x='(iw-ow)*(1-{progress_expr})':y='(ih-oh)/2',setsar=1"
+    )
 
 
 class TransformCompileResult(BaseModel):
@@ -931,6 +1000,7 @@ def compile_transform_filter(
     params: ClipTransformParams,
     *,
     pix_fmt: str | None = None,
+    clip_duration_s: float | None = None,
 ) -> str | None:
     """Compile validated ClipTransformParams into a safe FFmpeg transform filtergraph."""
     if pix_fmt is not None and pix_fmt not in ALLOWED_TRANSFORM_PIX_FMTS:
@@ -943,6 +1013,11 @@ def compile_transform_filter(
         if pix_fmt is not None:
             parts.append(f"format={pix_fmt}")
         return ",".join(parts)
+
+    dz_graph = compile_dynamic_zoom_filter(params.dynamic_zoom, clip_duration_s=clip_duration_s)
+    if not params.has_static_transform():
+        assert dz_graph is not None
+        return f"{dz_graph},format={pix_fmt}" if pix_fmt is not None else dz_graph
 
     fg_steps: list[str] = []
     if not math.isclose(params.zoom_pct, 100.0, abs_tol=1e-4):
@@ -982,6 +1057,8 @@ def compile_transform_filter(
             f"[xf_blk][xf_fg]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
         )
 
+    if dz_graph is not None:
+        graph = f"{dz_graph},{graph}"
     if pix_fmt is not None:
         graph = f"{graph},format={pix_fmt}"
     return graph
@@ -991,9 +1068,10 @@ def compile_transform_filter_result(
     params: ClipTransformParams,
     *,
     pix_fmt: str | None = None,
+    clip_duration_s: float | None = None,
 ) -> TransformCompileResult:
     """Compile clip transform parameters into structured filtergraph and argv slice."""
-    fg = compile_transform_filter(params, pix_fmt=pix_fmt) or ""
+    fg = compile_transform_filter(params, pix_fmt=pix_fmt, clip_duration_s=clip_duration_s) or ""
     return TransformCompileResult(
         filtergraph=fg,
         ffmpeg_vf_args=["-vf", fg] if fg else [],
@@ -1262,7 +1340,11 @@ def build_render_plan(
 
     transform_vf: str | None = None
     if transform_params is not None and not transform_params.is_identity():
-        transform_vf = compile_transform_filter(transform_params, pix_fmt=pix_fmt)
+        transform_vf = compile_transform_filter(
+            transform_params,
+            pix_fmt=pix_fmt,
+            clip_duration_s=clip_duration_s,
+        )
 
     vf_parts: list[str] = []
     if retime_vf is not None:

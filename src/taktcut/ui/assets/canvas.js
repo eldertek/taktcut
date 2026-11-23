@@ -8,6 +8,7 @@ import {
   formatRetimeBadgeText,
   formatTransformBadgeText,
   getAspectRatioPreset,
+  getDynamicZoomShortTag,
   getTransitionPresetName,
   getTransitionShortTag,
   isClipTransformIdentity,
@@ -2404,7 +2405,16 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       }
       let transformBadgeW = 0;
       if (hasTransform && drawW >= 48) {
-        const tfText = `XF ${Math.round(transformNorm.zoom_pct)}%`;
+        const dzTag =
+          transformNorm.dynamic_zoom && transformNorm.dynamic_zoom !== "off"
+            ? getDynamicZoomShortTag(transformNorm.dynamic_zoom)
+            : "";
+        const tfText =
+          Math.abs(transformNorm.zoom_pct - 100.0) <= 0.05 && dzTag
+            ? dzTag
+            : dzTag
+              ? `XF ${Math.round(transformNorm.zoom_pct)}% ${dzTag}`
+              : `XF ${Math.round(transformNorm.zoom_pct)}%`;
         ctx.font = "700 9px ui-monospace, monospace";
         const measuredTfW = Math.ceil(ctx.measureText(tfText).width) + 8;
         const usedRight = rightReserve + (speedBadgeW > 0 ? speedBadgeW + 4 : 0);

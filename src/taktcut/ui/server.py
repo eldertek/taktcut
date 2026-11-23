@@ -480,6 +480,7 @@ def _build_transform_params_from_payload(
                 "pos_y_pct": raw_transform.get("pos_y_pct", 0.0),
                 "rotation_deg": raw_transform.get("rotation_deg", 0.0),
                 "opacity_pct": raw_transform.get("opacity_pct", 100.0),
+                "dynamic_zoom": raw_transform.get("dynamic_zoom", "off"),
             }
         )
 
@@ -491,6 +492,7 @@ def _build_transform_params_from_payload(
                 "pos_y_pct": payload.get("pos_y_pct", 0.0),
                 "rotation_deg": payload.get("rotation_deg", 0.0),
                 "opacity_pct": payload.get("opacity_pct", 100.0),
+                "dynamic_zoom": payload.get("dynamic_zoom", "off"),
             }
         )
     return None
@@ -1698,9 +1700,16 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             assert transform_params is not None
             raw_pix_fmt = payload.get("pix_fmt")
             pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            raw_clip_dur = payload.get("clip_duration_s")
+            xf_clip_duration_s: float | None = None
+            if raw_clip_dur not in (None, ""):
+                if isinstance(raw_clip_dur, bool) or not isinstance(raw_clip_dur, (int, float)):
+                    raise ValueError("clip_duration_s must be a finite number")
+                xf_clip_duration_s = float(raw_clip_dur)
             compiled_transform = compile_transform_filter_result(
                 transform_params,
                 pix_fmt=pix_fmt,
+                clip_duration_s=xf_clip_duration_s,
             )
             self._send_json(HTTPStatus.OK, compiled_transform.model_dump(mode="json"))
             return

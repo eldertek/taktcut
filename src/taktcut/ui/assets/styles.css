@@ -2446,6 +2446,24 @@ input[type="range"] {
   color: var(--accent-amber-bright);
 }
 
+.transform-dz-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.transform-dz-row label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.transform-dz-row .input-select {
+  min-width: 0;
+  width: 100%;
+}
+
 /* CLIP SPEED / RETIME INSPECTOR */
 .retime-inspector-dock {
   display: flex;
@@ -3090,6 +3108,15 @@ input[type="range"] {
   }
   .still-delete-btn {
     min-width: 44px;
+    min-height: 44px;
+  }
+  .transform-dz-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .transform-dz-row .input-select,
+  .transform-preset-btn,
+  .transform-inspector-dock .btn-mini {
     min-height: 44px;
   }
 }

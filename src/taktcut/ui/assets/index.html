@@ -253,6 +253,16 @@
                     <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="pip_bottom_right" aria-pressed="false" data-i18n="timeline.transform.presetPip">PiP Bottom-Right</button>
                     <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="zoom_punch_115" aria-pressed="false" data-i18n="timeline.transform.presetPunch">Zoom Punch 115%</button>
                   </div>
+                  <div class="transform-dz-row">
+                    <label for="clip-transform-dynamic-zoom" data-i18n="timeline.transform.dynamicZoom">Dynamic Zoom (Ken Burns)</label>
+                    <select id="clip-transform-dynamic-zoom" class="input-select" aria-label="Dynamic Zoom (Ken Burns) motion preset">
+                      <option value="off" data-i18n="timeline.transform.dzOff">Off</option>
+                      <option value="slow_zoom_in" data-i18n="timeline.transform.dzSlowIn">Slow Zoom In (+15%)</option>
+                      <option value="slow_zoom_out" data-i18n="timeline.transform.dzSlowOut">Slow Zoom Out (-15%)</option>
+                      <option value="pan_left_to_right" data-i18n="timeline.transform.dzPanL2R">Pan Left -&gt; Right</option>
+                      <option value="pan_right_to_left" data-i18n="timeline.transform.dzPanR2L">Pan Right -&gt; Left</option>
+                    </select>
+                  </div>
                   <div class="audio-ctrl-row">
                     <label for="clip-transform-zoom-range" data-i18n="timeline.transform.zoom">Zoom (%)</label>
                     <input type="range" id="clip-transform-zoom-range" min="10" max="300" step="1" value="100">
@@ -1468,7 +1478,7 @@
                 </label>
                 <label class="check-label">
                   <input type="checkbox" id="render-use-clip-transform" checked>
-                  <span data-i18n="render.check.clipTransform">Apply selected clip motion transform (zoom / pos / rot / opacity)</span>
+                  <span data-i18n="render.check.clipTransform">Apply selected clip motion transform (zoom / pos / rot / opacity / dynamic zoom)</span>
                 </label>
                 <label class="check-label">
                   <input type="checkbox" id="render-prefer-hw" checked>

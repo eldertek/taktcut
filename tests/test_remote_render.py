@@ -292,3 +292,21 @@ def test_remote_node_cli_help() -> None:
     assert "--token" in proc.stdout
     assert "--port" in proc.stdout
     assert "--workspace-dir" in proc.stdout
+
+
+def test_remote_render_request_accepts_dynamic_zoom() -> None:
+    from taktcut.remote_render import RemoteRenderJobRequest
+
+    req = RemoteRenderJobRequest(
+        input_base64="AAAA",
+        transform_params={"dynamic_zoom": "slow_zoom_out"},  # type: ignore[arg-type]
+    )
+    assert req.transform_params is not None
+    assert req.transform_params.dynamic_zoom == "slow_zoom_out"
+    assert req.transform_params.is_identity() is False
+
+    with pytest.raises((ValueError, Exception)):
+        RemoteRenderJobRequest(
+            input_base64="AAAA",
+            transform_params={"dynamic_zoom": "invalid_dz"},  # type: ignore[arg-type]
+        )
