@@ -1514,6 +1514,50 @@ export function drawProgramMonitorCanvas(
           ctx.fillRect(fx, fy, frameW, frameH);
         }
       }
+    } else if (node.effect === "vignette") {
+      const rawAngle = Math.min(1.2, Math.max(0.1, Number(p.angle_rad ?? 0.52)));
+      const intensity = Math.min(1, kfMul);
+      if (intensity > 0.005) {
+        const effAngle = rawAngle * intensity;
+        const midX = fx + frameW * 0.5;
+        const midY = fy + frameH * 0.5;
+        const innerR = Math.max(8, frameH * (0.44 - Math.min(0.28, effAngle * 0.22)));
+        const outerR = Math.hypot(frameW * 0.5, frameH * 0.5) * 1.05;
+        const edgeAlpha = Math.min(0.92, (0.22 + effAngle * 0.62) * intensity);
+        const midAlpha = Math.min(0.45, edgeAlpha * 0.38);
+        const vig = ctx.createRadialGradient(midX, midY, innerR, midX, midY, outerR);
+        vig.addColorStop(0, "rgba(0, 0, 0, 0)");
+        vig.addColorStop(0.55, `rgba(0, 0, 0, ${midAlpha.toFixed(3)})`);
+        vig.addColorStop(1, `rgba(0, 0, 0, ${edgeAlpha.toFixed(3)})`);
+        ctx.save();
+        ctx.fillStyle = vig;
+        ctx.fillRect(fx, fy, frameW, frameH);
+        ctx.restore();
+      }
+    } else if (node.effect === "film_grain") {
+      const strength = Math.min(40, Math.max(0, Number(p.strength ?? 14))) * kfMul;
+      if (strength > 0.2) {
+        let rng = (((playheadFrame + 17) * 1664525 + 1013904223) >>> 0);
+        const nextRand = () => {
+          rng = (rng * 1664525 + 1013904223) >>> 0;
+          return rng / 4294967296;
+        };
+        const norm = Math.min(1, strength / 40);
+        const speckCount = Math.round(strength * 14);
+        const brightAlpha = (0.08 + norm * 0.22).toFixed(3);
+        const darkAlpha = (0.10 + norm * 0.26).toFixed(3);
+        ctx.save();
+        for (let i = 0; i < speckCount; i++) {
+          const sx = fx + nextRand() * frameW;
+          const sy = fy + nextRand() * frameH;
+          const sz = nextRand() > 0.72 ? 1.8 : 1.2;
+          ctx.fillStyle = nextRand() > 0.5
+            ? `rgba(245, 242, 236, ${brightAlpha})`
+            : `rgba(12, 12, 15, ${darkAlpha})`;
+          ctx.fillRect(sx, sy, sz, sz);
+        }
+        ctx.restore();
+      }
     }
   }
 

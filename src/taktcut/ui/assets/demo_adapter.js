@@ -314,7 +314,7 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65 };
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45 };
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -341,6 +341,12 @@ function compileFxClient(nodes, opts = {}) {
       const rh = Math.round(Number(p.spread ?? 8) * Math.cos(rad));
       const rv = Math.round(Number(p.spread ?? 8) * Math.sin(rad));
       segs.push(`rgbashift=rh=${rh}:rv=${rv}:bh=${-rh}:bv=${-rv}:edge=smear`);
+    } else if (n.effect === "vignette") {
+      const angle = Math.min(1.2, Math.max(0.1, Number(p.angle_rad ?? 0.52)));
+      segs.push(`vignette=angle=${angle.toFixed(3)}`);
+    } else if (n.effect === "film_grain") {
+      const alls = Math.round(Math.min(40, Math.max(0, Number(p.strength ?? 14))));
+      segs.push(`noise=alls=${alls}:allf=t+u`);
     }
   });
   if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);
@@ -674,7 +680,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.7",
+      version: "0.1.8",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -1113,8 +1119,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.7",
-          latest_version: "0.1.7",
+          current_version: "0.1.8",
+          latest_version: "0.1.8",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -1315,7 +1321,7 @@ export function createApiClient() {
         }
         const project = {
           ...rawProj,
-          app_version: rawProj.app_version || "0.1.7",
+          app_version: rawProj.app_version || "0.1.8",
           saved_at: rawProj.saved_at || new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
         };
         const projectJson = JSON.stringify(project, null, 2) + "\n";

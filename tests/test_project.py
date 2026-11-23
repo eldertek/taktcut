@@ -416,3 +416,34 @@ def test_project_auto_duck_roundtrip() -> None:
     assert loaded.auto_duck.ratio == 8.0
     assert loaded.auto_duck.attack_ms == 30.0
     assert loaded.auto_duck.release_ms == 550.0
+
+
+def test_project_fx_vignette_and_film_grain_roundtrip() -> None:
+    proj = _build_full_test_project()
+    proj.fx.nodes = [
+        FxNode(effect="film_grain", enabled=True, params={"strength": 22.0}),
+        FxNode(effect="vignette", enabled=True, params={"angle_rad": 0.85}),
+    ]
+    proj.fx.active_preset_id = "35mm_cinema"
+
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+
+    assert loaded.fx.active_preset_id == "35mm_cinema"
+    assert len(loaded.fx.nodes) == 2
+    assert loaded.fx.nodes[0].effect == "film_grain"
+    assert loaded.fx.nodes[0].params["strength"] == pytest.approx(22.0)
+    assert loaded.fx.nodes[1].effect == "vignette"
+    assert loaded.fx.nodes[1].params["angle_rad"] == pytest.approx(0.85)
+
+    for bad_grain in (-1.0, 45.0):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["strength"] = bad_grain
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_angle in (0.05, 1.5):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][1]["params"]["angle_rad"] = bad_angle
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

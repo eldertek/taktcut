@@ -16,6 +16,8 @@ FxType = Literal[
     "lens_flare",
     "film_damage",
     "chroma_aberration",
+    "vignette",
+    "film_grain",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -25,6 +27,8 @@ FX_TYPES: tuple[FxType, ...] = (
     "lens_flare",
     "film_damage",
     "chroma_aberration",
+    "vignette",
+    "film_grain",
 )
 
 EasingType = Literal["linear", "ease_in", "ease_out", "ease_in_out"]
@@ -73,6 +77,8 @@ _PARAM_ALIASES: dict[str, str] = {
     "GateWeave": "gate_weave",
     "Spread": "spread",
     "Angle": "angle",
+    "AngleRad": "angle_rad",
+    "Strength": "strength",
 }
 
 
@@ -319,6 +325,29 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             unit="px",
         ),
     ),
+    "vignette": (
+        FxParamSpec(
+            name="angle_rad",
+            label="Angle (rad)",
+            kind="float",
+            default=0.52,
+            min_val=0.1,
+            max_val=1.2,
+            step=0.02,
+            unit="rad",
+        ),
+    ),
+    "film_grain": (
+        FxParamSpec(
+            name="strength",
+            label="Strength",
+            kind="float",
+            default=14.0,
+            min_val=0.0,
+            max_val=40.0,
+            step=1.0,
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -328,6 +357,8 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "lens_flare": 1.25,
     "film_damage": 1.10,
     "chroma_aberration": 0.65,
+    "vignette": 0.35,
+    "film_grain": 0.45,
 }
 
 
@@ -353,6 +384,15 @@ class FxNode(BaseModel):
     enabled: bool = True
     params: dict[str, float | int | str] = Field(default_factory=dict)
     keyframes: list[Keyframe] = Field(default_factory=list)
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def _reject_bool_params(cls, raw: Any) -> Any:
+        if isinstance(raw, dict):
+            for key, val in raw.items():
+                if isinstance(val, bool):
+                    raise ValueError(f"Parameter {key!r} must be numeric, not bool")
+        return raw
 
 
 class FxPreset(BaseModel):
@@ -684,6 +724,50 @@ FX_PRESETS: tuple[FxPreset, ...] = (
                     "width": 14.0,
                     "threshold": 0.42,
                     "tint": "#ffffff",
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="35mm_cinema",
+        name="35mm Cinema",
+        category="Film",
+        description="Clean 35mm theatrical grain paired with subtle optical lens vignette.",
+        nodes=[
+            FxNode(
+                effect="film_grain",
+                enabled=True,
+                params={
+                    "strength": 16.0,
+                },
+            ),
+            FxNode(
+                effect="vignette",
+                enabled=True,
+                params={
+                    "angle_rad": 0.45,
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="moody_vignette",
+        name="Moody Vignette",
+        category="Film",
+        description="Deep anamorphic edge falloff with fine 35mm shadow grain texture.",
+        nodes=[
+            FxNode(
+                effect="vignette",
+                enabled=True,
+                params={
+                    "angle_rad": 0.92,
+                },
+            ),
+            FxNode(
+                effect="film_grain",
+                enabled=True,
+                params={
+                    "strength": 8.0,
                 },
             ),
         ],
@@ -1167,6 +1251,17 @@ def _compile_chroma_aberration(params: dict[str, float | int | str]) -> str:
     return segment
 
 
+def _compile_vignette(params: dict[str, float | int | str]) -> str:
+    angle_rad = _clamp_num(float(params["angle_rad"]), 0.1, 1.2)
+    return f"vignette=angle={angle_rad:.3f}"
+
+
+def _compile_film_grain(params: dict[str, float | int | str]) -> str:
+    strength = _clamp_num(float(params["strength"]), 0.0, 40.0)
+    alls = round(strength)
+    return f"noise=alls={alls}:allf=t+u"
+
+
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
     """Return all built-in Chroma Key / Green Screen Studio presets."""
     return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
@@ -1325,6 +1420,12 @@ def compile_fx_filtergraph(
         elif node.effect == "chroma_aberration":
             seg = _compile_chroma_aberration(node.params)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "vignette":
+            seg = _compile_vignette(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "film_grain":
+            seg = _compile_film_grain(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb or ck_active:
         segments.append(f"format={pix_fmt}")
@@ -1372,7 +1473,7 @@ def compile_preset_filtergraph(
     pix_fmt: str = "yuv420p",
     use_gpu: bool = False,
 ) -> FxCompileResult:
-    """Compile one of the 6 built-in Sapphire-inspired presets."""
+    """Compile one of the built-in Sapphire-inspired presets."""
     preset = get_fx_preset(preset_id)
     return compile_fx_filtergraph(
         preset.nodes,

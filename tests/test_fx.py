@@ -101,6 +101,14 @@ def test_compile_all_six_individual_effects() -> None:
     chroma = compile_fx_filtergraph([default_fx_node("chroma_aberration")])
     assert "rgbashift=" in chroma.filtergraph
 
+    vig = compile_fx_filtergraph([default_fx_node("vignette")])
+    assert vig.filtergraph == "vignette=angle=0.520"
+    assert vig.active_effects == ["vignette"]
+
+    grain = compile_fx_filtergraph([default_fx_node("film_grain")])
+    assert grain.filtergraph == "noise=alls=14:allf=t+u"
+    assert grain.active_effects == ["film_grain"]
+
     # Determinism check
     assert compile_fx_filtergraph([default_fx_node("glow")]).filtergraph == glow.filtergraph
 
@@ -131,7 +139,7 @@ def test_compile_multi_effect_chain_and_bypass() -> None:
     assert all_off.estimated_render_seconds == 0.0
 
 
-def test_six_presets_compile_and_lookup() -> None:
+def test_eight_presets_compile_and_lookup() -> None:
     expected_names = {
         "Dreamy Glow",
         "Music Video Shake",
@@ -139,9 +147,11 @@ def test_six_presets_compile_and_lookup() -> None:
         "Anamorphic Flare",
         "RGB Glitch Split",
         "Strobe Flicker",
+        "35mm Cinema",
+        "Moody Vignette",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 6
+    assert len(FX_PRESETS) == 8
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -150,6 +160,12 @@ def test_six_presets_compile_and_lookup() -> None:
         res = compile_preset_filtergraph(preset.id, duration_seconds=5.0)
         assert len(res.filtergraph) > 10
         assert res.estimated_render_seconds > 0
+
+    cinema_res = compile_preset_filtergraph("35mm_cinema", duration_seconds=5.0)
+    assert cinema_res.filtergraph == "noise=alls=16:allf=t+u,vignette=angle=0.450"
+
+    moody_res = compile_preset_filtergraph("moody_vignette", duration_seconds=5.0)
+    assert moody_res.filtergraph == "vignette=angle=0.920,noise=alls=8:allf=t+u"
 
     with pytest.raises(ValueError, match="Unknown FX preset"):
         get_fx_preset("nonexistent_preset")
@@ -228,7 +244,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 6
+    assert len(p_data["presets"]) == 8
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -665,3 +681,65 @@ def test_chroma_key_http_endpoints(fx_ui_server: str) -> None:
         payload={"key_color": "#00b140", "similarity": 0.95},
     )
     assert bad_sim_status == 400
+
+
+def test_vignette_and_film_grain_bounds_and_compilation() -> None:
+    vig_low = normalize_fx_node({"effect": "vignette", "params": {"AngleRad": 0.01}})
+    assert vig_low.params["angle_rad"] == 0.1
+    assert compile_fx_filtergraph([vig_low]).filtergraph == "vignette=angle=0.100"
+
+    vig_high = normalize_fx_node({"effect": "vignette", "params": {"angle_rad": 3.5}})
+    assert vig_high.params["angle_rad"] == 1.2
+    assert compile_fx_filtergraph([vig_high]).filtergraph == "vignette=angle=1.200"
+
+    grain_low = normalize_fx_node({"effect": "film_grain", "params": {"Strength": -5.0}})
+    assert grain_low.params["strength"] == 0.0
+    assert compile_fx_filtergraph([grain_low]).filtergraph == "noise=alls=0:allf=t+u"
+
+    grain_high = normalize_fx_node({"effect": "film_grain", "params": {"strength": 99.4}})
+    assert grain_high.params["strength"] == 40.0
+    assert compile_fx_filtergraph([grain_high]).filtergraph == "noise=alls=40:allf=t+u"
+
+    grain_mid = normalize_fx_node({"effect": "film_grain", "params": {"strength": 18.6}})
+    assert compile_fx_filtergraph([grain_mid]).filtergraph == "noise=alls=19:allf=t+u"
+
+    with pytest.raises(ValueError, match="finite"):
+        normalize_fx_node({"effect": "vignette", "params": {"angle_rad": float("nan")}})
+    with pytest.raises(ValueError, match="finite"):
+        normalize_fx_node({"effect": "film_grain", "params": {"strength": float("inf")}})
+    with pytest.raises(ValueError, match="not bool"):
+        normalize_fx_node({"effect": "vignette", "params": {"angle_rad": True}})
+    with pytest.raises(ValueError, match="not bool"):
+        normalize_fx_node({"effect": "film_grain", "params": {"strength": False}})
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_film_finishing_presets_execute_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    for preset_id in ("35mm_cinema", "moody_vignette"):
+        res = compile_preset_filtergraph(
+            preset_id,
+            duration_seconds=0.2,
+            width=320,
+            height=180,
+            fps=25.0,
+        )
+        cmd = [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=0.2:size=320x180:rate=25",
+            "-vf",
+            res.filtergraph,
+            "-frames:v",
+            "2",
+            "-f",
+            "null",
+            "-",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+        assert proc.returncode == 0, f"FFmpeg rejected {preset_id}: {proc.stderr}"

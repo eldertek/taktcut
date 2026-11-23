@@ -2118,6 +2118,12 @@ const FX_PARAM_FALLBACK = {
     { name: "spread", label: "Spread", kind: "float", default: 8, min_val: 0, max_val: 40, step: 0.5 },
     { name: "angle", label: "Angle", kind: "float", default: 15, min_val: -180, max_val: 180, step: 1 },
     { name: "blur", label: "Blur", kind: "float", default: 0.8, min_val: 0, max_val: 10, step: 0.1 }
+  ],
+  vignette: [
+    { name: "angle_rad", label: "Angle (rad)", kind: "float", default: 0.52, min_val: 0.1, max_val: 1.2, step: 0.02 }
+  ],
+  film_grain: [
+    { name: "strength", label: "Strength", kind: "float", default: 14, min_val: 0, max_val: 40, step: 1 }
   ]
 };
 
@@ -2144,6 +2150,14 @@ const FX_PRESET_FALLBACK = {
   strobe_flicker: [
     { effect: "flicker", enabled: true, params: { amplitude: 0.32, frequency: 14, randomness: 0.25 } },
     { effect: "glow", enabled: true, params: { brightness: 0.75, width: 14, threshold: 0.42, tint: "#ffffff" } }
+  ],
+  "35mm_cinema": [
+    { effect: "film_grain", enabled: true, params: { strength: 16 } },
+    { effect: "vignette", enabled: true, params: { angle_rad: 0.45 } }
+  ],
+  moody_vignette: [
+    { effect: "vignette", enabled: true, params: { angle_rad: 0.92 } },
+    { effect: "film_grain", enabled: true, params: { strength: 8 } }
   ]
 };
 
@@ -2153,7 +2167,9 @@ const FX_DISPLAY_TITLES = {
   flicker: "S_Flicker",
   lens_flare: "S_LensFlare",
   film_damage: "S_FilmDamage",
-  chroma_aberration: "S_ChromaAberration"
+  chroma_aberration: "S_ChromaAberration",
+  vignette: "S_Vignette",
+  film_grain: "S_FilmGrain"
 };
 
 function getFxSpecs(effect) {
