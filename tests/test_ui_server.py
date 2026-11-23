@@ -2470,6 +2470,41 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     f"Deliver watermark overflow at {width}x{height}: {wm_render_overflow}px"
                 )
 
+                # Verify Deliver Export Frame Rate & Deinterlace (yadif) controls & touch targets
+                export_fps_sel = page.locator("#render-export-fps")
+                deint_chk = page.locator("#render-deinterlace")
+                deint_label = page.locator("label:has(#render-deinterlace)")
+                assert export_fps_sel.is_visible() is True
+                assert deint_chk.is_visible() is True
+                if width <= 820:
+                    fps_box = export_fps_sel.bounding_box()
+                    deint_box = deint_label.bounding_box()
+                    assert fps_box is not None and fps_box["height"] >= 44
+                    assert deint_box is not None and deint_box["height"] >= 44
+                export_fps_sel.select_option("24")
+                assert export_fps_sel.input_value() == "24"
+                deint_chk.check()
+                assert deint_chk.is_checked() is True
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('yadif=mode=0:parity=-1:deint=0,fps=24')"
+                )
+                deint_argv = page.locator("#render-argv-output").text_content() or ""
+                deint_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "yadif=mode=0:parity=-1:deint=0,fps=24" in deint_argv
+                assert "-r 24" in deint_argv
+                assert "24 fps" in deint_kv
+                assert "yadif (mode=0:parity=-1:deint=0)" in deint_kv
+
+                deint_render_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert deint_render_overflow <= 0, (
+                    f"Deliver export_fps/deinterlace overflow at {width}x{height}: "
+                    f"{deint_render_overflow}px"
+                )
+
                 # Verify Save Project / Open Project controls and round-trip in top bar
                 assert page.locator("#btn-save-project").is_visible() is True
                 assert page.locator("#btn-open-project").is_visible() is True
@@ -3563,3 +3598,84 @@ def test_ui_render_plan_review_watermark_endpoint_and_assets(
         "render.plan.reviewWatermark",
     ):
         assert i18n_text.count(f'"{key}"') == 2
+
+
+def test_ui_render_plan_export_fps_and_deinterlace_endpoint_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    for fps_opt in ("source", "24", "25", "30", "60"):
+        for deint in (False, True):
+            status, _, raw = _http_call(
+                f"{base_url}/api/render/plan",
+                method="POST",
+                payload={
+                    "input_path": ".taktcut-samples/sample_rec709.mp4",
+                    "output_path": f"renders/fps_{fps_opt}_{deint}.mp4",
+                    "profile": "web_h264",
+                    "fps": "25",
+                    "export_fps": fps_opt,
+                    "deinterlace": deint,
+                    "prefer_hw": False,
+                    "execute": False,
+                },
+            )
+            assert status == 200
+            plan = json.loads(raw.decode("utf-8"))["plan"]
+            assert plan["export_fps"] == fps_opt
+            assert plan["deinterlace"] is deint
+            expected_num = 25 if fps_opt == "source" else int(fps_opt)
+            assert plan["fps"] == {"num": expected_num, "den": 1}
+            assert plan["gop_frames"] == 2 * expected_num
+            vf = plan["video_filter"]
+            if deint and fps_opt != "source":
+                assert vf == f"yadif=mode=0:parity=-1:deint=0,fps={fps_opt}"
+            elif deint:
+                assert vf == "yadif=mode=0:parity=-1:deint=0"
+            elif fps_opt != "source":
+                assert vf == f"fps={fps_opt}"
+            else:
+                assert vf is None
+
+    for bad_payload in (
+        {"export_fps": "120"},
+        {"export_fps": 24},
+        {"export_fps": "24;evil"},
+        {"deinterlace": "true"},
+        {"deinterlace": 1},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": "renders/fps_bad.mp4",
+                "execute": False,
+                **bad_payload,
+            },
+        )
+        assert bad_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="render-export-fps"' in html_text
+    assert 'id="render-deinterlace"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.label.exportFps",
+        "render.exportFps.source",
+        "render.plan.exportFps",
+        "render.check.deinterlace",
+        "render.plan.deinterlace",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    for asset_file in assets_dir.iterdir():
+        if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:
+            content = asset_file.read_text(encoding="utf-8")
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_file.name}"
+            assert "\u2013" not in content and "\u2014" not in content, (
+                f"En/em dash found in {asset_file.name}"
+            )

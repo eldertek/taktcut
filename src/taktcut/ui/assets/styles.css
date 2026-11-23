@@ -3194,7 +3194,11 @@ input[type="range"] {
   #panel-render .check-label,
   #panel-render .watermark-preset-btn,
   #panel-render .watermark-opacity-slider {
-    min-height: 44px;
+    min-height: 45px;
+  }
+  #panel-render .check-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
   }
 }
 

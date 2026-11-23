@@ -242,6 +242,8 @@ def test_remote_node_client_and_ui_proxy_render_roundtrip(
             "timecode_burnin": "bottom_right",
             "review_watermark_text": "CONFIDENTIAL",
             "review_watermark_opacity": 0.45,
+            "export_fps": "30",
+            "deinterlace": True,
             "prefer_hw": False,
             "cdl": {
                 "slope": [1.05, 1.0, 0.95],
@@ -276,8 +278,14 @@ def test_remote_node_client_and_ui_proxy_render_roundtrip(
         polled_data = json.loads(p_raw.decode("utf-8"))
 
     assert polled_data["job"]["status"] == "completed", polled_data["job"].get("error")
+    assert polled_data["job"]["plan"]["export_fps"] == "30"
+    assert polled_data["job"]["plan"]["deinterlace"] is True
+    assert polled_data["job"]["plan"]["fps"] == {"num": 30, "den": 1}
+    assert polled_data["job"]["plan"]["video_filter"].startswith(
+        "yadif=mode=0:parity=-1:deint=0,fps=30,"
+    )
     assert polled_data["job"]["plan"]["timecode_burnin"] == "bottom_right"
-    assert "timecode='00\\:00\\:00\\:00':rate=25" in polled_data["job"]["plan"]["video_filter"]
+    assert "timecode='00\\:00\\:00\\:00':rate=30" in polled_data["job"]["plan"]["video_filter"]
     assert polled_data["job"]["plan"]["review_watermark_text"] == "CONFIDENTIAL"
     assert polled_data["job"]["plan"]["review_watermark_opacity"] == pytest.approx(0.45)
     assert (

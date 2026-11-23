@@ -65,6 +65,7 @@ from taktcut.models import (
     AscCdlParams,
     ClipTransformParams,
     DialogueEqPresetId,
+    ExportFpsOption,
     HardwareCapabilities,
     LoudnessPresetId,
     RationalFrameRate,
@@ -112,7 +113,9 @@ from taktcut.render import (
     list_aspect_presets,
     list_delivery_presets,
     probe_hardware_capabilities,
+    validate_deinterlace,
     validate_dialogue_eq,
+    validate_export_fps,
     validate_loudness_preset,
     validate_review_watermark_opacity,
     validate_review_watermark_text,
@@ -438,6 +441,20 @@ def _extract_timecode_burnin(payload: dict[str, Any]) -> TimecodeBurnInPosition:
     if raw is None or raw == "":
         return "off"
     return validate_timecode_burnin(raw)
+
+
+def _extract_export_fps(payload: dict[str, Any]) -> ExportFpsOption:
+    raw = payload.get("export_fps")
+    if raw is None or raw == "":
+        return "source"
+    return validate_export_fps(raw)
+
+
+def _extract_deinterlace(payload: dict[str, Any]) -> bool:
+    raw = payload.get("deinterlace")
+    if raw is None:
+        return False
+    return validate_deinterlace(raw)
 
 
 def _extract_review_watermark(payload: dict[str, Any]) -> tuple[str, float]:
@@ -1534,6 +1551,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             timecode_burnin = _extract_timecode_burnin(payload)
             review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
+            export_fps = _extract_export_fps(payload)
+            deinterlace = _extract_deinterlace(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1578,6 +1597,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 timecode_burnin=timecode_burnin,
                 review_watermark_text=review_watermark_text,
                 review_watermark_opacity=review_watermark_opacity,
+                export_fps=export_fps,
+                deinterlace=deinterlace,
                 prefer_hw=prefer_hw,
                 caps=caps,
                 delivery_preset=delivery_preset,
@@ -1962,6 +1983,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             timecode_burnin = _extract_timecode_burnin(payload)
             review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
+            export_fps = _extract_export_fps(payload)
+            deinterlace = _extract_deinterlace(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -2001,6 +2024,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 timecode_burnin=timecode_burnin,
                 review_watermark_text=review_watermark_text,
                 review_watermark_opacity=review_watermark_opacity,
+                export_fps=export_fps,
+                deinterlace=deinterlace,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
             job = client.submit_job(job_req)

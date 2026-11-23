@@ -895,3 +895,36 @@ def test_project_delivery_review_watermark_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["review_watermark_opacity"] = bad_op
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_export_fps_and_deinterlace_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    assert proj.delivery.export_fps == "source"
+    assert proj.delivery.deinterlace is False
+
+    proj.delivery.export_fps = "60"
+    proj.delivery.deinterlace = True
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.export_fps == "60"
+    assert loaded.delivery.deinterlace is True
+
+    proj_path = tmp_path / "broadcast_deint_24.taktcut.json"
+    proj.delivery.export_fps = "24"
+    proj.delivery.deinterlace = True
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.export_fps == "24"
+    assert disk_loaded.delivery.deinterlace is True
+
+    for bad_fps in ("120", "", "23.976", "24;evil", 24, True):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["export_fps"] = bad_fps
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_deint in ("true", "false", 1, 0, None, "yadif"):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["deinterlace"] = bad_deint
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

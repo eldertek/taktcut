@@ -36,6 +36,7 @@ from taktcut.models import (
     AscCdlParams,
     ClipTransformParams,
     DialogueEqPresetId,
+    ExportFpsOption,
     HardwareCapabilities,
     LoudnessPresetId,
     RationalFrameRate,
@@ -51,7 +52,9 @@ from taktcut.render import (
     build_render_plan,
     execute_render_plan,
     probe_hardware_capabilities,
+    validate_deinterlace,
     validate_dialogue_eq,
+    validate_export_fps,
     validate_loudness_preset,
     validate_review_watermark_opacity,
     validate_review_watermark_text,
@@ -233,6 +236,8 @@ class RemoteRenderJobRequest(BaseModel):
     timecode_burnin: TimecodeBurnInPosition = "off"
     review_watermark_text: str = ""
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
+    export_fps: ExportFpsOption = "source"
+    deinterlace: bool = False
     prefer_hw: bool = True
     chroma_key: ChromaKeyParams | None = None
     fx_stack: list[FxNode] = Field(default_factory=list)
@@ -271,6 +276,16 @@ class RemoteRenderJobRequest(BaseModel):
     @classmethod
     def _validate_review_watermark_opacity(cls, raw: Any) -> float:
         return validate_review_watermark_opacity(raw)
+
+    @field_validator("export_fps", mode="before")
+    @classmethod
+    def _validate_export_fps(cls, raw: Any) -> ExportFpsOption:
+        return validate_export_fps(raw)
+
+    @field_validator("deinterlace", mode="before")
+    @classmethod
+    def _validate_deinterlace(cls, raw: Any) -> bool:
+        return validate_deinterlace(raw)
 
     @field_validator("input_filename", "output_filename")
     @classmethod
@@ -554,6 +569,8 @@ class RemoteRenderState:
             timecode_burnin=req.timecode_burnin,
             review_watermark_text=req.review_watermark_text,
             review_watermark_opacity=req.review_watermark_opacity,
+            export_fps=req.export_fps,
+            deinterlace=req.deinterlace,
             prefer_hw=req.prefer_hw,
             caps=caps,
         )

@@ -186,6 +186,7 @@ TransitionPresetId = Literal["fade", "fadeblack", "wipeleft", "slideright", "zoo
 LoudnessPresetId = Literal["off", "youtube_14", "reels_16", "broadcast_23"]
 DialogueEqPresetId = Literal["off", "voice_clarity", "podcast_warm", "derumble"]
 TimecodeBurnInPosition = Literal["off", "top_left", "bottom_center", "bottom_right"]
+ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 
 ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "off",
@@ -193,6 +194,8 @@ ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "bottom_center",
     "bottom_right",
 )
+ALLOWED_EXPORT_FPS: tuple[ExportFpsOption, ...] = ("source", "24", "25", "30", "60")
+YADIF_DEINTERLACE_FILTER: str = "yadif=mode=0:parity=-1:deint=0"
 
 REVIEW_WATERMARK_MAX_LEN: int = 40
 REVIEW_WATERMARK_OPACITY_MIN: float = 0.15
@@ -505,6 +508,8 @@ class RenderPlan(BaseModel):
     timecode_burnin: TimecodeBurnInPosition = "off"
     review_watermark_text: str = ""
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
+    export_fps: ExportFpsOption = "source"
+    deinterlace: bool = False
     target_width: int | None = None
     target_height: int | None = None
     framing_mode: str | None = None
@@ -512,6 +517,24 @@ class RenderPlan(BaseModel):
     video_filter: str | None = None
     audio_filter: str | None = None
     argv: list[str]
+
+    @field_validator("export_fps", mode="before")
+    @classmethod
+    def _validate_plan_export_fps(cls, raw: Any) -> ExportFpsOption:
+        if not isinstance(raw, str):
+            raise ValueError(f"export_fps must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_EXPORT_FPS:
+            allowed = ", ".join(ALLOWED_EXPORT_FPS)
+            raise ValueError(f"Unsupported export_fps {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("deinterlace", mode="before")
+    @classmethod
+    def _validate_plan_deinterlace(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"deinterlace must be a boolean, got {raw!r}")
+        return raw
 
 
 class RenderResult(BaseModel):

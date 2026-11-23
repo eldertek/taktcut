@@ -25,6 +25,7 @@ from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     BpmGridConfig,
     DialogueEqPresetId,
+    ExportFpsOption,
     LoudnessPresetId,
     RationalFrameRate,
     RenderProfile,
@@ -43,6 +44,7 @@ from taktcut.render import (
     EncoderPresetId,
     FramingParams,
     validate_dialogue_eq,
+    validate_export_fps,
     validate_loudness_preset,
     validate_review_watermark_opacity,
     validate_review_watermark_text,
@@ -166,6 +168,8 @@ class ProjectDeliveryState(BaseModel):
     timecode_burnin: TimecodeBurnInPosition = "off"
     review_watermark_text: str = ""
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
+    export_fps: ExportFpsOption = "source"
+    deinterlace: bool = False
     lut_path: str = ""
     input_path: str = ".taktcut-samples/sample_rec709.mp4"
     output_path: str = "renders/delivery_web.mp4"
@@ -230,6 +234,11 @@ class ProjectDeliveryState(BaseModel):
     def _validate_review_watermark_opacity(cls, raw: Any) -> float:
         return validate_review_watermark_opacity(raw)
 
+    @field_validator("export_fps", mode="before")
+    @classmethod
+    def _validate_export_fps(cls, raw: Any) -> ExportFpsOption:
+        return validate_export_fps(raw)
+
     @field_validator("fps", mode="before")
     @classmethod
     def _validate_fps(cls, raw: Any) -> str:
@@ -248,6 +257,7 @@ class ProjectDeliveryState(BaseModel):
         return _require_safe_text(raw, str(info.field_name), max_len=512, allow_empty=True)
 
     @field_validator(
+        "deinterlace",
         "use_framing",
         "use_studio_cdl",
         "use_studio_fx",

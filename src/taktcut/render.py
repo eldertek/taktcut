@@ -24,14 +24,17 @@ from taktcut.color import (
 from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
+    ALLOWED_EXPORT_FPS,
     ALLOWED_TIMECODE_BURNIN,
     REVIEW_WATERMARK_MAX_LEN,
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     REVIEW_WATERMARK_OPACITY_MAX,
     REVIEW_WATERMARK_OPACITY_MIN,
+    YADIF_DEINTERLACE_FILTER,
     ClipTransformParams,
     DialogueEqPresetId,
     DynamicZoomPresetId,
+    ExportFpsOption,
     HardwareCapabilities,
     LoudnessPresetId,
     RationalFrameRate,
@@ -127,6 +130,39 @@ def validate_timecode_burnin(raw: Any) -> TimecodeBurnInPosition:
         allowed = ", ".join(ALLOWED_TIMECODE_BURNIN)
         raise ValueError(f"Unsupported timecode_burnin {raw!r}; expected one of: {allowed}")
     return cleaned
+
+
+def validate_export_fps(raw: Any) -> ExportFpsOption:
+    """Validate and normalize a Deliver export frame-rate override option."""
+    if not isinstance(raw, str):
+        raise ValueError(f"export_fps must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned not in ALLOWED_EXPORT_FPS:
+        allowed = ", ".join(ALLOWED_EXPORT_FPS)
+        raise ValueError(f"Unsupported export_fps {raw!r}; expected one of: {allowed}")
+    return cleaned
+
+
+def validate_deinterlace(raw: Any) -> bool:
+    """Validate strict boolean broadcast deinterlace toggle."""
+    if not isinstance(raw, bool):
+        raise ValueError(f"deinterlace must be a boolean, got {raw!r}")
+    return raw
+
+
+def compile_deinterlace_filter(deinterlace: bool) -> str | None:
+    """Compile broadcast yadif deinterlace filter when enabled."""
+    if not validate_deinterlace(deinterlace):
+        return None
+    return YADIF_DEINTERLACE_FILTER
+
+
+def compile_export_fps_filter(export_fps: ExportFpsOption) -> str | None:
+    """Compile FFmpeg fps video filter when export_fps differs from 'source'."""
+    resolved = validate_export_fps(export_fps)
+    if resolved == "source":
+        return None
+    return f"fps={resolved}"
 
 
 def resolve_timecode_fontfile() -> Path | None:
@@ -1381,6 +1417,8 @@ def build_render_plan(
     timecode_burnin: TimecodeBurnInPosition | None = None,
     review_watermark_text: str | None = None,
     review_watermark_opacity: float | None = None,
+    export_fps: ExportFpsOption | None = None,
+    deinterlace: bool = False,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1403,6 +1441,10 @@ def build_render_plan(
         if review_watermark_opacity is not None
         else REVIEW_WATERMARK_OPACITY_DEFAULT
     )
+    resolved_export_fps: ExportFpsOption = (
+        validate_export_fps(export_fps) if export_fps is not None else "source"
+    )
+    resolved_deinterlace: bool = validate_deinterlace(deinterlace)
     resolved_profile = (
         profile
         if profile is not None
@@ -1427,7 +1469,12 @@ def build_render_plan(
 
     hw = caps or probe_hardware_capabilities(ffmpeg_bin=ffmpeg_bin, verify_nvenc_runtime=prefer_hw)
     encoder = select_encoder(resolved_profile, hw, prefer_hw=prefer_hw)
-    target_fps = fps or RationalFrameRate(num=25, den=1)
+    base_fps = fps or RationalFrameRate(num=25, den=1)
+    target_fps = (
+        RationalFrameRate(num=int(resolved_export_fps), den=1)
+        if resolved_export_fps != "source"
+        else base_fps
+    )
     gop = max(2, round(2 * target_fps.as_float))
 
     is_prores = resolved_profile == RenderProfile.PRORES_HQ
@@ -1512,8 +1559,14 @@ def build_render_plan(
         )
 
     vf_parts: list[str] = []
+    deint_vf = compile_deinterlace_filter(resolved_deinterlace)
+    if deint_vf is not None:
+        vf_parts.append(deint_vf)
     if retime_vf is not None:
         vf_parts.append(retime_vf)
+    export_fps_vf = compile_export_fps_filter(resolved_export_fps)
+    if export_fps_vf is not None:
+        vf_parts.append(export_fps_vf)
     if framing_vf is not None:
         vf_parts.append(framing_vf)
     if transform_vf is not None:
@@ -1668,6 +1721,8 @@ def build_render_plan(
         timecode_burnin=resolved_timecode_burnin,
         review_watermark_text=resolved_watermark_text,
         review_watermark_opacity=resolved_watermark_opacity,
+        export_fps=resolved_export_fps,
+        deinterlace=resolved_deinterlace,
         target_width=target_width,
         target_height=target_height,
         framing_mode=framing_mode,

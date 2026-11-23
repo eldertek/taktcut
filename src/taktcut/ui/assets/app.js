@@ -2023,6 +2023,8 @@ function serializeFullProjectState() {
       timecode_burnin: txt("render-timecode-burnin", "off") || "off",
       review_watermark_text: txt("render-watermark-text", ""),
       review_watermark_opacity: Number(byId("render-watermark-opacity")?.value ?? 0.35),
+      export_fps: txt("render-export-fps", "source") || "source",
+      deinterlace: chk("render-deinterlace", false),
       lut_path: txt("render-lut-path", ""),
       input_path: txt("render-input-path", ".taktcut-samples/sample_rec709.mp4"),
       output_path: txt("render-output-path", "renders/delivery_web.mp4"),
@@ -2192,6 +2194,8 @@ function applyFullProjectState(project, validation) {
   });
   setVal("render-lut-path", del.lut_path || "");
   setVal("render-timecode-burnin", del.timecode_burnin || "off");
+  setVal("render-export-fps", del.export_fps || "source");
+  setChk("render-deinterlace", Boolean(del.deinterlace));
   setVal("render-watermark-text", del.review_watermark_text || "");
   const wmOpacityVal =
     del.review_watermark_opacity !== null && del.review_watermark_opacity !== undefined
@@ -4641,6 +4645,10 @@ async function buildOrExecuteRender(execute) {
     const reviewWatermarkText = wmTextEl ? wmTextEl.value.trim() : "";
     const wmOpacityEl = byId("render-watermark-opacity");
     const reviewWatermarkOpacity = wmOpacityEl ? Number(wmOpacityEl.value) : 0.35;
+    const exportFpsEl = byId("render-export-fps");
+    const exportFps = exportFpsEl ? exportFpsEl.value : "source";
+    const deinterlaceEl = byId("render-deinterlace");
+    const deinterlace = deinterlaceEl ? Boolean(deinterlaceEl.checked) : false;
 
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
@@ -4669,6 +4677,8 @@ async function buildOrExecuteRender(execute) {
         timecode_burnin: timecodeBurnin,
         review_watermark_text: reviewWatermarkText,
         review_watermark_opacity: reviewWatermarkOpacity,
+        export_fps: exportFps,
+        deinterlace,
         prefer_hw: preferHw
       });
       renderRemoteJobTelemetry(submitData);
@@ -4726,6 +4736,8 @@ async function buildOrExecuteRender(execute) {
       timecode_burnin: timecodeBurnin,
       review_watermark_text: reviewWatermarkText,
       review_watermark_opacity: reviewWatermarkOpacity,
+      export_fps: exportFps,
+      deinterlace,
       prefer_hw: preferHw,
       execute
     };
@@ -4759,6 +4771,16 @@ async function buildOrExecuteRender(execute) {
       ["Video Quality", qualityLabel],
       ["Audio Stream", audioBitrateLabel],
       ["Rational FPS", fpsLabel],
+      [
+        t("render.plan.exportFps"),
+        plan.export_fps && plan.export_fps !== "source"
+          ? `${plan.export_fps} fps`
+          : t("render.exportFps.source")
+      ],
+      [
+        t("render.plan.deinterlace"),
+        plan.deinterlace ? "yadif (mode=0:parity=-1:deint=0)" : "off"
+      ],
       ["GOP Frames", String(plan.gop_frames)],
       ["Pixel Format", plan.pix_fmt],
       ["MP4 Faststart", String(plan.faststart)],

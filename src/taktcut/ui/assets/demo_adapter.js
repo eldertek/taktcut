@@ -964,9 +964,24 @@ export function createApiClient() {
         }
         const presetObj = body.delivery_preset ? getDeliveryPresetClient(body.delivery_preset) : null;
         const resolvedProfile = body.profile || (presetObj ? presetObj.profile : "web_h264");
+        const rawExportFps =
+          typeof body.export_fps === "string" && body.export_fps.trim() !== ""
+            ? body.export_fps.trim().toLowerCase()
+            : body.export_fps === undefined || body.export_fps === null
+              ? "source"
+              : null;
+        if (rawExportFps === null || !["source", "24", "25", "30", "60"].includes(rawExportFps)) {
+          throw new Error(`Unsupported export_fps '${body.export_fps}'`);
+        }
+        if (body.deinterlace !== undefined && typeof body.deinterlace !== "boolean") {
+          throw new Error("deinterlace must be a boolean");
+        }
+        const deinterlace = Boolean(body.deinterlace);
         const fpsParts = String(body.fps || "25").split("/");
-        const fpsNum = Number.parseInt(fpsParts[0], 10) || 25;
-        const fpsDen = Number.parseInt(fpsParts[1] || "1", 10) || 1;
+        const baseFpsNum = Number.parseInt(fpsParts[0], 10) || 25;
+        const baseFpsDen = Number.parseInt(fpsParts[1] || "1", 10) || 1;
+        const fpsNum = rawExportFps !== "source" ? Number.parseInt(rawExportFps, 10) : baseFpsNum;
+        const fpsDen = rawExportFps !== "source" ? 1 : baseFpsDen;
         const isProres = resolvedProfile === "prores_hq";
         const encoder = isProres ? "prores_ks" : resolvedProfile === "master_hevc" ? "libx265" : "libx264";
         const pixFmt = isProres ? "yuv422p10le" : "yuv420p";
@@ -996,12 +1011,18 @@ export function createApiClient() {
         let targetWidth = null;
         let targetHeight = null;
         let framingMode = null;
+        if (deinterlace) {
+          vfParts.push("yadif=mode=0:parity=-1:deint=0");
+        }
         if (body.retime_params) {
           const compiledRetime = compileRetimeFilterClient(body.retime_params);
           if (!compiledRetime.is_identity) {
             if (compiledRetime.video_filtergraph) vfParts.push(compiledRetime.video_filtergraph);
             if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
           }
+        }
+        if (rawExportFps !== "source") {
+          vfParts.push(`fps=${rawExportFps}`);
         }
         const effectiveFraming =
           body.framing ||
@@ -1143,6 +1164,7 @@ export function createApiClient() {
           }
         }
         const af = afParts.length > 0 ? afParts.join(",") : null;
+        const fpsArg = fpsDen === 1 ? String(fpsNum) : `${fpsNum}/${fpsDen}`;
         const argv = [
           "ffmpeg",
           "-hide_banner",
@@ -1152,7 +1174,7 @@ export function createApiClient() {
           "-fps_mode",
           "cfr",
           "-r",
-          body.fps || "25",
+          fpsArg,
           "-c:v",
           encoder
         ];
@@ -1191,6 +1213,8 @@ export function createApiClient() {
             timecode_burnin: tcModeRaw,
             review_watermark_text: rawWmText,
             review_watermark_opacity: rawWmOpacity,
+            export_fps: rawExportFps,
+            deinterlace,
             target_width: targetWidth,
             target_height: targetHeight,
             framing_mode: framingMode,

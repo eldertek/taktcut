@@ -32,8 +32,10 @@ from taktcut.render import (
     compile_audio_filter_result,
     compile_auto_duck_filter,
     compile_auto_duck_filter_result,
+    compile_deinterlace_filter,
     compile_dialogue_eq_filter,
     compile_dynamic_zoom_filter,
+    compile_export_fps_filter,
     compile_fairlight_audio_filter,
     compile_framing_filter,
     compile_framing_filter_result,
@@ -48,6 +50,8 @@ from taktcut.render import (
     get_delivery_preset,
     list_aspect_presets,
     list_delivery_presets,
+    validate_deinterlace,
+    validate_export_fps,
     validate_review_watermark_opacity,
     validate_review_watermark_text,
     validate_timecode_burnin,
@@ -1214,3 +1218,125 @@ def test_review_watermark_real_ffmpeg_render(tmp_path: Path) -> None:
     assert probe.is_cfr is True
     assert probe.width == 640
     assert probe.height == 360
+
+
+def test_export_fps_and_deinterlace_validation_compile_and_real_ffmpeg_render(
+    tmp_path: Path,
+) -> None:
+    assert validate_export_fps("source") == "source"
+    for valid_fps in ("24", " 25 ", "30", "60"):
+        assert validate_export_fps(valid_fps) == valid_fps.strip()
+
+    for bad_fps in ("", "120", "23.976", "24000/1001", "24;evil", 24, True, None):
+        with pytest.raises(ValueError):
+            validate_export_fps(bad_fps)
+
+    assert validate_deinterlace(False) is False
+    assert validate_deinterlace(True) is True
+    for bad_deint in ("true", "false", 1, 0, None, "yadif"):
+        with pytest.raises(ValueError):
+            validate_deinterlace(bad_deint)
+
+    assert compile_deinterlace_filter(False) is None
+    assert compile_deinterlace_filter(True) == "yadif=mode=0:parity=-1:deint=0"
+    assert compile_export_fps_filter("source") is None
+    assert compile_export_fps_filter("24") == "fps=24"
+    assert compile_export_fps_filter("60") == "fps=60"
+
+    interlaced_src = tmp_path / "interlaced_25i.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=50:duration=1.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:sample_rate=48000:duration=1.5",
+            "-vf",
+            "tinterlace=interleave_top",
+            "-flags",
+            "+ildct+ilme",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            str(interlaced_src),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    out_clean = tmp_path / "source_keep.mp4"
+    clean_plan = build_render_plan(
+        input_path=interlaced_src,
+        output_path=out_clean,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        export_fps="source",
+        deinterlace=False,
+        prefer_hw=False,
+    )
+    assert clean_plan.export_fps == "source"
+    assert clean_plan.deinterlace is False
+    assert clean_plan.fps == RationalFrameRate(num=25, den=1)
+    assert clean_plan.gop_frames == 50
+    assert clean_plan.video_filter is None
+
+    out_deint_24 = tmp_path / "deint_24p.mp4"
+    deint_plan = build_render_plan(
+        input_path=interlaced_src,
+        output_path=out_deint_24,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        export_fps="24",
+        deinterlace=True,
+        timecode_burnin="bottom_center",
+        prefer_hw=False,
+    )
+    assert deint_plan.export_fps == "24"
+    assert deint_plan.deinterlace is True
+    assert deint_plan.fps == RationalFrameRate(num=24, den=1)
+    assert deint_plan.gop_frames == 48
+    assert deint_plan.video_filter is not None
+    assert deint_plan.video_filter.startswith("yadif=mode=0:parity=-1:deint=0,fps=24,")
+    assert "timecode='00\\:00\\:00\\:00':rate=24" in deint_plan.video_filter
+    assert "-r" in deint_plan.argv
+    r_idx = deint_plan.argv.index("-r")
+    assert deint_plan.argv[r_idx + 1] == "24"
+
+    res = execute_render_plan(deint_plan)
+    assert res.success is True, res.stderr_tail
+    assert res.bytes_written > 0
+
+    probe = probe_media(out_deint_24)
+    assert probe.is_cfr is True
+    assert probe.r_frame_rate == "24/1"
+    assert probe.avg_frame_rate == "24/1"
+
+    ffprobe_proc = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=field_order",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(out_deint_24),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert ffprobe_proc.stdout.strip() == "progressive"

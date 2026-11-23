@@ -1404,10 +1404,20 @@
                   </select>
                 </div>
               </div>
-              <div class="form-row-two">
+              <div class="form-row-three">
                 <div class="form-row">
                   <label for="render-fps" data-i18n="render.label.fps">Target Rational FPS</label>
                   <input type="text" id="render-fps" class="input-control mono" value="25" placeholder="25 or 24000/1001">
+                </div>
+                <div class="form-row">
+                  <label for="render-export-fps" data-i18n="render.label.exportFps">Export Frame Rate (CFR)</label>
+                  <select id="render-export-fps" class="input-control mono">
+                    <option value="source" data-i18n="render.exportFps.source" selected>Source (Timeline)</option>
+                    <option value="24">24 fps</option>
+                    <option value="25">25 fps</option>
+                    <option value="30">30 fps</option>
+                    <option value="60">60 fps</option>
+                  </select>
                 </div>
                 <div class="form-row">
                   <label for="render-lufs" data-i18n="render.label.lufs">Target Loudness (LUFS)</label>
@@ -1501,6 +1511,10 @@
                 </div>
               </div>
               <div class="checkbox-row">
+                <label class="check-label">
+                  <input type="checkbox" id="render-deinterlace">
+                  <span data-i18n="render.check.deinterlace">Broadcast Deinterlace (yadif field-to-frame)</span>
+                </label>
                 <label class="check-label">
                   <input type="checkbox" id="render-use-framing">
                   <span data-i18n="render.check.framing">Conform output aspect ratio &amp; resolution (scale + crop/pad)</span>
