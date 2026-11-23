@@ -3634,9 +3634,12 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 page.locator("#btn-build-render-plan").click()
                 page.wait_for_function(
                     "() => (document.getElementById('render-argv-output').textContent || '')"
-                    ".includes('crop=w=')"
+                    ".includes('ih*9/16')"
                 )
+                rf_argv = page.locator("#render-argv-output").text_content() or ""
                 rf_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "1+(0.4000)" in rf_argv
+                assert "1+(-0.2500)" in rf_argv
                 assert "9:16 (0.40, -0.25)" in rf_kv
                 rf_overflow = page.evaluate(
                     "() => document.documentElement.scrollWidth - window.innerWidth"
