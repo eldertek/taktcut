@@ -2843,6 +2843,9 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 page.wait_for_function(
                     "() => !document.getElementById('media-pool-info-dialog').open"
                 )
+                page.locator("#playhead-slider").fill("25")
+                page.locator("#playhead-slider").dispatch_event("input")
+                assert page.locator("#program-frame-counter").text_content() == "25f / 500f"
                 if width == 1440:
                     page.keyboard.press("ArrowRight")
                     assert page.locator("#program-frame-counter").text_content() == "26f / 500f"
