@@ -28,6 +28,7 @@ import {
   compileAutoDuckFilterClient,
   compileColorNodeChainClient,
   compileFairlightAudioFilterClient,
+  compileFairlightAudioRackClient,
   compileFairlightMixerClient,
   compileFramingFilterClient,
   compileMinterpolateFilterClient,
@@ -2090,6 +2091,12 @@ export function createApiClient() {
           if (compiledFairlight.filtergraph) {
             afParts.push(compiledFairlight.filtergraph);
           }
+          if (body.fairlight_rack) {
+            const compiledRack = compileFairlightAudioRackClient(body.fairlight_rack);
+            if (!compiledRack.is_identity && compiledRack.filtergraph) {
+              afParts.push(compiledRack.filtergraph);
+            }
+          }
           if (
             fairlight.loudness_preset === "off" &&
             effectiveLufs !== null &&
@@ -2392,6 +2399,14 @@ export function createApiClient() {
         );
       }
       return requestJson("/api/fairlight/mixer/compile", { method: "POST", body: payload });
+    },
+    async compileFairlightAudioRack(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileFairlightAudioRackClient(
+          payload && payload.fairlight_rack ? payload.fairlight_rack : payload
+        );
+      }
+      return requestJson("/api/fairlight/rack/compile", { method: "POST", body: payload });
     },
     async compileRetimeFilter(payload) {
       if (resolvedMode === "static-demo") {

@@ -29,6 +29,10 @@ from taktcut.render import (
     ClipRetimeParams,
     ClipVideoFadeParams,
     FairlightAudioParams,
+    FairlightAudioRackParams,
+    FairlightCompressorParams,
+    FairlightEqBandParams,
+    FairlightLimiterParams,
     FilmGrainParams,
     FramingParams,
     LowerThirdParams,
@@ -36,6 +40,7 @@ from taktcut.render import (
     RetimeParams,
     VignetteParams,
     VoiceCleanupParams,
+    apply_fairlight_rack_preset,
     build_atempo_stages,
     build_render_plan,
     compile_audio_filter,
@@ -48,6 +53,8 @@ from taktcut.render import (
     compile_dynamic_zoom_filter,
     compile_export_fps_filter,
     compile_fairlight_audio_filter,
+    compile_fairlight_audio_rack_filter,
+    compile_fairlight_audio_rack_filter_result,
     compile_film_grain_filter,
     compile_film_grain_filter_result,
     compile_framing_filter,
@@ -73,6 +80,7 @@ from taktcut.render import (
     get_delivery_preset,
     list_aspect_presets,
     list_delivery_presets,
+    list_fairlight_rack_presets,
     resolve_audio_only_output_path,
     validate_audio_only_format,
     validate_deinterlace,
@@ -2394,3 +2402,79 @@ def test_dve_pip_crop_feather_border_shadow_and_real_ffmpeg(tmp_path: Path) -> N
         probe = probe_media(out)
         assert probe.width == 640
         assert probe.height == 360
+
+
+def test_fairlight_broadcast_audio_rack_compile_and_ffmpeg_execution(tmp_path: Path) -> None:
+    default_rack = FairlightAudioRackParams()
+    assert default_rack.is_identity() is True
+    assert compile_fairlight_audio_rack_filter(default_rack) is None
+    res_idle = compile_fairlight_audio_rack_filter_result(default_rack)
+    assert res_idle.is_identity is True
+    assert res_idle.filtergraph == ""
+    assert res_idle.ffmpeg_af_args == []
+    assert res_idle.estimated_gr_db == 0.0
+    assert res_idle.ceiling_dbtp == 0.0
+
+    presets = list_fairlight_rack_presets()
+    assert [p.preset_id for p in presets] == [
+        "flat",
+        "broadcast_voice",
+        "podcast_warm",
+        "cinema_punch",
+        "music_master",
+    ]
+
+    bv = apply_fairlight_rack_preset("broadcast_voice")
+    assert bv.is_identity() is False
+    bv_res = compile_fairlight_audio_rack_filter_result(bv)
+    assert bv_res.is_identity is False
+    assert "highpass=f=85.0" in bv_res.filtergraph
+    assert "lowshelf=f=110.0:t=q:w=0.70:g=-2.50" in bv_res.filtergraph
+    assert "equalizer=f=340.0:t=q:w=1.60:g=-3.00" in bv_res.filtergraph
+    assert "equalizer=f=3200.0:t=q:w=1.30:g=3.50" in bv_res.filtergraph
+    assert "highshelf=f=9500.0:t=q:w=0.70:g=2.00" in bv_res.filtergraph
+    assert "acompressor=" in bv_res.filtergraph
+    assert "alimiter=" in bv_res.filtergraph
+    assert bv_res.estimated_gr_db < -1.0
+    assert bv_res.ceiling_dbtp == pytest.approx(-1.0)
+    assert bv_res.eq_band_summary == "HP 85Hz + 4B"
+
+    # Reject out-of-range, wrong types, and extra fields
+    with pytest.raises(ValidationError):
+        FairlightEqBandParams(band_id="low", freq_hz=600.0)
+    with pytest.raises(ValidationError):
+        FairlightEqBandParams(band_id="low_mid", gain_db=24.0)
+    with pytest.raises(ValidationError):
+        FairlightCompressorParams(enabled=True, ratio=25.0)
+    with pytest.raises(ValidationError):
+        FairlightCompressorParams(enabled=True, threshold_db=True)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        FairlightLimiterParams(enabled=True, ceiling_db=0.0)
+    with pytest.raises(ValidationError):
+        FairlightAudioRackParams.model_validate({"extra_field": 1})
+
+    # Real FFmpeg render test with Fairlight Broadcast Audio Rack
+    src = tmp_path / "rack_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "rack_broadcast_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        fairlight_rack=bv,
+        prefer_hw=False,
+    )
+    assert plan.fairlight_rack_enabled is True
+    assert plan.fairlight_rack_preset == "broadcast_voice"
+    assert plan.audio_filter is not None
+    assert "lowshelf=" in plan.audio_filter
+    assert "acompressor=" in plan.audio_filter
+    assert "alimiter=" in plan.audio_filter
+
+    exec_res = execute_render_plan(plan)
+    assert exec_res.success is True, f"Fairlight rack render failed: {exec_res.stderr_tail}"
+    assert exec_res.bytes_written > 0
+    probe = probe_media(out)
+    assert probe.audio_codec == "aac"
+    assert probe.video_codec == "h264"

@@ -8423,5 +8423,237 @@ def test_timeline_slip_slide_roll_ripple_sync_lock_parity_and_playwright(tmp_pat
         thread.join(timeout=5)
 
 
+def test_ui_fairlight_broadcast_audio_rack_e2e(tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    from taktcut.render import (
+        apply_fairlight_rack_preset,
+        compile_fairlight_audio_rack_filter_result,
+    )
+    from taktcut.ui.server import ASSETS_DIR
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        # 1. Backend API /api/fairlight/rack/compile (identity, preset, invalid -> 400)
+        id_status, _, id_raw = _http_call(
+            f"{base_url}/api/fairlight/rack/compile",
+            method="POST",
+            payload={"preset_id": "flat"},
+        )
+        assert id_status == 200
+        id_data = json.loads(id_raw.decode("utf-8"))
+        assert id_data["is_identity"] is True
+        assert id_data["filtergraph"] == ""
+        assert id_data["eq_band_summary"] == "BYPASS"
+
+        bv_model = apply_fairlight_rack_preset("broadcast_voice")
+        py_bv = compile_fairlight_audio_rack_filter_result(bv_model)
+        bv_status, _, bv_raw = _http_call(
+            f"{base_url}/api/fairlight/rack/compile",
+            method="POST",
+            payload={"fairlight_rack": bv_model.model_dump(mode="json")},
+        )
+        assert bv_status == 200
+        bv_data = json.loads(bv_raw.decode("utf-8"))
+        assert bv_data["is_identity"] is False
+        assert bv_data["filtergraph"] == py_bv.filtergraph
+        assert "lowshelf=" in bv_data["filtergraph"]
+        assert "acompressor=" in bv_data["filtergraph"]
+        assert "alimiter=" in bv_data["filtergraph"]
+
+        for bad_payload in (
+            {"fairlight_rack": "not-an-object"},
+            {"fairlight_rack": {"preset_id": "bogus"}},
+            {"fairlight_rack": {"hpf_hz": 500}},
+            {"fairlight_rack": {"limiter": {"enabled": True, "ceiling_db": 0.5}}},
+            {"fairlight_rack": {"compressor": {"enabled": True, "ratio": 99}}},
+        ):
+            bad_status, _, _ = _http_call(
+                f"{base_url}/api/fairlight/rack/compile",
+                method="POST",
+                payload=bad_payload,
+            )
+            assert bad_status == 400
+
+        # 2. Render plan endpoint with fairlight_rack
+        sample_in = tmp_path / "rack_input.mp4"
+        sample_in.write_bytes(b"fake-media")
+        render_status, _, render_raw = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": "rack_input.mp4",
+                "output_path": "renders/rack_out.mp4",
+                "profile": "web_h264",
+                "fps": "25/1",
+                "fairlight_rack": bv_model.model_dump(mode="json"),
+                "execute": False,
+            },
+        )
+        assert render_status == 200
+        render_data = json.loads(render_raw.decode("utf-8"))
+        assert render_data["plan"]["fairlight_rack_enabled"] is True
+        assert render_data["plan"]["fairlight_rack_preset"] == "broadcast_voice"
+        assert "lowshelf=" in render_data["plan"]["audio_filter"]
+        assert "acompressor=" in render_data["plan"]["audio_filter"]
+        assert "alimiter=" in render_data["plan"]["audio_filter"]
+
+        # 3. Node.js parity + static-demo adapter parity
+        if shutil.which("node"):
+            ops_url = (ASSETS_DIR / "timeline_ops.js").as_uri()
+            demo_url = (ASSETS_DIR / "demo_adapter.js").as_uri()
+            node_script = (
+                "import assert from 'node:assert/strict';\n"
+                f"import {{ createApiClient }} from '{demo_url}';\n"
+                "import {\n"
+                "  applyFairlightRackPresetClient,\n"
+                "  compileFairlightAudioRackClient,\n"
+                "  evaluateFairlightEqCurveDb,\n"
+                "  evaluateFairlightDynamicsTransferDb\n"
+                f"}} from '{ops_url}';\n"
+                "const bv = applyFairlightRackPresetClient('broadcast_voice');\n"
+                "const comp = compileFairlightAudioRackClient(bv);\n"
+                f"assert.equal(comp.filtergraph, {json.dumps(py_bv.filtergraph)});\n"
+                "assert.equal(comp.is_identity, false);\n"
+                "assert.ok(evaluateFairlightEqCurveDb(bv, 3200) > 2.0);\n"
+                "assert.ok(evaluateFairlightEqCurveDb(bv, 40) < -5.0);\n"
+                "assert.ok(evaluateFairlightDynamicsTransferDb(bv, 0) <= -0.99);\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const client = createApiClient({ mode: 'static-demo' });\n"
+                "const apiRes = await client.compileFairlightAudioRack({ fairlight_rack: bv });\n"
+                f"assert.equal(apiRes.filtergraph, {json.dumps(py_bv.filtergraph)});\n"
+                "console.log('FAIRLIGHT_RACK_PARITY_OK');\n"
+            )
+            proc = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed: {proc.stderr}"
+            assert "FAIRLIGHT_RACK_PARITY_OK" in proc.stdout
+
+        # 4. Playwright live UI verification (1440x900 + 375x812, EN/FR, zero overflow)
+        sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_function(
+                    "() => document.getElementById('fairlight-rack-badge')"
+                    "?.textContent === 'BYPASS'"
+                )
+                page.select_option("#fairlight-rack-preset", "broadcast_voice")
+                page.wait_for_function(
+                    "() => (document.getElementById('fairlight-rack-af-preview')"
+                    "?.textContent || '').includes('acompressor=')"
+                )
+                rack_preview = page.locator("#fairlight-rack-af-preview").text_content() or ""
+                assert "highpass=f=85.0" in rack_preview
+                assert "lowshelf=" in rack_preview
+                assert "alimiter=" in rack_preview
+
+                eq_pixels = page.evaluate(
+                    "() => {"
+                    "  const c = document.getElementById('fairlight-eq-canvas');"
+                    "  const ctx = c.getContext('2d');"
+                    "  const d = ctx.getImageData(0, 0, c.width, c.height).data;"
+                    "  let nonBg = 0;"
+                    "  for (let i = 0; i < d.length; i += 16) {"
+                    "    if (d[i] > 35 || d[i+1] > 35 || d[i+2] > 45) nonBg++;"
+                    "  }"
+                    "  return nonBg;"
+                    "}"
+                )
+                assert eq_pixels > 50
+
+                # Switch to Dynamics & Limiter tab and adjust Limiter ceiling
+                page.click("#fairlight-rack-tab-dyn")
+                assert (
+                    page.locator("#fairlight-rack-tab-dyn").get_attribute("aria-selected")
+                    == "true"
+                )
+                page.fill("#fairlight-lim-ceiling-num", "-2.0")
+                page.locator("#fairlight-lim-ceiling-num").dispatch_event("input")
+                page.wait_for_function(
+                    "() => document.getElementById('fairlight-lim-ceiling-badge')?.textContent"
+                    " === '-2.0 dBTP'"
+                )
+                dyn_pixels = page.evaluate(
+                    "() => {"
+                    "  const c = document.getElementById('fairlight-dyn-canvas');"
+                    "  const ctx = c.getContext('2d');"
+                    "  const d = ctx.getImageData(0, 0, c.width, c.height).data;"
+                    "  let nonBg = 0;"
+                    "  for (let i = 0; i < d.length; i += 16) {"
+                    "    if (d[i] > 35 || d[i+1] > 35 || d[i+2] > 45) nonBg++;"
+                    "  }"
+                    "  return nonBg;"
+                    "}"
+                )
+                assert dyn_pixels > 40
+
+                # Verify Deliver Audio preview reflects Fairlight Rack
+                del_preview = page.locator("#render-audio-af-preview").text_content() or ""
+                assert "acompressor=" in del_preview
+                assert "alimiter=" in del_preview
+
+                # Switch to FR and check diacritics
+                page.click("#lang-fr")
+                assert "Dynamique & Limiteur" in (
+                    page.locator("#fairlight-rack-tab-dyn").text_content() or ""
+                )
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+                for btn_id in (
+                    "fairlight-rack-tab-eq",
+                    "fairlight-rack-tab-dyn",
+                    "btn-fairlight-comp-toggle",
+                    "btn-fairlight-lim-toggle",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                # Reset back to BYPASS
+                page.click("#btn-fairlight-rack-reset")
+                page.wait_for_function(
+                    "() => document.getElementById('fairlight-rack-badge')"
+                    "?.textContent === 'BYPASS'"
+                )
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 
 

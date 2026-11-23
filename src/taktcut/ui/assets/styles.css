@@ -4377,6 +4377,199 @@ input[type="range"] {
   min-width: 0;
 }
 
+/* FAIRLIGHT BROADCAST AUDIO RACK (4-BAND PARAMETRIC EQ + DYNAMICS + LIMITER) */
+.fairlight-rack-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.fairlight-rack-preset-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fairlight-rack-preset-row label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.fairlight-rack-preset-row select {
+  width: 100%;
+  min-width: 0;
+}
+
+.fairlight-rack-subtabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.fairlight-rack-tab-btn {
+  padding: 5px 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border-inner);
+  background: var(--bg-workbench);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.fairlight-rack-tab-btn.is-active {
+  background: rgba(57, 197, 207, 0.16);
+  border-color: #39c5cf;
+  color: #7ee8f0;
+}
+
+.fairlight-rack-tab-btn:focus-visible,
+.fairlight-stage-btn:focus-visible,
+.fairlight-band-btn:focus-visible {
+  outline: 2px solid #39c5cf;
+  outline-offset: 1px;
+}
+
+.fairlight-rack-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fairlight-rack-toggle-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rack-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.rack-inline-field .input-num {
+  width: 58px;
+  min-width: 0;
+}
+
+.fairlight-stage-btn.is-active {
+  background: rgba(57, 197, 207, 0.18);
+  border-color: #39c5cf;
+  color: #7ee8f0;
+}
+
+.fairlight-rack-canvas-well {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  background: #111216;
+  overflow: hidden;
+}
+
+.fairlight-rack-canvas {
+  display: block;
+  width: 100%;
+  height: 152px;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.fairlight-eq-band-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.fairlight-band-btn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fairlight-band-btn[data-eq-band="low"].is-active {
+  border-color: #ffb648;
+  color: #ffb648;
+  background: rgba(255, 182, 72, 0.14);
+}
+
+.fairlight-band-btn[data-eq-band="low_mid"].is-active {
+  border-color: #39c5cf;
+  color: #7ee8f0;
+  background: rgba(57, 197, 207, 0.14);
+}
+
+.fairlight-band-btn[data-eq-band="high_mid"].is-active {
+  border-color: #a78bfa;
+  color: #ddd6fe;
+  background: rgba(167, 139, 250, 0.14);
+}
+
+.fairlight-band-btn[data-eq-band="high"].is-active {
+  border-color: #34d399;
+  color: #a7f3d0;
+  background: rgba(52, 211, 153, 0.14);
+}
+
+.fairlight-eq-band-controls,
+.fairlight-dyn-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+}
+
+.fairlight-band-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.fairlight-dyn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+#fairlight-rack-af-preview {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  min-width: 0;
+}
+
 /* CLIP MOTION TRANSFORM INSPECTOR */
 .transform-inspector-dock {
   display: flex;
@@ -6620,9 +6813,18 @@ input[type="range"] {
   .fade-quick-btn,
   .fade-inspector-dock .btn-mini,
   .fairlight-dock .btn-mini,
+  .fairlight-rack-dock .btn-mini,
+  .fairlight-rack-tab-btn,
   .audio-inspector-dock .btn-mini {
     min-width: 44px;
     min-height: 45px;
+  }
+  .fairlight-rack-preset-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .fairlight-eq-band-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .fairlight-mixer-console {
     grid-template-columns: repeat(2, minmax(0, 1fr));

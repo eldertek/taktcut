@@ -780,6 +780,123 @@
                     <div id="fairlight-af-preview" class="telemetry-note mono" data-i18n="timeline.fairlight.bypassed">Fairlight EQ &amp; Loudness bypassed.</div>
                   </div>
                 </div>
+                <div id="timeline-fairlight-rack-dock" class="fairlight-rack-dock" role="region" aria-label="Fairlight Broadcast Audio Rack">
+                  <div class="pane-subheader">
+                    <span data-i18n="timeline.fairlightRack.title">Fairlight Broadcast Audio Rack</span>
+                    <div class="viewer-controls">
+                      <span id="fairlight-rack-badge" class="nle-tag mono">BYPASS</span>
+                      <button type="button" id="btn-fairlight-rack-reset" class="btn btn-mini" data-i18n="timeline.fairlightRack.reset" aria-label="Reset Fairlight Audio Rack">Rst</button>
+                    </div>
+                  </div>
+                  <div class="fairlight-rack-preset-row mono">
+                    <label for="fairlight-rack-preset" data-i18n="timeline.fairlightRack.preset">Rack Preset</label>
+                    <select id="fairlight-rack-preset" class="input-control mono">
+                      <option value="flat" data-i18n="fairlightRack.preset.flat">Flat (Bypass)</option>
+                      <option value="broadcast_voice" data-i18n="fairlightRack.preset.broadcast_voice">Broadcast Voice (HP 85 + Comp + -1 dBTP)</option>
+                      <option value="podcast_warm" data-i18n="fairlightRack.preset.podcast_warm">Podcast Warm (HP 70 + Warmth + -1.5 dBTP)</option>
+                      <option value="cinema_punch" data-i18n="fairlightRack.preset.cinema_punch">Cinema Punch (+3 dB Low + 4:1 Comp)</option>
+                      <option value="music_master" data-i18n="fairlightRack.preset.music_master">Music Master (2.5:1 Glue + -1 dBTP)</option>
+                    </select>
+                  </div>
+                  <div id="fairlight-rack-subtabs" class="fairlight-rack-subtabs" role="tablist" aria-label="Fairlight Audio Rack Modules">
+                    <button type="button" role="tab" id="fairlight-rack-tab-eq" class="fairlight-rack-tab-btn is-active" data-rack-tab="eq" aria-selected="true" aria-controls="fairlight-rack-panel-eq" tabindex="0" data-i18n="timeline.fairlightRack.tabEq">4-Band EQ</button>
+                    <button type="button" role="tab" id="fairlight-rack-tab-dyn" class="fairlight-rack-tab-btn" data-rack-tab="dyn" aria-selected="false" aria-controls="fairlight-rack-panel-dyn" tabindex="-1" data-i18n="timeline.fairlightRack.tabDyn">Dynamics &amp; Limiter</button>
+                  </div>
+
+                  <div id="fairlight-rack-panel-eq" class="fairlight-rack-panel mono" role="tabpanel" aria-labelledby="fairlight-rack-tab-eq">
+                    <div class="fairlight-rack-toggle-row">
+                      <button type="button" id="btn-fairlight-eq-toggle" class="btn btn-mini fairlight-stage-btn" aria-pressed="false" data-i18n="timeline.fairlightRack.eqOff">EQ OFF</button>
+                      <button type="button" id="btn-fairlight-hpf-toggle" class="btn btn-mini fairlight-stage-btn" aria-pressed="false" data-i18n="timeline.fairlightRack.hpfOff">HPF OFF</button>
+                      <label class="rack-inline-field" for="fairlight-hpf-hz">
+                        <span data-i18n="timeline.fairlightRack.hpfHz">HPF (Hz)</span>
+                        <input type="number" id="fairlight-hpf-hz" class="input-num" min="20" max="250" step="5" value="80" aria-label="High-pass filter cutoff frequency in Hz">
+                      </label>
+                    </div>
+                    <div class="fairlight-rack-canvas-well">
+                      <canvas id="fairlight-eq-canvas" class="fairlight-rack-canvas" aria-label="4-Band Parametric EQ logarithmic frequency curve"></canvas>
+                    </div>
+                    <div id="fairlight-eq-band-strip" class="fairlight-eq-band-strip" role="group" aria-label="Parametric EQ Band Selector">
+                      <button type="button" class="btn btn-mini fairlight-band-btn" data-eq-band="low" aria-pressed="false">L 100Hz</button>
+                      <button type="button" class="btn btn-mini fairlight-band-btn is-active" data-eq-band="low_mid" aria-pressed="true">LM 400Hz</button>
+                      <button type="button" class="btn btn-mini fairlight-band-btn" data-eq-band="high_mid" aria-pressed="false">HM 3.2k</button>
+                      <button type="button" class="btn btn-mini fairlight-band-btn" data-eq-band="high" aria-pressed="false">H 10k</button>
+                    </div>
+                    <div id="fairlight-eq-band-controls" class="fairlight-eq-band-controls">
+                      <div class="fairlight-band-head">
+                        <span id="fairlight-eq-band-label" class="nle-tag mono">LM (PEAKING)</span>
+                        <button type="button" id="btn-fairlight-band-enable" class="btn btn-mini fairlight-stage-btn is-active" aria-pressed="true" data-i18n="timeline.fairlightRack.bandOn">BAND ON</button>
+                      </div>
+                      <div class="audio-ctrl-row">
+                        <label for="fairlight-band-freq-range" data-i18n="timeline.fairlightRack.freq">Freq (Hz)</label>
+                        <input type="range" id="fairlight-band-freq-range" min="80" max="2500" step="10" value="400">
+                        <input type="number" id="fairlight-band-freq-num" class="input-num" min="80" max="2500" step="10" value="400" aria-label="EQ band center frequency in Hz">
+                      </div>
+                      <div class="audio-ctrl-row">
+                        <label for="fairlight-band-gain-range" data-i18n="timeline.fairlightRack.gain">Gain (dB)</label>
+                        <input type="range" id="fairlight-band-gain-range" min="-18" max="18" step="0.5" value="0">
+                        <input type="number" id="fairlight-band-gain-num" class="input-num" min="-18" max="18" step="0.5" value="0.0" aria-label="EQ band gain in dB">
+                      </div>
+                      <div class="audio-ctrl-row">
+                        <label for="fairlight-band-q-range" data-i18n="timeline.fairlightRack.q">Q Factor</label>
+                        <input type="range" id="fairlight-band-q-range" min="0.3" max="10" step="0.1" value="1.2">
+                        <input type="number" id="fairlight-band-q-num" class="input-num" min="0.3" max="10" step="0.1" value="1.2" aria-label="EQ band Q factor">
+                      </div>
+                    </div>
+                  </div>
+
+                  <div id="fairlight-rack-panel-dyn" class="fairlight-rack-panel mono is-hidden" role="tabpanel" aria-labelledby="fairlight-rack-tab-dyn" hidden>
+                    <div class="fairlight-rack-canvas-well">
+                      <canvas id="fairlight-dyn-canvas" class="fairlight-rack-canvas" aria-label="Dynamics Compressor and Limiter transfer curve"></canvas>
+                    </div>
+                    <div class="fairlight-dyn-section">
+                      <div class="fairlight-band-head">
+                        <span data-i18n="timeline.fairlightRack.compTitle">Compressor</span>
+                        <div class="viewer-controls">
+                          <span id="fairlight-comp-gr-badge" class="nle-tag mono">GR 0.0 dB</span>
+                          <button type="button" id="btn-fairlight-comp-toggle" class="btn btn-mini fairlight-stage-btn" aria-pressed="false" data-i18n="timeline.fairlightRack.compOff">COMP OFF</button>
+                        </div>
+                      </div>
+                      <div class="audio-ctrl-row">
+                        <label for="fairlight-comp-thresh-range" data-i18n="timeline.fairlightRack.thresh">Thresh (dB)</label>
+                        <input type="range" id="fairlight-comp-thresh-range" min="-60" max="0" step="0.5" value="-18">
+                        <input type="number" id="fairlight-comp-thresh-num" class="input-num" min="-60" max="0" step="0.5" value="-18.0" aria-label="Compressor threshold in dB">
+                      </div>
+                      <div class="fairlight-dyn-grid">
+                        <label class="duck-mini-field" for="fairlight-comp-ratio-num">
+                          <span data-i18n="timeline.fairlightRack.ratio">Ratio (:1)</span>
+                          <input type="number" id="fairlight-comp-ratio-num" class="input-num" min="1" max="20" step="0.5" value="3.5" aria-label="Compressor ratio">
+                        </label>
+                        <label class="duck-mini-field" for="fairlight-comp-attack-num">
+                          <span data-i18n="timeline.fairlightRack.attack">Atk (ms)</span>
+                          <input type="number" id="fairlight-comp-attack-num" class="input-num" min="0.5" max="250" step="0.5" value="10.0" aria-label="Compressor attack in milliseconds">
+                        </label>
+                        <label class="duck-mini-field" for="fairlight-comp-release-num">
+                          <span data-i18n="timeline.fairlightRack.release">Rel (ms)</span>
+                          <input type="number" id="fairlight-comp-release-num" class="input-num" min="10" max="1500" step="5" value="120" aria-label="Compressor release in milliseconds">
+                        </label>
+                        <label class="duck-mini-field" for="fairlight-comp-makeup-num">
+                          <span data-i18n="timeline.fairlightRack.makeup">Makeup (dB)</span>
+                          <input type="number" id="fairlight-comp-makeup-num" class="input-num" min="0" max="24" step="0.5" value="2.0" aria-label="Compressor makeup gain in dB">
+                        </label>
+                      </div>
+                    </div>
+                    <div class="fairlight-dyn-section">
+                      <div class="fairlight-band-head">
+                        <span data-i18n="timeline.fairlightRack.limTitle">True-Peak Limiter</span>
+                        <div class="viewer-controls">
+                          <span id="fairlight-lim-ceiling-badge" class="nle-tag mono">-1.0 dBTP</span>
+                          <button type="button" id="btn-fairlight-lim-toggle" class="btn btn-mini fairlight-stage-btn" aria-pressed="false" data-i18n="timeline.fairlightRack.limOff">LIMIT OFF</button>
+                        </div>
+                      </div>
+                      <div class="audio-ctrl-row">
+                        <label for="fairlight-lim-ceiling-range" data-i18n="timeline.fairlightRack.ceiling">Ceiling (dBTP)</label>
+                        <input type="range" id="fairlight-lim-ceiling-range" min="-12" max="-0.1" step="0.1" value="-1.0">
+                        <input type="number" id="fairlight-lim-ceiling-num" class="input-num" min="-12" max="-0.1" step="0.1" value="-1.0" aria-label="Limiter ceiling in dBTP">
+                      </div>
+                    </div>
+                  </div>
+                  <div id="fairlight-rack-af-preview" class="telemetry-note mono" data-i18n="timeline.fairlightRack.bypassed">Fairlight Broadcast Audio Rack bypassed.</div>
+                </div>
               </div>
 
               <div id="timeline-retime-inspector" class="retime-inspector-dock">

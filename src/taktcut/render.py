@@ -2278,6 +2278,7 @@ def compile_fairlight_mixer_filter(
     master: MasterBusParams | None = None,
     *,
     voice_cleanup: VoiceCleanupParams | None = None,
+    audio_rack: FairlightAudioRackParams | None = None,
 ) -> FairlightMixerCompileResult:
     """Compile Fairlight track fader, stereo pan, Master Bus M1, and Voice Isolation to -af."""
     resolved_master = master or MasterBusParams()
@@ -2317,6 +2318,11 @@ def compile_fairlight_mixer_filter(
         if iso_af:
             parts.append(iso_af)
 
+    if audio_rack is not None and not audio_rack.is_identity():
+        rack_af = compile_fairlight_audio_rack_filter(audio_rack)
+        if rack_af:
+            parts.append(rack_af)
+
     fg = ",".join(parts)
     return FairlightMixerCompileResult(
         filtergraph=fg,
@@ -2327,6 +2333,712 @@ def compile_fairlight_mixer_filter(
         effective_gain_db=effective_gain_db,
         pan_law_left=left_gain,
         pan_law_right=right_gain,
+    )
+
+
+FairlightEqBandId = Literal["low", "low_mid", "high_mid", "high"]
+FairlightEqFilterType = Literal["lowshelf", "peaking", "highshelf"]
+FairlightRackPresetId = Literal[
+    "flat",
+    "broadcast_voice",
+    "podcast_warm",
+    "cinema_punch",
+    "music_master",
+]
+
+FAIRLIGHT_EQ_BAND_ORDER: tuple[FairlightEqBandId, ...] = (
+    "low",
+    "low_mid",
+    "high_mid",
+    "high",
+)
+FAIRLIGHT_EQ_BAND_SPECS: dict[
+    FairlightEqBandId, tuple[FairlightEqFilterType, float, float, float, float]
+] = {
+    "low": ("lowshelf", 100.0, 20.0, 500.0, 0.70),
+    "low_mid": ("peaking", 400.0, 80.0, 2500.0, 1.20),
+    "high_mid": ("peaking", 3200.0, 500.0, 10000.0, 1.40),
+    "high": ("highshelf", 10000.0, 2000.0, 20000.0, 0.70),
+}
+FAIRLIGHT_EQ_GAIN_MIN_DB: float = -18.0
+FAIRLIGHT_EQ_GAIN_MAX_DB: float = 18.0
+FAIRLIGHT_EQ_Q_MIN: float = 0.3
+FAIRLIGHT_EQ_Q_MAX: float = 10.0
+FAIRLIGHT_HPF_HZ_MIN: float = 20.0
+FAIRLIGHT_HPF_HZ_MAX: float = 250.0
+FAIRLIGHT_COMP_THRESHOLD_MIN_DB: float = -60.0
+FAIRLIGHT_COMP_THRESHOLD_MAX_DB: float = 0.0
+FAIRLIGHT_COMP_RATIO_MIN: float = 1.0
+FAIRLIGHT_COMP_RATIO_MAX: float = 20.0
+FAIRLIGHT_COMP_ATTACK_MIN_MS: float = 0.5
+FAIRLIGHT_COMP_ATTACK_MAX_MS: float = 250.0
+FAIRLIGHT_COMP_RELEASE_MIN_MS: float = 10.0
+FAIRLIGHT_COMP_RELEASE_MAX_MS: float = 1500.0
+FAIRLIGHT_COMP_MAKEUP_MIN_DB: float = 0.0
+FAIRLIGHT_COMP_MAKEUP_MAX_DB: float = 24.0
+FAIRLIGHT_COMP_KNEE_MIN: float = 1.0
+FAIRLIGHT_COMP_KNEE_MAX: float = 8.0
+FAIRLIGHT_LIMITER_CEILING_MIN_DB: float = -12.0
+FAIRLIGHT_LIMITER_CEILING_MAX_DB: float = -0.1
+FAIRLIGHT_LIMITER_ATTACK_MIN_MS: float = 0.1
+FAIRLIGHT_LIMITER_ATTACK_MAX_MS: float = 50.0
+FAIRLIGHT_LIMITER_RELEASE_MIN_MS: float = 10.0
+FAIRLIGHT_LIMITER_RELEASE_MAX_MS: float = 500.0
+
+ALLOWED_FAIRLIGHT_RACK_PRESETS: frozenset[str] = frozenset(
+    {"flat", "broadcast_voice", "podcast_warm", "cinema_punch", "music_master"}
+)
+
+
+def _validate_rack_bool(raw: Any, field_name: str) -> bool:
+    if not isinstance(raw, bool):
+        raise ValueError(f"{field_name} must be a boolean, got {raw!r}")
+    return raw
+
+
+class FairlightEqBandParams(BaseModel):
+    """Single band of the DaVinci Fairlight 4-Band Parametric EQ."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    band_id: FairlightEqBandId
+    enabled: bool = True
+    filter_type: FairlightEqFilterType = "peaking"
+    freq_hz: float = 1000.0
+    gain_db: float = 0.0
+    q: float = 1.0
+
+    @field_validator("band_id", mode="before")
+    @classmethod
+    def _validate_band_id(cls, raw: Any) -> FairlightEqBandId:
+        if not isinstance(raw, str):
+            raise ValueError(f"band_id must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in FAIRLIGHT_EQ_BAND_SPECS:
+            allowed = ", ".join(FAIRLIGHT_EQ_BAND_ORDER)
+            raise ValueError(f"Unsupported band_id {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        return _validate_rack_bool(raw, "enabled")
+
+    @field_validator("filter_type", mode="before")
+    @classmethod
+    def _validate_filter_type(cls, raw: Any) -> FairlightEqFilterType:
+        if not isinstance(raw, str):
+            raise ValueError(f"filter_type must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ("lowshelf", "peaking", "highshelf"):
+            raise ValueError(
+                f"Unsupported filter_type {raw!r}; expected lowshelf, peaking, or highshelf"
+            )
+        return cast(FairlightEqFilterType, cleaned)
+
+    @field_validator("gain_db", mode="before")
+    @classmethod
+    def _validate_gain_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "gain_db", FAIRLIGHT_EQ_GAIN_MIN_DB, FAIRLIGHT_EQ_GAIN_MAX_DB
+        )
+
+    @field_validator("q", mode="before")
+    @classmethod
+    def _validate_q(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "q", FAIRLIGHT_EQ_Q_MIN, FAIRLIGHT_EQ_Q_MAX)
+
+    @model_validator(mode="after")
+    def _validate_freq_for_band(self) -> FairlightEqBandParams:
+        _, _, f_min, f_max, _ = FAIRLIGHT_EQ_BAND_SPECS[self.band_id]
+        self.freq_hz = _validate_bounded_float(self.freq_hz, "freq_hz", f_min, f_max)
+        return self
+
+
+def default_fairlight_eq_bands() -> list[FairlightEqBandParams]:
+    """Return the default flat 4-band Fairlight Parametric EQ configuration."""
+    return [
+        FairlightEqBandParams(
+            band_id=band_id,
+            enabled=True,
+            filter_type=spec[0],
+            freq_hz=spec[1],
+            gain_db=0.0,
+            q=spec[4],
+        )
+        for band_id, spec in (
+            (bid, FAIRLIGHT_EQ_BAND_SPECS[bid]) for bid in FAIRLIGHT_EQ_BAND_ORDER
+        )
+    ]
+
+
+class FairlightCompressorParams(BaseModel):
+    """DaVinci Fairlight Dynamics Compressor stage compiled to FFmpeg acompressor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    threshold_db: float = -18.0
+    ratio: float = 3.5
+    attack_ms: float = 10.0
+    release_ms: float = 120.0
+    makeup_db: float = 2.0
+    knee_db: float = 2.8
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        return _validate_rack_bool(raw, "enabled")
+
+    @field_validator("threshold_db", mode="before")
+    @classmethod
+    def _validate_threshold_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "threshold_db",
+            FAIRLIGHT_COMP_THRESHOLD_MIN_DB,
+            FAIRLIGHT_COMP_THRESHOLD_MAX_DB,
+        )
+
+    @field_validator("ratio", mode="before")
+    @classmethod
+    def _validate_ratio(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "ratio", FAIRLIGHT_COMP_RATIO_MIN, FAIRLIGHT_COMP_RATIO_MAX
+        )
+
+    @field_validator("attack_ms", mode="before")
+    @classmethod
+    def _validate_attack_ms(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "attack_ms", FAIRLIGHT_COMP_ATTACK_MIN_MS, FAIRLIGHT_COMP_ATTACK_MAX_MS
+        )
+
+    @field_validator("release_ms", mode="before")
+    @classmethod
+    def _validate_release_ms(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "release_ms", FAIRLIGHT_COMP_RELEASE_MIN_MS, FAIRLIGHT_COMP_RELEASE_MAX_MS
+        )
+
+    @field_validator("makeup_db", mode="before")
+    @classmethod
+    def _validate_makeup_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "makeup_db", FAIRLIGHT_COMP_MAKEUP_MIN_DB, FAIRLIGHT_COMP_MAKEUP_MAX_DB
+        )
+
+    @field_validator("knee_db", mode="before")
+    @classmethod
+    def _validate_knee_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "knee_db", FAIRLIGHT_COMP_KNEE_MIN, FAIRLIGHT_COMP_KNEE_MAX
+        )
+
+
+class FairlightLimiterParams(BaseModel):
+    """DaVinci Fairlight True-Peak Brickwall Limiter compiled to FFmpeg alimiter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    ceiling_db: float = -1.0
+    attack_ms: float = 5.0
+    release_ms: float = 80.0
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        return _validate_rack_bool(raw, "enabled")
+
+    @field_validator("ceiling_db", mode="before")
+    @classmethod
+    def _validate_ceiling_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "ceiling_db",
+            FAIRLIGHT_LIMITER_CEILING_MIN_DB,
+            FAIRLIGHT_LIMITER_CEILING_MAX_DB,
+        )
+
+    @field_validator("attack_ms", mode="before")
+    @classmethod
+    def _validate_attack_ms(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "attack_ms",
+            FAIRLIGHT_LIMITER_ATTACK_MIN_MS,
+            FAIRLIGHT_LIMITER_ATTACK_MAX_MS,
+        )
+
+    @field_validator("release_ms", mode="before")
+    @classmethod
+    def _validate_release_ms(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "release_ms",
+            FAIRLIGHT_LIMITER_RELEASE_MIN_MS,
+            FAIRLIGHT_LIMITER_RELEASE_MAX_MS,
+        )
+
+
+class FairlightAudioRackParams(BaseModel):
+    """DaVinci Fairlight Broadcast Audio Rack: 4-Band Parametric EQ, Compressor, and Limiter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preset_id: FairlightRackPresetId = "flat"
+    eq_enabled: bool = False
+    hpf_enabled: bool = False
+    hpf_hz: float = 80.0
+    bands: list[FairlightEqBandParams] = Field(default_factory=default_fairlight_eq_bands)
+    compressor: FairlightCompressorParams = Field(default_factory=FairlightCompressorParams)
+    limiter: FairlightLimiterParams = Field(default_factory=FairlightLimiterParams)
+
+    @field_validator("preset_id", mode="before")
+    @classmethod
+    def _validate_preset_id(cls, raw: Any) -> FairlightRackPresetId:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset_id must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_FAIRLIGHT_RACK_PRESETS:
+            allowed = ", ".join(sorted(ALLOWED_FAIRLIGHT_RACK_PRESETS))
+            raise ValueError(f"Unsupported preset_id {raw!r}; expected one of: {allowed}")
+        return cast(FairlightRackPresetId, cleaned)
+
+    @field_validator("eq_enabled", "hpf_enabled", mode="before")
+    @classmethod
+    def _validate_flags(cls, raw: Any, info: Any) -> bool:
+        return _validate_rack_bool(raw, str(info.field_name))
+
+    @field_validator("hpf_hz", mode="before")
+    @classmethod
+    def _validate_hpf_hz(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "hpf_hz", FAIRLIGHT_HPF_HZ_MIN, FAIRLIGHT_HPF_HZ_MAX
+        )
+
+    @model_validator(mode="after")
+    def _validate_bands(self) -> FairlightAudioRackParams:
+        if len(self.bands) != len(FAIRLIGHT_EQ_BAND_ORDER):
+            raise ValueError(
+                f"bands must contain exactly 4 EQ bands, got {len(self.bands)}"
+            )
+        by_id = {band.band_id: band for band in self.bands}
+        if len(by_id) != len(FAIRLIGHT_EQ_BAND_ORDER):
+            raise ValueError("bands must include unique low, low_mid, high_mid, and high bands")
+        self.bands = [by_id[bid] for bid in FAIRLIGHT_EQ_BAND_ORDER]
+        return self
+
+    def is_eq_active(self) -> bool:
+        """Return True when EQ stage will emit at least one FFmpeg filter."""
+        if not self.eq_enabled:
+            return False
+        if self.hpf_enabled:
+            return True
+        return any(band.enabled and abs(band.gain_db) > 1e-6 for band in self.bands)
+
+    def is_identity(self) -> bool:
+        """Return True when EQ, Compressor, and Limiter are all bypassed/flat."""
+        return (
+            not self.is_eq_active()
+            and not self.compressor.enabled
+            and not self.limiter.enabled
+        )
+
+
+class FairlightAudioRackCompileResult(BaseModel):
+    """Compiled FFmpeg filtergraph and telemetry for Fairlight Broadcast Audio Rack."""
+
+    filtergraph: str
+    ffmpeg_af_args: list[str]
+    is_identity: bool
+    params: FairlightAudioRackParams
+    estimated_gr_db: float
+    ceiling_dbtp: float
+    eq_band_summary: str
+
+
+FAIRLIGHT_RACK_PRESETS: dict[FairlightRackPresetId, dict[str, Any]] = {
+    "flat": {
+        "preset_id": "flat",
+        "eq_enabled": False,
+        "hpf_enabled": False,
+        "hpf_hz": 80.0,
+        "bands": [
+            {
+                "band_id": "low",
+                "enabled": True,
+                "filter_type": "lowshelf",
+                "freq_hz": 100.0,
+                "gain_db": 0.0,
+                "q": 0.7,
+            },
+            {
+                "band_id": "low_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 400.0,
+                "gain_db": 0.0,
+                "q": 1.2,
+            },
+            {
+                "band_id": "high_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 3200.0,
+                "gain_db": 0.0,
+                "q": 1.4,
+            },
+            {
+                "band_id": "high",
+                "enabled": True,
+                "filter_type": "highshelf",
+                "freq_hz": 10000.0,
+                "gain_db": 0.0,
+                "q": 0.7,
+            },
+        ],
+        "compressor": {
+            "enabled": False,
+            "threshold_db": -18.0,
+            "ratio": 3.5,
+            "attack_ms": 10.0,
+            "release_ms": 120.0,
+            "makeup_db": 2.0,
+            "knee_db": 2.8,
+        },
+        "limiter": {
+            "enabled": False,
+            "ceiling_db": -1.0,
+            "attack_ms": 5.0,
+            "release_ms": 80.0,
+        },
+    },
+    "broadcast_voice": {
+        "preset_id": "broadcast_voice",
+        "eq_enabled": True,
+        "hpf_enabled": True,
+        "hpf_hz": 85.0,
+        "bands": [
+            {
+                "band_id": "low",
+                "enabled": True,
+                "filter_type": "lowshelf",
+                "freq_hz": 110.0,
+                "gain_db": -2.5,
+                "q": 0.7,
+            },
+            {
+                "band_id": "low_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 340.0,
+                "gain_db": -3.0,
+                "q": 1.6,
+            },
+            {
+                "band_id": "high_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 3200.0,
+                "gain_db": 3.5,
+                "q": 1.3,
+            },
+            {
+                "band_id": "high",
+                "enabled": True,
+                "filter_type": "highshelf",
+                "freq_hz": 9500.0,
+                "gain_db": 2.0,
+                "q": 0.7,
+            },
+        ],
+        "compressor": {
+            "enabled": True,
+            "threshold_db": -18.0,
+            "ratio": 3.5,
+            "attack_ms": 8.0,
+            "release_ms": 110.0,
+            "makeup_db": 2.5,
+            "knee_db": 2.8,
+        },
+        "limiter": {
+            "enabled": True,
+            "ceiling_db": -1.0,
+            "attack_ms": 3.0,
+            "release_ms": 70.0,
+        },
+    },
+    "podcast_warm": {
+        "preset_id": "podcast_warm",
+        "eq_enabled": True,
+        "hpf_enabled": True,
+        "hpf_hz": 70.0,
+        "bands": [
+            {
+                "band_id": "low",
+                "enabled": True,
+                "filter_type": "lowshelf",
+                "freq_hz": 120.0,
+                "gain_db": 2.0,
+                "q": 0.7,
+            },
+            {
+                "band_id": "low_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 420.0,
+                "gain_db": -2.0,
+                "q": 1.4,
+            },
+            {
+                "band_id": "high_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 3800.0,
+                "gain_db": 2.5,
+                "q": 1.2,
+            },
+            {
+                "band_id": "high",
+                "enabled": True,
+                "filter_type": "highshelf",
+                "freq_hz": 10500.0,
+                "gain_db": 1.5,
+                "q": 0.7,
+            },
+        ],
+        "compressor": {
+            "enabled": True,
+            "threshold_db": -20.0,
+            "ratio": 3.0,
+            "attack_ms": 12.0,
+            "release_ms": 150.0,
+            "makeup_db": 3.0,
+            "knee_db": 3.2,
+        },
+        "limiter": {
+            "enabled": True,
+            "ceiling_db": -1.5,
+            "attack_ms": 4.0,
+            "release_ms": 90.0,
+        },
+    },
+    "cinema_punch": {
+        "preset_id": "cinema_punch",
+        "eq_enabled": True,
+        "hpf_enabled": True,
+        "hpf_hz": 40.0,
+        "bands": [
+            {
+                "band_id": "low",
+                "enabled": True,
+                "filter_type": "lowshelf",
+                "freq_hz": 85.0,
+                "gain_db": 3.0,
+                "q": 0.7,
+            },
+            {
+                "band_id": "low_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 300.0,
+                "gain_db": -1.5,
+                "q": 1.1,
+            },
+            {
+                "band_id": "high_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 2800.0,
+                "gain_db": 2.0,
+                "q": 1.2,
+            },
+            {
+                "band_id": "high",
+                "enabled": True,
+                "filter_type": "highshelf",
+                "freq_hz": 11000.0,
+                "gain_db": 2.5,
+                "q": 0.7,
+            },
+        ],
+        "compressor": {
+            "enabled": True,
+            "threshold_db": -14.0,
+            "ratio": 4.0,
+            "attack_ms": 6.0,
+            "release_ms": 95.0,
+            "makeup_db": 2.0,
+            "knee_db": 2.5,
+        },
+        "limiter": {
+            "enabled": True,
+            "ceiling_db": -0.5,
+            "attack_ms": 2.0,
+            "release_ms": 60.0,
+        },
+    },
+    "music_master": {
+        "preset_id": "music_master",
+        "eq_enabled": True,
+        "hpf_enabled": True,
+        "hpf_hz": 30.0,
+        "bands": [
+            {
+                "band_id": "low",
+                "enabled": True,
+                "filter_type": "lowshelf",
+                "freq_hz": 90.0,
+                "gain_db": 1.5,
+                "q": 0.7,
+            },
+            {
+                "band_id": "low_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 380.0,
+                "gain_db": -1.0,
+                "q": 1.2,
+            },
+            {
+                "band_id": "high_mid",
+                "enabled": True,
+                "filter_type": "peaking",
+                "freq_hz": 4500.0,
+                "gain_db": 1.5,
+                "q": 1.1,
+            },
+            {
+                "band_id": "high",
+                "enabled": True,
+                "filter_type": "highshelf",
+                "freq_hz": 12000.0,
+                "gain_db": 2.0,
+                "q": 0.7,
+            },
+        ],
+        "compressor": {
+            "enabled": True,
+            "threshold_db": -16.0,
+            "ratio": 2.5,
+            "attack_ms": 15.0,
+            "release_ms": 180.0,
+            "makeup_db": 1.5,
+            "knee_db": 3.5,
+        },
+        "limiter": {
+            "enabled": True,
+            "ceiling_db": -1.0,
+            "attack_ms": 5.0,
+            "release_ms": 100.0,
+        },
+    },
+}
+
+
+def list_fairlight_rack_presets() -> list[FairlightAudioRackParams]:
+    """Return validated preset parameter sets for the Fairlight Broadcast Audio Rack."""
+    return [
+        FairlightAudioRackParams.model_validate(FAIRLIGHT_RACK_PRESETS[pid])
+        for pid in ("flat", "broadcast_voice", "podcast_warm", "cinema_punch", "music_master")
+    ]
+
+
+def apply_fairlight_rack_preset(preset_id: str) -> FairlightAudioRackParams:
+    """Validate preset_id and return a deep-validated FairlightAudioRackParams copy."""
+    if not isinstance(preset_id, str):
+        raise ValueError(f"preset_id must be a string, got {preset_id!r}")
+    cleaned = preset_id.strip().lower()
+    if cleaned not in FAIRLIGHT_RACK_PRESETS:
+        allowed = ", ".join(sorted(FAIRLIGHT_RACK_PRESETS))
+        raise ValueError(f"Unsupported preset_id {preset_id!r}; expected one of: {allowed}")
+    return FairlightAudioRackParams.model_validate(FAIRLIGHT_RACK_PRESETS[cleaned])
+
+
+def estimate_fairlight_compressor_gr(
+    comp: FairlightCompressorParams,
+    input_peak_db: float = -12.0,
+) -> float:
+    """Estimate steady-state downward gain reduction in dB at a nominal speech peak."""
+    if not comp.enabled or comp.ratio <= 1.001:
+        return 0.0
+    over_db = input_peak_db - comp.threshold_db
+    if over_db <= 0.0:
+        return 0.0
+    gr_db = over_db * (1.0 - 1.0 / comp.ratio)
+    return round(-min(24.0, max(0.0, gr_db)), 2)
+
+
+def compile_fairlight_audio_rack_filter(params: FairlightAudioRackParams) -> str | None:
+    """Compile Fairlight 4-Band Parametric EQ, Compressor, and Limiter to an FFmpeg -af string."""
+    parts: list[str] = []
+    if params.eq_enabled:
+        if params.hpf_enabled:
+            parts.append(f"highpass=f={params.hpf_hz:.1f}")
+        for band in params.bands:
+            if not band.enabled or abs(band.gain_db) <= 1e-6:
+                continue
+            if band.filter_type == "lowshelf":
+                parts.append(
+                    f"lowshelf=f={band.freq_hz:.1f}:t=q:w={band.q:.2f}:g={band.gain_db:.2f}"
+                )
+            elif band.filter_type == "highshelf":
+                parts.append(
+                    f"highshelf=f={band.freq_hz:.1f}:t=q:w={band.q:.2f}:g={band.gain_db:.2f}"
+                )
+            else:
+                parts.append(
+                    f"equalizer=f={band.freq_hz:.1f}:t=q:w={band.q:.2f}:g={band.gain_db:.2f}"
+                )
+
+    if params.compressor.enabled:
+        comp = params.compressor
+        thresh_lin = max(0.000977, min(1.0, 10.0 ** (comp.threshold_db / 20.0)))
+        makeup_lin = max(1.0, min(64.0, 10.0 ** (comp.makeup_db / 20.0)))
+        parts.append(
+            f"acompressor=threshold={thresh_lin:.5f}:ratio={comp.ratio:.2f}"
+            f":attack={comp.attack_ms:.1f}:release={comp.release_ms:.1f}"
+            f":makeup={makeup_lin:.4f}:knee={comp.knee_db:.2f}"
+        )
+
+    if params.limiter.enabled:
+        lim = params.limiter
+        limit_lin = max(0.0625, min(1.0, 10.0 ** (lim.ceiling_db / 20.0)))
+        parts.append(
+            f"alimiter=limit={limit_lin:.5f}:attack={lim.attack_ms:.1f}"
+            f":release={lim.release_ms:.1f}:level=false"
+        )
+
+    return ",".join(parts) if parts else None
+
+
+def compile_fairlight_audio_rack_filter_result(
+    params: FairlightAudioRackParams,
+) -> FairlightAudioRackCompileResult:
+    """Compile FairlightAudioRackParams into a complete FairlightAudioRackCompileResult."""
+    fg = compile_fairlight_audio_rack_filter(params) or ""
+    active_eq_count = (
+        sum(1 for b in params.bands if b.enabled and abs(b.gain_db) > 1e-6)
+        if params.eq_enabled
+        else 0
+    )
+    if params.eq_enabled and params.hpf_enabled:
+        eq_summary = f"HP {params.hpf_hz:.0f}Hz + {active_eq_count}B"
+    elif params.eq_enabled:
+        eq_summary = f"{active_eq_count}B"
+    else:
+        eq_summary = "BYPASS"
+
+    return FairlightAudioRackCompileResult(
+        filtergraph=fg,
+        ffmpeg_af_args=["-af", fg] if fg else [],
+        is_identity=(fg == ""),
+        params=params,
+        estimated_gr_db=estimate_fairlight_compressor_gr(params.compressor),
+        ceiling_dbtp=round(params.limiter.ceiling_db, 2) if params.limiter.enabled else 0.0,
+        eq_band_summary=eq_summary,
     )
 
 
@@ -2902,6 +3614,7 @@ def build_render_plan(
     film_grain: FilmGrainParams | None = None,
     vignette: VignetteParams | None = None,
     voice_cleanup: VoiceCleanupParams | None = None,
+    fairlight_rack: FairlightAudioRackParams | None = None,
     color_nodes: Sequence[ColorNodeParams] | None = None,
     stabilizer: StabilizerParams | None = None,
     planar_tracker: PlanarTrackerParams | None = None,
@@ -3261,12 +3974,22 @@ def build_render_plan(
         if clip_af is not None:
             af_parts.append(clip_af)
     is_muted = audio_params is not None and audio_params.muted
+    fairlight_rack_af: str | None = None
+    fairlight_rack_enabled = False
+    fairlight_rack_preset = "flat"
+    if not is_muted and fairlight_rack is not None:
+        fairlight_rack_preset = fairlight_rack.preset_id
+        if not fairlight_rack.is_identity():
+            fairlight_rack_af = compile_fairlight_audio_rack_filter(fairlight_rack)
+            fairlight_rack_enabled = bool(fairlight_rack_af)
     if not is_muted:
         if voice_cleanup_af:
             af_parts.append(voice_cleanup_af)
         eq_af = compile_dialogue_eq_filter(resolved_dialogue_eq)
         if eq_af is not None:
             af_parts.append(eq_af)
+        if fairlight_rack_af:
+            af_parts.append(fairlight_rack_af)
         if resolved_loudness_preset != "off":
             loud_af = compile_loudness_preset_filter(resolved_loudness_preset)
             if loud_af is not None:
@@ -3343,6 +4066,8 @@ def build_render_plan(
             voice_cleanup_highpass_hz=voice_cleanup_highpass_hz,
             voice_cleanup_presence_db=voice_cleanup_presence_db,
             voice_cleanup_de_ess=voice_cleanup_de_ess,
+            fairlight_rack_enabled=fairlight_rack_enabled,
+            fairlight_rack_preset=fairlight_rack_preset,
             export_fps=resolved_export_fps,
             deinterlace=resolved_deinterlace,
             audio_only_format=resolved_audio_only,
@@ -3465,6 +4190,8 @@ def build_render_plan(
         voice_cleanup_highpass_hz=voice_cleanup_highpass_hz,
         voice_cleanup_presence_db=voice_cleanup_presence_db,
         voice_cleanup_de_ess=voice_cleanup_de_ess,
+        fairlight_rack_enabled=fairlight_rack_enabled,
+        fairlight_rack_preset=fairlight_rack_preset,
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
         audio_only_format=resolved_audio_only,

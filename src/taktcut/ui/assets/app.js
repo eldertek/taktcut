@@ -17,6 +17,8 @@ import {
   drawTransformGraphCanvas,
   findActiveSubtitleCue,
   framesToSmpte,
+  renderFairlightDynamicsCanvas,
+  renderFairlightEqCurveCanvas,
   sampleColorViewerInputRgb,
   trackPointSequenceCanvas
 } from "./canvas.js";
@@ -49,6 +51,8 @@ import {
   CURVE_CHANNELS,
   DELIVERY_PRESETS,
   DYNAMIC_ZOOM_DEFAULT,
+  FAIRLIGHT_EQ_BAND_ORDER,
+  FAIRLIGHT_EQ_BAND_SPECS,
   LOUDNESS_PRESET_LUFS,
   MARKER_COLOR_HEX,
   MAX_COLOR_NODES,
@@ -111,6 +115,7 @@ import {
   addOutsideColorNodeInTree,
   appendClipToTrackInDocument,
   appendStillBounded,
+  applyFairlightRackPresetClient,
   buildSourceTapeSegments,
   classifyMediaPoolEntry,
   clearTransformParamKeyframesInDocument,
@@ -120,6 +125,7 @@ import {
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileFairlightAudioFilterClient,
+  compileFairlightAudioRackClient,
   compileFairlightMixerClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
@@ -138,6 +144,7 @@ import {
   createStillRecord,
   deleteMarkerInDocument,
   deserializeColorNodeFromApi,
+  estimateFairlightCompressorGrClient,
   estimateRenderFileSize,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
@@ -196,6 +203,7 @@ import {
   normalizeColorNodeTree,
   normalizeCurvePoints,
   normalizeFairlightAudioParams,
+  normalizeFairlightAudioRackParams,
   normalizeInOutRange,
   normalizePlanarTrackerClient,
   normalizeStabilizerClient,
@@ -446,6 +454,9 @@ const state = {
     loudness_preset: "youtube_14",
     dialogue_eq: "off"
   },
+  fairlightRack: normalizeFairlightAudioRackParams(),
+  fairlightRackTab: "eq",
+  fairlightRackBandId: "low_mid",
   masterBus: {
     volume_db: 0.0,
     muted: false,
@@ -913,6 +924,7 @@ function syncDeliverTabIndicators() {
   const audioActive = Boolean(
     (audioOnlyEl && audioOnlyEl.value !== "off") ||
       (state.voiceCleanup && state.voiceCleanup.enabled) ||
+      (state.fairlightRack && !compileFairlightAudioRackClient(state.fairlightRack).is_identity) ||
       (state.fairlight &&
         ((state.fairlight.loudness_preset && state.fairlight.loudness_preset !== "off") ||
           (state.fairlight.dialogue_eq && state.fairlight.dialogue_eq !== "off")))
@@ -1156,6 +1168,7 @@ function redrawActiveCanvases() {
       duckEnabled: Boolean(state.autoDuck.enabled),
       duckThresholdDb: state.autoDuck.threshold_db
     });
+    renderFairlightRackCanvases();
   } else if (state.activeTab === "fx") {
     drawProgramMonitorCanvas(
       byId("fx-program-canvas"),
@@ -2197,8 +2210,208 @@ function renderFairlightAudioUI() {
         ? parsedLufs
         : null;
     const compiledFull = compileAudioFilterClient(clipParams, clipDur, fallbackLufs, fairlight);
-    delPreview.textContent = compiledFull.filtergraph ? `-af ${compiledFull.filtergraph}` : t("common.none");
+    const compiledRack = compileFairlightAudioRackClient(state.fairlightRack);
+    const previewParts = [];
+    if (compiledFull.filtergraph) previewParts.push(compiledFull.filtergraph);
+    if (!clipParams.muted && !compiledRack.is_identity && compiledRack.filtergraph) {
+      previewParts.push(compiledRack.filtergraph);
+    }
+    delPreview.textContent = previewParts.length > 0 ? `-af ${previewParts.join(",")}` : t("common.none");
   }
+  renderFairlightAudioRackUI();
+}
+
+function renderFairlightRackCanvases() {
+  if (state.activeTab !== "timeline") return;
+  const eqCanvas = byId("fairlight-eq-canvas");
+  if (eqCanvas && state.fairlightRackTab === "eq") {
+    renderFairlightEqCurveCanvas(eqCanvas, state.fairlightRack, state.fairlightRackBandId);
+  }
+  const dynCanvas = byId("fairlight-dyn-canvas");
+  if (dynCanvas && state.fairlightRackTab === "dyn") {
+    const livePeak = Math.max(-48, Number(state.vuMeter.leftDb || -60), Number(state.vuMeter.rightDb || -60));
+    const inputProbe = state.playbackPlaying ? livePeak : -12.0;
+    renderFairlightDynamicsCanvas(dynCanvas, state.fairlightRack, inputProbe);
+  }
+}
+
+function switchFairlightRackTab(tabId) {
+  const nextTab = tabId === "dyn" ? "dyn" : "eq";
+  state.fairlightRackTab = nextTab;
+  const eqTab = byId("fairlight-rack-tab-eq");
+  const dynTab = byId("fairlight-rack-tab-dyn");
+  const eqPanel = byId("fairlight-rack-panel-eq");
+  const dynPanel = byId("fairlight-rack-panel-dyn");
+  if (eqTab) {
+    eqTab.classList.toggle("is-active", nextTab === "eq");
+    eqTab.setAttribute("aria-selected", nextTab === "eq" ? "true" : "false");
+    eqTab.setAttribute("tabindex", nextTab === "eq" ? "0" : "-1");
+  }
+  if (dynTab) {
+    dynTab.classList.toggle("is-active", nextTab === "dyn");
+    dynTab.setAttribute("aria-selected", nextTab === "dyn" ? "true" : "false");
+    dynTab.setAttribute("tabindex", nextTab === "dyn" ? "0" : "-1");
+  }
+  if (eqPanel) {
+    eqPanel.classList.toggle("is-hidden", nextTab !== "eq");
+    eqPanel.hidden = nextTab !== "eq";
+  }
+  if (dynPanel) {
+    dynPanel.classList.toggle("is-hidden", nextTab !== "dyn");
+    dynPanel.hidden = nextTab !== "dyn";
+  }
+  renderFairlightRackCanvases();
+}
+
+function renderFairlightAudioRackUI() {
+  const rack = normalizeFairlightAudioRackParams(state.fairlightRack);
+  state.fairlightRack = rack;
+  const compiled = compileFairlightAudioRackClient(rack);
+
+  const badgeEl = byId("fairlight-rack-badge");
+  if (badgeEl) {
+    if (compiled.is_identity) {
+      badgeEl.textContent = "BYPASS";
+      badgeEl.className = "nle-tag mono";
+    } else {
+      const tags = [];
+      if (rack.eq_enabled) tags.push(`EQ ${compiled.eq_band_summary}`);
+      if (rack.compressor.enabled) tags.push(`COMP ${rack.compressor.threshold_db.toFixed(0)}dB`);
+      if (rack.limiter.enabled) tags.push(`${rack.limiter.ceiling_db.toFixed(1)} dBTP`);
+      badgeEl.textContent = tags.join(" | ");
+      badgeEl.className = "nle-tag mono is-pass";
+    }
+  }
+
+  const presetEl = byId("fairlight-rack-preset");
+  if (presetEl) presetEl.value = rack.preset_id;
+
+  const eqBtn = byId("btn-fairlight-eq-toggle");
+  if (eqBtn) {
+    eqBtn.classList.toggle("is-active", rack.eq_enabled);
+    eqBtn.setAttribute("aria-pressed", rack.eq_enabled ? "true" : "false");
+    eqBtn.textContent = rack.eq_enabled ? t("timeline.fairlightRack.eqOn") : t("timeline.fairlightRack.eqOff");
+  }
+  const hpfBtn = byId("btn-fairlight-hpf-toggle");
+  if (hpfBtn) {
+    hpfBtn.classList.toggle("is-active", rack.hpf_enabled);
+    hpfBtn.setAttribute("aria-pressed", rack.hpf_enabled ? "true" : "false");
+    hpfBtn.textContent = rack.hpf_enabled ? t("timeline.fairlightRack.hpfOn") : t("timeline.fairlightRack.hpfOff");
+  }
+  const hpfHzEl = byId("fairlight-hpf-hz");
+  if (hpfHzEl && document.activeElement !== hpfHzEl) {
+    hpfHzEl.value = String(Math.round(rack.hpf_hz));
+  }
+
+  // Band buttons & active band controls
+  for (const band of rack.bands) {
+    const btn = document.querySelector(`.fairlight-band-btn[data-eq-band="${band.band_id}"]`);
+    if (btn) {
+      const isSel = band.band_id === state.fairlightRackBandId;
+      btn.classList.toggle("is-active", isSel);
+      btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+      const spec = FAIRLIGHT_EQ_BAND_SPECS[band.band_id];
+      const fLabel = band.freq_hz >= 1000 ? `${(band.freq_hz / 1000).toFixed(1)}k` : `${Math.round(band.freq_hz)}Hz`;
+      btn.textContent = `${spec ? spec.shortLabel : band.band_id} ${fLabel}`;
+    }
+  }
+
+  const activeBand =
+    rack.bands.find((b) => b.band_id === state.fairlightRackBandId) || rack.bands[1];
+  const activeSpec = FAIRLIGHT_EQ_BAND_SPECS[activeBand.band_id];
+  const bandLabel = byId("fairlight-eq-band-label");
+  if (bandLabel) {
+    const typeLabel = activeBand.filter_type.toUpperCase();
+    bandLabel.textContent = `${activeSpec ? activeSpec.shortLabel : activeBand.band_id} (${typeLabel})`;
+  }
+  const bandEnableBtn = byId("btn-fairlight-band-enable");
+  if (bandEnableBtn) {
+    bandEnableBtn.classList.toggle("is-active", activeBand.enabled);
+    bandEnableBtn.setAttribute("aria-pressed", activeBand.enabled ? "true" : "false");
+    bandEnableBtn.textContent = activeBand.enabled
+      ? t("timeline.fairlightRack.bandOn")
+      : t("timeline.fairlightRack.bandOff");
+  }
+
+  const freqRange = byId("fairlight-band-freq-range");
+  const freqNum = byId("fairlight-band-freq-num");
+  const freqStep = activeSpec.maxFreq >= 5000 ? "50" : "10";
+  for (const el of [freqRange, freqNum]) {
+    if (!el) continue;
+    el.min = String(activeSpec.minFreq);
+    el.max = String(activeSpec.maxFreq);
+    el.step = freqStep;
+  }
+  if (freqRange) freqRange.value = String(Math.round(activeBand.freq_hz));
+  if (freqNum && document.activeElement !== freqNum) freqNum.value = String(Math.round(activeBand.freq_hz));
+
+  const gainRange = byId("fairlight-band-gain-range");
+  const gainNum = byId("fairlight-band-gain-num");
+  if (gainRange) gainRange.value = String(activeBand.gain_db);
+  if (gainNum && document.activeElement !== gainNum) gainNum.value = activeBand.gain_db.toFixed(1);
+
+  const qRange = byId("fairlight-band-q-range");
+  const qNum = byId("fairlight-band-q-num");
+  if (qRange) qRange.value = String(activeBand.q);
+  if (qNum && document.activeElement !== qNum) qNum.value = activeBand.q.toFixed(1);
+
+  // Dynamics & Limiter controls
+  const compBtn = byId("btn-fairlight-comp-toggle");
+  if (compBtn) {
+    compBtn.classList.toggle("is-active", rack.compressor.enabled);
+    compBtn.setAttribute("aria-pressed", rack.compressor.enabled ? "true" : "false");
+    compBtn.textContent = rack.compressor.enabled
+      ? t("timeline.fairlightRack.compOn")
+      : t("timeline.fairlightRack.compOff");
+  }
+  const grBadge = byId("fairlight-comp-gr-badge");
+  if (grBadge) {
+    grBadge.textContent = `GR ${compiled.estimated_gr_db.toFixed(1)} dB`;
+    grBadge.className =
+      rack.compressor.enabled && compiled.estimated_gr_db < -0.1
+        ? "nle-tag mono is-warn"
+        : "nle-tag mono";
+  }
+  const threshRange = byId("fairlight-comp-thresh-range");
+  const threshNum = byId("fairlight-comp-thresh-num");
+  if (threshRange) threshRange.value = String(rack.compressor.threshold_db);
+  if (threshNum && document.activeElement !== threshNum) threshNum.value = rack.compressor.threshold_db.toFixed(1);
+  const ratioNum = byId("fairlight-comp-ratio-num");
+  if (ratioNum && document.activeElement !== ratioNum) ratioNum.value = rack.compressor.ratio.toFixed(1);
+  const atkNum = byId("fairlight-comp-attack-num");
+  if (atkNum && document.activeElement !== atkNum) atkNum.value = rack.compressor.attack_ms.toFixed(1);
+  const relNum = byId("fairlight-comp-release-num");
+  if (relNum && document.activeElement !== relNum) relNum.value = String(Math.round(rack.compressor.release_ms));
+  const makeupNum = byId("fairlight-comp-makeup-num");
+  if (makeupNum && document.activeElement !== makeupNum) makeupNum.value = rack.compressor.makeup_db.toFixed(1);
+
+  const limBtn = byId("btn-fairlight-lim-toggle");
+  if (limBtn) {
+    limBtn.classList.toggle("is-active", rack.limiter.enabled);
+    limBtn.setAttribute("aria-pressed", rack.limiter.enabled ? "true" : "false");
+    limBtn.textContent = rack.limiter.enabled
+      ? t("timeline.fairlightRack.limOn")
+      : t("timeline.fairlightRack.limOff");
+  }
+  const limBadge = byId("fairlight-lim-ceiling-badge");
+  if (limBadge) {
+    limBadge.textContent = `${rack.limiter.ceiling_db.toFixed(1)} dBTP`;
+    limBadge.className = rack.limiter.enabled ? "nle-tag mono is-pass" : "nle-tag mono";
+  }
+  const limRange = byId("fairlight-lim-ceiling-range");
+  const limNum = byId("fairlight-lim-ceiling-num");
+  if (limRange) limRange.value = String(rack.limiter.ceiling_db);
+  if (limNum && document.activeElement !== limNum) limNum.value = rack.limiter.ceiling_db.toFixed(1);
+
+  const previewEl = byId("fairlight-rack-af-preview");
+  if (previewEl) {
+    previewEl.textContent = compiled.filtergraph
+      ? `-af ${compiled.filtergraph}`
+      : t("timeline.fairlightRack.bypassed");
+  }
+
+  syncDeliverTabIndicators();
+  renderFairlightRackCanvases();
 }
 
 function setFairlightState(patch, opts = {}) {
@@ -2315,7 +2528,8 @@ function updateVuMeterInstant(ts, isPlaying) {
     phaseSec: ts / 1000,
     autoDuck: state.autoDuck,
     masterBus: state.masterBus,
-    voiceCleanup: state.voiceCleanup
+    voiceCleanup: state.voiceCleanup,
+    fairlightRack: state.fairlightRack
   });
   vm.allMuted = evalRes.allAudioMuted;
   vm.duckReductionDb = evalRes.duckReductionDb;
@@ -4033,6 +4247,7 @@ function serializeFullProjectState() {
     },
     auto_duck: normalizeAutoDuckParams(state.autoDuck),
     master_bus: normalizeMasterBusState(state.masterBus),
+    fairlight_rack: normalizeFairlightAudioRackParams(state.fairlightRack),
     color: {
       grade: {
         ...cloneGradeParams(state.colorGrade),
@@ -4142,6 +4357,7 @@ function applyFullProjectState(project, validation) {
   };
   state.autoDuck = normalizeAutoDuckParams(project.auto_duck);
   state.masterBus = normalizeMasterBusState(project.master_bus);
+  state.fairlightRack = normalizeFairlightAudioRackParams(project.fairlight_rack);
   setPlayhead(Number(project.playhead_frame ?? 0));
 
   // Color state
@@ -9271,6 +9487,10 @@ async function buildOrExecuteRender(execute) {
     const vignetteActivePayload = vignettePayload.enabled ? vignettePayload : null;
     const voiceCleanupPayload = getNormalizedVoiceCleanupPayload();
     const voiceCleanupActivePayload = voiceCleanupPayload.enabled ? voiceCleanupPayload : null;
+    const fairlightRackCompiled = compileFairlightAudioRackClient(state.fairlightRack);
+    const fairlightRackActivePayload = !fairlightRackCompiled.is_identity
+      ? fairlightRackCompiled.params
+      : null;
     const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
     const exportFpsEl = byId("render-export-fps");
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
@@ -9309,6 +9529,7 @@ async function buildOrExecuteRender(execute) {
         film_grain: filmGrainActivePayload,
         vignette: vignetteActivePayload,
         voice_cleanup: voiceCleanupActivePayload,
+        fairlight_rack: fairlightRackActivePayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
         loudness_preset: fairlightPayload.loudness_preset,
@@ -9379,6 +9600,7 @@ async function buildOrExecuteRender(execute) {
       film_grain: filmGrainActivePayload,
       vignette: vignetteActivePayload,
       voice_cleanup: voiceCleanupActivePayload,
+      fairlight_rack: fairlightRackActivePayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
       loudness_preset: fairlightPayload.loudness_preset,
@@ -16333,6 +16555,208 @@ function wireEvents() {
 
   document.addEventListener("keydown", handleTransportKeydown);
   window.addEventListener("resize", redrawActiveCanvases);
+  wireFairlightAudioRackEvents();
+}
+
+function wireFairlightAudioRackEvents() {
+  const updateRack = (mutator) => {
+    const next = normalizeFairlightAudioRackParams(state.fairlightRack);
+    mutator(next);
+    state.fairlightRack = normalizeFairlightAudioRackParams(next);
+    renderFairlightAudioUI();
+  };
+
+  for (const tabBtn of document.querySelectorAll(".fairlight-rack-tab-btn[data-rack-tab]")) {
+    tabBtn.addEventListener("click", () => {
+      switchFairlightRackTab(tabBtn.getAttribute("data-rack-tab"));
+    });
+    tabBtn.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        const nextTab = state.fairlightRackTab === "eq" ? "dyn" : "eq";
+        switchFairlightRackTab(nextTab);
+        const focusEl = byId(nextTab === "eq" ? "fairlight-rack-tab-eq" : "fairlight-rack-tab-dyn");
+        if (focusEl) focusEl.focus();
+      }
+    });
+  }
+
+  byId("fairlight-rack-preset")?.addEventListener("change", (ev) => {
+    state.fairlightRack = applyFairlightRackPresetClient(ev.target.value);
+    renderFairlightAudioUI();
+  });
+
+  byId("btn-fairlight-rack-reset")?.addEventListener("click", () => {
+    state.fairlightRack = applyFairlightRackPresetClient("flat");
+    renderFairlightAudioUI();
+  });
+
+  byId("btn-fairlight-eq-toggle")?.addEventListener("click", () => {
+    updateRack((r) => {
+      r.eq_enabled = !r.eq_enabled;
+    });
+  });
+
+  byId("btn-fairlight-hpf-toggle")?.addEventListener("click", () => {
+    updateRack((r) => {
+      r.hpf_enabled = !r.hpf_enabled;
+      if (r.hpf_enabled) r.eq_enabled = true;
+    });
+  });
+
+  byId("fairlight-hpf-hz")?.addEventListener("input", (ev) => {
+    const val = Number.parseFloat(ev.target.value);
+    if (!Number.isFinite(val)) return;
+    updateRack((r) => {
+      r.hpf_hz = Math.max(20, Math.min(250, val));
+    });
+  });
+
+  for (const btn of document.querySelectorAll(".fairlight-band-btn[data-eq-band]")) {
+    btn.addEventListener("click", () => {
+      const bandId = btn.getAttribute("data-eq-band");
+      if (FAIRLIGHT_EQ_BAND_ORDER.includes(bandId)) {
+        state.fairlightRackBandId = bandId;
+        renderFairlightAudioRackUI();
+      }
+    });
+  }
+
+  byId("btn-fairlight-band-enable")?.addEventListener("click", () => {
+    updateRack((r) => {
+      const b = r.bands.find((x) => x.band_id === state.fairlightRackBandId);
+      if (b) b.enabled = !b.enabled;
+    });
+  });
+
+  const bindBandParam = (rangeId, numId, prop, minV, maxV, autoEnableEq = false) => {
+    const onVal = (raw) => {
+      const val = Number.parseFloat(raw);
+      if (!Number.isFinite(val)) return;
+      const spec = FAIRLIGHT_EQ_BAND_SPECS[state.fairlightRackBandId];
+      const lo = prop === "freq_hz" && spec ? spec.minFreq : minV;
+      const hi = prop === "freq_hz" && spec ? spec.maxFreq : maxV;
+      updateRack((r) => {
+        const b = r.bands.find((x) => x.band_id === state.fairlightRackBandId);
+        if (b) {
+          b[prop] = Math.max(lo, Math.min(hi, val));
+          if (autoEnableEq && Math.abs(b.gain_db) > 1e-6) {
+            r.eq_enabled = true;
+            b.enabled = true;
+          }
+        }
+      });
+    };
+    byId(rangeId)?.addEventListener("input", (ev) => onVal(ev.target.value));
+    byId(numId)?.addEventListener("input", (ev) => onVal(ev.target.value));
+  };
+  bindBandParam("fairlight-band-freq-range", "fairlight-band-freq-num", "freq_hz", 20, 20000, false);
+  bindBandParam("fairlight-band-gain-range", "fairlight-band-gain-num", "gain_db", -18, 18, true);
+  bindBandParam("fairlight-band-q-range", "fairlight-band-q-num", "q", 0.3, 10, false);
+
+  // Interactive pointer drag on 4-Band EQ canvas
+  const eqCanvas = byId("fairlight-eq-canvas");
+  if (eqCanvas) {
+    let draggingBandId = null;
+    const applyPointerToBand = (ev) => {
+      const geom = eqCanvas._fairlightEqGeom;
+      if (!geom || !draggingBandId) return;
+      const rect = eqCanvas.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      const u = Math.max(0, Math.min(1, (px - geom.padL) / Math.max(1, geom.plotW)));
+      const v = Math.max(0, Math.min(1, (py - geom.padT) / Math.max(1, geom.plotH)));
+      const freq = Math.pow(10, geom.logMin + u * (geom.logMax - geom.logMin));
+      const gain = 18 - v * 36;
+      const spec = FAIRLIGHT_EQ_BAND_SPECS[draggingBandId];
+      updateRack((r) => {
+        r.eq_enabled = true;
+        const b = r.bands.find((x) => x.band_id === draggingBandId);
+        if (b && spec) {
+          b.enabled = true;
+          b.freq_hz = Math.round(Math.max(spec.minFreq, Math.min(spec.maxFreq, freq)));
+          b.gain_db = Number(Math.max(-18, Math.min(18, gain)).toFixed(1));
+        }
+      });
+    };
+    eqCanvas.addEventListener("pointerdown", (ev) => {
+      const geom = eqCanvas._fairlightEqGeom;
+      if (!geom || !Array.isArray(geom.nodes)) return;
+      const rect = eqCanvas.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      let best = null;
+      let bestDist = 24;
+      for (const n of geom.nodes) {
+        const d = Math.hypot(px - n.x, py - n.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = n;
+        }
+      }
+      if (best) {
+        draggingBandId = best.band_id;
+        state.fairlightRackBandId = best.band_id;
+        eqCanvas.setPointerCapture?.(ev.pointerId);
+        applyPointerToBand(ev);
+      }
+    });
+    eqCanvas.addEventListener("pointermove", (ev) => {
+      if (draggingBandId) applyPointerToBand(ev);
+    });
+    const endDrag = (ev) => {
+      if (!draggingBandId) return;
+      draggingBandId = null;
+      try {
+        eqCanvas.releasePointerCapture?.(ev.pointerId);
+      } catch {
+        // ignore release when not captured
+      }
+    };
+    eqCanvas.addEventListener("pointerup", endDrag);
+    eqCanvas.addEventListener("pointercancel", endDrag);
+  }
+
+  // Dynamics Compressor & Limiter controls
+  byId("btn-fairlight-comp-toggle")?.addEventListener("click", () => {
+    updateRack((r) => {
+      r.compressor.enabled = !r.compressor.enabled;
+    });
+  });
+
+  const bindCompParam = (id, prop, minV, maxV) => {
+    byId(id)?.addEventListener("input", (ev) => {
+      const val = Number.parseFloat(ev.target.value);
+      if (!Number.isFinite(val)) return;
+      updateRack((r) => {
+        r.compressor[prop] = Math.max(minV, Math.min(maxV, val));
+      });
+    });
+  };
+  bindCompParam("fairlight-comp-thresh-range", "threshold_db", -60, 0);
+  bindCompParam("fairlight-comp-thresh-num", "threshold_db", -60, 0);
+  bindCompParam("fairlight-comp-ratio-num", "ratio", 1, 20);
+  bindCompParam("fairlight-comp-attack-num", "attack_ms", 0.5, 250);
+  bindCompParam("fairlight-comp-release-num", "release_ms", 10, 1500);
+  bindCompParam("fairlight-comp-makeup-num", "makeup_db", 0, 24);
+
+  byId("btn-fairlight-lim-toggle")?.addEventListener("click", () => {
+    updateRack((r) => {
+      r.limiter.enabled = !r.limiter.enabled;
+    });
+  });
+
+  const bindLimCeiling = (id) => {
+    byId(id)?.addEventListener("input", (ev) => {
+      const val = Number.parseFloat(ev.target.value);
+      if (!Number.isFinite(val)) return;
+      updateRack((r) => {
+        r.limiter.ceiling_db = Math.max(-12, Math.min(-0.1, val));
+      });
+    });
+  };
+  bindLimCeiling("fairlight-lim-ceiling-range");
+  bindLimCeiling("fairlight-lim-ceiling-num");
 }
 
 async function loadFxCatalog() {

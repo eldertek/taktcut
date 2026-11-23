@@ -1462,6 +1462,8 @@ class RenderPlan(BaseModel):
     voice_cleanup_highpass_hz: int = VOICE_CLEANUP_HIGHPASS_HZ_DEFAULT
     voice_cleanup_presence_db: float = VOICE_CLEANUP_PRESENCE_DB_DEFAULT
     voice_cleanup_de_ess: float = VOICE_CLEANUP_DE_ESS_DEFAULT
+    fairlight_rack_enabled: bool = False
+    fairlight_rack_preset: str = "flat"
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

@@ -2276,6 +2276,7 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
       leftLin: 0,
       rightLin: 0,
       duckReductionDb: 0,
+      rackGrDb: 0,
       activeClipCount: 0,
       allAudioMuted,
       trackLevels
@@ -2357,8 +2358,30 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
 
   const masterDb = masterBus.volume_db + (masterBus.dim_enabled ? -20.0 : 0.0);
   const masterLin = Math.pow(10, masterDb / 20);
-  const rawTotalL = (fgLeft + bgLeft) * masterLin;
-  const rawTotalR = (fgRight + bgRight) * masterLin;
+  let rawTotalL = (fgLeft + bgLeft) * masterLin;
+  let rawTotalR = (fgRight + bgRight) * masterLin;
+  let rackGrDb = 0;
+  if (opts.fairlightRack && typeof opts.fairlightRack === "object") {
+    const rack = normalizeFairlightAudioRackParams(opts.fairlightRack);
+    if (rack.compressor.enabled) {
+      const prePeak = Math.max(rawTotalL, rawTotalR);
+      const preDb = prePeak > 1e-4 ? 20 * Math.log10(prePeak) : -60;
+      const gr = estimateFairlightCompressorGrClient(rack.compressor, preDb);
+      rackGrDb = gr;
+      const compScale = Math.pow(10, (gr + rack.compressor.makeup_db) / 20);
+      rawTotalL *= compScale;
+      rawTotalR *= compScale;
+    }
+    if (rack.limiter.enabled) {
+      const limLin = Math.pow(10, rack.limiter.ceiling_db / 20);
+      const postPeak = Math.max(rawTotalL, rawTotalR);
+      if (postPeak > limLin && postPeak > 1e-6) {
+        const limScale = limLin / postPeak;
+        rawTotalL *= limScale;
+        rawTotalR *= limScale;
+      }
+    }
+  }
   const totalL = clampNum(rawTotalL, 0, 1.0);
   const totalR = clampNum(rawTotalR, 0, 1.0);
   const leftDb = totalL > 1e-3 ? clampNum(20 * Math.log10(totalL), -60, 0) : -60;
@@ -2380,6 +2403,7 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
     leftLin: totalL,
     rightLin: totalR,
     duckReductionDb,
+    rackGrDb,
     activeClipCount,
     allAudioMuted,
     trackLevels
@@ -7605,4 +7629,340 @@ export function findAdjacentRollTarget(doc, trackKind, trackIndex, clipIndex, ed
     leftClip: clip,
     rightClip: nextClip
   };
+}
+
+// ============================================================================
+// Fairlight Broadcast Audio Rack: 4-Band Parametric EQ, Compressor & Limiter
+// ============================================================================
+
+export const FAIRLIGHT_EQ_BAND_ORDER = ["low", "low_mid", "high_mid", "high"];
+
+export const FAIRLIGHT_EQ_BAND_SPECS = {
+  low: { filter_type: "lowshelf", defaultFreq: 100.0, minFreq: 20.0, maxFreq: 500.0, defaultQ: 0.7, color: "#ffb648", shortLabel: "L" },
+  low_mid: { filter_type: "peaking", defaultFreq: 400.0, minFreq: 80.0, maxFreq: 2500.0, defaultQ: 1.2, color: "#39c5cf", shortLabel: "LM" },
+  high_mid: { filter_type: "peaking", defaultFreq: 3200.0, minFreq: 500.0, maxFreq: 10000.0, defaultQ: 1.4, color: "#a78bfa", shortLabel: "HM" },
+  high: { filter_type: "highshelf", defaultFreq: 10000.0, minFreq: 2000.0, maxFreq: 20000.0, defaultQ: 0.7, color: "#34d399", shortLabel: "H" }
+};
+
+export const FAIRLIGHT_RACK_PRESETS = {
+  flat: {
+    preset_id: "flat",
+    eq_enabled: false,
+    hpf_enabled: false,
+    hpf_hz: 80.0,
+    bands: [
+      { band_id: "low", enabled: true, filter_type: "lowshelf", freq_hz: 100.0, gain_db: 0.0, q: 0.7 },
+      { band_id: "low_mid", enabled: true, filter_type: "peaking", freq_hz: 400.0, gain_db: 0.0, q: 1.2 },
+      { band_id: "high_mid", enabled: true, filter_type: "peaking", freq_hz: 3200.0, gain_db: 0.0, q: 1.4 },
+      { band_id: "high", enabled: true, filter_type: "highshelf", freq_hz: 10000.0, gain_db: 0.0, q: 0.7 }
+    ],
+    compressor: { enabled: false, threshold_db: -18.0, ratio: 3.5, attack_ms: 10.0, release_ms: 120.0, makeup_db: 2.0, knee_db: 2.8 },
+    limiter: { enabled: false, ceiling_db: -1.0, attack_ms: 5.0, release_ms: 80.0 }
+  },
+  broadcast_voice: {
+    preset_id: "broadcast_voice",
+    eq_enabled: true,
+    hpf_enabled: true,
+    hpf_hz: 85.0,
+    bands: [
+      { band_id: "low", enabled: true, filter_type: "lowshelf", freq_hz: 110.0, gain_db: -2.5, q: 0.7 },
+      { band_id: "low_mid", enabled: true, filter_type: "peaking", freq_hz: 340.0, gain_db: -3.0, q: 1.6 },
+      { band_id: "high_mid", enabled: true, filter_type: "peaking", freq_hz: 3200.0, gain_db: 3.5, q: 1.3 },
+      { band_id: "high", enabled: true, filter_type: "highshelf", freq_hz: 9500.0, gain_db: 2.0, q: 0.7 }
+    ],
+    compressor: { enabled: true, threshold_db: -18.0, ratio: 3.5, attack_ms: 8.0, release_ms: 110.0, makeup_db: 2.5, knee_db: 2.8 },
+    limiter: { enabled: true, ceiling_db: -1.0, attack_ms: 3.0, release_ms: 70.0 }
+  },
+  podcast_warm: {
+    preset_id: "podcast_warm",
+    eq_enabled: true,
+    hpf_enabled: true,
+    hpf_hz: 70.0,
+    bands: [
+      { band_id: "low", enabled: true, filter_type: "lowshelf", freq_hz: 120.0, gain_db: 2.0, q: 0.7 },
+      { band_id: "low_mid", enabled: true, filter_type: "peaking", freq_hz: 420.0, gain_db: -2.0, q: 1.4 },
+      { band_id: "high_mid", enabled: true, filter_type: "peaking", freq_hz: 3800.0, gain_db: 2.5, q: 1.2 },
+      { band_id: "high", enabled: true, filter_type: "highshelf", freq_hz: 10500.0, gain_db: 1.5, q: 0.7 }
+    ],
+    compressor: { enabled: true, threshold_db: -20.0, ratio: 3.0, attack_ms: 12.0, release_ms: 150.0, makeup_db: 3.0, knee_db: 3.2 },
+    limiter: { enabled: true, ceiling_db: -1.5, attack_ms: 4.0, release_ms: 90.0 }
+  },
+  cinema_punch: {
+    preset_id: "cinema_punch",
+    eq_enabled: true,
+    hpf_enabled: true,
+    hpf_hz: 40.0,
+    bands: [
+      { band_id: "low", enabled: true, filter_type: "lowshelf", freq_hz: 85.0, gain_db: 3.0, q: 0.7 },
+      { band_id: "low_mid", enabled: true, filter_type: "peaking", freq_hz: 300.0, gain_db: -1.5, q: 1.1 },
+      { band_id: "high_mid", enabled: true, filter_type: "peaking", freq_hz: 2800.0, gain_db: 2.0, q: 1.2 },
+      { band_id: "high", enabled: true, filter_type: "highshelf", freq_hz: 11000.0, gain_db: 2.5, q: 0.7 }
+    ],
+    compressor: { enabled: true, threshold_db: -14.0, ratio: 4.0, attack_ms: 6.0, release_ms: 95.0, makeup_db: 2.0, knee_db: 2.5 },
+    limiter: { enabled: true, ceiling_db: -0.5, attack_ms: 2.0, release_ms: 60.0 }
+  },
+  music_master: {
+    preset_id: "music_master",
+    eq_enabled: true,
+    hpf_enabled: true,
+    hpf_hz: 30.0,
+    bands: [
+      { band_id: "low", enabled: true, filter_type: "lowshelf", freq_hz: 90.0, gain_db: 1.5, q: 0.7 },
+      { band_id: "low_mid", enabled: true, filter_type: "peaking", freq_hz: 380.0, gain_db: -1.0, q: 1.2 },
+      { band_id: "high_mid", enabled: true, filter_type: "peaking", freq_hz: 4500.0, gain_db: 1.5, q: 1.1 },
+      { band_id: "high", enabled: true, filter_type: "highshelf", freq_hz: 12000.0, gain_db: 2.0, q: 0.7 }
+    ],
+    compressor: { enabled: true, threshold_db: -16.0, ratio: 2.5, attack_ms: 15.0, release_ms: 180.0, makeup_db: 1.5, knee_db: 3.5 },
+    limiter: { enabled: true, ceiling_db: -1.0, attack_ms: 5.0, release_ms: 100.0 }
+  }
+};
+
+export function normalizeFairlightAudioRackParams(raw = null) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const presetKey =
+    typeof src.preset_id === "string" &&
+    Object.prototype.hasOwnProperty.call(FAIRLIGHT_RACK_PRESETS, src.preset_id.trim().toLowerCase())
+      ? src.preset_id.trim().toLowerCase()
+      : "flat";
+  const base = FAIRLIGHT_RACK_PRESETS.flat;
+  const rawBands = Array.isArray(src.bands) ? src.bands : [];
+  const bandById = {};
+  for (const b of rawBands) {
+    if (b && typeof b === "object" && typeof b.band_id === "string") {
+      bandById[b.band_id.trim().toLowerCase()] = b;
+    }
+  }
+  const bands = FAIRLIGHT_EQ_BAND_ORDER.map((bandId) => {
+    const spec = FAIRLIGHT_EQ_BAND_SPECS[bandId];
+    const inp = bandById[bandId] || {};
+    const ftype =
+      inp.filter_type === "lowshelf" || inp.filter_type === "peaking" || inp.filter_type === "highshelf"
+        ? inp.filter_type
+        : spec.filter_type;
+    return {
+      band_id: bandId,
+      enabled: typeof inp.enabled === "boolean" ? inp.enabled : true,
+      filter_type: ftype,
+      freq_hz: Number.isFinite(Number(inp.freq_hz))
+        ? clampNum(Number(inp.freq_hz), spec.minFreq, spec.maxFreq)
+        : spec.defaultFreq,
+      gain_db: Number.isFinite(Number(inp.gain_db))
+        ? clampNum(Number(inp.gain_db), -18.0, 18.0)
+        : 0.0,
+      q: Number.isFinite(Number(inp.q)) ? clampNum(Number(inp.q), 0.3, 10.0) : spec.defaultQ
+    };
+  });
+  const rawComp = src.compressor && typeof src.compressor === "object" ? src.compressor : {};
+  const rawLim = src.limiter && typeof src.limiter === "object" ? src.limiter : {};
+  return {
+    preset_id: presetKey,
+    eq_enabled: typeof src.eq_enabled === "boolean" ? src.eq_enabled : base.eq_enabled,
+    hpf_enabled: typeof src.hpf_enabled === "boolean" ? src.hpf_enabled : base.hpf_enabled,
+    hpf_hz: Number.isFinite(Number(src.hpf_hz)) ? clampNum(Number(src.hpf_hz), 20.0, 250.0) : 80.0,
+    bands,
+    compressor: {
+      enabled: typeof rawComp.enabled === "boolean" ? rawComp.enabled : false,
+      threshold_db: Number.isFinite(Number(rawComp.threshold_db))
+        ? clampNum(Number(rawComp.threshold_db), -60.0, 0.0)
+        : -18.0,
+      ratio: Number.isFinite(Number(rawComp.ratio)) ? clampNum(Number(rawComp.ratio), 1.0, 20.0) : 3.5,
+      attack_ms: Number.isFinite(Number(rawComp.attack_ms))
+        ? clampNum(Number(rawComp.attack_ms), 0.5, 250.0)
+        : 10.0,
+      release_ms: Number.isFinite(Number(rawComp.release_ms))
+        ? clampNum(Number(rawComp.release_ms), 10.0, 1500.0)
+        : 120.0,
+      makeup_db: Number.isFinite(Number(rawComp.makeup_db))
+        ? clampNum(Number(rawComp.makeup_db), 0.0, 24.0)
+        : 2.0,
+      knee_db: Number.isFinite(Number(rawComp.knee_db))
+        ? clampNum(Number(rawComp.knee_db), 1.0, 8.0)
+        : 2.8
+    },
+    limiter: {
+      enabled: typeof rawLim.enabled === "boolean" ? rawLim.enabled : false,
+      ceiling_db: Number.isFinite(Number(rawLim.ceiling_db))
+        ? clampNum(Number(rawLim.ceiling_db), -12.0, -0.1)
+        : -1.0,
+      attack_ms: Number.isFinite(Number(rawLim.attack_ms))
+        ? clampNum(Number(rawLim.attack_ms), 0.1, 50.0)
+        : 5.0,
+      release_ms: Number.isFinite(Number(rawLim.release_ms))
+        ? clampNum(Number(rawLim.release_ms), 10.0, 500.0)
+        : 80.0
+    }
+  };
+}
+
+export function applyFairlightRackPresetClient(presetId) {
+  const key =
+    typeof presetId === "string" &&
+    Object.prototype.hasOwnProperty.call(FAIRLIGHT_RACK_PRESETS, presetId.trim().toLowerCase())
+      ? presetId.trim().toLowerCase()
+      : "flat";
+  return normalizeFairlightAudioRackParams(JSON.parse(JSON.stringify(FAIRLIGHT_RACK_PRESETS[key])));
+}
+
+export function estimateFairlightCompressorGrClient(comp, inputPeakDb = -12.0) {
+  if (!comp || !comp.enabled || comp.ratio <= 1.001) return 0.0;
+  const overDb = inputPeakDb - comp.threshold_db;
+  if (overDb <= 0.0) return 0.0;
+  const grDb = overDb * (1.0 - 1.0 / comp.ratio);
+  return Number((-Math.min(24.0, Math.max(0.0, grDb))).toFixed(2));
+}
+
+export function compileFairlightAudioRackClient(raw = null) {
+  const params = normalizeFairlightAudioRackParams(raw);
+  const parts = [];
+  if (params.eq_enabled) {
+    if (params.hpf_enabled) {
+      parts.push(`highpass=f=${params.hpf_hz.toFixed(1)}`);
+    }
+    for (const band of params.bands) {
+      if (!band.enabled || Math.abs(band.gain_db) <= 1e-6) continue;
+      if (band.filter_type === "lowshelf") {
+        parts.push(`lowshelf=f=${band.freq_hz.toFixed(1)}:t=q:w=${band.q.toFixed(2)}:g=${band.gain_db.toFixed(2)}`);
+      } else if (band.filter_type === "highshelf") {
+        parts.push(`highshelf=f=${band.freq_hz.toFixed(1)}:t=q:w=${band.q.toFixed(2)}:g=${band.gain_db.toFixed(2)}`);
+      } else {
+        parts.push(`equalizer=f=${band.freq_hz.toFixed(1)}:t=q:w=${band.q.toFixed(2)}:g=${band.gain_db.toFixed(2)}`);
+      }
+    }
+  }
+  if (params.compressor.enabled) {
+    const c = params.compressor;
+    const threshLin = Math.max(0.000977, Math.min(1.0, Math.pow(10.0, c.threshold_db / 20.0)));
+    const makeupLin = Math.max(1.0, Math.min(64.0, Math.pow(10.0, c.makeup_db / 20.0)));
+    parts.push(
+      `acompressor=threshold=${threshLin.toFixed(5)}:ratio=${c.ratio.toFixed(2)}` +
+        `:attack=${c.attack_ms.toFixed(1)}:release=${c.release_ms.toFixed(1)}` +
+        `:makeup=${makeupLin.toFixed(4)}:knee=${c.knee_db.toFixed(2)}`
+    );
+  }
+  if (params.limiter.enabled) {
+    const l = params.limiter;
+    const limitLin = Math.max(0.0625, Math.min(1.0, Math.pow(10.0, l.ceiling_db / 20.0)));
+    parts.push(
+      `alimiter=limit=${limitLin.toFixed(5)}:attack=${l.attack_ms.toFixed(1)}` +
+        `:release=${l.release_ms.toFixed(1)}:level=false`
+    );
+  }
+  const filtergraph = parts.join(",");
+  const activeEqCount = params.eq_enabled
+    ? params.bands.filter((b) => b.enabled && Math.abs(b.gain_db) > 1e-6).length
+    : 0;
+  let eqBandSummary = "BYPASS";
+  if (params.eq_enabled && params.hpf_enabled) {
+    eqBandSummary = `HP ${Math.round(params.hpf_hz)}Hz + ${activeEqCount}B`;
+  } else if (params.eq_enabled) {
+    eqBandSummary = `${activeEqCount}B`;
+  }
+  return {
+    filtergraph,
+    ffmpeg_af_args: filtergraph ? ["-af", filtergraph] : [],
+    is_identity: filtergraph === "",
+    params,
+    estimated_gr_db: estimateFairlightCompressorGrClient(params.compressor),
+    ceiling_dbtp: params.limiter.enabled ? Number(params.limiter.ceiling_db.toFixed(2)) : 0.0,
+    eq_band_summary: eqBandSummary
+  };
+}
+
+function biquadMagnitudeDb(b0, b1, b2, a0, a1, a2, w) {
+  const cosW = Math.cos(w);
+  const cos2W = Math.cos(2 * w);
+  const sinW = Math.sin(w);
+  const sin2W = Math.sin(2 * w);
+  const numRe = b0 + b1 * cosW + b2 * cos2W;
+  const numIm = -b1 * sinW - b2 * sin2W;
+  const denRe = a0 + a1 * cosW + a2 * cos2W;
+  const denIm = -a1 * sinW - a2 * sin2W;
+  const numSq = numRe * numRe + numIm * numIm;
+  const denSq = Math.max(1e-18, denRe * denRe + denIm * denIm);
+  return 10 * Math.log10(Math.max(1e-12, numSq / denSq));
+}
+
+export function evaluateFairlightEqBandDb(band, freqHz, sampleRate = 48000) {
+  if (!band || !band.enabled || Math.abs(band.gain_db) <= 1e-6) return 0;
+  const f0 = clampNum(Number(band.freq_hz) || 1000, 20, sampleRate * 0.45);
+  const w0 = (2 * Math.PI * f0) / sampleRate;
+  const w = (2 * Math.PI * clampNum(freqHz, 15, sampleRate * 0.48)) / sampleRate;
+  const cosW0 = Math.cos(w0);
+  const sinW0 = Math.sin(w0);
+  const A = Math.pow(10, band.gain_db / 40);
+  const qVal = clampNum(Number(band.q) || 1.0, 0.3, 10.0);
+  const alpha = sinW0 / (2 * qVal);
+
+  if (band.filter_type === "lowshelf") {
+    const sqA = Math.sqrt(A);
+    const b0 = A * (A + 1 - (A - 1) * cosW0 + 2 * sqA * alpha);
+    const b1 = 2 * A * (A - 1 - (A + 1) * cosW0);
+    const b2 = A * (A + 1 - (A - 1) * cosW0 - 2 * sqA * alpha);
+    const a0 = A + 1 + (A - 1) * cosW0 + 2 * sqA * alpha;
+    const a1 = -2 * (A - 1 + (A + 1) * cosW0);
+    const a2 = A + 1 + (A - 1) * cosW0 - 2 * sqA * alpha;
+    return biquadMagnitudeDb(b0, b1, b2, a0, a1, a2, w);
+  }
+  if (band.filter_type === "highshelf") {
+    const sqA = Math.sqrt(A);
+    const b0 = A * (A + 1 + (A - 1) * cosW0 + 2 * sqA * alpha);
+    const b1 = -2 * A * (A - 1 + (A + 1) * cosW0);
+    const b2 = A * (A + 1 + (A - 1) * cosW0 - 2 * sqA * alpha);
+    const a0 = A + 1 - (A - 1) * cosW0 + 2 * sqA * alpha;
+    const a1 = 2 * (A - 1 - (A + 1) * cosW0);
+    const a2 = A + 1 - (A - 1) * cosW0 - 2 * sqA * alpha;
+    return biquadMagnitudeDb(b0, b1, b2, a0, a1, a2, w);
+  }
+  const b0 = 1 + alpha * A;
+  const b1 = -2 * cosW0;
+  const b2 = 1 - alpha * A;
+  const a0 = 1 + alpha / A;
+  const a1 = -2 * cosW0;
+  const a2 = 1 - alpha / A;
+  return biquadMagnitudeDb(b0, b1, b2, a0, a1, a2, w);
+}
+
+export function evaluateFairlightEqCurveDb(rackParams, freqHz, sampleRate = 48000) {
+  const params = normalizeFairlightAudioRackParams(rackParams);
+  if (!params.eq_enabled) return 0;
+  let totalDb = 0;
+  if (params.hpf_enabled) {
+    const w0 = (2 * Math.PI * clampNum(params.hpf_hz, 20, 250)) / sampleRate;
+    const w = (2 * Math.PI * clampNum(freqHz, 15, sampleRate * 0.48)) / sampleRate;
+    const cosW0 = Math.cos(w0);
+    const alpha = Math.sin(w0) / (2 * 0.7071);
+    const b0 = (1 + cosW0) / 2;
+    const b1 = -(1 + cosW0);
+    const b2 = (1 + cosW0) / 2;
+    const a0 = 1 + alpha;
+    const a1 = -2 * cosW0;
+    const a2 = 1 - alpha;
+    totalDb += biquadMagnitudeDb(b0, b1, b2, a0, a1, a2, w);
+  }
+  for (const band of params.bands) {
+    totalDb += evaluateFairlightEqBandDb(band, freqHz, sampleRate);
+  }
+  return clampNum(totalDb, -24.0, 24.0);
+}
+
+export function evaluateFairlightDynamicsTransferDb(rackParams, inputDb) {
+  const params = normalizeFairlightAudioRackParams(rackParams);
+  let outDb = clampNum(Number(inputDb) || -60, -60, 0);
+  if (params.compressor.enabled) {
+    const c = params.compressor;
+    const halfKnee = c.knee_db * 0.5;
+    if (2 * (outDb - c.threshold_db) < -c.knee_db) {
+      // Below knee: 1:1
+    } else if (2 * Math.abs(outDb - c.threshold_db) <= c.knee_db && c.knee_db > 0.05) {
+      const diff = outDb - c.threshold_db + halfKnee;
+      outDb = outDb + ((1 / c.ratio - 1) * diff * diff) / (2 * c.knee_db);
+    } else {
+      outDb = c.threshold_db + (outDb - c.threshold_db) / c.ratio;
+    }
+    outDb += c.makeup_db;
+  }
+  if (params.limiter.enabled) {
+    outDb = Math.min(outDb, params.limiter.ceiling_db);
+  }
+  return clampNum(outDb, -60, 0);
 }

@@ -1313,3 +1313,31 @@ def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
     assert loaded.color.nodes[1].lut_mix == pytest.approx(0.8)
     assert loaded.color.nodes[1].lut_size == 2
     assert len(loaded.color.nodes[1].lut_table or []) == 8
+
+
+def test_project_fairlight_audio_rack_roundtrip(tmp_path: Path) -> None:
+    from taktcut.render import apply_fairlight_rack_preset
+
+    proj = _build_full_test_project()
+    assert proj.fairlight_rack.is_identity() is True
+
+    proj.fairlight_rack = apply_fairlight_rack_preset("broadcast_voice")
+    proj.fairlight_rack.bands[2].gain_db = 4.5
+    proj.fairlight_rack.limiter.ceiling_db = -1.2
+
+    proj_path = tmp_path / "fairlight_rack.taktcut.json"
+    save_project_file(proj, proj_path)
+    loaded = load_project_file(proj_path)
+    assert loaded.fairlight_rack.preset_id == "broadcast_voice"
+    assert loaded.fairlight_rack.eq_enabled is True
+    assert loaded.fairlight_rack.hpf_enabled is True
+    assert loaded.fairlight_rack.hpf_hz == pytest.approx(85.0)
+    assert loaded.fairlight_rack.bands[2].gain_db == pytest.approx(4.5)
+    assert loaded.fairlight_rack.compressor.enabled is True
+    assert loaded.fairlight_rack.limiter.enabled is True
+    assert loaded.fairlight_rack.limiter.ceiling_db == pytest.approx(-1.2)
+
+    bad_payload = export_project_dict(loaded)
+    bad_payload["fairlight_rack"]["limiter"]["ceiling_db"] = 0.5
+    with pytest.raises((ValueError, ValidationError)):
+        validate_project_payload(bad_payload)

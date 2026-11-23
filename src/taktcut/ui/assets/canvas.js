@@ -1,6 +1,7 @@
 import {
   CLIP_LABEL_COLORS,
   CURVE_CHANNELS,
+  FAIRLIGHT_EQ_BAND_SPECS,
   MARKER_COLOR_HEX,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
@@ -14,10 +15,14 @@ import {
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
   computeTimelineZoomViewport,
+  estimateFairlightCompressorGrClient,
   evaluateActiveNodeMaskAtClient,
   evaluateClipFadeEnvelope,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
+  evaluateFairlightDynamicsTransferDb,
+  evaluateFairlightEqBandDb,
+  evaluateFairlightEqCurveDb,
   evaluateRetimeSourceOffset,
   evaluateRetimeSpeedAt,
   evaluateTrackPointClient,
@@ -45,6 +50,7 @@ import {
   normalizeClipTransition,
   normalizeColorCurves,
   normalizeCurvePoints,
+  normalizeFairlightAudioRackParams,
   normalizePlanarTrackerClient,
   normalizePowerWindow,
   normalizeQualifier,
@@ -6733,4 +6739,320 @@ export function drawColorCurvesCanvas(
   };
   canvas._curvesGeom = geom;
   return geom;
+}
+
+export function renderFairlightEqCurveCanvas(canvas, rawRackParams, selectedBandId = "low_mid") {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(240, Math.round(rect.width || canvas.clientWidth || 300));
+  const height = Math.max(128, Math.round(rect.height || canvas.clientHeight || 156));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const params = normalizeFairlightAudioRackParams(rawRackParams);
+  const padL = 28;
+  const padR = 10;
+  const padT = 12;
+  const padB = 20;
+  const plotW = Math.max(80, width - padL - padR);
+  const plotH = Math.max(60, height - padT - padB);
+  const logMin = Math.log10(20);
+  const logMax = Math.log10(20000);
+  const freqToX = (hz) => {
+    const clamped = Math.max(20, Math.min(20000, hz));
+    return padL + ((Math.log10(clamped) - logMin) / (logMax - logMin)) * plotW;
+  };
+  const dbToY = (db) => {
+    const clamped = Math.max(-18, Math.min(18, db));
+    return padT + ((18 - clamped) / 36) * plotH;
+  };
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#14161c";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  // Horizontal dB graticule
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (const db of [18, 12, 6, 0, -6, -12, -18]) {
+    const y = Math.round(dbToY(db)) + 0.5;
+    ctx.strokeStyle = db === 0 ? "#384152" : "#22242e";
+    ctx.lineWidth = db === 0 ? 1.2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + plotW, y);
+    ctx.stroke();
+    if (db === 18 || db === 0 || db === -18 || db === 12 || db === -12) {
+      ctx.fillStyle = db === 0 ? "#cbd5e1" : "#6b7280";
+      ctx.fillText(db > 0 ? `+${db}` : String(db), padL - 4, y);
+    }
+  }
+
+  // Logarithmic frequency graticule
+  const freqTicks = [
+    { hz: 20, label: "20" },
+    { hz: 50, label: "50" },
+    { hz: 100, label: "100" },
+    { hz: 200, label: "200" },
+    { hz: 500, label: "500" },
+    { hz: 1000, label: "1k" },
+    { hz: 2000, label: "2k" },
+    { hz: 5000, label: "5k" },
+    { hz: 10000, label: "10k" },
+    { hz: 20000, label: "20k" }
+  ];
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const tick of freqTicks) {
+    const x = Math.round(freqToX(tick.hz)) + 0.5;
+    ctx.strokeStyle = tick.hz === 1000 ? "#323846" : "#1f222b";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, padT + plotH);
+    ctx.stroke();
+    if (tick.hz !== 200 && tick.hz !== 2000 && tick.hz !== 20000) {
+      ctx.fillStyle = "#7a808e";
+      ctx.fillText(tick.label, x, padT + plotH + 4);
+    }
+  }
+
+  // Draw individual band translucent curves when EQ is enabled
+  const samples = 120;
+  if (params.eq_enabled) {
+    for (const band of params.bands) {
+      if (!band.enabled || Math.abs(band.gain_db) <= 0.05) continue;
+      const spec = FAIRLIGHT_EQ_BAND_SPECS[band.band_id];
+      ctx.save();
+      ctx.strokeStyle = spec ? spec.color : "#39c5cf";
+      ctx.globalAlpha = band.band_id === selectedBandId ? 0.55 : 0.24;
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      for (let i = 0; i <= samples; i++) {
+        const logF = logMin + (i / samples) * (logMax - logMin);
+        const f = Math.pow(10, logF);
+        const y = dbToY(evaluateFairlightEqBandDb(band, f));
+        const x = padL + (i / samples) * plotW;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Composite response curve
+  const zeroY = dbToY(0);
+  const curvePts = [];
+  for (let i = 0; i <= samples; i++) {
+    const logF = logMin + (i / samples) * (logMax - logMin);
+    const f = Math.pow(10, logF);
+    const x = padL + (i / samples) * plotW;
+    const db = params.eq_enabled ? evaluateFairlightEqCurveDb(params, f) : 0;
+    const y = dbToY(db);
+    curvePts.push({ x, y });
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(padL, zeroY);
+  for (const p of curvePts) ctx.lineTo(p.x, p.y);
+  ctx.lineTo(padL + plotW, zeroY);
+  ctx.closePath();
+  ctx.fillStyle = params.eq_enabled ? "rgba(57, 197, 207, 0.16)" : "rgba(148, 163, 184, 0.06)";
+  ctx.fill();
+
+  ctx.beginPath();
+  for (let i = 0; i < curvePts.length; i++) {
+    if (i === 0) ctx.moveTo(curvePts[i].x, curvePts[i].y);
+    else ctx.lineTo(curvePts[i].x, curvePts[i].y);
+  }
+  ctx.strokeStyle = params.eq_enabled ? "#7ee8f0" : "#64748b";
+  ctx.lineWidth = params.eq_enabled ? 2.1 : 1.4;
+  ctx.stroke();
+  ctx.restore();
+
+  // HPF marker line
+  if (params.eq_enabled && params.hpf_enabled) {
+    const hpfX = freqToX(params.hpf_hz);
+    ctx.save();
+    ctx.strokeStyle = "#f97316";
+    ctx.setLineDash([3, 3]);
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.moveTo(hpfX, padT);
+    ctx.lineTo(hpfX, padT + plotH);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Band control nodes
+  const nodes = [];
+  for (const band of params.bands) {
+    const spec = FAIRLIGHT_EQ_BAND_SPECS[band.band_id];
+    const color = spec ? spec.color : "#39c5cf";
+    const nx = freqToX(band.freq_hz);
+    const ny = dbToY(band.gain_db);
+    const isSel = band.band_id === selectedBandId;
+    nodes.push({ band_id: band.band_id, x: nx, y: ny, freq_hz: band.freq_hz, gain_db: band.gain_db });
+
+    if (isSel) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.14)";
+      ctx.beginPath();
+      ctx.arc(nx, ny, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = band.enabled && params.eq_enabled ? color : "#272a33";
+    ctx.strokeStyle = isSel ? "#ffffff" : color;
+    ctx.lineWidth = isSel ? 2 : 1.5;
+    ctx.beginPath();
+    ctx.arc(nx, ny, isSel ? 6 : 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#0f1115";
+    ctx.font = "700 8px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(spec ? spec.shortLabel : "?", nx, ny + 0.5);
+  }
+
+  const geom = { padL, padR, padT, padB, plotW, plotH, logMin, logMax, width, height, nodes };
+  canvas._fairlightEqGeom = geom;
+  return geom;
+}
+
+export function renderFairlightDynamicsCanvas(canvas, rawRackParams, liveInputDb = -12.0) {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(220, Math.round(rect.width || canvas.clientWidth || 300));
+  const height = Math.max(120, Math.round(rect.height || canvas.clientHeight || 148));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const params = normalizeFairlightAudioRackParams(rawRackParams);
+  const padL = 28;
+  const padR = 34;
+  const padT = 12;
+  const padB = 20;
+  const plotW = Math.max(80, width - padL - padR);
+  const plotH = Math.max(60, height - padT - padB);
+  const dbToX = (db) => padL + ((Math.max(-60, Math.min(0, db)) + 60) / 60) * plotW;
+  const dbToY = (db) => padT + (1 - (Math.max(-60, Math.min(0, db)) + 60) / 60) * plotH;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#14161c";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  ctx.font = "9px ui-monospace, monospace";
+  for (const db of [0, -12, -24, -36, -48, -60]) {
+    const x = Math.round(dbToX(db)) + 0.5;
+    const y = Math.round(dbToY(db)) + 0.5;
+    ctx.strokeStyle = "#22242e";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + plotW, y);
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, padT + plotH);
+    ctx.stroke();
+    if (db === 0 || db === -24 || db === -48) {
+      ctx.fillStyle = "#7a808e";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(db), padL - 4, y);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText(String(db), x, padT + plotH + 4);
+    }
+  }
+
+  // 1:1 unity reference diagonal
+  ctx.save();
+  ctx.strokeStyle = "#333948";
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(dbToX(-60), dbToY(-60));
+  ctx.lineTo(dbToX(0), dbToY(0));
+  ctx.stroke();
+  ctx.restore();
+
+  // Threshold crosshair
+  if (params.compressor.enabled) {
+    const tx = dbToX(params.compressor.threshold_db);
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 182, 72, 0.55)";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(tx, padT);
+    ctx.lineTo(tx, padT + plotH);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Limiter ceiling line
+  if (params.limiter.enabled) {
+    const ly = dbToY(params.limiter.ceiling_db);
+    ctx.save();
+    ctx.strokeStyle = "rgba(248, 113, 113, 0.78)";
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(padL, ly);
+    ctx.lineTo(padL + plotW, ly);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Transfer curve
+  const dynActive = params.compressor.enabled || params.limiter.enabled;
+  ctx.beginPath();
+  for (let i = 0; i <= 60; i++) {
+    const inDb = -60 + i;
+    const outDb = evaluateFairlightDynamicsTransferDb(params, inDb);
+    const px = dbToX(inDb);
+    const py = dbToY(outDb);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.strokeStyle = dynActive ? "#39c5cf" : "#64748b";
+  ctx.lineWidth = dynActive ? 2.1 : 1.4;
+  ctx.stroke();
+
+  // Live Gain Reduction (GR) vertical bar on the right
+  const barX = padL + plotW + 10;
+  const barW = 14;
+  ctx.fillStyle = "#181a22";
+  ctx.fillRect(barX, padT, barW, plotH);
+  ctx.strokeStyle = "#2b2f3d";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX, padT, barW, plotH);
+
+  const grDb = estimateFairlightCompressorGrClient(params.compressor, liveInputDb);
+  const grMag = Math.min(24, Math.max(0, Math.abs(grDb)));
+  if (grMag > 0.05) {
+    const grH = (grMag / 24) * plotH;
+    ctx.fillStyle = "#f59e0b";
+    ctx.fillRect(barX + 1, padT + 1, barW - 2, Math.max(2, grH - 2));
+  }
+  ctx.fillStyle = "#9ca3af";
+  ctx.font = "700 8.5px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("GR", barX + barW * 0.5, padT + plotH + 4);
+  return { plotW, plotH, grDb };
 }

@@ -133,6 +133,7 @@ from taktcut.render import (
     ClipRetimeParams,
     ClipVideoFadeParams,
     FairlightAudioParams,
+    FairlightAudioRackParams,
     FairlightChannelStripParams,
     FilmGrainParams,
     FramingParams,
@@ -145,6 +146,7 @@ from taktcut.render import (
     build_render_plan,
     compile_audio_filter_result,
     compile_auto_duck_filter_result,
+    compile_fairlight_audio_rack_filter_result,
     compile_fairlight_mixer_filter,
     compile_film_grain_filter_result,
     compile_framing_filter_result,
@@ -709,6 +711,31 @@ def _build_fairlight_mixer_from_payload(
 
     voice_cleanup = _build_voice_cleanup_from_payload(payload)
     return channel, master, voice_cleanup
+
+
+def _build_fairlight_rack_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> FairlightAudioRackParams | None:
+    raw_rack = payload.get("fairlight_rack")
+    if raw_rack is not None:
+        if not isinstance(raw_rack, dict):
+            raise ValueError("'fairlight_rack' must be a JSON object")
+        return FairlightAudioRackParams.model_validate(raw_rack)
+    if allow_top_level:
+        rack_keys = (
+            "preset_id",
+            "eq_enabled",
+            "hpf_enabled",
+            "hpf_hz",
+            "bands",
+            "compressor",
+            "limiter",
+        )
+        subset = {k: payload[k] for k in rack_keys if k in payload}
+        return FairlightAudioRackParams.model_validate(subset)
+    return None
 
 
 def _build_retime_params_from_payload(
@@ -2170,6 +2197,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             film_grain_obj = _build_film_grain_from_payload(payload)
             vignette_obj = _build_vignette_from_payload(payload)
             voice_cleanup_obj = _build_voice_cleanup_from_payload(payload)
+            fairlight_rack_obj = _build_fairlight_rack_from_payload(payload)
 
             title_overlay_obj: TitleOverlayParams | None = None
             raw_title_overlay = payload.get("title_overlay")
@@ -2216,6 +2244,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 film_grain=film_grain_obj,
                 vignette=vignette_obj,
                 voice_cleanup=voice_cleanup_obj,
+                fairlight_rack=fairlight_rack_obj,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
                 loudness_preset=loudness_preset,
@@ -2555,6 +2584,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, compiled_mixer.model_dump(mode="json"))
             return
 
+        if route == "/api/fairlight/rack/compile":
+            rack_obj = _build_fairlight_rack_from_payload(payload, allow_top_level=True)
+            assert rack_obj is not None
+            compiled_rack = compile_fairlight_audio_rack_filter_result(rack_obj)
+            self._send_json(HTTPStatus.OK, compiled_rack.model_dump(mode="json"))
+            return
+
         if route == "/api/transitions/compile":
             trans_params = _build_transition_params_from_payload(payload)
             raw_dur_a = payload.get("clip_a_duration_s")
@@ -2827,6 +2863,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             film_grain_obj = _build_film_grain_from_payload(payload)
             vignette_obj = _build_vignette_from_payload(payload)
             voice_cleanup_obj = _build_voice_cleanup_from_payload(payload)
+            fairlight_rack_obj = _build_fairlight_rack_from_payload(payload)
             title_overlay_remote: TitleOverlayParams | None = None
             if isinstance(payload.get("title_overlay"), dict):
                 title_overlay_remote = _build_title_overlay_from_payload(
@@ -2865,6 +2902,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 film_grain=film_grain_obj,
                 vignette=vignette_obj,
                 voice_cleanup=voice_cleanup_obj,
+                fairlight_rack=fairlight_rack_obj,
                 clip_duration_s=clip_duration_s,
                 loudness_preset=loudness_preset or "off",
                 dialogue_eq=dialogue_eq or "off",

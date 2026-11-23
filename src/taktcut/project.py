@@ -43,6 +43,7 @@ from taktcut.render import (
     AutoDuckParams,
     DeliveryPresetId,
     EncoderPresetId,
+    FairlightAudioRackParams,
     FilmGrainParams,
     FramingParams,
     LowerThirdParams,
@@ -424,6 +425,7 @@ class TaktcutProject(BaseModel):
     bpm_grid: BpmGridConfig = Field(default_factory=BpmGridConfig)
     auto_duck: AutoDuckParams = Field(default_factory=AutoDuckParams)
     master_bus: MasterBusParams = Field(default_factory=MasterBusParams)
+    fairlight_rack: FairlightAudioRackParams = Field(default_factory=FairlightAudioRackParams)
     color: ProjectColorState = Field(default_factory=ProjectColorState)
     fx: ProjectFxState = Field(default_factory=ProjectFxState)
     title_overlay: TitleOverlayParams = Field(

@@ -50,6 +50,7 @@ from taktcut.render import (
     ClipAudioParams,
     ClipRetimeParams,
     ClipVideoFadeParams,
+    FairlightAudioRackParams,
     FilmGrainParams,
     FramingParams,
     LowerThirdParams,
@@ -268,6 +269,7 @@ class RemoteRenderJobRequest(BaseModel):
     film_grain: FilmGrainParams | None = None
     vignette: VignetteParams | None = None
     voice_cleanup: VoiceCleanupParams | None = None
+    fairlight_rack: FairlightAudioRackParams | None = None
     clip_duration_s: float | None = None
 
     @field_validator("loudness_preset", mode="before")
@@ -593,6 +595,7 @@ class RemoteRenderState:
             film_grain=req.film_grain,
             vignette=req.vignette,
             voice_cleanup=req.voice_cleanup,
+            fairlight_rack=req.fairlight_rack,
             clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,
             loudness_preset=req.loudness_preset,
