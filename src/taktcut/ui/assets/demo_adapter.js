@@ -10,6 +10,7 @@ import {
   compileAutoDuckFilterClient,
   compileColorNodeChainClient,
   compileFairlightAudioFilterClient,
+  compileFairlightMixerClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransformFilterClient,
@@ -1962,6 +1963,16 @@ export function createApiClient() {
         return compileAutoDuckFilterClient(payload.auto_duck || payload, payload);
       }
       return requestJson("/api/audio/duck/compile", { method: "POST", body: payload });
+    },
+    async compileFairlightMixer(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileFairlightMixerClient(
+          payload.channel || payload,
+          payload.master || null,
+          payload.voice_cleanup || null
+        );
+      }
+      return requestJson("/api/fairlight/mixer/compile", { method: "POST", body: payload });
     },
     async compileRetimeFilter(payload) {
       if (resolvedMode === "static-demo") {

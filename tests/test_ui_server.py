@@ -3172,6 +3172,45 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator('[data-track-solo="A2"]').click()
                     assert page.locator("#track-mixer-summary").text_content() == "ALL ACTIVE"
 
+                    # Verify Fairlight Track Mixer Strip (Fader, Pan, Arm R, M1 DIM/ISO & LUFS)
+                    assert page.locator('#track-mixer-strip [data-strip-code="A1"]').count() == 1
+                    assert page.locator('#track-mixer-strip [data-strip-code="M1"]').count() == 1
+                    page.locator('[data-track-arm="A1"]').click()
+                    assert (
+                        page.locator('[data-track-arm="A1"]').get_attribute("aria-pressed")
+                        == "true"
+                    )
+                    page.locator('[data-track-fader="A1"]').fill("-6")
+                    page.locator('[data-track-fader="A1"]').dispatch_event("input")
+                    page.locator('[data-track-fader="A1"]').dispatch_event("change")
+                    assert page.locator('[data-track-db="A1"]').text_content() == "-6.0"
+                    page.locator('[data-track-pan="A1"]').fill("-0.5")
+                    page.locator('[data-track-pan="A1"]').dispatch_event("input")
+                    page.locator('[data-track-pan="A1"]').dispatch_event("change")
+                    assert page.locator('[data-track-pan-label="A1"]').text_content() == "L50"
+                    page.locator('[data-master-dim="M1"]').click()
+                    page.locator("#btn-fairlight-voice-iso").click()
+                    assert (
+                        page.locator("#btn-fairlight-voice-iso").get_attribute("aria-pressed")
+                        == "true"
+                    )
+                    mixer_af = page.locator("#fairlight-mixer-af-preview").text_content() or ""
+                    assert "volume=-26.00dB" in mixer_af
+                    assert "pan=stereo|c0=1.000*c0|c1=0.500*c1" in mixer_af
+                    assert "highpass=f=85" in mixer_af
+                    assert page.locator("#timeline-vu-tp-badge").is_visible() is True
+                    assert page.locator("#timeline-vu-lufs-m").is_visible() is True
+                    assert page.locator("#timeline-vu-lufs-i").is_visible() is True
+                    page.locator("#btn-mixer-reset").click()
+                    assert page.locator('[data-track-db="A1"]').text_content() == "+0.0"
+                    assert page.locator('[data-track-pan-label="A1"]').text_content() == "C"
+                    assert (
+                        page.locator("#btn-fairlight-voice-iso").get_attribute("aria-pressed")
+                        == "false"
+                    )
+                    tl_mon_box = page.locator("#timeline-program-canvas").bounding_box()
+                    assert tl_mon_box is not None and tl_mon_box["y"] + tl_mon_box["height"] <= 900
+
                     # Verify Clip Speed / Retime Inspector presets & Reverse toggle
                     page.locator('[data-retime-preset="2.0"]').click()
                     rt_badge = page.locator("#clip-retime-badge").text_content() or ""
@@ -3279,6 +3318,13 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                         "#timeline-index-list .timeline-index-row",
                         '[data-fade-quick="in"][data-fade-val="0.5"]',
                         "#btn-clip-fade-reset-all",
+                        "#btn-mixer-reset",
+                        "#btn-fairlight-voice-iso",
+                        '[data-track-mute="A1"]',
+                        '[data-track-arm="A1"]',
+                        '[data-master-iso="M1"]',
+                        '[data-track-fader="A1"]',
+                        '[data-track-pan="A1"]',
                     ):
                         box = page.locator(idx_selector).first.bounding_box()
                         assert box is not None and box["height"] >= 44, (
@@ -6682,3 +6728,135 @@ def test_ui_color_node_tree_and_cube_import_endpoints(ui_server: tuple[str, Path
     assert plan_status == 200
     plan = json.loads(plan_raw.decode("utf-8"))
     assert "lut3d=" in (plan["plan"]["video_filter"] or "")
+
+
+def test_ui_fairlight_mixer_compile_and_project_persistence(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    ok_status, _, ok_raw = _http_call(
+        f"{base_url}/api/fairlight/mixer/compile",
+        method="POST",
+        payload={
+            "channel": {
+                "track_code": "A1",
+                "volume_db": -6.0,
+                "pan": -0.5,
+                "muted": False,
+                "solo": False,
+                "rec_armed": True,
+            },
+            "master": {
+                "volume_db": 0.0,
+                "muted": False,
+                "dim_enabled": True,
+                "voice_isolation": True,
+            },
+        },
+    )
+    assert ok_status == 200
+    compiled = json.loads(ok_raw.decode("utf-8"))
+    assert compiled["is_identity"] is False
+    assert compiled["effective_gain_db"] == pytest.approx(-26.0)
+    assert compiled["pan_law_left"] == pytest.approx(1.0)
+    assert compiled["pan_law_right"] == pytest.approx(0.5)
+    assert "volume=-26.00dB" in compiled["filtergraph"]
+    assert "pan=stereo|c0=1.000*c0|c1=0.500*c1" in compiled["filtergraph"]
+    assert "highpass=f=85" in compiled["filtergraph"]
+
+    id_status, _, id_raw = _http_call(
+        f"{base_url}/api/fairlight/mixer/compile",
+        method="POST",
+        payload={
+            "channel": {"track_code": "A2", "volume_db": 0.0, "pan": 0.0},
+            "master": {"volume_db": 0.0, "muted": False, "dim_enabled": False},
+        },
+    )
+    assert id_status == 200
+    id_data = json.loads(id_raw.decode("utf-8"))
+    assert id_data["is_identity"] is True
+    assert id_data["filtergraph"] == ""
+    assert id_data["ffmpeg_af_args"] == []
+
+    mute_status, _, mute_raw = _http_call(
+        f"{base_url}/api/fairlight/mixer/compile",
+        method="POST",
+        payload={
+            "channel": {"track_code": "A1", "volume_db": 3.0, "pan": 0.25},
+            "master": {"volume_db": 0.0, "muted": True},
+        },
+    )
+    assert mute_status == 200
+    mute_data = json.loads(mute_raw.decode("utf-8"))
+    assert mute_data["filtergraph"] == "volume=0"
+    assert mute_data["effective_gain_db"] == pytest.approx(-96.0)
+
+    for bad_payload in (
+        {"channel": {"track_code": "INVALID", "volume_db": 0.0}},
+        {"channel": {"track_code": "A1", "volume_db": -60.0}},
+        {"channel": {"track_code": "A1", "volume_db": True}},
+        {"channel": {"track_code": "A1", "pan": 1.5}},
+        {"master": {"dim_enabled": "yes"}},
+        {"master": {"volume_db": 20.0}},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/fairlight/mixer/compile",
+            method="POST",
+            payload=bad_payload,
+        )
+        assert bad_status == 400
+
+    # Project save/export roundtrip with track mixer fields & master_bus
+    sample_status, _, sample_raw = _http_call(f"{base_url}/api/sample")
+    assert sample_status == 200
+    doc = json.loads(sample_raw.decode("utf-8"))["document"]
+    doc["tracks"][1]["volume_db"] = -4.5
+    doc["tracks"][1]["pan"] = 0.35
+    doc["tracks"][1]["rec_armed"] = True
+    project_payload = {
+        "schema_version": "taktcut.project.v1",
+        "project_name": "Fairlight_Mixer_Test",
+        "timeline": doc,
+        "master_bus": {
+            "volume_db": -1.5,
+            "muted": False,
+            "dim_enabled": True,
+            "voice_isolation": True,
+        },
+    }
+    exp_status, _, exp_raw = _http_call(
+        f"{base_url}/api/project/export",
+        method="POST",
+        payload={"project": project_payload},
+    )
+    assert exp_status == 200
+    exported_text = json.loads(exp_raw.decode("utf-8"))["project_json"]
+    imp_status, _, imp_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={"project_json": exported_text},
+    )
+    assert imp_status == 200
+    imported = json.loads(imp_raw.decode("utf-8"))["project"]
+    assert imported["timeline"]["tracks"][1]["volume_db"] == pytest.approx(-4.5)
+    assert imported["timeline"]["tracks"][1]["pan"] == pytest.approx(0.35)
+    assert imported["timeline"]["tracks"][1]["rec_armed"] is True
+    assert imported["master_bus"]["volume_db"] == pytest.approx(-1.5)
+    assert imported["master_bus"]["dim_enabled"] is True
+    assert imported["master_bus"]["voice_isolation"] is True
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "timeline_ops.js",
+        "demo_adapter.js",
+        "i18n.js",
+        "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content
+        assert "\u2013" not in content
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content

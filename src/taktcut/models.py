@@ -443,15 +443,36 @@ class TimelineClip(BaseModel):
         return self.start_frame + self.duration_frames
 
 
+TRACK_VOLUME_DB_MIN: float = -48.0
+TRACK_VOLUME_DB_MAX: float = 12.0
+TRACK_PAN_MIN: float = -1.0
+TRACK_PAN_MAX: float = 1.0
+
+
 class TimelineTrack(BaseModel):
-    """A single video or audio track containing clips and markers."""
+    """A single video or audio track containing clips, mixer strip state, and markers."""
 
     index: int = Field(ge=1)
     kind: Literal["video", "audio"] = "video"
     name: str = ""
     muted: bool = False
     solo: bool = False
+    rec_armed: bool = False
+    volume_db: float = Field(default=0.0, ge=TRACK_VOLUME_DB_MIN, le=TRACK_VOLUME_DB_MAX)
+    pan: float = Field(default=0.0, ge=TRACK_PAN_MIN, le=TRACK_PAN_MAX)
     clips: list[TimelineClip] = Field(default_factory=list)
+
+    @field_validator("volume_db", "pan", mode="before")
+    @classmethod
+    def _validate_track_mixer_float(cls, raw: Any, info: Any) -> float:
+        return _check_finite_number(raw, str(info.field_name))
+
+    @field_validator("rec_armed", mode="before")
+    @classmethod
+    def _validate_rec_armed(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"rec_armed must be a boolean, got {raw!r}")
+        return raw
 
 
 class TimelineDocument(BaseModel):

@@ -1,6 +1,10 @@
 export const SNAP_THRESHOLD_PX = 10;
 export const AUDIO_GAIN_DB_MIN = -24;
 export const AUDIO_GAIN_DB_MAX = 12;
+export const TRACK_VOLUME_DB_MIN = -48.0;
+export const TRACK_VOLUME_DB_MAX = 12.0;
+export const TRACK_PAN_MIN = -1.0;
+export const TRACK_PAN_MAX = 1.0;
 export const AUDIO_FADE_S_MIN = 0;
 export const AUDIO_FADE_S_MAX = 5;
 export const AUTO_DUCK_THRESHOLD_DB_MIN = -40;
@@ -896,28 +900,142 @@ function isMusicBedTrack(track, allAudioTracks) {
   return Array.isArray(allAudioTracks) && allAudioTracks.length > 1 && Number(track.index) > 1;
 }
 
+export function normalizeTrackMixerState(track) {
+  const src = track && typeof track === "object" ? track : {};
+  const rawVol = Number(src.volume_db);
+  const volumeDb = Number.isFinite(rawVol)
+    ? clampNum(rawVol, TRACK_VOLUME_DB_MIN, TRACK_VOLUME_DB_MAX)
+    : 0.0;
+  const rawPan = Number(src.pan);
+  const pan = Number.isFinite(rawPan) ? clampNum(rawPan, TRACK_PAN_MIN, TRACK_PAN_MAX) : 0.0;
+  return {
+    volume_db: Number(volumeDb.toFixed(1)),
+    pan: Number(pan.toFixed(2)),
+    muted: Boolean(src.muted),
+    solo: Boolean(src.solo),
+    rec_armed: Boolean(src.rec_armed)
+  };
+}
+
+export function normalizeMasterBusState(master) {
+  const src = master && typeof master === "object" ? master : {};
+  const rawVol = Number(src.volume_db);
+  const volumeDb = Number.isFinite(rawVol)
+    ? clampNum(rawVol, TRACK_VOLUME_DB_MIN, TRACK_VOLUME_DB_MAX)
+    : 0.0;
+  return {
+    volume_db: Number(volumeDb.toFixed(1)),
+    muted: Boolean(src.muted),
+    dim_enabled: Boolean(src.dim_enabled),
+    voice_isolation: Boolean(src.voice_isolation)
+  };
+}
+
+export function formatTrackPanLabel(pan) {
+  const p = Number.isFinite(Number(pan)) ? clampNum(Number(pan), TRACK_PAN_MIN, TRACK_PAN_MAX) : 0.0;
+  if (Math.abs(p) <= 0.02) return "C";
+  const pct = Math.round(Math.abs(p) * 100);
+  return p < 0 ? `L${pct}` : `R${pct}`;
+}
+
+export function compileTrackPanClient(pan) {
+  const p = Number.isFinite(Number(pan)) ? clampNum(Number(pan), TRACK_PAN_MIN, TRACK_PAN_MAX) : 0.0;
+  if (Math.abs(p) <= 1e-6) return "";
+  const leftGain = Math.min(1.0, 1.0 - p);
+  const rightGain = Math.min(1.0, 1.0 + p);
+  return `pan=stereo|c0=${leftGain.toFixed(3)}*c0|c1=${rightGain.toFixed(3)}*c1`;
+}
+
+export function compileFairlightMixerClient(channel, master = null, voiceCleanup = null) {
+  const ch = normalizeTrackMixerState(channel);
+  const trackCode =
+    channel && typeof channel.track_code === "string" && channel.track_code.trim()
+      ? channel.track_code.trim().toUpperCase()
+      : "A1";
+  const m = normalizeMasterBusState(master);
+  const leftGain = Number(Math.min(1.0, 1.0 - ch.pan).toFixed(3));
+  const rightGain = Number(Math.min(1.0, 1.0 + ch.pan).toFixed(3));
+  const dimDb = m.dim_enabled ? -20.0 : 0.0;
+  const effectiveGainDb = Number((ch.volume_db + m.volume_db + dimDb).toFixed(2));
+
+  if (ch.muted || m.muted) {
+    return {
+      filtergraph: "volume=0",
+      ffmpeg_af_args: ["-af", "volume=0"],
+      is_identity: false,
+      channel: { track_code: trackCode, ...ch },
+      master: m,
+      effective_gain_db: -96.0,
+      pan_law_left: leftGain,
+      pan_law_right: rightGain
+    };
+  }
+
+  const parts = [];
+  if (Math.abs(effectiveGainDb) > 1e-6) {
+    parts.push(`volume=${effectiveGainDb.toFixed(2)}dB`);
+  }
+  const panAf = compileTrackPanClient(ch.pan);
+  if (panAf) {
+    parts.push(panAf);
+  }
+  if (m.voice_isolation) {
+    const vc = voiceCleanup && typeof voiceCleanup === "object" ? voiceCleanup : {};
+    const hp = Number.isFinite(Number(vc.highpass_hz)) ? clampNum(Math.round(Number(vc.highpass_hz)), 40, 200) : 85;
+    const pres = Number.isFinite(Number(vc.presence_db)) ? clampNum(Number(vc.presence_db), -6, 6) : 2.5;
+    const deEss = Number.isFinite(Number(vc.de_ess)) ? clampNum(Number(vc.de_ess), 0, 1) : 0.35;
+    parts.push(`highpass=f=${hp}`);
+    if (Math.abs(pres) > 1e-6) {
+      parts.push(`equalizer=f=3200:t=q:w=1.2:g=${pres.toFixed(1)}`);
+    }
+    if (deEss > 1e-6) {
+      parts.push(`deesser=i=${deEss.toFixed(2)}:m=0.50:f=0.50:s=o`);
+    }
+  }
+  const filtergraph = parts.join(",");
+  return {
+    filtergraph,
+    ffmpeg_af_args: filtergraph ? ["-af", filtergraph] : [],
+    is_identity: filtergraph === "",
+    channel: { track_code: trackCode, ...ch },
+    master: m,
+    effective_gain_db: effectiveGainDb,
+    pan_law_left: leftGain,
+    pan_law_right: rightGain
+  };
+}
+
 export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
   const isPlaying = Boolean(opts.isPlaying);
   const phaseSec = Number.isFinite(Number(opts.phaseSec)) ? Number(opts.phaseSec) : 0;
   const autoDuck = normalizeAutoDuckParams(opts.autoDuck);
+  const masterBus = normalizeMasterBusState(opts.masterBus);
   const tracks = doc && Array.isArray(doc.tracks) ? doc.tracks : [];
   const audioTracks = tracks.filter((trk) => trk && trk.kind === "audio");
   const fpsRate =
     doc && doc.fps ? Math.max(1, Number(doc.fps.num || 25) / Math.max(1, Number(doc.fps.den || 1))) : 25;
 
   const audibleAudioTracks = audioTracks.filter((trk) => !isTrackAudiblyMuted(trk, tracks));
-  const allAudioMuted = audioTracks.length > 0 && audibleAudioTracks.length === 0;
+  const allAudioMuted = masterBus.muted || (audioTracks.length > 0 && audibleAudioTracks.length === 0);
+  const trackLevels = {};
+  for (const trk of tracks) {
+    const code = `${trk.kind === "audio" ? "A" : "V"}${trk.index}`;
+    trackLevels[code] = -60;
+  }
 
-  if (!doc || !isPlaying || audibleAudioTracks.length === 0) {
+  if (!doc || !isPlaying || allAudioMuted || audibleAudioTracks.length === 0) {
     return {
       leftDb: -60,
       rightDb: -60,
       peakDb: -60,
+      truePeakDbtp: -60,
+      momentaryLufs: -70,
       leftLin: 0,
       rightLin: 0,
       duckReductionDb: 0,
       activeClipCount: 0,
-      allAudioMuted
+      allAudioMuted,
+      trackLevels
     };
   }
 
@@ -929,7 +1047,15 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
   const tBase = frame / fpsRate + phaseSec * 0.15;
 
   for (const trk of audibleAudioTracks) {
+    const code = `A${trk.index}`;
+    const trkMix = normalizeTrackMixerState(trk);
+    const trkGainLin = Math.pow(10, trkMix.volume_db / 20);
+    const panLeft = Math.min(1.0, 1.0 - trkMix.pan);
+    const panRight = Math.min(1.0, 1.0 + trkMix.pan);
     const isBed = isMusicBedTrack(trk, audioTracks);
+    const isoScale = masterBus.voice_isolation ? (isBed ? 0.25 : 1.18) : 1.0;
+
+    let trkPeakLin = 0;
     for (const clip of trk.clips || []) {
       if (clip.enabled === false) continue;
       if (frame < clip.start_frame || frame >= clip.start_frame + clip.duration_frames) continue;
@@ -937,7 +1063,7 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
       if (env <= 1e-6) continue;
       activeClipCount += 1;
       const norm = normalizeClipAudio(clip);
-      const gainLin = Math.pow(10, norm.gainDb / 20);
+      const gainLin = Math.pow(10, norm.gainDb / 20) * trkGainLin * isoScale;
       const seed = (Number(trk.index) || 1) * 1.37 + (Number(clip.start_frame) || 0) * 0.03;
 
       let modL;
@@ -956,8 +1082,9 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
         modR = baseVo * (0.97 + 0.04 * Math.cos(tBase * 6.8 + seed + 0.35));
       }
 
-      const clipL = modL * gainLin * env;
-      const clipR = modR * gainLin * env;
+      const clipL = modL * gainLin * env * panLeft;
+      const clipR = modR * gainLin * env * panRight;
+      trkPeakLin = Math.max(trkPeakLin, clipL, clipR);
       if (isBed) {
         bgLeft += clipL;
         bgRight += clipR;
@@ -966,6 +1093,7 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
         fgRight += clipR;
       }
     }
+    trackLevels[code] = trkPeakLin > 1e-3 ? clampNum(20 * Math.log10(trkPeakLin), -60, 0) : -60;
   }
 
   let duckReductionDb = 0;
@@ -984,21 +1112,34 @@ export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
     }
   }
 
-  const totalL = clampNum(fgLeft + bgLeft, 0, 1.0);
-  const totalR = clampNum(fgRight + bgRight, 0, 1.0);
+  const masterDb = masterBus.volume_db + (masterBus.dim_enabled ? -20.0 : 0.0);
+  const masterLin = Math.pow(10, masterDb / 20);
+  const rawTotalL = (fgLeft + bgLeft) * masterLin;
+  const rawTotalR = (fgRight + bgRight) * masterLin;
+  const totalL = clampNum(rawTotalL, 0, 1.0);
+  const totalR = clampNum(rawTotalR, 0, 1.0);
   const leftDb = totalL > 1e-3 ? clampNum(20 * Math.log10(totalL), -60, 0) : -60;
   const rightDb = totalR > 1e-3 ? clampNum(20 * Math.log10(totalR), -60, 0) : -60;
   const peakDb = Math.max(leftDb, rightDb);
+  const rawPeak = Math.max(rawTotalL, rawTotalR);
+  const truePeakDbtp =
+    rawPeak > 1e-3 ? clampNum(20 * Math.log10(rawPeak) + 0.4, -60, 3.0) : -60;
+  const rmsEnergy = Math.sqrt(0.5 * (totalL * totalL + totalR * totalR));
+  const momentaryLufs =
+    rmsEnergy > 1e-3 ? clampNum(20 * Math.log10(rmsEnergy) - 3.2, -70, -1.0) : -70;
 
   return {
     leftDb,
     rightDb,
     peakDb,
+    truePeakDbtp: Number(truePeakDbtp.toFixed(1)),
+    momentaryLufs: Number(momentaryLufs.toFixed(1)),
     leftLin: totalL,
     rightLin: totalR,
     duckReductionDb,
     activeClipCount,
-    allAudioMuted
+    allAudioMuted,
+    trackLevels
   };
 }
 
@@ -2334,6 +2475,61 @@ export function toggleTrackSoloInDocument(doc, trackKind, trackIndex) {
   if (!trk) return { doc, track: null, changed: false };
   trk.solo = !Boolean(trk.solo);
   return { doc: nextDoc, track: trk, changed: true };
+}
+
+export function toggleTrackArmInDocument(doc, trackKind, trackIndex) {
+  if (!doc || !Array.isArray(doc.tracks)) return { doc, track: null, changed: false };
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = nextDoc.tracks.find((t) => t.kind === trackKind && t.index === trackIndex);
+  if (!trk) return { doc, track: null, changed: false };
+  trk.rec_armed = !Boolean(trk.rec_armed);
+  return { doc: nextDoc, track: trk, changed: true };
+}
+
+export function updateTrackMixerInDocument(doc, trackKind, trackIndex, patch = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) return { doc, track: null, changed: false };
+  const nextDoc = cloneTimelineDoc(doc);
+  const trk = nextDoc.tracks.find((t) => t.kind === trackKind && t.index === trackIndex);
+  if (!trk) return { doc, track: null, changed: false };
+  const cur = normalizeTrackMixerState(trk);
+  const next = normalizeTrackMixerState({ ...cur, ...patch });
+  const changed =
+    Math.abs(next.volume_db - cur.volume_db) > 1e-6 ||
+    Math.abs(next.pan - cur.pan) > 1e-6 ||
+    next.muted !== cur.muted ||
+    next.solo !== cur.solo ||
+    next.rec_armed !== cur.rec_armed;
+  if (!changed) return { doc, track: trk, changed: false };
+  trk.volume_db = next.volume_db;
+  trk.pan = next.pan;
+  trk.muted = next.muted;
+  trk.solo = next.solo;
+  trk.rec_armed = next.rec_armed;
+  return { doc: nextDoc, track: trk, changed: true };
+}
+
+export function resetAllTracksMixerInDocument(doc) {
+  if (!doc || !Array.isArray(doc.tracks)) return { doc, changed: false };
+  const nextDoc = cloneTimelineDoc(doc);
+  let changed = false;
+  for (const trk of nextDoc.tracks) {
+    const cur = normalizeTrackMixerState(trk);
+    if (
+      Math.abs(cur.volume_db) > 1e-6 ||
+      Math.abs(cur.pan) > 1e-6 ||
+      cur.muted ||
+      cur.solo ||
+      cur.rec_armed
+    ) {
+      trk.volume_db = 0.0;
+      trk.pan = 0.0;
+      trk.muted = false;
+      trk.solo = false;
+      trk.rec_armed = false;
+      changed = true;
+    }
+  }
+  return { doc: changed ? nextDoc : doc, changed };
 }
 
 export function hasSplittableClipAtFrame(doc, frame, selectedClip = null) {

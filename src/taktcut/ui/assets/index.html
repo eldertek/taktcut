@@ -529,19 +529,29 @@
                   </div>
                 </div>
                 <div class="pane-subheader">
-                  <span data-i18n="timeline.mixer.title">Track Mute / Solo Mixer</span>
-                  <span id="track-mixer-summary" class="nle-tag mono">ALL ACTIVE</span>
+                  <span data-i18n="timeline.mixer.title">Fairlight Track Mixer &amp; Master Bus</span>
+                  <div class="viewer-controls">
+                    <span id="track-mixer-summary" class="nle-tag mono">ALL ACTIVE</span>
+                    <button type="button" id="btn-mixer-reset" class="btn btn-mini" data-i18n="timeline.mixer.reset" aria-label="Reset Fairlight mixer strips">Rst</button>
+                  </div>
                 </div>
-                <div id="track-mixer-strip" class="track-mixer-strip" role="group" aria-label="Track Mute and Solo Mixer"></div>
-                <div class="vu-meter-bridge" role="region" aria-label="Stereo L/R Peak Meter Bridge">
+                <div id="track-mixer-strip" class="track-mixer-strip fairlight-mixer-console" role="group" aria-label="Fairlight Track Mixer Strips and Master Bus"></div>
+                <div id="fairlight-mixer-af-preview" class="telemetry-note mono" data-i18n="timeline.mixer.bypassed">Mixer console at unity 0.0 dB | Pan C.</div>
+                <div class="vu-meter-bridge" role="region" aria-label="Fairlight Stereo Peak, True-Peak and LUFS Meter Bridge">
                   <div class="vu-meter-head">
-                    <span class="vu-meter-title" data-i18n="timeline.meter.title">Stereo Peak Meter (L/R)</span>
+                    <span class="vu-meter-title" data-i18n="timeline.meter.title">Fairlight Loudness &amp; True-Peak</span>
                     <div class="viewer-controls">
+                      <span id="timeline-vu-iso-pill" class="nle-tag mono is-hidden">VOICE ISO</span>
                       <span id="timeline-vu-duck-pill" class="nle-tag mono is-hidden">GR 0.0 dB</span>
                       <span id="timeline-vu-peak-badge" class="nle-tag mono">-inf dBFS</span>
                     </div>
                   </div>
                   <canvas id="timeline-vu-meter" class="vu-meter-canvas" aria-label="Stereo L/R peak level meter"></canvas>
+                  <div class="vu-meter-lufs-row mono" aria-live="polite">
+                    <span class="vu-lufs-kv"><span class="k" data-i18n="timeline.meter.tp">TP</span> <span id="timeline-vu-tp-badge" class="v">-inf dBTP</span></span>
+                    <span class="vu-lufs-kv"><span class="k" data-i18n="timeline.meter.lufsM">M</span> <span id="timeline-vu-lufs-m" class="v">-inf LUFS</span></span>
+                    <span class="vu-lufs-kv"><span class="k" data-i18n="timeline.meter.lufsI">I</span> <span id="timeline-vu-lufs-i" class="v">-inf LUFS</span></span>
+                  </div>
                 </div>
                 <div id="timeline-auto-duck-dock" class="auto-duck-dock">
                   <div class="pane-subheader">
@@ -601,6 +611,13 @@
                         <option value="reels_16" data-i18n="fairlight.loudness.reels_16">Reels / TikTok (-16 LUFS / -1.0 dBTP)</option>
                         <option value="broadcast_23" data-i18n="fairlight.loudness.broadcast_23">Broadcast EBU R128 (-23 LUFS / -1.0 dBTP)</option>
                       </select>
+                    </div>
+                    <div class="fairlight-ctrl-row fairlight-iso-row">
+                      <label for="btn-fairlight-voice-iso" data-i18n="timeline.fairlight.voiceIso">Voice Isolation</label>
+                      <div class="fairlight-iso-controls">
+                        <button type="button" id="btn-fairlight-voice-iso" class="btn btn-mini fairlight-iso-btn" aria-pressed="false" data-i18n="timeline.fairlight.isoOff">ISO OFF</button>
+                        <span id="fairlight-voice-iso-badge" class="nle-tag mono">HP 85Hz | +2.5dB</span>
+                      </div>
                     </div>
                     <div id="fairlight-af-preview" class="telemetry-note mono" data-i18n="timeline.fairlight.bypassed">Fairlight EQ &amp; Loudness bypassed.</div>
                   </div>

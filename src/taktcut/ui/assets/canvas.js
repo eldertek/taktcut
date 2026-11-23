@@ -4504,6 +4504,18 @@ export function drawStereoVuMeterCanvas(canvas, meterState = {}) {
     ctx.strokeRect(labelW + 0.5, ch.y + 0.5, barW - 1, barH - 1);
   }
 
+  // -1.0 dBTP Broadcast True-Peak ceiling guide
+  const tpCeilX = Math.round(dbToX(-1.0)) + 0.5;
+  ctx.save();
+  ctx.strokeStyle = "rgba(248, 113, 113, 0.72)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.moveTo(tpCeilX, padT - 1);
+  ctx.lineTo(tpCeilX, padT + barH * 2 + gapY + 1);
+  ctx.stroke();
+  ctx.restore();
+
   // Optional Auto-Duck sidechain threshold marker across meter bridge
   if (duckEnabled) {
     const tx = Math.round(dbToX(duckThreshDb)) + 0.5;

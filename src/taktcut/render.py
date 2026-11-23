@@ -51,6 +51,10 @@ from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     REVIEW_WATERMARK_OPACITY_MAX,
     REVIEW_WATERMARK_OPACITY_MIN,
+    TRACK_PAN_MAX,
+    TRACK_PAN_MIN,
+    TRACK_VOLUME_DB_MAX,
+    TRACK_VOLUME_DB_MIN,
     VIGNETTE_ANGLE_DEG_DEFAULT,
     VIGNETTE_ANGLE_DEG_MAX,
     VIGNETTE_ANGLE_DEG_MIN,
@@ -1928,6 +1932,170 @@ def compile_voice_cleanup_filter_result(params: VoiceCleanupParams) -> VoiceClea
         is_identity=not is_act,
         is_active=is_act,
         params=params,
+    )
+
+
+class MasterBusParams(BaseModel):
+    """DaVinci Fairlight Master Bus M1 fader, mute, -20 dB Dim, and Voice Isolation state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    volume_db: float = 0.0
+    muted: bool = False
+    dim_enabled: bool = False
+    voice_isolation: bool = False
+
+    @field_validator("volume_db", mode="before")
+    @classmethod
+    def _validate_volume_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "volume_db",
+            TRACK_VOLUME_DB_MIN,
+            TRACK_VOLUME_DB_MAX,
+        )
+
+    @field_validator("muted", "dim_enabled", "voice_isolation", mode="before")
+    @classmethod
+    def _validate_flags(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+    def is_identity(self) -> bool:
+        """Return True when Master Bus is unmuted, Dim off, Voice Iso off, and unity 0 dB."""
+        return (
+            not self.muted
+            and not self.dim_enabled
+            and not self.voice_isolation
+            and math.isclose(self.volume_db, 0.0, abs_tol=1e-6)
+        )
+
+
+class FairlightChannelStripParams(BaseModel):
+    """Validated DaVinci Fairlight audio track channel strip state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    track_code: str = "A1"
+    volume_db: float = 0.0
+    pan: float = 0.0
+    muted: bool = False
+    solo: bool = False
+    rec_armed: bool = False
+
+    @field_validator("track_code", mode="before")
+    @classmethod
+    def _validate_track_code(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"track_code must be a string, got {raw!r}")
+        cleaned = raw.strip().upper()
+        if not cleaned or len(cleaned) > 16:
+            raise ValueError(f"track_code must be 1..16 chars, got {raw!r}")
+        if not re.fullmatch(r"[AVM]\d+", cleaned):
+            raise ValueError(f"track_code must match A1/V1/M1 format, got {raw!r}")
+        return cleaned
+
+    @field_validator("volume_db", mode="before")
+    @classmethod
+    def _validate_volume_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "volume_db",
+            TRACK_VOLUME_DB_MIN,
+            TRACK_VOLUME_DB_MAX,
+        )
+
+    @field_validator("pan", mode="before")
+    @classmethod
+    def _validate_pan(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "pan", TRACK_PAN_MIN, TRACK_PAN_MAX)
+
+    @field_validator("muted", "solo", "rec_armed", mode="before")
+    @classmethod
+    def _validate_flags(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+
+class FairlightMixerCompileResult(BaseModel):
+    """Compiled FFmpeg audio filtergraph for a Fairlight Track Strip + Master Bus."""
+
+    filtergraph: str
+    ffmpeg_af_args: list[str]
+    is_identity: bool
+    channel: FairlightChannelStripParams
+    master: MasterBusParams
+    effective_gain_db: float
+    pan_law_left: float
+    pan_law_right: float
+
+
+def compile_track_pan_filter(pan: float) -> str | None:
+    """Compile normalized stereo pan [-1.0, +1.0] into deterministic FFmpeg pan filter."""
+    validated = _validate_bounded_float(pan, "pan", TRACK_PAN_MIN, TRACK_PAN_MAX)
+    if math.isclose(validated, 0.0, abs_tol=1e-6):
+        return None
+    left_gain = min(1.0, 1.0 - validated)
+    right_gain = min(1.0, 1.0 + validated)
+    return f"pan=stereo|c0={left_gain:.3f}*c0|c1={right_gain:.3f}*c1"
+
+
+def compile_fairlight_mixer_filter(
+    channel: FairlightChannelStripParams,
+    master: MasterBusParams | None = None,
+    *,
+    voice_cleanup: VoiceCleanupParams | None = None,
+) -> FairlightMixerCompileResult:
+    """Compile Fairlight track fader, stereo pan, Master Bus M1, and Voice Isolation to -af."""
+    resolved_master = master or MasterBusParams()
+    left_gain = round(min(1.0, 1.0 - channel.pan), 3)
+    right_gain = round(min(1.0, 1.0 + channel.pan), 3)
+    dim_db = -20.0 if resolved_master.dim_enabled else 0.0
+    effective_gain_db = round(channel.volume_db + resolved_master.volume_db + dim_db, 2)
+
+    if channel.muted or resolved_master.muted:
+        fg = "volume=0"
+        return FairlightMixerCompileResult(
+            filtergraph=fg,
+            ffmpeg_af_args=["-af", fg],
+            is_identity=False,
+            channel=channel,
+            master=resolved_master,
+            effective_gain_db=-96.0,
+            pan_law_left=left_gain,
+            pan_law_right=right_gain,
+        )
+
+    parts: list[str] = []
+    if not math.isclose(effective_gain_db, 0.0, abs_tol=1e-6):
+        parts.append(f"volume={effective_gain_db:.2f}dB")
+
+    pan_af = compile_track_pan_filter(channel.pan)
+    if pan_af is not None:
+        parts.append(pan_af)
+
+    if resolved_master.voice_isolation:
+        iso_params = (
+            voice_cleanup.model_copy(update={"enabled": True})
+            if voice_cleanup is not None
+            else VoiceCleanupParams(enabled=True)
+        )
+        iso_af = compile_voice_cleanup_filter(iso_params)
+        if iso_af:
+            parts.append(iso_af)
+
+    fg = ",".join(parts)
+    return FairlightMixerCompileResult(
+        filtergraph=fg,
+        ffmpeg_af_args=["-af", fg] if fg else [],
+        is_identity=(fg == ""),
+        channel=channel,
+        master=resolved_master,
+        effective_gain_db=effective_gain_db,
+        pan_law_left=left_gain,
+        pan_law_right=right_gain,
     )
 
 

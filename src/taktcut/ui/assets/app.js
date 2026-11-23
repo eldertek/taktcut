@@ -49,6 +49,10 @@ import {
   SPLIT_WIPE_HIT_RADIUS_PX,
   SPLIT_WIPE_POS_DEFAULT,
   STILLS_GALLERY_MAX,
+  TRACK_PAN_MAX,
+  TRACK_PAN_MIN,
+  TRACK_VOLUME_DB_MAX,
+  TRACK_VOLUME_DB_MIN,
   TRANSFORM_OPACITY_DEFAULT,
   TRANSFORM_OPACITY_MAX,
   TRANSFORM_OPACITY_MIN,
@@ -76,6 +80,7 @@ import {
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileFairlightAudioFilterClient,
+  compileFairlightMixerClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
@@ -100,6 +105,7 @@ import {
   formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
+  formatTrackPanLabel,
   formatTransformBadgeText,
   formatYoutubeChaptersFromMarkers,
   getAspectRatioPreset,
@@ -125,9 +131,12 @@ import {
   normalizeFairlightAudioParams,
   normalizeInOutRange,
   normalizeMarkerColor,
+  normalizeMasterBusState,
+  normalizeTrackMixerState,
   parseCubeLutTextClient,
   removeColorNodeFromTree,
   removeStillById,
+  resetAllTracksMixerInDocument,
   resolveSourceTapeFrame,
   rippleDeleteClipInDocument,
   sanitizeStillDataUrl,
@@ -142,6 +151,7 @@ import {
   stepShuttleSpeed,
   timelineDocToChapterInputs,
   toggleColorNodeBypassInTree,
+  toggleTrackArmInDocument,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
@@ -151,6 +161,7 @@ import {
   updateClipTransitionInDocument,
   updateColorNodeInTree,
   updateMarkerInDocument,
+  updateTrackMixerInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -339,6 +350,14 @@ const state = {
     loudness_preset: "youtube_14",
     dialogue_eq: "off"
   },
+  masterBus: {
+    volume_db: 0.0,
+    muted: false,
+    dim_enabled: false,
+    voice_isolation: false
+  },
+  mixerSelectedTrackCode: "A1",
+  mixerDragDocBefore: null,
   vuMeter: {
     leftDb: -60,
     rightDb: -60,
@@ -346,6 +365,12 @@ const state = {
     holdR: -60,
     holdAgeL: 0,
     holdAgeR: 0,
+    truePeakDbtp: -60,
+    momentaryLufs: -70,
+    integratedLufs: -70,
+    lufsAccumSum: 0,
+    lufsAccumCount: 0,
+    trackLevels: {},
     duckReductionDb: 0,
     allMuted: false,
     decayRafId: null,
@@ -1233,34 +1258,144 @@ function getSelectedClipTransformPayload() {
   };
 }
 
-function toggleTrackMuteAction(trackKind, trackIndex) {
-  if (!state.timelineDoc) return;
-  const res = toggleTrackMuteInDocument(state.timelineDoc, trackKind, trackIndex);
-  if (!res.changed) return;
+function preserveSelectionAcrossDoc(nextDoc) {
   let nextSel = state.timelineSelected;
   if (nextSel && nextSel.kind === "clip") {
     const ref = findClipIndex(state.timelineDoc, nextSel.data);
     if (ref) {
-      const found = findTrackAndClip(res.doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+      const found = findTrackAndClip(nextDoc, ref.trackKind, ref.trackIndex, ref.clipIndex);
       if (found) nextSel = { kind: "clip", data: found.clip };
     }
   }
-  commitTimelineMutation(res.doc, nextSel);
+  return nextSel;
+}
+
+function toggleTrackMuteAction(trackKind, trackIndex) {
+  if (!state.timelineDoc) return;
+  const res = toggleTrackMuteInDocument(state.timelineDoc, trackKind, trackIndex);
+  if (!res.changed) return;
+  commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
 }
 
 function toggleTrackSoloAction(trackKind, trackIndex) {
   if (!state.timelineDoc) return;
   const res = toggleTrackSoloInDocument(state.timelineDoc, trackKind, trackIndex);
   if (!res.changed) return;
-  let nextSel = state.timelineSelected;
-  if (nextSel && nextSel.kind === "clip") {
-    const ref = findClipIndex(state.timelineDoc, nextSel.data);
-    if (ref) {
-      const found = findTrackAndClip(res.doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
-      if (found) nextSel = { kind: "clip", data: found.clip };
+  commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
+}
+
+function toggleTrackArmAction(trackKind, trackIndex) {
+  if (!state.timelineDoc) return;
+  const res = toggleTrackArmInDocument(state.timelineDoc, trackKind, trackIndex);
+  if (!res.changed) return;
+  commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
+}
+
+function updateTrackMixerLive(trackKind, trackIndex, patch) {
+  if (!state.timelineDoc) return;
+  const code = `${trackKind === "audio" ? "A" : "V"}${trackIndex}`;
+  state.mixerSelectedTrackCode = code;
+  const res = updateTrackMixerInDocument(state.timelineDoc, trackKind, trackIndex, patch);
+  if (!res.changed) {
+    renderFairlightMixerPreview();
+    return;
+  }
+  state.timelineDoc = res.doc;
+  const trkMix = normalizeTrackMixerState(res.track);
+  const dbEl = document.querySelector(`[data-track-db="${code}"]`);
+  if (dbEl) dbEl.textContent = `${trkMix.volume_db >= 0 ? "+" : ""}${trkMix.volume_db.toFixed(1)}`;
+  const panEl = document.querySelector(`[data-track-pan-label="${code}"]`);
+  if (panEl) panEl.textContent = formatTrackPanLabel(trkMix.pan);
+  renderFairlightMixerPreview();
+  updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
+}
+
+function commitTrackMixerDrag() {
+  if (!state.mixerDragDocBefore || !state.timelineDoc) {
+    state.mixerDragDocBefore = null;
+    return;
+  }
+  const before = state.mixerDragDocBefore;
+  state.mixerDragDocBefore = null;
+  if (JSON.stringify(before.tracks) !== JSON.stringify(state.timelineDoc.tracks)) {
+    state.timelineUndoStack.push(before);
+    if (state.timelineUndoStack.length > 60) state.timelineUndoStack.shift();
+    state.timelineRedoStack = [];
+    updateHistoryButtons();
+  }
+}
+
+function resetTrackMixerSingleAction(trackKind, trackIndex) {
+  if (!state.timelineDoc) return;
+  const code = `${trackKind === "audio" ? "A" : "V"}${trackIndex}`;
+  state.mixerSelectedTrackCode = code;
+  const res = updateTrackMixerInDocument(state.timelineDoc, trackKind, trackIndex, {
+    volume_db: 0.0,
+    pan: 0.0
+  });
+  if (!res.changed) return;
+  commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
+}
+
+function resetMixerConsoleAction() {
+  state.masterBus = normalizeMasterBusState({
+    volume_db: 0.0,
+    muted: false,
+    dim_enabled: false,
+    voice_isolation: false
+  });
+  if (state.voiceCleanup.enabled) {
+    state.voiceCleanup.enabled = false;
+    syncVoiceCleanupControlsUI();
+  }
+  if (state.timelineDoc) {
+    const res = resetAllTracksMixerInDocument(state.timelineDoc);
+    if (res.changed) {
+      commitTimelineMutation(res.doc, preserveSelectionAcrossDoc(res.doc));
+      return;
     }
   }
-  commitTimelineMutation(res.doc, nextSel);
+  renderTimelineAudioInspector();
+  renderFairlightAudioUI();
+}
+
+function setMasterBusState(patch) {
+  const prevIso = Boolean(state.masterBus.voice_isolation);
+  state.masterBus = normalizeMasterBusState({ ...state.masterBus, ...patch });
+  if (Object.hasOwn(patch, "voice_isolation") && state.masterBus.voice_isolation !== prevIso) {
+    state.voiceCleanup.enabled = Boolean(state.masterBus.voice_isolation);
+    syncVoiceCleanupControlsUI();
+  }
+  renderTimelineAudioInspector();
+  renderFairlightAudioUI();
+  updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
+}
+
+function renderFairlightMixerPreview() {
+  const previewEl = byId("fairlight-mixer-af-preview");
+  if (!previewEl) return;
+  const tracks = state.timelineDoc && Array.isArray(state.timelineDoc.tracks) ? state.timelineDoc.tracks : [];
+  const targetTrack =
+    tracks.find((trk) => `${trk.kind === "audio" ? "A" : "V"}${trk.index}` === state.mixerSelectedTrackCode) ||
+    tracks.find((trk) => trk.kind === "audio") ||
+    tracks[0];
+  if (!targetTrack) {
+    previewEl.textContent = t("timeline.mixer.bypassed");
+    return;
+  }
+  const code = `${targetTrack.kind === "audio" ? "A" : "V"}${targetTrack.index}`;
+  const mix = normalizeTrackMixerState(targetTrack);
+  const effMuted = isTrackAudiblyMuted(targetTrack, tracks);
+  const compiled = compileFairlightMixerClient(
+    { track_code: code, ...mix, muted: effMuted },
+    state.masterBus,
+    state.voiceCleanup
+  );
+  if (compiled.filtergraph) {
+    previewEl.textContent = `${code} -> M1: -af ${compiled.filtergraph}`;
+  } else {
+    previewEl.textContent = `${code} -> M1: ${t("timeline.mixer.bypassed")}`;
+  }
 }
 
 function renderTimelineFadeInspector() {
@@ -1395,30 +1530,264 @@ function renderTimelineAudioInspector() {
     }
   }
 
-  const mixerPills = tracks.map((trk) => {
-    const code = `${trk.kind === "audio" ? "A" : "V"}${trk.index}`;
-    const effMuted = isTrackAudiblyMuted(trk, tracks);
-    const pill = dom("div", `mixer-ch-pill${effMuted ? " is-muted-effective" : ""}`);
-    const tag = dom("span", `mixer-ch-tag mono ${trk.kind === "audio" ? "is-audio" : "is-video"}`, code);
+  const master = normalizeMasterBusState(state.masterBus);
+  state.masterBus = master;
+  const expectedKeys = [...tracks.map((t) => `${t.kind === "audio" ? "A" : "V"}${t.index}`), "M1"].join(",");
+  const canPatchInPlace = mixerStrip.dataset.stripKeys === expectedKeys;
 
-    const mBtn = dom("button", `mixer-btn${trk.muted ? " is-mute" : ""}`, "M");
-    mBtn.type = "button";
-    mBtn.setAttribute("aria-pressed", trk.muted ? "true" : "false");
-    mBtn.setAttribute("aria-label", `Mute track ${code}`);
-    mBtn.setAttribute("data-track-mute", code);
-    mBtn.addEventListener("click", () => toggleTrackMuteAction(trk.kind, trk.index));
+  if (!canPatchInPlace) {
+    mixerStrip.dataset.stripKeys = expectedKeys;
+    const stripNodes = tracks.map((trk) => {
+      const code = `${trk.kind === "audio" ? "A" : "V"}${trk.index}`;
+      const trkMix = normalizeTrackMixerState(trk);
+      const effMuted = isTrackAudiblyMuted(trk, tracks);
+      const pill = dom("div", `mixer-ch-pill${effMuted ? " is-muted-effective" : ""}`);
+      pill.dataset.stripCode = code;
 
-    const sBtn = dom("button", `mixer-btn${trk.solo ? " is-solo" : ""}`, "S");
-    sBtn.type = "button";
-    sBtn.setAttribute("aria-pressed", trk.solo ? "true" : "false");
-    sBtn.setAttribute("aria-label", `Solo track ${code}`);
-    sBtn.setAttribute("data-track-solo", code);
-    sBtn.addEventListener("click", () => toggleTrackSoloAction(trk.kind, trk.index));
+      const head = dom("div", "mixer-ch-head");
+      const tag = dom("span", `mixer-ch-tag mono ${trk.kind === "audio" ? "is-audio" : "is-video"}`, code);
+      const dbBadge = dom(
+        "span",
+        "mixer-ch-db mono",
+        `${trkMix.volume_db >= 0 ? "+" : ""}${trkMix.volume_db.toFixed(1)}`
+      );
+      dbBadge.setAttribute("data-track-db", code);
+      head.replaceChildren(tag, dbBadge);
 
-    pill.replaceChildren(tag, mBtn, sBtn);
-    return pill;
-  });
-  mixerStrip.replaceChildren(...mixerPills);
+      const btnsRow = dom("div", "mixer-ch-btns");
+      const mBtn = dom("button", `mixer-btn${trkMix.muted ? " is-mute" : ""}`, "M");
+      mBtn.type = "button";
+      mBtn.setAttribute("aria-pressed", trkMix.muted ? "true" : "false");
+      mBtn.setAttribute("aria-label", `Mute track ${code}`);
+      mBtn.setAttribute("data-track-mute", code);
+      mBtn.addEventListener("click", () => toggleTrackMuteAction(trk.kind, trk.index));
+
+      const sBtn = dom("button", `mixer-btn${trkMix.solo ? " is-solo" : ""}`, "S");
+      sBtn.type = "button";
+      sBtn.setAttribute("aria-pressed", trkMix.solo ? "true" : "false");
+      sBtn.setAttribute("aria-label", `Solo track ${code}`);
+      sBtn.setAttribute("data-track-solo", code);
+      sBtn.addEventListener("click", () => toggleTrackSoloAction(trk.kind, trk.index));
+
+      const rBtn = dom("button", `mixer-btn${trkMix.rec_armed ? " is-arm" : ""}`, "R");
+      rBtn.type = "button";
+      rBtn.setAttribute("aria-pressed", trkMix.rec_armed ? "true" : "false");
+      rBtn.setAttribute("aria-label", `Arm track ${code}`);
+      rBtn.setAttribute("data-track-arm", code);
+      rBtn.addEventListener("click", () => toggleTrackArmAction(trk.kind, trk.index));
+      btnsRow.replaceChildren(mBtn, sBtn, rBtn);
+
+      const panRow = dom("div", "mixer-pan-row");
+      const panInput = document.createElement("input");
+      panInput.type = "range";
+      panInput.className = "mixer-pan-input";
+      panInput.min = String(TRACK_PAN_MIN);
+      panInput.max = String(TRACK_PAN_MAX);
+      panInput.step = "0.05";
+      panInput.value = String(trkMix.pan);
+      panInput.setAttribute("aria-label", `Pan track ${code}`);
+      panInput.setAttribute("data-track-pan", code);
+      panInput.addEventListener("pointerdown", () => {
+        if (!state.mixerDragDocBefore && state.timelineDoc) {
+          state.mixerDragDocBefore = cloneTimelineDoc(state.timelineDoc);
+        }
+      });
+      panInput.addEventListener("input", () => {
+        const val = Number.parseFloat(panInput.value);
+        if (Number.isFinite(val)) {
+          updateTrackMixerLive(trk.kind, trk.index, { pan: val });
+        }
+      });
+      panInput.addEventListener("change", () => {
+        commitTrackMixerDrag();
+      });
+      panInput.addEventListener("dblclick", () => {
+        resetTrackMixerSingleAction(trk.kind, trk.index);
+      });
+      const panVal = dom("span", "mixer-pan-val mono", formatTrackPanLabel(trkMix.pan));
+      panVal.setAttribute("data-track-pan-label", code);
+      panRow.replaceChildren(panInput, panVal);
+
+      const stage = dom("div", "mixer-fader-stage");
+      const faderInput = document.createElement("input");
+      faderInput.type = "range";
+      faderInput.className = "mixer-fader-input";
+      faderInput.min = String(TRACK_VOLUME_DB_MIN);
+      faderInput.max = String(TRACK_VOLUME_DB_MAX);
+      faderInput.step = "0.5";
+      faderInput.value = String(trkMix.volume_db);
+      faderInput.setAttribute("aria-label", `Fader track ${code} dB`);
+      faderInput.setAttribute("data-track-fader", code);
+      faderInput.addEventListener("pointerdown", () => {
+        if (!state.mixerDragDocBefore && state.timelineDoc) {
+          state.mixerDragDocBefore = cloneTimelineDoc(state.timelineDoc);
+        }
+      });
+      faderInput.addEventListener("input", () => {
+        const val = Number.parseFloat(faderInput.value);
+        if (Number.isFinite(val)) {
+          updateTrackMixerLive(trk.kind, trk.index, { volume_db: val });
+        }
+      });
+      faderInput.addEventListener("change", () => {
+        commitTrackMixerDrag();
+      });
+      faderInput.addEventListener("dblclick", () => {
+        resetTrackMixerSingleAction(trk.kind, trk.index);
+      });
+      const meterWell = dom("div", "mixer-meter-well");
+      const meterFill = dom("div", "mixer-meter-fill");
+      meterFill.setAttribute("data-track-meter", code);
+      meterWell.appendChild(meterFill);
+      stage.replaceChildren(faderInput, meterWell);
+
+      const unityBtn = dom("button", "mixer-unity-btn", "0dB");
+      unityBtn.type = "button";
+      unityBtn.setAttribute("aria-label", `Reset track ${code} fader and pan`);
+      unityBtn.setAttribute("data-track-unity", code);
+      unityBtn.addEventListener("click", () => resetTrackMixerSingleAction(trk.kind, trk.index));
+
+      pill.replaceChildren(head, btnsRow, panRow, stage, unityBtn);
+      return pill;
+    });
+
+    // Master Bus Strip M1
+    const masterPill = dom("div", `mixer-ch-pill is-master${master.muted ? " is-muted-effective" : ""}`);
+    masterPill.dataset.stripCode = "M1";
+
+    const mHead = dom("div", "mixer-ch-head");
+    const mTag = dom("span", "mixer-ch-tag mono is-master", "M1");
+    const mDb = dom(
+      "span",
+      "mixer-ch-db mono",
+      `${master.volume_db >= 0 ? "+" : ""}${master.volume_db.toFixed(1)}`
+    );
+    mDb.setAttribute("data-master-db", "M1");
+    mHead.replaceChildren(mTag, mDb);
+
+    const mBtns = dom("div", "mixer-ch-btns");
+    const mMute = dom("button", `mixer-btn${master.muted ? " is-mute" : ""}`, "M");
+    mMute.type = "button";
+    mMute.setAttribute("aria-pressed", master.muted ? "true" : "false");
+    mMute.setAttribute("aria-label", "Mute Master Bus");
+    mMute.setAttribute("data-master-mute", "M1");
+    mMute.addEventListener("click", () => setMasterBusState({ muted: !state.masterBus.muted }));
+
+    const mDim = dom("button", `mixer-btn${master.dim_enabled ? " is-dim" : ""}`, "DIM");
+    mDim.type = "button";
+    mDim.setAttribute("aria-pressed", master.dim_enabled ? "true" : "false");
+    mDim.setAttribute("aria-label", "Dim Master Bus -20 dB");
+    mDim.setAttribute("data-master-dim", "M1");
+    mDim.addEventListener("click", () => setMasterBusState({ dim_enabled: !state.masterBus.dim_enabled }));
+
+    const mIso = dom("button", `mixer-btn${master.voice_isolation ? " is-iso" : ""}`, "ISO");
+    mIso.type = "button";
+    mIso.setAttribute("aria-pressed", master.voice_isolation ? "true" : "false");
+    mIso.setAttribute("aria-label", "Voice Isolation Live Preview");
+    mIso.setAttribute("data-master-iso", "M1");
+    mIso.addEventListener("click", () => setMasterBusState({ voice_isolation: !state.masterBus.voice_isolation }));
+    mBtns.replaceChildren(mMute, mDim, mIso);
+
+    const mPanRow = dom("div", "mixer-pan-row");
+    const mBusLbl = dom("span", "mixer-pan-val mono", t("timeline.mixer.masterLabel"));
+    mBusLbl.style.flex = "1 1 auto";
+    mBusLbl.style.textAlign = "center";
+    mPanRow.appendChild(mBusLbl);
+
+    const mStage = dom("div", "mixer-fader-stage");
+    const mFader = document.createElement("input");
+    mFader.type = "range";
+    mFader.className = "mixer-fader-input";
+    mFader.min = String(TRACK_VOLUME_DB_MIN);
+    mFader.max = String(TRACK_VOLUME_DB_MAX);
+    mFader.step = "0.5";
+    mFader.value = String(master.volume_db);
+    mFader.setAttribute("aria-label", "Master Bus M1 Fader dB");
+    mFader.setAttribute("data-master-fader", "M1");
+    mFader.addEventListener("input", () => {
+      const val = Number.parseFloat(mFader.value);
+      if (Number.isFinite(val)) {
+        state.masterBus = normalizeMasterBusState({ ...state.masterBus, volume_db: val });
+        const dbEl = document.querySelector('[data-master-db="M1"]');
+        if (dbEl) dbEl.textContent = `${state.masterBus.volume_db >= 0 ? "+" : ""}${state.masterBus.volume_db.toFixed(1)}`;
+        renderFairlightMixerPreview();
+        updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
+      }
+    });
+    mFader.addEventListener("dblclick", () => setMasterBusState({ volume_db: 0.0 }));
+    const mWell = dom("div", "mixer-meter-well");
+    const mFill = dom("div", "mixer-meter-fill");
+    mFill.setAttribute("data-master-meter", "M1");
+    mWell.appendChild(mFill);
+    mStage.replaceChildren(mFader, mWell);
+
+    const mUnity = dom("button", "mixer-unity-btn", "0dB");
+    mUnity.type = "button";
+    mUnity.setAttribute("aria-label", "Reset Master Bus M1 fader");
+    mUnity.setAttribute("data-master-unity", "M1");
+    mUnity.addEventListener("click", () => setMasterBusState({ volume_db: 0.0, muted: false, dim_enabled: false }));
+
+    masterPill.replaceChildren(mHead, mBtns, mPanRow, mStage, mUnity);
+    stripNodes.push(masterPill);
+    mixerStrip.replaceChildren(...stripNodes);
+  } else {
+    // Update existing strips in-place to preserve slider drag & focus
+    for (const trk of tracks) {
+      const code = `${trk.kind === "audio" ? "A" : "V"}${trk.index}`;
+      const trkMix = normalizeTrackMixerState(trk);
+      const effMuted = isTrackAudiblyMuted(trk, tracks);
+      const pill = mixerStrip.querySelector(`[data-strip-code="${code}"]`);
+      if (!pill) continue;
+      pill.classList.toggle("is-muted-effective", effMuted);
+      const dbEl = pill.querySelector(`[data-track-db="${code}"]`);
+      if (dbEl) dbEl.textContent = `${trkMix.volume_db >= 0 ? "+" : ""}${trkMix.volume_db.toFixed(1)}`;
+      const mBtn = pill.querySelector(`[data-track-mute="${code}"]`);
+      if (mBtn) {
+        mBtn.classList.toggle("is-mute", trkMix.muted);
+        mBtn.setAttribute("aria-pressed", trkMix.muted ? "true" : "false");
+      }
+      const sBtn = pill.querySelector(`[data-track-solo="${code}"]`);
+      if (sBtn) {
+        sBtn.classList.toggle("is-solo", trkMix.solo);
+        sBtn.setAttribute("aria-pressed", trkMix.solo ? "true" : "false");
+      }
+      const rBtn = pill.querySelector(`[data-track-arm="${code}"]`);
+      if (rBtn) {
+        rBtn.classList.toggle("is-arm", trkMix.rec_armed);
+        rBtn.setAttribute("aria-pressed", trkMix.rec_armed ? "true" : "false");
+      }
+      const panIn = pill.querySelector(`[data-track-pan="${code}"]`);
+      if (panIn && document.activeElement !== panIn) panIn.value = String(trkMix.pan);
+      const panLbl = pill.querySelector(`[data-track-pan-label="${code}"]`);
+      if (panLbl) panLbl.textContent = formatTrackPanLabel(trkMix.pan);
+      const faderIn = pill.querySelector(`[data-track-fader="${code}"]`);
+      if (faderIn && document.activeElement !== faderIn) faderIn.value = String(trkMix.volume_db);
+    }
+    const masterPill = mixerStrip.querySelector('[data-strip-code="M1"]');
+    if (masterPill) {
+      masterPill.classList.toggle("is-muted-effective", master.muted);
+      const mDb = masterPill.querySelector('[data-master-db="M1"]');
+      if (mDb) mDb.textContent = `${master.volume_db >= 0 ? "+" : ""}${master.volume_db.toFixed(1)}`;
+      const mMute = masterPill.querySelector('[data-master-mute="M1"]');
+      if (mMute) {
+        mMute.classList.toggle("is-mute", master.muted);
+        mMute.setAttribute("aria-pressed", master.muted ? "true" : "false");
+      }
+      const mDim = masterPill.querySelector('[data-master-dim="M1"]');
+      if (mDim) {
+        mDim.classList.toggle("is-dim", master.dim_enabled);
+        mDim.setAttribute("aria-pressed", master.dim_enabled ? "true" : "false");
+      }
+      const mIso = masterPill.querySelector('[data-master-iso="M1"]');
+      if (mIso) {
+        mIso.classList.toggle("is-iso", master.voice_isolation);
+        mIso.setAttribute("aria-pressed", master.voice_isolation ? "true" : "false");
+      }
+      const mFader = masterPill.querySelector('[data-master-fader="M1"]');
+      if (mFader && document.activeElement !== mFader) mFader.value = String(master.volume_db);
+    }
+  }
+  renderFairlightMixerPreview();
 
   const info = getSelectedClipTrack();
   const hasClip = Boolean(info);
@@ -1560,6 +1929,22 @@ function renderFairlightAudioUI() {
       : t("timeline.fairlight.bypassed");
   }
 
+  const isoBtn = byId("btn-fairlight-voice-iso");
+  const isoBadge = byId("fairlight-voice-iso-badge");
+  const isoOn = Boolean(state.masterBus.voice_isolation || state.voiceCleanup.enabled);
+  if (isoBtn) {
+    isoBtn.classList.toggle("is-active", isoOn);
+    isoBtn.setAttribute("aria-pressed", isoOn ? "true" : "false");
+    isoBtn.textContent = isoOn ? t("timeline.fairlight.isoOn") : t("timeline.fairlight.isoOff");
+  }
+  if (isoBadge) {
+    const vc = getNormalizedVoiceCleanupPayload();
+    const sign = vc.presence_db >= 0 ? "+" : "";
+    isoBadge.textContent = `HP ${vc.highpass_hz}Hz | ${sign}${vc.presence_db.toFixed(1)}dB`;
+    isoBadge.className = isoOn ? "nle-tag mono is-pass" : "nle-tag mono";
+  }
+  renderFairlightMixerPreview();
+
   if (delPreview) {
     const useClipAudioEl = byId("render-use-clip-audio");
     const clipInfo =
@@ -1602,6 +1987,10 @@ function renderVuMeterReadout() {
   const vm = state.vuMeter;
   const peakBadge = byId("timeline-vu-peak-badge");
   const duckPill = byId("timeline-vu-duck-pill");
+  const isoPill = byId("timeline-vu-iso-pill");
+  const tpBadge = byId("timeline-vu-tp-badge");
+  const lufsMEl = byId("timeline-vu-lufs-m");
+  const lufsIEl = byId("timeline-vu-lufs-i");
   const peakDb = Math.max(vm.leftDb, vm.rightDb);
 
   if (peakBadge) {
@@ -1629,6 +2018,42 @@ function renderVuMeterReadout() {
       duckPill.className = "nle-tag mono is-warn";
     }
   }
+  if (isoPill) {
+    const showIso = Boolean((state.masterBus.voice_isolation || state.voiceCleanup.enabled) && !vm.allMuted);
+    isoPill.classList.toggle("is-hidden", !showIso);
+    if (showIso) {
+      isoPill.className = "nle-tag mono is-pass";
+    }
+  }
+  if (tpBadge) {
+    if (vm.allMuted || vm.truePeakDbtp <= -59.5) {
+      tpBadge.textContent = "-inf dBTP";
+      tpBadge.className = "v";
+    } else {
+      tpBadge.textContent = `${vm.truePeakDbtp.toFixed(1)} dBTP`;
+      tpBadge.className = vm.truePeakDbtp > -1.0 ? "v is-hot" : "v is-pass";
+    }
+  }
+  if (lufsMEl) {
+    lufsMEl.textContent =
+      vm.allMuted || vm.momentaryLufs <= -69.5 ? "-inf LUFS" : `${vm.momentaryLufs.toFixed(1)} LUFS`;
+  }
+  if (lufsIEl) {
+    lufsIEl.textContent =
+      vm.allMuted || vm.integratedLufs <= -69.5 ? "-inf LUFS" : `${vm.integratedLufs.toFixed(1)} LUFS`;
+  }
+  for (const [code, lvlDb] of Object.entries(vm.trackLevels || {})) {
+    const fill = document.querySelector(`[data-track-meter="${code}"]`);
+    if (fill) {
+      const pct = vm.allMuted || lvlDb <= -59.5 ? 0 : Math.min(100, Math.max(2, ((lvlDb + 60) / 60) * 100));
+      fill.style.height = `${pct.toFixed(1)}%`;
+    }
+  }
+  const masterFill = document.querySelector('[data-master-meter="M1"]');
+  if (masterFill) {
+    const mPct = vm.allMuted || peakDb <= -59.5 ? 0 : Math.min(100, Math.max(2, ((peakDb + 60) / 60) * 100));
+    masterFill.style.height = `${mPct.toFixed(1)}%`;
+  }
   if (state.activeTab === "timeline") {
     drawStereoVuMeterCanvas(byId("timeline-vu-meter"), {
       leftDb: vm.leftDb,
@@ -1650,10 +2075,24 @@ function updateVuMeterInstant(ts, isPlaying) {
   const evalRes = evaluateTimelineAudioLevels(state.timelineDoc, state.playheadFrame, {
     isPlaying,
     phaseSec: ts / 1000,
-    autoDuck: state.autoDuck
+    autoDuck: state.autoDuck,
+    masterBus: state.masterBus,
+    voiceCleanup: state.voiceCleanup
   });
   vm.allMuted = evalRes.allAudioMuted;
   vm.duckReductionDb = evalRes.duckReductionDb;
+  vm.trackLevels = evalRes.trackLevels || {};
+  vm.truePeakDbtp = evalRes.truePeakDbtp ?? -60;
+  vm.momentaryLufs = evalRes.momentaryLufs ?? -70;
+  if (isPlaying && !evalRes.allAudioMuted && vm.momentaryLufs > -69.5) {
+    const linE = Math.pow(10, vm.momentaryLufs / 10);
+    vm.lufsAccumSum = (vm.lufsAccumSum || 0) + linE;
+    vm.lufsAccumCount = (vm.lufsAccumCount || 0) + 1;
+    vm.integratedLufs = Number((10 * Math.log10(vm.lufsAccumSum / vm.lufsAccumCount)).toFixed(1));
+  } else if (!isPlaying && vm.leftDb <= -59.5 && vm.rightDb <= -59.5) {
+    vm.truePeakDbtp = -60;
+    vm.momentaryLufs = -70;
+  }
 
   const smoothChannel = (curDb, targetDb, holdDb, holdAge) => {
     const attackAlpha = Math.min(1, dtSec * 24);
@@ -2936,6 +3375,7 @@ function serializeFullProjectState() {
       offset_s: Number(state.bpmGrid.offset_s ?? 0.0)
     },
     auto_duck: normalizeAutoDuckParams(state.autoDuck),
+    master_bus: normalizeMasterBusState(state.masterBus),
     color: {
       grade: {
         ...cloneGradeParams(state.colorGrade),
@@ -3039,6 +3479,7 @@ function applyFullProjectState(project, validation) {
     offset_s: Number(bpm.offset_s ?? 0.0)
   };
   state.autoDuck = normalizeAutoDuckParams(project.auto_duck);
+  state.masterBus = normalizeMasterBusState(project.master_bus);
   setPlayhead(Number(project.playhead_frame ?? 0));
 
   // Color state
@@ -9178,6 +9619,20 @@ function wireFairlightAudioInspector() {
         { loudness_preset: "off", dialogue_eq: "off" },
         { syncLufs: true, markCustom: true }
       );
+      setMasterBusState({ voice_isolation: false });
+    });
+  }
+  const isoBtn = byId("btn-fairlight-voice-iso");
+  if (isoBtn) {
+    isoBtn.addEventListener("click", () => {
+      const nextIso = !(state.masterBus.voice_isolation || state.voiceCleanup.enabled);
+      setMasterBusState({ voice_isolation: nextIso });
+    });
+  }
+  const mixerResetBtn = byId("btn-mixer-reset");
+  if (mixerResetBtn) {
+    mixerResetBtn.addEventListener("click", () => {
+      resetMixerConsoleAction();
     });
   }
 }
@@ -11579,7 +12034,13 @@ function wireEvents() {
   if (vcEnabledEl) {
     vcEnabledEl.addEventListener("change", () => {
       state.voiceCleanup.enabled = Boolean(vcEnabledEl.checked);
+      state.masterBus = normalizeMasterBusState({
+        ...state.masterBus,
+        voice_isolation: state.voiceCleanup.enabled
+      });
       syncVoiceCleanupControlsUI();
+      renderTimelineAudioInspector();
+      renderFairlightAudioUI();
     });
   }
   for (const btn of document.querySelectorAll(".voice-cleanup-deliver-preset-btn[data-deliver-voice-cleanup-preset]")) {

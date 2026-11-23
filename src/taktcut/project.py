@@ -46,6 +46,7 @@ from taktcut.render import (
     FilmGrainParams,
     FramingParams,
     LowerThirdParams,
+    MasterBusParams,
     ReframeParams,
     RetimeParams,
     VignetteParams,
@@ -422,6 +423,7 @@ class TaktcutProject(BaseModel):
     snap_enabled: bool = True
     bpm_grid: BpmGridConfig = Field(default_factory=BpmGridConfig)
     auto_duck: AutoDuckParams = Field(default_factory=AutoDuckParams)
+    master_bus: MasterBusParams = Field(default_factory=MasterBusParams)
     color: ProjectColorState = Field(default_factory=ProjectColorState)
     fx: ProjectFxState = Field(default_factory=ProjectFxState)
     title_overlay: TitleOverlayParams = Field(

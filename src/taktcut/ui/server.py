@@ -109,9 +109,11 @@ from taktcut.render import (
     ClipRetimeParams,
     ClipVideoFadeParams,
     FairlightAudioParams,
+    FairlightChannelStripParams,
     FilmGrainParams,
     FramingParams,
     LowerThirdParams,
+    MasterBusParams,
     ReframeParams,
     RetimeParams,
     VignetteParams,
@@ -119,6 +121,7 @@ from taktcut.render import (
     build_render_plan,
     compile_audio_filter_result,
     compile_auto_duck_filter_result,
+    compile_fairlight_mixer_filter,
     compile_film_grain_filter_result,
     compile_framing_filter_result,
     compile_lower_third_filter_result,
@@ -634,6 +637,31 @@ def _build_voice_cleanup_from_payload(
         subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
         return VoiceCleanupParams.model_validate(subset)
     return None
+
+
+def _build_fairlight_mixer_from_payload(
+    payload: dict[str, Any],
+) -> tuple[FairlightChannelStripParams, MasterBusParams, VoiceCleanupParams | None]:
+    raw_ch = payload.get("channel")
+    if raw_ch is None:
+        ch_keys = ("track_code", "volume_db", "pan", "muted", "solo", "rec_armed")
+        ch_data = {k: payload[k] for k in ch_keys if k in payload and payload[k] is not None}
+        channel = FairlightChannelStripParams.model_validate(ch_data)
+    else:
+        if not isinstance(raw_ch, dict):
+            raise ValueError("'channel' must be a JSON object")
+        channel = FairlightChannelStripParams.model_validate(raw_ch)
+
+    raw_master = payload.get("master")
+    if raw_master is None:
+        master = MasterBusParams()
+    else:
+        if not isinstance(raw_master, dict):
+            raise ValueError("'master' must be a JSON object")
+        master = MasterBusParams.model_validate(raw_master)
+
+    voice_cleanup = _build_voice_cleanup_from_payload(payload)
+    return channel, master, voice_cleanup
 
 
 def _build_retime_params_from_payload(
@@ -2122,6 +2150,16 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             assert vc_obj is not None
             compiled_vc = compile_voice_cleanup_filter_result(vc_obj)
             self._send_json(HTTPStatus.OK, compiled_vc.model_dump(mode="json"))
+            return
+
+        if route == "/api/fairlight/mixer/compile":
+            channel, master, vc_obj = _build_fairlight_mixer_from_payload(payload)
+            compiled_mixer = compile_fairlight_mixer_filter(
+                channel,
+                master,
+                voice_cleanup=vc_obj,
+            )
+            self._send_json(HTTPStatus.OK, compiled_mixer.model_dump(mode="json"))
             return
 
         if route == "/api/transitions/compile":
