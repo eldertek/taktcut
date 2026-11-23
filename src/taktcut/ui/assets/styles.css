@@ -529,6 +529,19 @@ body {
     display: flex;
     flex-direction: column;
   }
+  .nle-deliver-grid {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+  }
+  .nle-deliver-grid > .nle-pane,
+  .nle-deliver-grid > .deliver-side-stack {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+  }
 }
 
 /* DELIVER TOP RIBBON & TWO-COLUMN SCROLLABLE WORKSPACE */
@@ -545,16 +558,8 @@ body {
   gap: 5px;
 }
 
-.nle-deliver-grid {
-  flex: 1 1 0;
-  min-height: 0;
-  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
-}
-
-.nle-deliver-grid > .nle-pane,
-.nle-deliver-grid > .deliver-side-stack {
-  min-height: 0;
-  overflow-y: auto;
+.nle-deliver-grid .pane-body {
+  padding-bottom: 18px;
 }
 
 .nle-deliver-grid .lower-third-card,
