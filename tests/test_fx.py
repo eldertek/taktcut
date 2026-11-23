@@ -166,9 +166,10 @@ def test_ten_presets_compile_and_lookup() -> None:
         "Action Handheld",
         "Retro VHS CRT",
         "Neon Hue Shift",
+        "Retro Arcade Pixel",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 14
+    assert len(FX_PRESETS) == 15
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -271,7 +272,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 14
+    assert len(p_data["presets"]) == 15
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -1211,7 +1212,7 @@ def test_scanlines_unsharp_mask_and_retro_vhs_execute_in_real_ffmpeg() -> None:
 
 
 def test_hue_shift_mirror_flip_bounds_and_neon_shift() -> None:
-    assert len(FX_TYPES) == 18
+    assert len(FX_TYPES) >= 18
     assert "hue_shift" in FX_TYPES
     assert "mirror_flip" in FX_TYPES
 
@@ -1303,6 +1304,145 @@ def test_hue_shift_mirror_flip_and_neon_shift_execute_in_real_ffmpeg() -> None:
         [FxNode(effect="mirror_flip", params={"axis": "vertical"})],
         [FxNode(effect="mirror_flip", params={"axis": "both"})],
         get_fx_preset("neon_shift").nodes,
+    ):
+        res = compile_fx_filtergraph(stack, duration_seconds=0.2, width=w, height=h, fps=25.0)
+        proc = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc=duration=0.2:size={w}x{h}:rate=25",
+                "-vf",
+                res.filtergraph,
+                "-frames:v",
+                "3",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        assert proc.returncode == 0, (
+            f"FFmpeg rejected {res.active_effects}: "
+            f"{proc.stderr.decode('utf-8', errors='replace')}"
+        )
+        assert len(proc.stdout) == 3 * w * h * 3
+
+
+def test_mosaic_pixelate_invert_negative_bounds_and_retro_arcade() -> None:
+    assert len(FX_TYPES) == 20
+    assert "mosaic_pixelate" in FX_TYPES
+    assert "invert_negative" in FX_TYPES
+
+    mp_low = normalize_fx_node(
+        {
+            "effect": "mosaic_pixelate",
+            "params": {"BlockSizePx": 1},
+        }
+    )
+    assert mp_low.params["block_size_px"] == 4
+    mp_low_res = compile_fx_filtergraph([mp_low])
+    assert mp_low_res.active_effects == ["mosaic_pixelate"]
+    assert mp_low_res.filtergraph == "pixelize=w=4:h=4"
+
+    mp_high = normalize_fx_node(
+        {
+            "effect": "mosaic_pixelate",
+            "params": {"BlockSize": 99},
+        }
+    )
+    assert mp_high.params["block_size_px"] == 48
+    assert compile_fx_filtergraph([mp_high]).filtergraph == "pixelize=w=48:h=48"
+
+    inv_rgb = normalize_fx_node({"effect": "invert_negative", "params": {"Mode": " RGB "}})
+    assert inv_rgb.params["mode"] == "rgb"
+    assert compile_fx_filtergraph([inv_rgb]).filtergraph == "negate=negate_alpha=0"
+
+    inv_luma = normalize_fx_node({"effect": "invert_negative", "params": {"mode": "luma"}})
+    assert inv_luma.params["mode"] == "luma"
+    assert (
+        compile_fx_filtergraph([inv_luma]).filtergraph
+        == "format=yuv444p,negate=components=y:negate_alpha=0"
+    )
+
+    inv_luma_rgb_combo = compile_fx_filtergraph(
+        [
+            FxNode(effect="invert_negative", params={"mode": "luma"}),
+            FxNode(effect="rgb_split", params={"chroma_shift_px": 3}),
+        ]
+    )
+    assert (
+        "format=yuv444p,negate=components=y:negate_alpha=0,format=rgb24"
+        in inv_luma_rgb_combo.filtergraph
+    )
+
+    kf_res = compile_fx_filtergraph(
+        [
+            FxNode(
+                effect="mosaic_pixelate",
+                params={"block_size_px": 16},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=2.0, value=1.0)],
+            ),
+            FxNode(
+                effect="invert_negative",
+                params={"mode": "rgb"},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=2.0, value=1.0)],
+            ),
+        ]
+    )
+    assert kf_res.keyframed_effects == ["mosaic_pixelate", "invert_negative"]
+    assert "pixelize=w=16:h=16" in kf_res.filtergraph
+    assert "negate=negate_alpha=0" in kf_res.filtergraph
+    assert "blend=all_expr=" in kf_res.filtergraph
+
+    arcade = compile_preset_filtergraph("retro_arcade", duration_seconds=6.0)
+    assert arcade.active_effects == ["mosaic_pixelate", "scanlines", "rgb_split"]
+    assert "pixelize=w=10:h=10" in arcade.filtergraph
+    assert "drawgrid=w=0:h=4:t=1:c=black@0.4500" in arcade.filtergraph
+    assert "rgbashift=rh=3:bh=-3" in arcade.filtergraph
+
+    for bad_node in (
+        {"effect": "mosaic_pixelate", "params": {"block_size_px": float("nan")}},
+        {"effect": "mosaic_pixelate", "params": {"block_size_px": float("inf")}},
+        {"effect": "mosaic_pixelate", "params": {"block_size_px": True}},
+        {"effect": "invert_negative", "params": {"mode": "cmyk"}},
+        {"effect": "invert_negative", "params": {"mode": ""}},
+        {"effect": "invert_negative", "params": {"mode": 123}},
+        {"effect": "invert_negative", "params": {"mode": False}},
+    ):
+        with pytest.raises(ValueError):
+            normalize_fx_node(bad_node)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_mosaic_pixelate_invert_negative_and_retro_arcade_execute_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    w, h = 320, 180
+
+    for stack in (
+        [FxNode(effect="mosaic_pixelate", params={"block_size_px": 12})],
+        [
+            FxNode(
+                effect="mosaic_pixelate",
+                params={"block_size_px": 18},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=0.2, value=1.0)],
+            )
+        ],
+        [FxNode(effect="invert_negative", params={"mode": "rgb"})],
+        [FxNode(effect="invert_negative", params={"mode": "luma"})],
+        [
+            FxNode(effect="invert_negative", params={"mode": "luma"}),
+            FxNode(effect="rgb_split", params={"chroma_shift_px": 3}),
+        ],
+        get_fx_preset("retro_arcade").nodes,
     ):
         res = compile_fx_filtergraph(stack, duration_seconds=0.2, width=w, height=h, fps=25.0)
         proc = subprocess.run(

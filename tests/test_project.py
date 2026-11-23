@@ -781,3 +781,62 @@ def test_project_fx_hue_shift_mirror_flip_neon_shift_roundtrip(tmp_path: Path) -
         bad_payload["fx"]["nodes"][1]["params"]["axis"] = bad_axis
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_fx_mosaic_pixelate_invert_negative_retro_arcade_roundtrip(
+    tmp_path: Path,
+) -> None:
+    proj = _build_full_test_project()
+    proj.fx.nodes = [
+        FxNode(
+            effect="mosaic_pixelate",
+            enabled=True,
+            params={"block_size_px": 10},
+        ),
+        FxNode(
+            effect="invert_negative",
+            enabled=True,
+            params={"mode": "luma"},
+        ),
+        FxNode(
+            effect="scanlines",
+            enabled=True,
+            params={"line_spacing_px": 4, "opacity": 0.45},
+        ),
+        FxNode(
+            effect="rgb_split",
+            enabled=True,
+            params={"chroma_shift_px": 3},
+        ),
+    ]
+    proj.fx.active_preset_id = "retro_arcade"
+
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.fx.active_preset_id == "retro_arcade"
+    assert [n.effect for n in loaded.fx.nodes] == [
+        "mosaic_pixelate",
+        "invert_negative",
+        "scanlines",
+        "rgb_split",
+    ]
+    assert loaded.fx.nodes[0].params["block_size_px"] == 10
+    assert loaded.fx.nodes[1].params["mode"] == "luma"
+
+    proj_path = tmp_path / "retro_arcade.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.fx.nodes[0].params["block_size_px"] == 10
+    assert disk_loaded.fx.nodes[1].params["mode"] == "luma"
+
+    for bad_block in (3, 49, True, "12"):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["block_size_px"] = bad_block
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_mode in ("cmyk", "", 123, False):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][1]["params"]["mode"] = bad_mode
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

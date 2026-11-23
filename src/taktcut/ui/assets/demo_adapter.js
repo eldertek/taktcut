@@ -317,7 +317,7 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55, scanlines: 0.25, unsharp_mask: 0.45, hue_shift: 0.3, mirror_flip: 0.2 };
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55, scanlines: 0.25, unsharp_mask: 0.45, hue_shift: 0.3, mirror_flip: 0.2, mosaic_pixelate: 0.3, invert_negative: 0.2 };
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -406,6 +406,20 @@ function compileFxClient(nodes, opts = {}) {
       if (axis === "vertical") segs.push("vflip");
       else if (axis === "both") segs.push("hflip,vflip");
       else segs.push("hflip");
+    } else if (n.effect === "mosaic_pixelate") {
+      const bsize = Math.round(Math.min(48, Math.max(4, Number(p.block_size_px ?? 12))));
+      segs.push(`pixelize=w=${bsize}:h=${bsize}`);
+    } else if (n.effect === "invert_negative") {
+      const mode = String(p.mode ?? "rgb").trim().toLowerCase();
+      if (mode === "luma") {
+        segs.push(
+          needsRgb
+            ? "format=yuv444p,negate=components=y:negate_alpha=0,format=rgb24"
+            : "format=yuv444p,negate=components=y:negate_alpha=0"
+        );
+      } else {
+        segs.push("negate=negate_alpha=0");
+      }
     }
   });
   if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);

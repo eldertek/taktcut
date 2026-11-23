@@ -28,6 +28,8 @@ FxType = Literal[
     "unsharp_mask",
     "hue_shift",
     "mirror_flip",
+    "mosaic_pixelate",
+    "invert_negative",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -49,10 +51,13 @@ FX_TYPES: tuple[FxType, ...] = (
     "unsharp_mask",
     "hue_shift",
     "mirror_flip",
+    "mosaic_pixelate",
+    "invert_negative",
 )
 
 LETTERBOX_RATIOS: tuple[str, ...] = ("2.39", "2.35", "1.85", "2.00")
 MIRROR_FLIP_AXES: tuple[str, ...] = ("horizontal", "vertical", "both")
+INVERT_NEGATIVE_MODES: tuple[str, ...] = ("rgb", "luma")
 _LETTERBOX_RATIO_ALIASES: dict[str, str] = {
     "2.39": "2.39",
     "2.35": "2.35",
@@ -126,6 +131,9 @@ _PARAM_ALIASES: dict[str, str] = {
     "Hue": "hue_deg",
     "Saturation": "saturation",
     "Axis": "axis",
+    "BlockSizePx": "block_size_px",
+    "BlockSize": "block_size_px",
+    "Mode": "mode",
 }
 
 
@@ -555,6 +563,27 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             options=MIRROR_FLIP_AXES,
         ),
     ),
+    "mosaic_pixelate": (
+        FxParamSpec(
+            name="block_size_px",
+            label="Block Size (px)",
+            kind="int",
+            default=12,
+            min_val=4,
+            max_val=48,
+            step=1,
+            unit="px",
+        ),
+    ),
+    "invert_negative": (
+        FxParamSpec(
+            name="mode",
+            label="Invert Mode",
+            kind="enum",
+            default="rgb",
+            options=INVERT_NEGATIVE_MODES,
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -576,6 +605,8 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "unsharp_mask": 0.45,
     "hue_shift": 0.30,
     "mirror_flip": 0.20,
+    "mosaic_pixelate": 0.30,
+    "invert_negative": 0.20,
 }
 
 
@@ -1173,6 +1204,38 @@ FX_PRESETS: tuple[FxPreset, ...] = (
             ),
         ],
     ),
+    FxPreset(
+        id="retro_arcade",
+        name="Retro Arcade Pixel",
+        category="Stylize",
+        description=(
+            "8-bit mosaic pixelation paired with CRT scanlines and RGB chromatic split."
+        ),
+        nodes=[
+            FxNode(
+                effect="mosaic_pixelate",
+                enabled=True,
+                params={
+                    "block_size_px": 10,
+                },
+            ),
+            FxNode(
+                effect="scanlines",
+                enabled=True,
+                params={
+                    "line_spacing_px": 4,
+                    "opacity": 0.45,
+                },
+            ),
+            FxNode(
+                effect="rgb_split",
+                enabled=True,
+                params={
+                    "chroma_shift_px": 3,
+                },
+            ),
+        ],
+    ),
 )
 
 
@@ -1201,20 +1264,24 @@ def normalize_enum_fx_param(raw: Any, spec: FxParamSpec) -> str:
         raise ValueError(f"Parameter {spec.name!r} must not be bool")
     options = spec.options or ()
     if isinstance(raw, int | float):
+        if spec.name != "ratio":
+            raise ValueError(
+                f"Parameter {spec.name!r} must be one of {', '.join(options)}, got {raw!r}"
+            )
         num = float(raw)
         if not math.isfinite(num):
             raise ValueError(f"Parameter {spec.name!r} must be finite, got {raw!r}")
         candidate = f"{num:.2f}"
     elif isinstance(raw, str):
         trimmed = raw.strip()
-        if spec.name == "axis":
+        if spec.name in ("axis", "mode"):
             candidate = trimmed.lower()
         else:
             candidate = _LETTERBOX_RATIO_ALIASES.get(trimmed, trimmed)
     else:
         raise ValueError(f"Parameter {spec.name!r} must be a valid option string, got {raw!r}")
 
-    if spec.name != "axis" and candidate in _LETTERBOX_RATIO_ALIASES:
+    if spec.name == "ratio" and candidate in _LETTERBOX_RATIO_ALIASES:
         candidate = _LETTERBOX_RATIO_ALIASES[candidate]
     if candidate not in options:
         raise ValueError(
@@ -1799,6 +1866,24 @@ def _compile_mirror_flip(params: dict[str, float | int | str]) -> str:
     return "hflip"
 
 
+def _compile_mosaic_pixelate(params: dict[str, float | int | str]) -> str:
+    block_size = round(_clamp_num(float(params["block_size_px"]), 4.0, 48.0))
+    return f"pixelize=w={block_size}:h={block_size}"
+
+
+def _compile_invert_negative(
+    params: dict[str, float | int | str],
+    *,
+    needs_rgb: bool = False,
+) -> str:
+    mode = normalize_enum_fx_param(params["mode"], FX_PARAM_SPECS["invert_negative"][0])
+    if mode == "luma":
+        if needs_rgb:
+            return "format=yuv444p,negate=components=y:negate_alpha=0,format=rgb24"
+        return "format=yuv444p,negate=components=y:negate_alpha=0"
+    return "negate=negate_alpha=0"
+
+
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
     """Return all built-in Chroma Key / Green Screen Studio presets."""
     return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
@@ -1999,6 +2084,12 @@ def compile_fx_filtergraph(
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "mirror_flip":
             seg = _compile_mirror_flip(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "mosaic_pixelate":
+            seg = _compile_mosaic_pixelate(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "invert_negative":
+            seg = _compile_invert_negative(node.params, needs_rgb=needs_rgb)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb or ck_active:

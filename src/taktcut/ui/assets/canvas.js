@@ -1456,6 +1456,65 @@ export function drawProgramMonitorCanvas(
         }
       }
 
+      // Apply S_Mosaic retro block pixelation on frame buffer
+      const mosaicNodes = pActiveFx.filter((n) => n.effect === "mosaic_pixelate");
+      if (mosaicNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        for (const mNode of mosaicNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(mNode, tSec));
+          if (mul <= 0.0001) continue;
+          const mp = mNode.params || {};
+          const rawBlock = Math.round(Math.min(48, Math.max(4, Number(mp.block_size_px ?? 12))));
+          const blockPx = Math.max(2, Math.round(rawBlock * Math.max(0.5, bw / 1280)));
+          const srcImg = bctx.getImageData(0, 0, bw, bh);
+          const d = srcImg.data;
+          const dryW = 1 - mul;
+          for (let ty = 0; ty < bh; ty += blockPx) {
+            const yEnd = Math.min(bh, ty + blockPx);
+            for (let tx = 0; tx < bw; tx += blockPx) {
+              const xEnd = Math.min(bw, tx + blockPx);
+              let sumR = 0;
+              let sumG = 0;
+              let sumB = 0;
+              let sumA = 0;
+              let count = 0;
+              for (let y = ty; y < yEnd; y++) {
+                const rowOff = y * bw;
+                for (let x = tx; x < xEnd; x++) {
+                  const idx = (rowOff + x) * 4;
+                  sumR += d[idx];
+                  sumG += d[idx + 1];
+                  sumB += d[idx + 2];
+                  sumA += d[idx + 3];
+                  count++;
+                }
+              }
+              const avgR = sumR / count;
+              const avgG = sumG / count;
+              const avgB = sumB / count;
+              const avgA = sumA / count;
+              for (let y = ty; y < yEnd; y++) {
+                const rowOff = y * bw;
+                for (let x = tx; x < xEnd; x++) {
+                  const idx = (rowOff + x) * 4;
+                  if (mul >= 0.999) {
+                    d[idx] = Math.round(avgR);
+                    d[idx + 1] = Math.round(avgG);
+                    d[idx + 2] = Math.round(avgB);
+                    d[idx + 3] = Math.round(avgA);
+                  } else {
+                    d[idx] = Math.round(d[idx] * dryW + avgR * mul);
+                    d[idx + 1] = Math.round(d[idx + 1] * dryW + avgG * mul);
+                    d[idx + 2] = Math.round(d[idx + 2] * dryW + avgB * mul);
+                    d[idx + 3] = Math.round(d[idx + 3] * dryW + avgA * mul);
+                  }
+                }
+              }
+            }
+          }
+          bctx.putImageData(srcImg, 0, 0);
+        }
+      }
+
       // Apply S_HueSatBright hue rotation & saturation boost on frame buffer
       const hueNodes = pActiveFx.filter((n) => n.effect === "hue_shift");
       if (hueNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
@@ -1513,6 +1572,47 @@ export function drawProgramMonitorCanvas(
             d[i] = nr < 0 ? 0 : nr > 255 ? 255 : Math.round(nr);
             d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : Math.round(ng);
             d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : Math.round(nb);
+          }
+          bctx.putImageData(srcImg, 0, 0);
+        }
+      }
+
+      // Apply S_Invert film negative (RGB or luma-only) on frame buffer
+      const invertNodes = pActiveFx.filter((n) => n.effect === "invert_negative");
+      if (invertNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        for (const iNode of invertNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(iNode, tSec));
+          if (mul <= 0.0001) continue;
+          const mode = String((iNode.params && iNode.params.mode) || "rgb").trim().toLowerCase();
+          const srcImg = bctx.getImageData(0, 0, bw, bh);
+          const d = srcImg.data;
+          const dryW = 1 - mul;
+          if (mode === "luma") {
+            for (let i = 0; i < d.length; i += 4) {
+              const r = d[i];
+              const g = d[i + 1];
+              const b = d[i + 2];
+              const y = 0.299 * r + 0.587 * g + 0.114 * b;
+              const deltaY = (255 - 2 * y) * mul;
+              const nr = r + deltaY;
+              const ng = g + deltaY;
+              const nb = b + deltaY;
+              d[i] = nr < 0 ? 0 : nr > 255 ? 255 : Math.round(nr);
+              d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : Math.round(ng);
+              d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : Math.round(nb);
+            }
+          } else {
+            for (let i = 0; i < d.length; i += 4) {
+              if (mul >= 0.999) {
+                d[i] = 255 - d[i];
+                d[i + 1] = 255 - d[i + 1];
+                d[i + 2] = 255 - d[i + 2];
+              } else {
+                d[i] = Math.round(d[i] * dryW + (255 - d[i]) * mul);
+                d[i + 1] = Math.round(d[i + 1] * dryW + (255 - d[i + 1]) * mul);
+                d[i + 2] = Math.round(d[i + 2] * dryW + (255 - d[i + 2]) * mul);
+              }
+            }
           }
           bctx.putImageData(srcImg, 0, 0);
         }

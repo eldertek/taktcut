@@ -2315,6 +2315,12 @@ const FX_PARAM_FALLBACK = {
   ],
   mirror_flip: [
     { name: "axis", label: "Mirror Axis", kind: "enum", default: "horizontal", options: ["horizontal", "vertical", "both"] }
+  ],
+  mosaic_pixelate: [
+    { name: "block_size_px", label: "Block Size (px)", kind: "int", default: 12, min_val: 4, max_val: 48, step: 1, unit: "px" }
+  ],
+  invert_negative: [
+    { name: "mode", label: "Invert Mode", kind: "enum", default: "rgb", options: ["rgb", "luma"] }
   ]
 };
 
@@ -2378,6 +2384,11 @@ const FX_PRESET_FALLBACK = {
     { effect: "hue_shift", enabled: true, params: { hue_deg: 45.0, saturation: 1.45 } },
     { effect: "optical_glow", enabled: true, params: { glow_intensity: 0.65, glow_radius: 14.0 } },
     { effect: "vignette", enabled: true, params: { angle_rad: 0.58 } }
+  ],
+  retro_arcade: [
+    { effect: "mosaic_pixelate", enabled: true, params: { block_size_px: 10 } },
+    { effect: "scanlines", enabled: true, params: { line_spacing_px: 4, opacity: 0.45 } },
+    { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 3 } }
   ]
 };
 
@@ -2399,7 +2410,9 @@ const FX_DISPLAY_TITLES = {
   scanlines: "S_ScanLines",
   unsharp_mask: "S_Sharpen",
   hue_shift: "S_HueSatBright",
-  mirror_flip: "S_FlipFlop"
+  mirror_flip: "S_FlipFlop",
+  mosaic_pixelate: "S_Mosaic",
+  invert_negative: "S_Invert"
 };
 
 function getFxParamLabel(spec) {
