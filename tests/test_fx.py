@@ -17,10 +17,13 @@ import pytest
 from taktcut.fx import (
     CHROMA_KEY_PRESETS,
     EASING_TYPES,
+    FX_MASK_SHAPES,
     FX_PRESETS,
     FX_TYPES,
     MAX_KEYFRAMES_PER_NODE,
+    PRISM_LEAK_CORNERS,
     ChromaKeyParams,
+    FxEffectMask,
     FxNode,
     Keyframe,
     PlanarTrackerParams,
@@ -181,9 +184,12 @@ def test_ten_presets_compile_and_lookup() -> None:
         "Retro VHS CRT",
         "Neon Hue Shift",
         "Retro Arcade Pixel",
+        "Black Pro-Mist 1/4",
+        "Tilt-Shift Toy World",
+        "Prism Light Leak",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 15
+    assert len(FX_PRESETS) == 18
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -286,7 +292,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 15
+    assert len(p_data["presets"]) == 18
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -1352,7 +1358,7 @@ def test_hue_shift_mirror_flip_and_neon_shift_execute_in_real_ffmpeg() -> None:
 
 
 def test_mosaic_pixelate_invert_negative_bounds_and_retro_arcade() -> None:
-    assert len(FX_TYPES) == 20
+    assert len(FX_TYPES) >= 20
     assert "mosaic_pixelate" in FX_TYPES
     assert "invert_negative" in FX_TYPES
 
@@ -1662,3 +1668,154 @@ def test_stabilizer_and_planar_tracker_execute_in_real_ffmpeg() -> None:
     )
     assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
     assert len(proc.stdout) == 4 * w * h * 3
+
+
+def test_pro_mist_directional_blur_tilt_shift_prism_leak_and_presets() -> None:
+    assert len(FX_TYPES) == 24
+    for fx_name in ("pro_mist", "directional_blur", "tilt_shift", "prism_leak"):
+        assert fx_name in FX_TYPES
+    assert PRISM_LEAK_CORNERS == ("top_left", "top_right", "bottom_left", "bottom_right")
+
+    pm = normalize_fx_node(
+        {
+            "effect": "pro_mist",
+            "params": {
+                "DiffusionStrength": 1.8,
+                "HighlightThreshold": 0.1,
+                "BloomRadius": 40.0,
+                "Warmth": -3.0,
+            },
+        }
+    )
+    assert pm.params["diffusion_strength"] == 1.0
+    assert pm.params["highlight_threshold"] == 0.3
+    assert pm.params["bloom_radius"] == 24.0
+    assert pm.params["warmth"] == -1.0
+
+    db = normalize_fx_node(
+        {
+            "effect": "directional_blur",
+            "params": {"BlurAmount": 99.0, "AngleDeg": 45.0},
+        }
+    )
+    assert db.params["blur_amount"] == 24.0
+    assert db.params["angle_deg"] == 45.0
+    db_res = compile_fx_filtergraph([db])
+    assert "avgblur=sizeX=24:sizeY=1" in db_res.filtergraph
+    assert "rotate='45.00*PI/180'" in db_res.filtergraph
+
+    ts = normalize_fx_node(
+        {
+            "effect": "tilt_shift",
+            "params": {"FocusY": 0.5, "BandHeight": 0.25, "BlurStrength": 8.0, "SatBoost": 1.4},
+        }
+    )
+    ts_res = compile_fx_filtergraph([ts])
+    assert "maskedmerge" in ts_res.filtergraph
+    assert "eq=saturation=1.4000" in ts_res.filtergraph
+
+    pl = normalize_fx_node(
+        {
+            "effect": "prism_leak",
+            "params": {"LeakIntensity": 0.7, "LeakCorner": "bottom_right", "PrismShiftPx": 5},
+        }
+    )
+    pl_res = compile_fx_filtergraph([pl])
+    assert "rgbashift=rh=5:bh=-5" in pl_res.filtergraph
+    assert "hypot(X/W-0.94,Y/H-0.94)" in pl_res.filtergraph
+
+    for preset_id in ("black_promist_cinema", "miniature_tilt_shift", "anamorphic_prism_leak"):
+        p_res = compile_preset_filtergraph(preset_id)
+        assert p_res.filtergraph
+        assert p_res.complexity_tier in {"light", "medium", "heavy"}
+
+
+def test_fx_effect_mask_validation_evaluation_and_ffmpeg_compile() -> None:
+    assert FX_MASK_SHAPES == ("off", "ellipse", "rect")
+    with pytest.raises(ValueError):
+        FxEffectMask(shape="triangle")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        FxEffectMask(invert="yes")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        FxEffectMask(center_x=True)  # type: ignore[arg-type]
+
+    ellipse = FxEffectMask(
+        shape="ellipse",
+        center_x=0.5,
+        center_y=0.5,
+        radius_x=0.30,
+        radius_y=0.30,
+        feather=0.10,
+        invert=False,
+    )
+    assert ellipse.is_active() is True
+    assert ellipse.evaluate_mask(0.5, 0.5) == pytest.approx(1.0)
+    assert ellipse.evaluate_mask(0.95, 0.95) == pytest.approx(0.0)
+
+    rect_inv = FxEffectMask(
+        shape="rect",
+        center_x=0.5,
+        center_y=0.5,
+        radius_x=0.25,
+        radius_y=0.25,
+        feather=0.05,
+        invert=True,
+    )
+    assert rect_inv.evaluate_mask(0.5, 0.5) == pytest.approx(0.0)
+    assert rect_inv.evaluate_mask(0.95, 0.95) == pytest.approx(1.0)
+
+    compiled = compile_fx_filtergraph(
+        [
+            FxNode(effect="pro_mist", enabled=True, effect_mask=ellipse),
+            FxNode(effect="mosaic_pixelate", enabled=True, effect_mask=rect_inv),
+        ]
+    )
+    assert compiled.masked_effects == ["pro_mist", "mosaic_pixelate"]
+    assert compiled.filtergraph.count("maskedmerge") == 2
+    assert "hypot((X/W-0.5000)/0.3000,(Y/H-0.5000)/0.3000)" in compiled.filtergraph
+    assert "max(abs(X/W-0.5000)/0.2500,abs(Y/H-0.5000)/0.2500)" in compiled.filtergraph
+
+    if shutil.which("ffmpeg") is not None:
+        ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+        w, h = 320, 180
+        combo = compile_fx_filtergraph(
+            [
+                FxNode(effect="pro_mist", enabled=True, effect_mask=ellipse),
+                FxNode(
+                    effect="directional_blur",
+                    enabled=True,
+                    params={"blur_amount": 8.0, "angle_deg": 25.0},
+                    effect_mask=rect_inv,
+                ),
+                FxNode(effect="tilt_shift", enabled=True),
+                FxNode(effect="prism_leak", enabled=True, params={"leak_corner": "top_right"}),
+            ],
+            width=w,
+            height=h,
+        )
+        proc = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc2=duration=0.16:size={w}x{h}:rate=25",
+                "-vf",
+                combo.filtergraph,
+                "-frames:v",
+                "2",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+        assert len(proc.stdout) == 2 * w * h * 3

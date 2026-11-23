@@ -2033,11 +2033,56 @@ body {
   cursor: pointer;
 }
 
-/* FX KEYFRAMES & CURVE PREVIEW */
+/* FX KEYFRAMES & EFFECT MASK */
 .fx-kf-toggle-btn.is-active {
   border-color: var(--accent-blue);
   background: var(--accent-blue-soft);
   color: #8cb4ff;
+}
+
+.fx-mask-toggle-btn.is-active,
+.fx-mask-shape-btn.is-active,
+.fx-mask-invert-btn.is-active {
+  border-color: var(--accent-teal, #2dd4bf);
+  background: rgba(45, 212, 191, 0.14);
+  color: #5eead4;
+}
+
+.fx-mask-panel {
+  border-top: 1px solid var(--border-inner);
+  background: #171a1d;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fx-mask-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.fx-mask-shape-group,
+.fx-mask-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.fx-mask-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fx-mask-grid.is-dimmed {
+  opacity: 0.48;
 }
 
 .fx-kf-panel {
@@ -6668,7 +6713,7 @@ input[type="range"] {
   #panel-fx input[type="range"],
   #panel-fx .fx-ofx-tab,
   .fg-drawer-summary {
-    min-height: 44px;
+    min-height: 45px;
   }
   #panel-fx .fx-bypass-btn,
   #panel-fx .fx-node-actions .btn-mini {

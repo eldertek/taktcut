@@ -355,6 +355,38 @@ function compileChromaKeyClient(payload, opts = {}) {
   };
 }
 
+function compileEffectMaskExprClient(mask) {
+  const cx = Math.min(0.95, Math.max(0.05, Number(mask.center_x ?? 0.5)));
+  const cy = Math.min(0.95, Math.max(0.05, Number(mask.center_y ?? 0.5)));
+  const rx = Math.min(0.95, Math.max(0.05, Number(mask.radius_x ?? 0.35)));
+  const ry = Math.min(0.95, Math.max(0.05, Number(mask.radius_y ?? 0.35)));
+  const f = Math.min(0.5, Math.max(0.01, Number(mask.feather ?? 0.12)));
+  const twoF = 2.0 * f;
+  const distExpr =
+    mask.shape === "ellipse"
+      ? `hypot((X/W-${cx.toFixed(4)})/${rx.toFixed(4)},(Y/H-${cy.toFixed(4)})/${ry.toFixed(4)})`
+      : `max(abs(X/W-${cx.toFixed(4)})/${rx.toFixed(4)},abs(Y/H-${cy.toFixed(4)})/${ry.toFixed(4)})`;
+  const weightExpr = `clip((1+${f.toFixed(4)}-(${distExpr}))/${twoF.toFixed(4)},0,1)`;
+  return mask.invert ? `255*(1-${weightExpr})` : `255*${weightExpr}`;
+}
+
+function wrapEffectMaskSegmentClient(idx, segment, mask, needsRgb) {
+  if (!segment || segment === "null" || !mask || mask.shape === "off" || !mask.shape) {
+    return segment;
+  }
+  const maskExpr = compileEffectMaskExprClient(mask);
+  const tail = needsRgb ? ",format=rgb24" : "";
+  return (
+    `split=3[fxm${idx}_b][fxm${idx}_w][fxm${idx}_m];` +
+    `[fxm${idx}_b]format=gbrp[fxm${idx}_bg];` +
+    `[fxm${idx}_w]${segment},format=gbrp[fxm${idx}_fg];` +
+    `[fxm${idx}_m]format=gray,geq=lum='${maskExpr}',` +
+    `split=3[fxm${idx}_mr][fxm${idx}_mg][fxm${idx}_mb];` +
+    `[fxm${idx}_mr][fxm${idx}_mg][fxm${idx}_mb]mergeplanes=0x001020:gbrp[fxm${idx}_msk];` +
+    `[fxm${idx}_bg][fxm${idx}_fg][fxm${idx}_msk]maskedmerge${tail}`
+  );
+}
+
 function compileFxClient(nodes, opts = {}) {
   const active = (nodes || []).filter((n) => n && n.enabled !== false);
   const ckRaw = opts.chroma_key || null;
@@ -370,6 +402,7 @@ function compileFxClient(nodes, opts = {}) {
       ffmpeg_vf_args: [],
       active_effects: [],
       keyframed_effects: [],
+      masked_effects: [],
       chroma_key_active: false,
       stabilizer_active: false,
       planar_tracker_active: false,
@@ -383,7 +416,9 @@ function compileFxClient(nodes, opts = {}) {
   }
   const pixFmt = opts.pix_fmt || "yuv420p";
   const dur = Math.max(0.1, Number(opts.duration_seconds || 10));
-  const needsRgb = active.some((n) => ["glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split", "halation"].includes(n.effect));
+  const needsRgb = active.some((n) =>
+    ["glow", "lens_flare", "chroma_aberration", "optical_glow", "rgb_split", "halation", "pro_mist", "tilt_shift", "prism_leak"].includes(n.effect)
+  );
   const segs = [];
   let totalWeight = 0;
   if (stabActive && stabCompiled) {
@@ -399,55 +434,86 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55, scanlines: 0.25, unsharp_mask: 0.45, hue_shift: 0.3, mirror_flip: 0.2, mosaic_pixelate: 0.3, invert_negative: 0.2 };
+  const weights = {
+    glow: 1.45,
+    shake: 0.7,
+    flicker: 0.25,
+    lens_flare: 1.25,
+    film_damage: 1.1,
+    chroma_aberration: 0.65,
+    vignette: 0.35,
+    film_grain: 0.45,
+    optical_glow: 1.2,
+    rgb_split: 0.55,
+    halation: 1.25,
+    letterbox: 0.2,
+    camera_shake: 0.65,
+    lens_distortion: 0.55,
+    scanlines: 0.25,
+    unsharp_mask: 0.45,
+    hue_shift: 0.3,
+    mirror_flip: 0.2,
+    mosaic_pixelate: 0.3,
+    invert_negative: 0.2,
+    pro_mist: 1.15,
+    directional_blur: 0.95,
+    tilt_shift: 1.2,
+    prism_leak: 0.9
+  };
   const keyframedEffects = [];
+  const maskedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
     const hasKf = Array.isArray(n.keyframes) && n.keyframes.length > 0;
     if (hasKf) keyframedEffects.push(n.effect);
+    const mask = n.effect_mask || null;
+    const hasMask = Boolean(mask && (mask.shape === "ellipse" || mask.shape === "rect"));
+    if (hasMask) {
+      maskedEffects.push(n.effect);
+      totalWeight += 0.25;
+    }
     totalWeight += weights[n.effect] || 0.8;
+    let nodeSeg = "";
     if (n.effect === "glow") {
       const thr = Math.round(Number(p.threshold ?? 0.45) * 255);
       const op = Math.min(1, Math.max(0, Number(p.brightness ?? 0.85) / 1.5)).toFixed(4);
-      segs.push(`split[glow${idx}_base][glow${idx}_src];[glow${idx}_src]lutrgb=r='if(gte(val,${thr}),min(255,val-${thr}),0)',gblur=sigma=${Number(p.width ?? 18).toFixed(2)}:steps=2[glow${idx}_blur];[glow${idx}_base][glow${idx}_blur]blend=all_mode=screen:all_opacity=${op}`);
+      nodeSeg = `split[glow${idx}_base][glow${idx}_src];[glow${idx}_src]lutrgb=r='if(gte(val,${thr}),min(255,val-${thr}),0)',gblur=sigma=${Number(p.width ?? 18).toFixed(2)}:steps=2[glow${idx}_blur];[glow${idx}_base][glow${idx}_blur]blend=all_mode=screen:all_opacity=${op}`;
     } else if (n.effect === "shake") {
       const amp = Math.round(Number(p.amplitude ?? 14));
-      segs.push(amp > 0 ? `pad=iw+${2 * amp}:ih+${2 * amp}:${amp}:${amp}:color=black,crop=iw-${2 * amp}:ih-${2 * amp}:x='${amp}+${amp}*sin(t*${(2 * Math.PI * Number(p.frequency ?? 6)).toFixed(2)})':y='${amp}+${amp}*cos(t*${(2.74 * Math.PI * Number(p.frequency ?? 6)).toFixed(2)})'` : "null");
+      nodeSeg = amp > 0 ? `pad=iw+${2 * amp}:ih+${2 * amp}:${amp}:${amp}:color=black,crop=iw-${2 * amp}:ih-${2 * amp}:x='${amp}+${amp}*sin(t*${(2 * Math.PI * Number(p.frequency ?? 6)).toFixed(2)})':y='${amp}+${amp}*cos(t*${(2.74 * Math.PI * Number(p.frequency ?? 6)).toFixed(2)})'` : "null";
     } else if (n.effect === "flicker") {
-      segs.push(`eq=brightness='${Number(p.amplitude ?? 0.18).toFixed(4)}*sin(t*${(2 * Math.PI * Number(p.frequency ?? 8)).toFixed(2)})':eval=frame`);
+      nodeSeg = `eq=brightness='${Number(p.amplitude ?? 0.18).toFixed(4)}*sin(t*${(2 * Math.PI * Number(p.frequency ?? 8)).toFixed(2)})':eval=frame`;
     } else if (n.effect === "lens_flare") {
       const op = Math.min(1, Number(p.brightness ?? 0.95) * 0.65).toFixed(4);
-      segs.push(`split[lf${idx}_base][lf${idx}_tmp];[lf${idx}_tmp]drawbox=x=0:y=0:w=iw:h=ih:color=black@1:t=fill,gblur=sigma=16:steps=2[lf${idx}_flare];[lf${idx}_base][lf${idx}_flare]blend=all_mode=screen:all_opacity=${op}`);
+      nodeSeg = `split[lf${idx}_base][lf${idx}_tmp];[lf${idx}_tmp]drawbox=x=0:y=0:w=iw:h=ih:color=black@1:t=fill,gblur=sigma=16:steps=2[lf${idx}_flare];[lf${idx}_base][lf${idx}_flare]blend=all_mode=screen:all_opacity=${op}`;
     } else if (n.effect === "film_damage") {
       const mix = Number(p.mix ?? 0.75);
-      segs.push(`noise=alls=${(Number(p.grain ?? 28) * mix * 0.65).toFixed(2)}:allf=t+u,vignette=angle=${(0.15 + Number(p.vignette ?? 0.55) * mix * 0.72).toFixed(3)},eq=brightness='${(0.035 * mix).toFixed(4)}*sin(t*19.3)':eval=frame`);
+      nodeSeg = `noise=alls=${(Number(p.grain ?? 28) * mix * 0.65).toFixed(2)}:allf=t+u,vignette=angle=${(0.15 + Number(p.vignette ?? 0.55) * mix * 0.72).toFixed(3)},eq=brightness='${(0.035 * mix).toFixed(4)}*sin(t*19.3)':eval=frame`;
     } else if (n.effect === "chroma_aberration") {
       const rad = (Number(p.angle ?? 15) * Math.PI) / 180;
       const rh = Math.round(Number(p.spread ?? 8) * Math.cos(rad));
       const rv = Math.round(Number(p.spread ?? 8) * Math.sin(rad));
-      segs.push(`rgbashift=rh=${rh}:rv=${rv}:bh=${-rh}:bv=${-rv}:edge=smear`);
+      nodeSeg = `rgbashift=rh=${rh}:rv=${rv}:bh=${-rh}:bv=${-rv}:edge=smear`;
     } else if (n.effect === "vignette") {
       const angle = Math.min(1.2, Math.max(0.1, Number(p.angle_rad ?? 0.52)));
-      segs.push(`vignette=angle=${angle.toFixed(3)}`);
+      nodeSeg = `vignette=angle=${angle.toFixed(3)}`;
     } else if (n.effect === "film_grain") {
       const alls = Math.round(Math.min(40, Math.max(0, Number(p.strength ?? 14))));
-      segs.push(`noise=alls=${alls}:allf=t+u`);
+      nodeSeg = `noise=alls=${alls}:allf=t+u`;
     } else if (n.effect === "optical_glow") {
       const intensity = Math.min(1, Math.max(0, Number(p.glow_intensity ?? 0.45))).toFixed(4);
       const radius = Math.min(24, Math.max(2, Number(p.glow_radius ?? 10))).toFixed(2);
       const g0 = idx === 0 ? "g0" : `g${idx}a`;
       const g1 = idx === 0 ? "g1" : `g${idx}b`;
       const gb = idx === 0 ? "gb" : `gb${idx}`;
-      segs.push(`split[${g0}][${g1}];[${g1}]gblur=sigma=${radius}[${gb}];[${g0}][${gb}]blend=all_mode=screen:all_opacity=${intensity}`);
+      nodeSeg = `split[${g0}][${g1}];[${g1}]gblur=sigma=${radius}[${gb}];[${g0}][${gb}]blend=all_mode=screen:all_opacity=${intensity}`;
     } else if (n.effect === "rgb_split") {
       const px = Math.round(Math.min(12, Math.max(0, Number(p.chroma_shift_px ?? 4))));
-      segs.push(`rgbashift=rh=${px}:bh=${-px}`);
+      nodeSeg = `rgbashift=rh=${px}:bh=${-px}`;
     } else if (n.effect === "halation") {
       const strength = Math.min(1, Math.max(0, Number(p.halation_strength ?? 0.55))).toFixed(4);
       const radius = Math.min(20, Math.max(2, Number(p.halation_radius ?? 10))).toFixed(2);
-      segs.push(
-        `split[hal${idx}_base][hal${idx}_src];[hal${idx}_src]lutrgb=r='if(gte(val,155),min(255,(val-155)*2.4000),0)':g='if(gte(val,155),min(255,(val-155)*0.8200),0)':b='if(gte(val,155),min(255,(val-155)*0.1800),0)',gblur=sigma=${radius}:steps=2[hal${idx}_blur];[hal${idx}_base][hal${idx}_blur]blend=all_mode=screen:all_opacity=${strength}`
-      );
+      nodeSeg = `split[hal${idx}_base][hal${idx}_src];[hal${idx}_src]lutrgb=r='if(gte(val,155),min(255,(val-155)*2.4000),0)':g='if(gte(val,155),min(255,(val-155)*0.8200),0)':b='if(gte(val,155),min(255,(val-155)*0.1800),0)',gblur=sigma=${radius}:steps=2[hal${idx}_blur];[hal${idx}_base][hal${idx}_blur]blend=all_mode=screen:all_opacity=${strength}`;
     } else if (n.effect === "letterbox") {
       const allowedRatios = new Set(["2.39", "2.35", "1.85", "2.00"]);
       const rawRatio = Number.parseFloat(String(p.ratio ?? "2.39"));
@@ -456,9 +522,7 @@ function compileFxClient(nodes, opts = {}) {
         : "2.39";
       const ratioVal = Number.parseFloat(ratioKey);
       const barFrac = Math.max(0, (1 - (16 / 9) / ratioVal) / 2).toFixed(4);
-      segs.push(
-        `drawbox=x=0:y=0:w=iw:h='round(ih*${barFrac})':color=black@1:t=fill,drawbox=x=0:y='ih-round(ih*${barFrac})':w=iw:h='round(ih*${barFrac})':color=black@1:t=fill`
-      );
+      nodeSeg = `drawbox=x=0:y=0:w=iw:h='round(ih*${barFrac})':color=black@1:t=fill,drawbox=x=0:y='ih-round(ih*${barFrac})':w=iw:h='round(ih*${barFrac})':color=black@1:t=fill`;
     } else if (n.effect === "camera_shake") {
       const amp = Math.min(24, Math.max(1, Number(p.amplitude_px ?? 8)));
       const freq = Math.min(12, Math.max(0.5, Number(p.frequency_hz ?? 4.5)));
@@ -466,45 +530,89 @@ function compileFxClient(nodes, opts = {}) {
       const margin = 2 * padAmp;
       const omegaX = (2 * Math.PI * freq).toFixed(4);
       const omegaY = (2 * Math.PI * freq * 1.37).toFixed(4);
-      segs.push(
-        `scale=w=iw+${margin}:h=ih+${margin}:flags=bilinear,crop=w=iw-${margin}:h=ih-${margin}:x='${padAmp}+${amp.toFixed(4)}*sin(t*${omegaX})':y='${padAmp}+${amp.toFixed(4)}*cos(t*${omegaY}+0.7)'`
-      );
+      nodeSeg = `scale=w=iw+${margin}:h=ih+${margin}:flags=bilinear,crop=w=iw-${margin}:h=ih-${margin}:x='${padAmp}+${amp.toFixed(4)}*sin(t*${omegaX})':y='${padAmp}+${amp.toFixed(4)}*cos(t*${omegaY}+0.7)'`;
     } else if (n.effect === "lens_distortion") {
       const k1 = Math.min(0.5, Math.max(-0.5, Number(p.k1 ?? -0.22)));
-      segs.push(`lenscorrection=cx=0.5:cy=0.5:k1=${k1.toFixed(4)}:k2=0`);
+      nodeSeg = `lenscorrection=cx=0.5:cy=0.5:k1=${k1.toFixed(4)}:k2=0`;
     } else if (n.effect === "scanlines") {
       const spacing = Math.round(Math.min(12, Math.max(2, Number(p.line_spacing_px ?? 4))));
       const opacity = Math.min(0.9, Math.max(0.1, Number(p.opacity ?? 0.45)));
-      segs.push(`drawgrid=w=0:h=${spacing}:t=1:c=black@${opacity.toFixed(4)}`);
+      nodeSeg = `drawgrid=w=0:h=${spacing}:t=1:c=black@${opacity.toFixed(4)}`;
     } else if (n.effect === "unsharp_mask") {
       const amount = Math.min(3.0, Math.max(0.2, Number(p.sharpen_amount ?? 1.2)));
-      segs.push(`unsharp=5:5:${amount.toFixed(4)}:5:5:0.0`);
+      nodeSeg = `unsharp=5:5:${amount.toFixed(4)}:5:5:0.0`;
     } else if (n.effect === "hue_shift") {
       const hueDeg = Math.min(180, Math.max(-180, Number(p.hue_deg ?? 30)));
       const sat = Math.min(2.5, Math.max(0, Number(p.saturation ?? 1.25)));
-      segs.push(`hue=h=${hueDeg.toFixed(2)}:s=${sat.toFixed(4)}`);
+      nodeSeg = `hue=h=${hueDeg.toFixed(2)}:s=${sat.toFixed(4)}`;
     } else if (n.effect === "mirror_flip") {
       const axis = String(p.axis ?? "horizontal").trim().toLowerCase();
-      if (axis === "vertical") segs.push("vflip");
-      else if (axis === "both") segs.push("hflip,vflip");
-      else segs.push("hflip");
+      if (axis === "vertical") nodeSeg = "vflip";
+      else if (axis === "both") nodeSeg = "hflip,vflip";
+      else nodeSeg = "hflip";
     } else if (n.effect === "mosaic_pixelate") {
       const bsize = Math.round(Math.min(48, Math.max(4, Number(p.block_size_px ?? 12))));
-      segs.push(`pixelize=w=${bsize}:h=${bsize}`);
+      nodeSeg = `pixelize=w=${bsize}:h=${bsize}`;
     } else if (n.effect === "invert_negative") {
       const mode = String(p.mode ?? "rgb").trim().toLowerCase();
       if (mode === "luma") {
-        segs.push(
-          needsRgb
-            ? "format=yuv444p,negate=components=y:negate_alpha=0,format=rgb24"
-            : "format=yuv444p,negate=components=y:negate_alpha=0"
-        );
+        nodeSeg = needsRgb
+          ? "format=yuv444p,negate=components=y:negate_alpha=0,format=rgb24"
+          : "format=yuv444p,negate=components=y:negate_alpha=0";
       } else {
-        segs.push("negate=negate_alpha=0");
+        nodeSeg = "negate=negate_alpha=0";
       }
+    } else if (n.effect === "pro_mist") {
+      const strength = Math.min(1, Math.max(0, Number(p.diffusion_strength ?? 0.45)));
+      const thr = Math.min(0.9, Math.max(0.3, Number(p.highlight_threshold ?? 0.55)));
+      const radius = Math.min(24, Math.max(2, Number(p.bloom_radius ?? 8)));
+      const warmth = Math.min(1, Math.max(-1, Number(p.warmth ?? 0.2)));
+      const thr255 = (thr * 255).toFixed(1);
+      const gain = 1.35 + strength * 1.15;
+      const wp = Math.max(0, warmth);
+      const cp = Math.max(0, -warmth);
+      const rw = (gain * (1 + wp * 0.28 - cp * 0.22)).toFixed(4);
+      const gw = (gain * (1 + wp * 0.08 - cp * 0.04)).toFixed(4);
+      const bw = (gain * (1 - wp * 0.28 + cp * 0.26)).toFixed(4);
+      const cLift = (1 - strength * 0.1).toFixed(4);
+      const bLift = (strength * 0.035).toFixed(4);
+      nodeSeg = `split[pm${idx}_b][pm${idx}_s];[pm${idx}_s]lutrgb=r='if(gte(val,${thr255}),min(255,(val-${thr255})*${rw}),0)':g='if(gte(val,${thr255}),min(255,(val-${thr255})*${gw}),0)':b='if(gte(val,${thr255}),min(255,(val-${thr255})*${bw}),0)',gblur=sigma=${radius.toFixed(2)}:steps=2[pm${idx}_g];[pm${idx}_b][pm${idx}_g]blend=all_mode=screen:all_opacity=${strength.toFixed(4)},eq=contrast=${cLift}:brightness=${bLift},format=rgb24`;
+    } else if (n.effect === "directional_blur") {
+      const blurPx = Math.round(Math.min(24, Math.max(1, Number(p.blur_amount ?? 8))));
+      const angleDeg = Math.min(180, Math.max(-180, Number(p.angle_deg ?? 0)));
+      nodeSeg =
+        Math.abs(angleDeg) < 0.1
+          ? `avgblur=sizeX=${blurPx}:sizeY=1`
+          : `rotate='${angleDeg.toFixed(2)}*PI/180':fillcolor=black@0,avgblur=sizeX=${blurPx}:sizeY=1,rotate='-${angleDeg.toFixed(2)}*PI/180':fillcolor=black@0`;
+    } else if (n.effect === "tilt_shift") {
+      const fy = Math.min(0.85, Math.max(0.15, Number(p.focus_y ?? 0.52)));
+      const bh = Math.min(0.55, Math.max(0.08, Number(p.band_height ?? 0.24)));
+      const blurS = Math.min(20, Math.max(2, Number(p.blur_strength ?? 7)));
+      const sat = Math.min(1.8, Math.max(1, Number(p.sat_boost ?? 1.3)));
+      const halfBand = (bh * 0.5).toFixed(4);
+      const feather = Math.max(0.08, bh * 0.65).toFixed(4);
+      nodeSeg = `split=3[ts${idx}_b][ts${idx}_w][ts${idx}_m];[ts${idx}_b]format=gbrp[ts${idx}_bg];[ts${idx}_w]gblur=sigma=${blurS.toFixed(2)}:steps=2,format=gbrp[ts${idx}_fg];[ts${idx}_m]format=gray,geq=lum='255*clip((abs(Y/H-${fy.toFixed(4)})-${halfBand})/${feather},0,1)',split=3[ts${idx}_mr][ts${idx}_mg][ts${idx}_mb];[ts${idx}_mr][ts${idx}_mg][ts${idx}_mb]mergeplanes=0x001020:gbrp[ts${idx}_msk];[ts${idx}_bg][ts${idx}_fg][ts${idx}_msk]maskedmerge,eq=saturation=${sat.toFixed(4)},format=rgb24`;
+    } else if (n.effect === "prism_leak") {
+      const intensity = Math.min(1, Math.max(0, Number(p.leak_intensity ?? 0.55)));
+      const corner = String(p.leak_corner ?? "top_left");
+      const shiftPx = Math.round(Math.min(12, Math.max(0, Number(p.prism_shift_px ?? 4))));
+      const coords = {
+        top_left: [0.06, 0.06],
+        top_right: [0.94, 0.06],
+        bottom_left: [0.06, 0.94],
+        bottom_right: [0.94, 0.94]
+      };
+      const [cx, cy] = coords[corner] || coords.top_left;
+      const prefix = shiftPx > 0 ? `rgbashift=rh=${shiftPx}:bh=${-shiftPx}:edge=smear,` : "";
+      const distExpr = `hypot(X/W-${cx.toFixed(2)},Y/H-${cy.toFixed(2)})`;
+      nodeSeg = `${prefix}split[pl${idx}_b][pl${idx}_l];[pl${idx}_l]format=rgb24,geq=r='clip(255*(1-${distExpr}/0.65),0,255)':g='clip(165*(1-${distExpr}/0.55),0,255)':b='clip(85*(1-${distExpr}/0.45),0,255)'[pl${idx}_g];[pl${idx}_b][pl${idx}_g]blend=all_mode=screen:all_opacity=${intensity.toFixed(4)}`;
     }
+    if (hasMask) {
+      nodeSeg = wrapEffectMaskSegmentClient(idx, nodeSeg, mask, needsRgb);
+    }
+    segs.push(nodeSeg);
   });
-  if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);
+  if (needsRgb || ckActive || maskedEffects.length > 0) segs.push(`format=${pixFmt}`);
   const fg = segs.join(",");
   const est = Number(Math.max(0.05, dur * (0.12 + totalWeight * 0.14) * (opts.use_gpu ? 0.38 : 1)).toFixed(2));
   return {
@@ -512,6 +620,7 @@ function compileFxClient(nodes, opts = {}) {
     ffmpeg_vf_args: ["-vf", fg],
     active_effects: active.map((n) => n.effect),
     keyframed_effects: keyframedEffects,
+    masked_effects: maskedEffects,
     chroma_key_active: ckActive,
     stabilizer_active: stabActive,
     planar_tracker_active: trkActive,

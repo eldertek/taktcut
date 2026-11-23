@@ -30,6 +30,10 @@ FxType = Literal[
     "mirror_flip",
     "mosaic_pixelate",
     "invert_negative",
+    "pro_mist",
+    "directional_blur",
+    "tilt_shift",
+    "prism_leak",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -53,11 +57,19 @@ FX_TYPES: tuple[FxType, ...] = (
     "mirror_flip",
     "mosaic_pixelate",
     "invert_negative",
+    "pro_mist",
+    "directional_blur",
+    "tilt_shift",
+    "prism_leak",
 )
 
 LETTERBOX_RATIOS: tuple[str, ...] = ("2.39", "2.35", "1.85", "2.00")
 MIRROR_FLIP_AXES: tuple[str, ...] = ("horizontal", "vertical", "both")
 INVERT_NEGATIVE_MODES: tuple[str, ...] = ("rgb", "luma")
+PRISM_LEAK_CORNERS: tuple[str, ...] = ("top_left", "top_right", "bottom_left", "bottom_right")
+
+FxMaskShape = Literal["off", "ellipse", "rect"]
+FX_MASK_SHAPES: tuple[FxMaskShape, ...] = ("off", "ellipse", "rect")
 _LETTERBOX_RATIO_ALIASES: dict[str, str] = {
     "2.39": "2.39",
     "2.35": "2.35",
@@ -134,6 +146,19 @@ _PARAM_ALIASES: dict[str, str] = {
     "BlockSizePx": "block_size_px",
     "BlockSize": "block_size_px",
     "Mode": "mode",
+    "DiffusionStrength": "diffusion_strength",
+    "HighlightThreshold": "highlight_threshold",
+    "BloomRadius": "bloom_radius",
+    "Warmth": "warmth",
+    "BlurAmount": "blur_amount",
+    "AngleDeg": "angle_deg",
+    "FocusY": "focus_y",
+    "BandHeight": "band_height",
+    "BlurStrength": "blur_strength",
+    "SatBoost": "sat_boost",
+    "LeakIntensity": "leak_intensity",
+    "LeakCorner": "leak_corner",
+    "PrismShiftPx": "prism_shift_px",
 }
 
 
@@ -584,6 +609,134 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             options=INVERT_NEGATIVE_MODES,
         ),
     ),
+    "pro_mist": (
+        FxParamSpec(
+            name="diffusion_strength",
+            label="Diffusion",
+            kind="float",
+            default=0.45,
+            min_val=0.0,
+            max_val=1.0,
+            step=0.05,
+        ),
+        FxParamSpec(
+            name="highlight_threshold",
+            label="Threshold",
+            kind="float",
+            default=0.55,
+            min_val=0.30,
+            max_val=0.90,
+            step=0.05,
+        ),
+        FxParamSpec(
+            name="bloom_radius",
+            label="Bloom Radius",
+            kind="float",
+            default=8.0,
+            min_val=2.0,
+            max_val=24.0,
+            step=1.0,
+            unit="px",
+        ),
+        FxParamSpec(
+            name="warmth",
+            label="Warmth",
+            kind="float",
+            default=0.20,
+            min_val=-1.0,
+            max_val=1.0,
+            step=0.05,
+        ),
+    ),
+    "directional_blur": (
+        FxParamSpec(
+            name="blur_amount",
+            label="Blur Amount",
+            kind="float",
+            default=8.0,
+            min_val=1.0,
+            max_val=24.0,
+            step=1.0,
+            unit="px",
+        ),
+        FxParamSpec(
+            name="angle_deg",
+            label="Angle (deg)",
+            kind="float",
+            default=0.0,
+            min_val=-180.0,
+            max_val=180.0,
+            step=5.0,
+            unit="deg",
+        ),
+    ),
+    "tilt_shift": (
+        FxParamSpec(
+            name="focus_y",
+            label="Focus Y",
+            kind="float",
+            default=0.52,
+            min_val=0.15,
+            max_val=0.85,
+            step=0.02,
+        ),
+        FxParamSpec(
+            name="band_height",
+            label="Focus Band",
+            kind="float",
+            default=0.24,
+            min_val=0.08,
+            max_val=0.55,
+            step=0.02,
+        ),
+        FxParamSpec(
+            name="blur_strength",
+            label="Bokeh Blur",
+            kind="float",
+            default=7.0,
+            min_val=2.0,
+            max_val=20.0,
+            step=1.0,
+            unit="px",
+        ),
+        FxParamSpec(
+            name="sat_boost",
+            label="Sat Boost",
+            kind="float",
+            default=1.30,
+            min_val=1.0,
+            max_val=1.8,
+            step=0.05,
+        ),
+    ),
+    "prism_leak": (
+        FxParamSpec(
+            name="leak_intensity",
+            label="Leak Intensity",
+            kind="float",
+            default=0.55,
+            min_val=0.0,
+            max_val=1.0,
+            step=0.05,
+        ),
+        FxParamSpec(
+            name="leak_corner",
+            label="Leak Corner",
+            kind="enum",
+            default="top_left",
+            options=PRISM_LEAK_CORNERS,
+        ),
+        FxParamSpec(
+            name="prism_shift_px",
+            label="Prism Shift",
+            kind="int",
+            default=4,
+            min_val=0,
+            max_val=12,
+            step=1,
+            unit="px",
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -607,7 +760,87 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "mirror_flip": 0.20,
     "mosaic_pixelate": 0.30,
     "invert_negative": 0.20,
+    "pro_mist": 1.15,
+    "directional_blur": 0.95,
+    "tilt_shift": 1.20,
+    "prism_leak": 0.90,
 }
+
+
+class FxEffectMask(BaseModel):
+    """Per-node feathered ellipse/rectangle roto mask for isolating or protecting an FX pass."""
+
+    shape: FxMaskShape = "off"
+    center_x: float = 0.5
+    center_y: float = 0.5
+    radius_x: float = 0.35
+    radius_y: float = 0.35
+    feather: float = 0.12
+    invert: bool = False
+
+    @field_validator("shape", mode="before")
+    @classmethod
+    def _validate_shape(cls, raw: Any) -> FxMaskShape:
+        text = str(raw or "off").strip().lower()
+        if text == "ellipse":
+            return "ellipse"
+        if text == "rect":
+            return "rect"
+        if text == "off":
+            return "off"
+        raise ValueError(f"effect_mask.shape must be one of {FX_MASK_SHAPES}, got {raw!r}")
+
+    @field_validator("center_x", "center_y", mode="before")
+    @classmethod
+    def _validate_center(cls, raw: Any, info: Any) -> float:
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
+            raise ValueError(f"{info.field_name} must be finite float, got {raw!r}")
+        val = float(raw)
+        if not math.isfinite(val):
+            raise ValueError(f"{info.field_name} must be finite, got {raw!r}")
+        return max(0.05, min(0.95, val))
+
+    @field_validator("radius_x", "radius_y", mode="before")
+    @classmethod
+    def _validate_radius(cls, raw: Any, info: Any) -> float:
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
+            raise ValueError(f"{info.field_name} must be finite float, got {raw!r}")
+        val = float(raw)
+        if not math.isfinite(val):
+            raise ValueError(f"{info.field_name} must be finite, got {raw!r}")
+        return max(0.05, min(0.95, val))
+
+    @field_validator("feather", mode="before")
+    @classmethod
+    def _validate_feather(cls, raw: Any) -> float:
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
+            raise ValueError(f"feather must be finite float, got {raw!r}")
+        val = float(raw)
+        if not math.isfinite(val):
+            raise ValueError(f"feather must be finite, got {raw!r}")
+        return max(0.01, min(0.50, val))
+
+    @field_validator("invert", mode="before")
+    @classmethod
+    def _validate_invert(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"effect_mask.invert must be bool, got {raw!r}")
+        return raw
+
+    def is_active(self) -> bool:
+        """Return True when the effect mask is enabled (ellipse or rect)."""
+        return self.shape != "off"
+
+    def evaluate_mask(self, u: float, v: float) -> float:
+        """Evaluate normalized [0, 1] mask weight at normalized frame coordinates (u, v)."""
+        if self.shape == "off":
+            return 1.0
+        du = (u - self.center_x) / self.radius_x
+        dv = (v - self.center_y) / self.radius_y
+        dist = math.hypot(du, dv) if self.shape == "ellipse" else max(abs(du), abs(dv))
+        f = max(0.01, self.feather)
+        weight = max(0.0, min(1.0, (1.0 + f - dist) / (2.0 * f)))
+        return 1.0 - weight if self.invert else weight
 
 
 class Keyframe(BaseModel):
@@ -632,6 +865,7 @@ class FxNode(BaseModel):
     enabled: bool = True
     params: dict[str, float | int | str] = Field(default_factory=dict)
     keyframes: list[Keyframe] = Field(default_factory=list)
+    effect_mask: FxEffectMask = Field(default_factory=FxEffectMask)
 
     @field_validator("params", mode="before")
     @classmethod
@@ -660,6 +894,7 @@ class FxCompileResult(BaseModel):
     ffmpeg_vf_args: list[str]
     active_effects: list[FxType]
     keyframed_effects: list[FxType] = Field(default_factory=list)
+    masked_effects: list[FxType] = Field(default_factory=list)
     chroma_key_active: bool = False
     stabilizer_active: bool = False
     planar_tracker_active: bool = False
@@ -1238,6 +1473,94 @@ FX_PRESETS: tuple[FxPreset, ...] = (
             ),
         ],
     ),
+    FxPreset(
+        id="black_promist_cinema",
+        name="Black Pro-Mist 1/4",
+        category="Cinema",
+        description=(
+            "Warm Black Pro-Mist highlight diffusion paired with organic 35mm grain and vignette."
+        ),
+        nodes=[
+            FxNode(
+                effect="pro_mist",
+                enabled=True,
+                params={
+                    "diffusion_strength": 0.50,
+                    "highlight_threshold": 0.52,
+                    "bloom_radius": 10.0,
+                    "warmth": 0.25,
+                },
+            ),
+            FxNode(
+                effect="film_grain",
+                enabled=True,
+                params={
+                    "strength": 10.0,
+                },
+            ),
+            FxNode(
+                effect="vignette",
+                enabled=True,
+                params={
+                    "angle_rad": 0.44,
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="miniature_tilt_shift",
+        name="Tilt-Shift Toy World",
+        category="Optical",
+        description=(
+            "Selective miniature focus band with optical bokeh falloff and vibrant color pop."
+        ),
+        nodes=[
+            FxNode(
+                effect="tilt_shift",
+                enabled=True,
+                params={
+                    "focus_y": 0.52,
+                    "band_height": 0.22,
+                    "blur_strength": 9.0,
+                    "sat_boost": 1.35,
+                },
+            ),
+            FxNode(
+                effect="unsharp_mask",
+                enabled=True,
+                params={
+                    "sharpen_amount": 1.15,
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="anamorphic_prism_leak",
+        name="Prism Light Leak",
+        category="Glamour",
+        description=(
+            "Warm anamorphic corner light leak with prismatic dispersion and subtle optical bloom."
+        ),
+        nodes=[
+            FxNode(
+                effect="prism_leak",
+                enabled=True,
+                params={
+                    "leak_intensity": 0.62,
+                    "leak_corner": "top_left",
+                    "prism_shift_px": 5,
+                },
+            ),
+            FxNode(
+                effect="optical_glow",
+                enabled=True,
+                params={
+                    "glow_intensity": 0.35,
+                    "glow_radius": 12.0,
+                },
+            ),
+        ],
+    ),
 )
 
 
@@ -1480,11 +1803,13 @@ def normalize_fx_node(raw_node: FxNode | dict[str, Any]) -> FxNode:
             normalized_params[spec.name] = round(_clamp_num(num, min_v, max_v), 4)
 
     normalized_kfs = _normalize_keyframes(node.keyframes)
+    normalized_mask = FxEffectMask.model_validate(node.effect_mask)
     return FxNode(
         effect=node.effect,
         enabled=node.enabled,
         params=normalized_params,
         keyframes=normalized_kfs,
+        effect_mask=normalized_mask,
     )
 
 
@@ -1884,6 +2209,157 @@ def _compile_invert_negative(
             return "format=yuv444p,negate=components=y:negate_alpha=0,format=rgb24"
         return "format=yuv444p,negate=components=y:negate_alpha=0"
     return "negate=negate_alpha=0"
+
+
+def _compile_pro_mist(idx: int, params: dict[str, float | int | str]) -> str:
+    strength = _clamp_num(float(params["diffusion_strength"]), 0.0, 1.0)
+    threshold = _clamp_num(float(params["highlight_threshold"]), 0.30, 0.90)
+    radius = _clamp_num(float(params["bloom_radius"]), 2.0, 24.0)
+    warmth = _clamp_num(float(params["warmth"]), -1.0, 1.0)
+
+    thr255 = round(threshold * 255.0, 1)
+    gain = 1.35 + strength * 1.15
+    warm_pos = max(0.0, warmth)
+    cool_pos = max(0.0, -warmth)
+    rw = round(gain * (1.0 + warm_pos * 0.28 - cool_pos * 0.22), 4)
+    gw = round(gain * (1.0 + warm_pos * 0.08 - cool_pos * 0.04), 4)
+    bw = round(gain * (1.0 - warm_pos * 0.28 + cool_pos * 0.26), 4)
+    c_lift = round(1.0 - strength * 0.10, 4)
+    b_lift = round(strength * 0.035, 4)
+
+    base_pad = f"pm{idx}_b"
+    src_pad = f"pm{idx}_s"
+    glow_pad = f"pm{idx}_g"
+    return (
+        f"split[{base_pad}][{src_pad}];"
+        f"[{src_pad}]lutrgb="
+        f"r='if(gte(val,{thr255}),min(255,(val-{thr255})*{rw}),0)':"
+        f"g='if(gte(val,{thr255}),min(255,(val-{thr255})*{gw}),0)':"
+        f"b='if(gte(val,{thr255}),min(255,(val-{thr255})*{bw}),0)',"
+        f"gblur=sigma={radius:.2f}:steps=2[{glow_pad}];"
+        f"[{base_pad}][{glow_pad}]blend=all_mode=screen:all_opacity={strength:.4f},"
+        f"eq=contrast={c_lift}:brightness={b_lift},format=rgb24"
+    )
+
+
+def _compile_directional_blur(params: dict[str, float | int | str]) -> str:
+    blur_px = round(_clamp_num(float(params["blur_amount"]), 1.0, 24.0))
+    angle_deg = _clamp_num(float(params["angle_deg"]), -180.0, 180.0)
+    if abs(angle_deg) < 0.1:
+        return f"avgblur=sizeX={blur_px}:sizeY=1"
+    return (
+        f"rotate='{angle_deg:.2f}*PI/180':fillcolor=black@0,"
+        f"avgblur=sizeX={blur_px}:sizeY=1,"
+        f"rotate='-{angle_deg:.2f}*PI/180':fillcolor=black@0"
+    )
+
+
+def _compile_tilt_shift(idx: int, params: dict[str, float | int | str]) -> str:
+    fy = _clamp_num(float(params["focus_y"]), 0.15, 0.85)
+    bh = _clamp_num(float(params["band_height"]), 0.08, 0.55)
+    blur_s = _clamp_num(float(params["blur_strength"]), 2.0, 20.0)
+    sat = _clamp_num(float(params["sat_boost"]), 1.0, 1.8)
+
+    half_band = round(bh * 0.5, 4)
+    feather = round(max(0.08, bh * 0.65), 4)
+    b_pad = f"ts{idx}_b"
+    w_pad = f"ts{idx}_w"
+    m_pad = f"ts{idx}_m"
+    bg_pad = f"ts{idx}_bg"
+    fg_pad = f"ts{idx}_fg"
+    mr_pad = f"ts{idx}_mr"
+    mg_pad = f"ts{idx}_mg"
+    mb_pad = f"ts{idx}_mb"
+    msk_pad = f"ts{idx}_msk"
+    return (
+        f"split=3[{b_pad}][{w_pad}][{m_pad}];"
+        f"[{b_pad}]format=gbrp[{bg_pad}];"
+        f"[{w_pad}]gblur=sigma={blur_s:.2f}:steps=2,format=gbrp[{fg_pad}];"
+        f"[{m_pad}]format=gray,"
+        f"geq=lum='255*clip((abs(Y/H-{fy:.4f})-{half_band:.4f})/{feather:.4f},0,1)',"
+        f"split=3[{mr_pad}][{mg_pad}][{mb_pad}];"
+        f"[{mr_pad}][{mg_pad}][{mb_pad}]mergeplanes=0x001020:gbrp[{msk_pad}];"
+        f"[{bg_pad}][{fg_pad}][{msk_pad}]maskedmerge,"
+        f"eq=saturation={sat:.4f},format=rgb24"
+    )
+
+
+def _compile_prism_leak(idx: int, params: dict[str, float | int | str]) -> str:
+    intensity = _clamp_num(float(params["leak_intensity"]), 0.0, 1.0)
+    corner = normalize_enum_fx_param(params["leak_corner"], FX_PARAM_SPECS["prism_leak"][1])
+    shift_px = round(_clamp_num(float(params["prism_shift_px"]), 0.0, 12.0))
+
+    corner_coords: dict[str, tuple[float, float]] = {
+        "top_left": (0.06, 0.06),
+        "top_right": (0.94, 0.06),
+        "bottom_left": (0.06, 0.94),
+        "bottom_right": (0.94, 0.94),
+    }
+    cx, cy = corner_coords[corner]
+    b_pad = f"pl{idx}_b"
+    l_pad = f"pl{idx}_l"
+    g_pad = f"pl{idx}_g"
+    prefix = f"rgbashift=rh={shift_px}:bh={-shift_px}:edge=smear," if shift_px > 0 else ""
+    dist_expr = f"hypot(X/W-{cx:.2f},Y/H-{cy:.2f})"
+    return (
+        f"{prefix}"
+        f"split[{b_pad}][{l_pad}];"
+        f"[{l_pad}]format=rgb24,"
+        f"geq=r='clip(255*(1-{dist_expr}/0.65),0,255)':"
+        f"g='clip(165*(1-{dist_expr}/0.55),0,255)':"
+        f"b='clip(85*(1-{dist_expr}/0.45),0,255)'[{g_pad}];"
+        f"[{b_pad}][{g_pad}]blend=all_mode=screen:all_opacity={intensity:.4f}"
+    )
+
+
+def _compile_effect_mask_expr(mask: FxEffectMask) -> str:
+    """Compile an FxEffectMask into a deterministic FFmpeg geq luma [0..255] expression."""
+    cx = mask.center_x
+    cy = mask.center_y
+    rx = mask.radius_x
+    ry = mask.radius_y
+    f = max(0.01, mask.feather)
+    two_f = 2.0 * f
+    if mask.shape == "ellipse":
+        dist_expr = f"hypot((X/W-{cx:.4f})/{rx:.4f},(Y/H-{cy:.4f})/{ry:.4f})"
+    else:
+        dist_expr = f"max(abs(X/W-{cx:.4f})/{rx:.4f},abs(Y/H-{cy:.4f})/{ry:.4f})"
+    weight_expr = f"clip((1+{f:.4f}-({dist_expr}))/{two_f:.4f},0,1)"
+    if mask.invert:
+        return f"255*(1-{weight_expr})"
+    return f"255*{weight_expr}"
+
+
+def _wrap_effect_mask_segment(
+    idx: int,
+    segment: str,
+    mask: FxEffectMask,
+    *,
+    needs_rgb: bool,
+) -> str:
+    """Wrap an FX segment inside a per-node feathered ellipse/rect maskedmerge."""
+    if segment == "null" or not mask.is_active():
+        return segment
+    mask_expr = _compile_effect_mask_expr(mask)
+    b_pad = f"fxm{idx}_b"
+    w_pad = f"fxm{idx}_w"
+    m_pad = f"fxm{idx}_m"
+    bg_pad = f"fxm{idx}_bg"
+    fg_pad = f"fxm{idx}_fg"
+    mr_pad = f"fxm{idx}_mr"
+    mg_pad = f"fxm{idx}_mg"
+    mb_pad = f"fxm{idx}_mb"
+    msk_pad = f"fxm{idx}_msk"
+    tail = ",format=rgb24" if needs_rgb else ""
+    return (
+        f"split=3[{b_pad}][{w_pad}][{m_pad}];"
+        f"[{b_pad}]format=gbrp[{bg_pad}];"
+        f"[{w_pad}]{segment},format=gbrp[{fg_pad}];"
+        f"[{m_pad}]format=gray,geq=lum='{mask_expr}',"
+        f"split=3[{mr_pad}][{mg_pad}][{mb_pad}];"
+        f"[{mr_pad}][{mg_pad}][{mb_pad}]mergeplanes=0x001020:gbrp[{msk_pad}];"
+        f"[{bg_pad}][{fg_pad}][{msk_pad}]maskedmerge{tail}"
+    )
 
 
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
@@ -2936,6 +3412,9 @@ def compile_fx_filtergraph(
             "optical_glow",
             "rgb_split",
             "halation",
+            "pro_mist",
+            "tilt_shift",
+            "prism_leak",
         }
         for n in active_nodes
     )
@@ -2965,6 +3444,7 @@ def compile_fx_filtergraph(
 
     active_effects: list[FxType] = []
     keyframed_effects: list[FxType] = []
+    masked_effects: list[FxType] = []
 
     for idx, node in enumerate(active_nodes):
         active_effects.append(node.effect)
@@ -2972,66 +3452,67 @@ def compile_fx_filtergraph(
         has_kf = len(node.keyframes) > 0
         if has_kf:
             keyframed_effects.append(node.effect)
+        has_mask = node.effect_mask.is_active()
+        if has_mask:
+            masked_effects.append(node.effect)
+            total_weight += 0.25
 
-        if node.effect == "glow":
-            seg = _compile_glow(idx, node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "shake":
-            segments.append(_compile_shake(node.params, node.keyframes))
+        if node.effect == "shake":
+            seg = _compile_shake(node.params, node.keyframes)
         elif node.effect == "flicker":
-            segments.append(_compile_flicker(node.params, node.keyframes))
-        elif node.effect == "lens_flare":
-            seg = _compile_lens_flare(idx, node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "film_damage":
-            seg = _compile_film_damage(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "chroma_aberration":
-            seg = _compile_chroma_aberration(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "vignette":
-            seg = _compile_vignette(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "film_grain":
-            seg = _compile_film_grain(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "optical_glow":
-            seg = _compile_optical_glow(idx, node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "rgb_split":
-            seg = _compile_rgb_split(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "halation":
-            seg = _compile_halation(idx, node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "letterbox":
-            seg = _compile_letterbox(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+            seg = _compile_flicker(node.params, node.keyframes)
         elif node.effect == "camera_shake":
-            segments.append(_compile_camera_shake(node.params, node.keyframes))
-        elif node.effect == "lens_distortion":
-            seg = _compile_lens_distortion(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "scanlines":
-            seg = _compile_scanlines(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "unsharp_mask":
-            seg = _compile_unsharp_mask(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "hue_shift":
-            seg = _compile_hue_shift(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "mirror_flip":
-            seg = _compile_mirror_flip(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "mosaic_pixelate":
-            seg = _compile_mosaic_pixelate(node.params)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
-        elif node.effect == "invert_negative":
-            seg = _compile_invert_negative(node.params, needs_rgb=needs_rgb)
-            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+            seg = _compile_camera_shake(node.params, node.keyframes)
+        else:
+            if node.effect == "glow":
+                raw_seg = _compile_glow(idx, node.params)
+            elif node.effect == "lens_flare":
+                raw_seg = _compile_lens_flare(idx, node.params)
+            elif node.effect == "film_damage":
+                raw_seg = _compile_film_damage(node.params)
+            elif node.effect == "chroma_aberration":
+                raw_seg = _compile_chroma_aberration(node.params)
+            elif node.effect == "vignette":
+                raw_seg = _compile_vignette(node.params)
+            elif node.effect == "film_grain":
+                raw_seg = _compile_film_grain(node.params)
+            elif node.effect == "optical_glow":
+                raw_seg = _compile_optical_glow(idx, node.params)
+            elif node.effect == "rgb_split":
+                raw_seg = _compile_rgb_split(node.params)
+            elif node.effect == "halation":
+                raw_seg = _compile_halation(idx, node.params)
+            elif node.effect == "letterbox":
+                raw_seg = _compile_letterbox(node.params)
+            elif node.effect == "lens_distortion":
+                raw_seg = _compile_lens_distortion(node.params)
+            elif node.effect == "scanlines":
+                raw_seg = _compile_scanlines(node.params)
+            elif node.effect == "unsharp_mask":
+                raw_seg = _compile_unsharp_mask(node.params)
+            elif node.effect == "hue_shift":
+                raw_seg = _compile_hue_shift(node.params)
+            elif node.effect == "mirror_flip":
+                raw_seg = _compile_mirror_flip(node.params)
+            elif node.effect == "mosaic_pixelate":
+                raw_seg = _compile_mosaic_pixelate(node.params)
+            elif node.effect == "invert_negative":
+                raw_seg = _compile_invert_negative(node.params, needs_rgb=needs_rgb)
+            elif node.effect == "pro_mist":
+                raw_seg = _compile_pro_mist(idx, node.params)
+            elif node.effect == "directional_blur":
+                raw_seg = _compile_directional_blur(node.params)
+            elif node.effect == "tilt_shift":
+                raw_seg = _compile_tilt_shift(idx, node.params)
+            else:
+                raw_seg = _compile_prism_leak(idx, node.params)
+            seg = _wrap_keyframed_segment(idx, raw_seg, node.keyframes) if has_kf else raw_seg
 
-    if needs_rgb or ck_active:
+        if has_mask:
+            seg = _wrap_effect_mask_segment(idx, seg, node.effect_mask, needs_rgb=needs_rgb)
+        segments.append(seg)
+
+    if needs_rgb or ck_active or masked_effects:
         segments.append(f"format={pix_fmt}")
 
     filtergraph = ",".join(segments)
@@ -3057,6 +3538,7 @@ def compile_fx_filtergraph(
         ffmpeg_vf_args=["-vf", filtergraph],
         active_effects=active_effects,
         keyframed_effects=keyframed_effects,
+        masked_effects=masked_effects,
         chroma_key_active=ck_active,
         stabilizer_active=stab_active,
         planar_tracker_active=trk_active,

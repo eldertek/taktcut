@@ -4795,6 +4795,27 @@ const FX_PARAM_FALLBACK = {
   ],
   invert_negative: [
     { name: "mode", label: "Invert Mode", kind: "enum", default: "rgb", options: ["rgb", "luma"] }
+  ],
+  pro_mist: [
+    { name: "diffusion_strength", label: "Diffusion", kind: "float", default: 0.45, min_val: 0, max_val: 1, step: 0.05 },
+    { name: "highlight_threshold", label: "Threshold", kind: "float", default: 0.55, min_val: 0.3, max_val: 0.9, step: 0.05 },
+    { name: "bloom_radius", label: "Bloom Radius", kind: "float", default: 8, min_val: 2, max_val: 24, step: 1, unit: "px" },
+    { name: "warmth", label: "Warmth", kind: "float", default: 0.2, min_val: -1, max_val: 1, step: 0.05 }
+  ],
+  directional_blur: [
+    { name: "blur_amount", label: "Blur Amount", kind: "float", default: 8, min_val: 1, max_val: 24, step: 1, unit: "px" },
+    { name: "angle_deg", label: "Angle (deg)", kind: "float", default: 0, min_val: -180, max_val: 180, step: 5, unit: "deg" }
+  ],
+  tilt_shift: [
+    { name: "focus_y", label: "Focus Y", kind: "float", default: 0.52, min_val: 0.15, max_val: 0.85, step: 0.02 },
+    { name: "band_height", label: "Focus Band", kind: "float", default: 0.24, min_val: 0.08, max_val: 0.55, step: 0.02 },
+    { name: "blur_strength", label: "Bokeh Blur", kind: "float", default: 7, min_val: 2, max_val: 20, step: 1, unit: "px" },
+    { name: "sat_boost", label: "Sat Boost", kind: "float", default: 1.3, min_val: 1, max_val: 1.8, step: 0.05 }
+  ],
+  prism_leak: [
+    { name: "leak_intensity", label: "Leak Intensity", kind: "float", default: 0.55, min_val: 0, max_val: 1, step: 0.05 },
+    { name: "leak_corner", label: "Leak Corner", kind: "enum", default: "top_left", options: ["top_left", "top_right", "bottom_left", "bottom_right"] },
+    { name: "prism_shift_px", label: "Prism Shift", kind: "int", default: 4, min_val: 0, max_val: 12, step: 1, unit: "px" }
   ]
 };
 
@@ -4863,6 +4884,19 @@ const FX_PRESET_FALLBACK = {
     { effect: "mosaic_pixelate", enabled: true, params: { block_size_px: 10 } },
     { effect: "scanlines", enabled: true, params: { line_spacing_px: 4, opacity: 0.45 } },
     { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 3 } }
+  ],
+  black_promist_cinema: [
+    { effect: "pro_mist", enabled: true, params: { diffusion_strength: 0.5, highlight_threshold: 0.52, bloom_radius: 10, warmth: 0.25 } },
+    { effect: "film_grain", enabled: true, params: { strength: 10 } },
+    { effect: "vignette", enabled: true, params: { angle_rad: 0.44 } }
+  ],
+  miniature_tilt_shift: [
+    { effect: "tilt_shift", enabled: true, params: { focus_y: 0.52, band_height: 0.22, blur_strength: 9, sat_boost: 1.35 } },
+    { effect: "unsharp_mask", enabled: true, params: { sharpen_amount: 1.15 } }
+  ],
+  anamorphic_prism_leak: [
+    { effect: "prism_leak", enabled: true, params: { leak_intensity: 0.62, leak_corner: "top_left", prism_shift_px: 5 } },
+    { effect: "optical_glow", enabled: true, params: { glow_intensity: 0.35, glow_radius: 12 } }
   ]
 };
 
@@ -4886,7 +4920,11 @@ const FX_DISPLAY_TITLES = {
   hue_shift: "S_HueSatBright",
   mirror_flip: "S_FlipFlop",
   mosaic_pixelate: "S_Mosaic",
-  invert_negative: "S_Invert"
+  invert_negative: "S_Invert",
+  pro_mist: "S_ProMist",
+  directional_blur: "S_DirectionalBlur",
+  tilt_shift: "S_TiltShift",
+  prism_leak: "S_PrismLeak"
 };
 
 function getFxParamLabel(spec) {
@@ -4906,12 +4944,50 @@ function getFxSpecs(effect) {
   return FX_PARAM_FALLBACK[effect] || [];
 }
 
+function defaultEffectMaskClient() {
+  return {
+    shape: "off",
+    center_x: 0.5,
+    center_y: 0.5,
+    radius_x: 0.35,
+    radius_y: 0.35,
+    feather: 0.12,
+    invert: false
+  };
+}
+
+function normalizeEffectMaskClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const shape = src.shape === "ellipse" || src.shape === "rect" ? src.shape : "off";
+  const clampBound = (v, minV, maxV, defV) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(maxV, Math.max(minV, n)) : defV;
+  };
+  return {
+    shape,
+    center_x: clampBound(src.center_x, 0.05, 0.95, 0.5),
+    center_y: clampBound(src.center_y, 0.05, 0.95, 0.5),
+    radius_x: clampBound(src.radius_x, 0.05, 0.95, 0.35),
+    radius_y: clampBound(src.radius_y, 0.05, 0.95, 0.35),
+    feather: clampBound(src.feather, 0.01, 0.5, 0.12),
+    invert: Boolean(src.invert)
+  };
+}
+
 function createDefaultFxNode(effect) {
   const params = {};
   for (const sp of getFxSpecs(effect)) {
     params[sp.name] = sp.default;
   }
-  return { effect, enabled: true, params, keyframes: [], kfOpen: false };
+  return {
+    effect,
+    enabled: true,
+    params,
+    keyframes: [],
+    kfOpen: false,
+    effect_mask: defaultEffectMaskClient(),
+    maskOpen: false
+  };
 }
 
 function getFxDurationSeconds() {
@@ -4931,7 +5007,8 @@ function serializeFxStackForApi(forceDisabled = false) {
           value: Number(k.value),
           easing: k.easing || "linear"
         }))
-      : []
+      : [],
+    effect_mask: normalizeEffectMaskClient(n.effect_mask)
   }));
 }
 
@@ -5449,6 +5526,9 @@ function renderFxCompileResult(res) {
   const kfList = Array.isArray(res.keyframed_effects) && res.keyframed_effects.length > 0
     ? ` | KF: ${res.keyframed_effects.join(", ")}`
     : "";
+  const maskList = Array.isArray(res.masked_effects) && res.masked_effects.length > 0
+    ? ` | Mask: ${res.masked_effects.join(", ")}`
+    : "";
   const activeLabels = [
     ...(res.stabilizer_active ? ["stabilizer"] : []),
     ...(res.planar_tracker_active ? ["planar_tracker"] : []),
@@ -5456,7 +5536,7 @@ function renderFxCompileResult(res) {
     ...(Array.isArray(res.active_effects) ? res.active_effects : [])
   ];
   renderKv(kv, [
-    ["Active FX", (activeLabels.join(", ") || t("common.none")) + kfList],
+    ["Active FX", (activeLabels.join(", ") || t("common.none")) + kfList + maskList],
     ["Est. Render", `${res.estimated_render_seconds.toFixed(2)}s`],
     ["Realtime", `${res.realtime_factor.toFixed(2)}x`],
     ["Complexity", `${res.complexity_tier.toUpperCase()} (${res.bypassed_count} bypassed)`]
@@ -5549,6 +5629,7 @@ function renderFxStack() {
 
   const cards = state.fxStack.map((node, nodeIdx) => {
     if (!Array.isArray(node.keyframes)) node.keyframes = [];
+    node.effect_mask = normalizeEffectMaskClient(node.effect_mask);
     const card = dom("article", `fx-node-card${node.enabled ? "" : " is-bypassed"}`);
 
     // Header
@@ -5575,7 +5656,24 @@ function renderFxStack() {
     const idxTag = dom("span", "nle-tag mono", `#${nodeIdx + 1}`);
     titleGroup.replaceChildren(bypassBtn, titleSpan, idxTag);
 
-    const actions = dom("div", "btn-row");
+    const actions = dom("div", "btn-row fx-node-actions");
+    const maskHasShape = node.effect_mask.shape !== "off";
+    const maskActive = Boolean(node.maskOpen || maskHasShape);
+    const maskLabel = maskHasShape
+      ? `${t("fx.mask.toggle")} (${node.effect_mask.shape === "ellipse" ? t("fx.mask.ellipse") : t("fx.mask.rect")})`
+      : t("fx.mask.toggle");
+    const maskBtn = dom(
+      "button",
+      `btn btn-mini fx-mask-toggle-btn${maskActive ? " is-active" : ""}`,
+      maskLabel
+    );
+    maskBtn.type = "button";
+    maskBtn.setAttribute("aria-pressed", maskActive ? "true" : "false");
+    maskBtn.addEventListener("click", () => {
+      node.maskOpen = !maskActive;
+      renderFxStack();
+    });
+
     const kfActive = Boolean(node.kfOpen || node.keyframes.length > 0);
     const kfLabel = node.keyframes.length > 0
       ? `${t("fx.kf.toggle")} (${node.keyframes.length})`
@@ -5600,6 +5698,8 @@ function renderFxStack() {
       node.params = { ...def.params };
       node.keyframes = [];
       node.kfOpen = false;
+      node.effect_mask = defaultEffectMaskClient();
+      node.maskOpen = false;
       node.enabled = true;
       state.fxActivePresetId = "";
       renderFxStack();
@@ -5617,7 +5717,7 @@ function renderFxStack() {
       scheduleFxCompile();
     });
 
-    actions.replaceChildren(kfBtn, rstBtn, rmBtn);
+    actions.replaceChildren(maskBtn, kfBtn, rstBtn, rmBtn);
     head.replaceChildren(titleGroup, actions);
 
     // Parameters
@@ -5882,6 +5982,124 @@ function renderFxStack() {
       cardChildren.push(kfPanel);
     }
 
+    if (maskActive) {
+      const m = node.effect_mask;
+      const maskPanel = dom("div", "fx-mask-panel");
+      const maskToolbar = dom("div", "fx-mask-toolbar");
+      const shapeGroup = dom("div", "fx-mask-shape-group");
+      shapeGroup.setAttribute("role", "group");
+      shapeGroup.setAttribute("aria-label", `${FX_DISPLAY_TITLES[node.effect] || node.effect} effect mask shape`);
+      for (const shapeId of ["off", "ellipse", "rect"]) {
+        const shapeBtn = dom(
+          "button",
+          `btn btn-mini fx-mask-shape-btn${m.shape === shapeId ? " is-active" : ""}`,
+          t(`fx.mask.${shapeId}`)
+        );
+        shapeBtn.type = "button";
+        shapeBtn.setAttribute("data-fx-mask-shape", shapeId);
+        shapeBtn.setAttribute("aria-pressed", m.shape === shapeId ? "true" : "false");
+        shapeBtn.addEventListener("click", () => {
+          m.shape = shapeId;
+          node.maskOpen = shapeId !== "off";
+          state.fxActivePresetId = "";
+          renderFxStack();
+          redrawActiveCanvases();
+          scheduleFxCompile();
+        });
+        shapeGroup.appendChild(shapeBtn);
+      }
+
+      const maskToggles = dom("div", "fx-mask-toggles");
+      const invBtn = dom(
+        "button",
+        `btn btn-mini fx-mask-invert-btn${m.invert ? " is-active" : ""}`,
+        t("fx.mask.invert")
+      );
+      invBtn.type = "button";
+      invBtn.disabled = m.shape === "off";
+      invBtn.setAttribute("aria-pressed", m.invert ? "true" : "false");
+      invBtn.addEventListener("click", () => {
+        m.invert = !m.invert;
+        state.fxActivePresetId = "";
+        renderFxStack();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      });
+
+      const rstMaskBtn = dom("button", "btn btn-mini", t("fx.mask.reset"));
+      rstMaskBtn.type = "button";
+      rstMaskBtn.addEventListener("click", () => {
+        node.effect_mask = defaultEffectMaskClient();
+        node.maskOpen = false;
+        state.fxActivePresetId = "";
+        renderFxStack();
+        redrawActiveCanvases();
+        scheduleFxCompile();
+      });
+      maskToggles.replaceChildren(invBtn, rstMaskBtn);
+      maskToolbar.replaceChildren(shapeGroup, maskToggles);
+
+      const maskGrid = dom("div", `fx-mask-grid${m.shape === "off" ? " is-dimmed" : ""}`);
+      const maskSpecs = [
+        { key: "center_x", label: t("fx.mask.centerX"), min: 0.05, max: 0.95, step: 0.02 },
+        { key: "center_y", label: t("fx.mask.centerY"), min: 0.05, max: 0.95, step: 0.02 },
+        { key: "radius_x", label: t("fx.mask.radiusX"), min: 0.05, max: 0.95, step: 0.02 },
+        { key: "radius_y", label: t("fx.mask.radiusY"), min: 0.05, max: 0.95, step: 0.02 },
+        { key: "feather", label: t("fx.mask.feather"), min: 0.01, max: 0.5, step: 0.01 }
+      ];
+      for (const mSpec of maskSpecs) {
+        const mRow = dom("div", "fx-param-row fx-mask-row");
+        const mId = `fx-node-${nodeIdx}-mask-${mSpec.key}`;
+        const mLbl = dom("label", "fx-param-label", mSpec.label);
+        mLbl.setAttribute("for", mId);
+
+        const mRange = dom("input");
+        mRange.type = "range";
+        mRange.id = mId;
+        mRange.min = String(mSpec.min);
+        mRange.max = String(mSpec.max);
+        mRange.step = String(mSpec.step);
+        mRange.value = String(m[mSpec.key]);
+        mRange.disabled = m.shape === "off";
+
+        const mNum = dom("input", "input-num mono");
+        mNum.type = "number";
+        mNum.min = String(mSpec.min);
+        mNum.max = String(mSpec.max);
+        mNum.step = String(mSpec.step);
+        mNum.value = String(m[mSpec.key]);
+        mNum.disabled = m.shape === "off";
+        mNum.setAttribute("aria-label", `${mSpec.label} value`);
+
+        mRange.addEventListener("input", () => {
+          const val = Number.parseFloat(mRange.value);
+          if (Number.isFinite(val)) {
+            m[mSpec.key] = val;
+            mNum.value = String(val);
+            state.fxActivePresetId = "";
+            redrawActiveCanvases();
+            scheduleFxCompile();
+          }
+        });
+        mNum.addEventListener("change", () => {
+          const val = Number.parseFloat(mNum.value);
+          if (Number.isFinite(val)) {
+            const clamped = Math.min(mSpec.max, Math.max(mSpec.min, val));
+            m[mSpec.key] = clamped;
+            mRange.value = String(clamped);
+            mNum.value = String(clamped);
+            state.fxActivePresetId = "";
+            redrawActiveCanvases();
+            scheduleFxCompile();
+          }
+        });
+        mRow.replaceChildren(mLbl, mRange, mNum);
+        maskGrid.appendChild(mRow);
+      }
+      maskPanel.replaceChildren(maskToolbar, maskGrid);
+      cardChildren.push(maskPanel);
+    }
+
     card.replaceChildren(...cardChildren);
     return card;
   });
@@ -5906,7 +6124,9 @@ function applyFxPreset(presetId) {
     enabled: n.enabled !== false,
     params: { ...n.params },
     keyframes: Array.isArray(n.keyframes) ? n.keyframes.map((k) => ({ ...k })) : [],
-    kfOpen: false
+    kfOpen: false,
+    effect_mask: normalizeEffectMaskClient(n.effect_mask),
+    maskOpen: Boolean(n.effect_mask && n.effect_mask.shape && n.effect_mask.shape !== "off")
   }));
   state.fxBypassAll = false;
   state.fxActivePresetId = presetId;

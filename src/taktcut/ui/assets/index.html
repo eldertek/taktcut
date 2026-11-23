@@ -1165,7 +1165,7 @@
           <aside class="nle-pane">
             <div class="pane-header">
               <h2 data-i18n="fx.library.title">Sapphire FX Library &amp; 1-Click Presets</h2>
-              <span class="nle-tag mono">20 FX</span>
+              <span class="nle-tag mono">24 FX</span>
             </div>
             <div class="pane-body">
               <div class="pane-subheader">
@@ -1232,6 +1232,18 @@
                   <span class="fx-preset-name" data-i18n="fx.preset.retroArcade">Retro Arcade Pixel</span>
                   <span class="fx-preset-meta mono">Mosaic + Scan + RGB</span>
                 </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="black_promist_cinema">
+                  <span class="fx-preset-name" data-i18n="fx.preset.blackPromist">Black Pro-Mist 1/4</span>
+                  <span class="fx-preset-meta mono">Pro-Mist + Grain</span>
+                </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="miniature_tilt_shift">
+                  <span class="fx-preset-name" data-i18n="fx.preset.miniatureTiltShift">Tilt-Shift Toy World</span>
+                  <span class="fx-preset-meta mono">Tilt-Shift + Sharp</span>
+                </button>
+                <button type="button" class="btn fx-preset-btn" data-fx-preset="anamorphic_prism_leak">
+                  <span class="fx-preset-name" data-i18n="fx.preset.anamorphicPrismLeak">Prism Light Leak</span>
+                  <span class="fx-preset-meta mono">Prism + Optical Glow</span>
+                </button>
               </div>
 
               <div class="pane-divider"></div>
@@ -1240,7 +1252,7 @@
                 <span data-i18n="fx.library.addEffect">Add OpenFX / Sapphire Node</span>
               </div>
               <div id="fx-ofx-filterbar" class="fx-ofx-filterbar" role="group" aria-label="OpenFX Categories">
-                <button type="button" class="btn btn-chip fx-ofx-tab is-active" data-fx-cat-filter="all" aria-pressed="true" data-i18n="fx.ofx.cat.all">All (20)</button>
+                <button type="button" class="btn btn-chip fx-ofx-tab is-active" data-fx-cat-filter="all" aria-pressed="true" data-i18n="fx.ofx.cat.all">All (24)</button>
                 <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="light_glow" aria-pressed="false" data-i18n="fx.ofx.cat.lightGlow">Light &amp; Glow</button>
                 <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="lens_blur" aria-pressed="false" data-i18n="fx.ofx.cat.lensBlur">Lens &amp; Blur</button>
                 <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="film_retro" aria-pressed="false" data-i18n="fx.ofx.cat.filmRetro">Film &amp; Retro</button>
@@ -1250,11 +1262,12 @@
                 <section class="fx-ofx-group" data-fx-category="light_glow">
                   <div class="fx-ofx-group-head">
                     <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.lightGlow">Light &amp; Glow</span>
-                    <span class="fx-ofx-count mono">5</span>
+                    <span class="fx-ofx-count mono">6</span>
                   </div>
                   <div class="fx-add-strip">
                     <button type="button" class="btn btn-chip mono" data-fx-add="glow">+ Glow</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="optical_glow">+ Optical Glow</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="pro_mist" data-i18n="fx.add.pro_mist">+ Pro-Mist 1/4</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="halation" data-i18n="fx.add.halation">+ Halation</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="flicker">+ Flicker</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="lens_flare">+ Lens Flare</button>
@@ -1263,11 +1276,13 @@
                 <section class="fx-ofx-group" data-fx-category="lens_blur">
                   <div class="fx-ofx-group-head">
                     <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.lensBlur">Lens &amp; Blur</span>
-                    <span class="fx-ofx-count mono">5</span>
+                    <span class="fx-ofx-count mono">7</span>
                   </div>
                   <div class="fx-add-strip">
                     <button type="button" class="btn btn-chip mono" data-fx-add="shake">+ Shake</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="camera_shake" data-i18n="fx.add.camera_shake">+ Camera Shake</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="directional_blur" data-i18n="fx.add.directional_blur">+ Dir Blur</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="tilt_shift" data-i18n="fx.add.tilt_shift">+ Tilt-Shift</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="lens_distortion" data-i18n="fx.add.lens_distortion">+ Lens Distortion</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="chroma_aberration">+ Chroma Split</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="unsharp_mask" data-i18n="fx.add.unsharp_mask">+ Unsharp Mask</button>
@@ -1276,10 +1291,11 @@
                 <section class="fx-ofx-group" data-fx-category="film_retro">
                   <div class="fx-ofx-group-head">
                     <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.filmRetro">Film &amp; Retro</span>
-                    <span class="fx-ofx-count mono">5</span>
+                    <span class="fx-ofx-count mono">6</span>
                   </div>
                   <div class="fx-add-strip">
                     <button type="button" class="btn btn-chip mono" data-fx-add="film_damage">+ Film Damage</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="prism_leak" data-i18n="fx.add.prism_leak">+ Prism Leak</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="rgb_split">+ RGB Split</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="vignette">+ Vignette</button>
                     <button type="button" class="btn btn-chip mono" data-fx-add="film_grain">+ Film Grain</button>

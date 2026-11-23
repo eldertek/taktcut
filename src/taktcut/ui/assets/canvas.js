@@ -689,6 +689,8 @@ function hexToRgbTuple(hex) {
 
 let _fxScratchCanvas = null;
 let _halScratchCanvas = null;
+let _tiltScratchCanvas = null;
+let _fxMaskScratchCanvas = null;
 let _transScratchA = null;
 let _transScratchB = null;
 let _dveLayerScratch = null;
@@ -711,6 +713,65 @@ function ensureScratchCanvas(existing, w, h) {
 function getFxScratchCanvas(w, h) {
   _fxScratchCanvas = ensureScratchCanvas(_fxScratchCanvas, w, h);
   return _fxScratchCanvas;
+}
+
+function isEffectMaskActive(node) {
+  const m = node && node.effect_mask;
+  return Boolean(m && (m.shape === "ellipse" || m.shape === "rect"));
+}
+
+function evaluateEffectMaskAt(u, v, mask) {
+  if (!mask || (mask.shape !== "ellipse" && mask.shape !== "rect")) return 1.0;
+  const cx = Math.min(0.95, Math.max(0.05, Number(mask.center_x ?? 0.5)));
+  const cy = Math.min(0.95, Math.max(0.05, Number(mask.center_y ?? 0.5)));
+  const rx = Math.min(0.95, Math.max(0.05, Number(mask.radius_x ?? 0.35)));
+  const ry = Math.min(0.95, Math.max(0.05, Number(mask.radius_y ?? 0.35)));
+  const f = Math.min(0.5, Math.max(0.01, Number(mask.feather ?? 0.12)));
+  const du = (u - cx) / rx;
+  const dv = (v - cy) / ry;
+  const dist = mask.shape === "ellipse" ? Math.hypot(du, dv) : Math.max(Math.abs(du), Math.abs(dv));
+  const weight = Math.min(1, Math.max(0, (1.0 + f - dist) / (2.0 * f)));
+  return mask.invert ? 1.0 - weight : weight;
+}
+
+function blendImageDataWithEffectMask(dryImg, wetImg, w, h, mask) {
+  const dry = dryImg.data;
+  const wet = wetImg.data;
+  for (let y = 0; y < h; y++) {
+    const v = (y + 0.5) / h;
+    const rowOff = y * w;
+    for (let x = 0; x < w; x++) {
+      const u = (x + 0.5) / w;
+      const m = evaluateEffectMaskAt(u, v, mask);
+      if (m >= 0.999) continue;
+      const idx = (rowOff + x) * 4;
+      if (m <= 0.001) {
+        wet[idx] = dry[idx];
+        wet[idx + 1] = dry[idx + 1];
+        wet[idx + 2] = dry[idx + 2];
+        wet[idx + 3] = dry[idx + 3];
+      } else {
+        const inv = 1.0 - m;
+        wet[idx] = Math.round(dry[idx] * inv + wet[idx] * m);
+        wet[idx + 1] = Math.round(dry[idx + 1] * inv + wet[idx + 1] * m);
+        wet[idx + 2] = Math.round(dry[idx + 2] * inv + wet[idx + 2] * m);
+        wet[idx + 3] = Math.round(dry[idx + 3] * inv + wet[idx + 3] * m);
+      }
+    }
+  }
+  return wetImg;
+}
+
+function runMaskedBufferPass(bctx, bw, bh, mask, applyFn) {
+  if (!mask || (mask.shape !== "ellipse" && mask.shape !== "rect")) {
+    applyFn();
+    return;
+  }
+  const dryImg = bctx.getImageData(0, 0, bw, bh);
+  applyFn();
+  const wetImg = bctx.getImageData(0, 0, bw, bh);
+  blendImageDataWithEffectMask(dryImg, wetImg, bw, bh, mask);
+  bctx.putImageData(wetImg, 0, 0);
 }
 
 const CLIP_SCENE_PALETTES = [
@@ -2692,10 +2753,12 @@ export function drawProgramMonitorCanvas(
         let flipH = false;
         let flipV = false;
         let maxMul = 0;
+        let mirrorMask = null;
         for (const mNode of mirrorNodes) {
           const mul = Math.min(1, evaluateNodeIntensity(mNode, tSec));
           if (mul <= 0.0001) continue;
           maxMul = Math.max(maxMul, mul);
+          if (!mirrorMask && isEffectMaskActive(mNode)) mirrorMask = mNode.effect_mask;
           const axis = String((mNode.params && mNode.params.axis) || "horizontal").trim().toLowerCase();
           if (axis === "horizontal") flipH = !flipH;
           else if (axis === "vertical") flipV = !flipV;
@@ -2705,34 +2768,36 @@ export function drawProgramMonitorCanvas(
           }
         }
         if ((flipH || flipV) && maxMul > 0.0001) {
-          const srcImg = bctx.getImageData(0, 0, bw, bh);
-          const outImg = bctx.createImageData(bw, bh);
-          const s = srcImg.data;
-          const d = outImg.data;
-          const wetW = maxMul;
-          const dryW = 1 - wetW;
-          for (let y = 0; y < bh; y++) {
-            const sy = flipV ? bh - 1 - y : y;
-            const rowOff = y * bw;
-            const srcRowOff = sy * bw;
-            for (let x = 0; x < bw; x++) {
-              const sx = flipH ? bw - 1 - x : x;
-              const di = (rowOff + x) * 4;
-              const si = (srcRowOff + sx) * 4;
-              if (wetW >= 0.999) {
-                d[di] = s[si];
-                d[di + 1] = s[si + 1];
-                d[di + 2] = s[si + 2];
-                d[di + 3] = s[si + 3];
-              } else {
-                d[di] = Math.round(s[di] * dryW + s[si] * wetW);
-                d[di + 1] = Math.round(s[di + 1] * dryW + s[si + 1] * wetW);
-                d[di + 2] = Math.round(s[di + 2] * dryW + s[si + 2] * wetW);
-                d[di + 3] = Math.round(s[di + 3] * dryW + s[si + 3] * wetW);
+          runMaskedBufferPass(bctx, bw, bh, mirrorMask, () => {
+            const srcImg = bctx.getImageData(0, 0, bw, bh);
+            const outImg = bctx.createImageData(bw, bh);
+            const s = srcImg.data;
+            const d = outImg.data;
+            const wetW = maxMul;
+            const dryW = 1 - wetW;
+            for (let y = 0; y < bh; y++) {
+              const sy = flipV ? bh - 1 - y : y;
+              const rowOff = y * bw;
+              const srcRowOff = sy * bw;
+              for (let x = 0; x < bw; x++) {
+                const sx = flipH ? bw - 1 - x : x;
+                const di = (rowOff + x) * 4;
+                const si = (srcRowOff + sx) * 4;
+                if (wetW >= 0.999) {
+                  d[di] = s[si];
+                  d[di + 1] = s[si + 1];
+                  d[di + 2] = s[si + 2];
+                  d[di + 3] = s[si + 3];
+                } else {
+                  d[di] = Math.round(s[di] * dryW + s[si] * wetW);
+                  d[di + 1] = Math.round(s[di + 1] * dryW + s[si + 1] * wetW);
+                  d[di + 2] = Math.round(s[di + 2] * dryW + s[si + 2] * wetW);
+                  d[di + 3] = Math.round(s[di + 3] * dryW + s[si + 3] * wetW);
+                }
               }
             }
-          }
-          bctx.putImageData(outImg, 0, 0);
+            bctx.putImageData(outImg, 0, 0);
+          });
         }
       }
 
@@ -2791,7 +2856,9 @@ export function drawProgramMonitorCanvas(
               }
             }
           }
-          bctx.putImageData(srcImg, 0, 0);
+          runMaskedBufferPass(bctx, bw, bh, mNode.effect_mask, () => {
+            bctx.putImageData(srcImg, 0, 0);
+          });
         }
       }
 
@@ -2801,10 +2868,12 @@ export function drawProgramMonitorCanvas(
         let totalHueDeg = 0;
         let totalSat = 1;
         let anyHueActive = false;
+        let hueMask = null;
         for (const hNode of hueNodes) {
           const mul = Math.min(1, evaluateNodeIntensity(hNode, tSec));
           if (mul <= 0.0001) continue;
           anyHueActive = true;
+          if (!hueMask && isEffectMaskActive(hNode)) hueMask = hNode.effect_mask;
           const hp = hNode.params || {};
           const rawHue = Math.min(180, Math.max(-180, Number(hp.hue_deg ?? 30)));
           const rawSat = Math.min(2.5, Math.max(0, Number(hp.saturation ?? 1.25)));
@@ -2812,48 +2881,50 @@ export function drawProgramMonitorCanvas(
           totalSat *= 1 + (rawSat - 1) * mul;
         }
         if (anyHueActive && (Math.abs(totalHueDeg) > 0.05 || Math.abs(totalSat - 1) > 0.005)) {
-          const srcImg = bctx.getImageData(0, 0, bw, bh);
-          const d = srcImg.data;
-          const rad = (totalHueDeg * Math.PI) / 180;
-          const cosA = Math.cos(rad);
-          const sinA = Math.sin(rad);
-          const sat = Math.min(2.5, Math.max(0, totalSat));
-          const lumR = 0.213;
-          const lumG = 0.715;
-          const lumB = 0.072;
-          const m00 = lumR + cosA * (1 - lumR) + sinA * (-lumR);
-          const m01 = lumG + cosA * (-lumG) + sinA * (-lumG);
-          const m02 = lumB + cosA * (-lumB) + sinA * (1 - lumB);
-          const m10 = lumR + cosA * (-lumR) + sinA * 0.143;
-          const m11 = lumG + cosA * (1 - lumG) + sinA * 0.140;
-          const m12 = lumB + cosA * (-lumB) + sinA * (-0.283);
-          const m20 = lumR + cosA * (-lumR) + sinA * (-(1 - lumR));
-          const m21 = lumG + cosA * (-lumG) + sinA * lumG;
-          const m22 = lumB + cosA * (1 - lumB) + sinA * lumB;
-          const sr = (1 - sat) * lumR;
-          const sg = (1 - sat) * lumG;
-          const sb = (1 - sat) * lumB;
-          const a00 = (sr + sat) * m00 + sg * m10 + sb * m20;
-          const a01 = (sr + sat) * m01 + sg * m11 + sb * m21;
-          const a02 = (sr + sat) * m02 + sg * m12 + sb * m22;
-          const a10 = sr * m00 + (sg + sat) * m10 + sb * m20;
-          const a11 = sr * m01 + (sg + sat) * m11 + sb * m21;
-          const a12 = sr * m02 + (sg + sat) * m12 + sb * m22;
-          const a20 = sr * m00 + sg * m10 + (sb + sat) * m20;
-          const a21 = sr * m01 + sg * m11 + (sb + sat) * m21;
-          const a22 = sr * m02 + sg * m12 + (sb + sat) * m22;
-          for (let i = 0; i < d.length; i += 4) {
-            const r = d[i];
-            const g = d[i + 1];
-            const b = d[i + 2];
-            const nr = a00 * r + a01 * g + a02 * b;
-            const ng = a10 * r + a11 * g + a12 * b;
-            const nb = a20 * r + a21 * g + a22 * b;
-            d[i] = nr < 0 ? 0 : nr > 255 ? 255 : Math.round(nr);
-            d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : Math.round(ng);
-            d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : Math.round(nb);
-          }
-          bctx.putImageData(srcImg, 0, 0);
+          runMaskedBufferPass(bctx, bw, bh, hueMask, () => {
+            const srcImg = bctx.getImageData(0, 0, bw, bh);
+            const d = srcImg.data;
+            const rad = (totalHueDeg * Math.PI) / 180;
+            const cosA = Math.cos(rad);
+            const sinA = Math.sin(rad);
+            const sat = Math.min(2.5, Math.max(0, totalSat));
+            const lumR = 0.213;
+            const lumG = 0.715;
+            const lumB = 0.072;
+            const m00 = lumR + cosA * (1 - lumR) + sinA * (-lumR);
+            const m01 = lumG + cosA * (-lumG) + sinA * (-lumG);
+            const m02 = lumB + cosA * (-lumB) + sinA * (1 - lumB);
+            const m10 = lumR + cosA * (-lumR) + sinA * 0.143;
+            const m11 = lumG + cosA * (1 - lumG) + sinA * 0.140;
+            const m12 = lumB + cosA * (-lumB) + sinA * (-0.283);
+            const m20 = lumR + cosA * (-lumR) + sinA * (-(1 - lumR));
+            const m21 = lumG + cosA * (-lumG) + sinA * lumG;
+            const m22 = lumB + cosA * (1 - lumB) + sinA * lumB;
+            const sr = (1 - sat) * lumR;
+            const sg = (1 - sat) * lumG;
+            const sb = (1 - sat) * lumB;
+            const a00 = (sr + sat) * m00 + sg * m10 + sb * m20;
+            const a01 = (sr + sat) * m01 + sg * m11 + sb * m21;
+            const a02 = (sr + sat) * m02 + sg * m12 + sb * m22;
+            const a10 = sr * m00 + (sg + sat) * m10 + sb * m20;
+            const a11 = sr * m01 + (sg + sat) * m11 + sb * m21;
+            const a12 = sr * m02 + (sg + sat) * m12 + sb * m22;
+            const a20 = sr * m00 + sg * m10 + (sb + sat) * m20;
+            const a21 = sr * m01 + sg * m11 + (sb + sat) * m21;
+            const a22 = sr * m02 + sg * m12 + (sb + sat) * m22;
+            for (let i = 0; i < d.length; i += 4) {
+              const r = d[i];
+              const g = d[i + 1];
+              const b = d[i + 2];
+              const nr = a00 * r + a01 * g + a02 * b;
+              const ng = a10 * r + a11 * g + a12 * b;
+              const nb = a20 * r + a21 * g + a22 * b;
+              d[i] = nr < 0 ? 0 : nr > 255 ? 255 : Math.round(nr);
+              d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : Math.round(ng);
+              d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : Math.round(nb);
+            }
+            bctx.putImageData(srcImg, 0, 0);
+          });
         }
       }
 
@@ -2864,37 +2935,39 @@ export function drawProgramMonitorCanvas(
           const mul = Math.min(1, evaluateNodeIntensity(iNode, tSec));
           if (mul <= 0.0001) continue;
           const mode = String((iNode.params && iNode.params.mode) || "rgb").trim().toLowerCase();
-          const srcImg = bctx.getImageData(0, 0, bw, bh);
-          const d = srcImg.data;
-          const dryW = 1 - mul;
-          if (mode === "luma") {
-            for (let i = 0; i < d.length; i += 4) {
-              const r = d[i];
-              const g = d[i + 1];
-              const b = d[i + 2];
-              const y = 0.299 * r + 0.587 * g + 0.114 * b;
-              const deltaY = (255 - 2 * y) * mul;
-              const nr = r + deltaY;
-              const ng = g + deltaY;
-              const nb = b + deltaY;
-              d[i] = nr < 0 ? 0 : nr > 255 ? 255 : Math.round(nr);
-              d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : Math.round(ng);
-              d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : Math.round(nb);
-            }
-          } else {
-            for (let i = 0; i < d.length; i += 4) {
-              if (mul >= 0.999) {
-                d[i] = 255 - d[i];
-                d[i + 1] = 255 - d[i + 1];
-                d[i + 2] = 255 - d[i + 2];
-              } else {
-                d[i] = Math.round(d[i] * dryW + (255 - d[i]) * mul);
-                d[i + 1] = Math.round(d[i + 1] * dryW + (255 - d[i + 1]) * mul);
-                d[i + 2] = Math.round(d[i + 2] * dryW + (255 - d[i + 2]) * mul);
+          runMaskedBufferPass(bctx, bw, bh, iNode.effect_mask, () => {
+            const srcImg = bctx.getImageData(0, 0, bw, bh);
+            const d = srcImg.data;
+            const dryW = 1 - mul;
+            if (mode === "luma") {
+              for (let i = 0; i < d.length; i += 4) {
+                const r = d[i];
+                const g = d[i + 1];
+                const b = d[i + 2];
+                const y = 0.299 * r + 0.587 * g + 0.114 * b;
+                const deltaY = (255 - 2 * y) * mul;
+                const nr = r + deltaY;
+                const ng = g + deltaY;
+                const nb = b + deltaY;
+                d[i] = nr < 0 ? 0 : nr > 255 ? 255 : Math.round(nr);
+                d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : Math.round(ng);
+                d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : Math.round(nb);
+              }
+            } else {
+              for (let i = 0; i < d.length; i += 4) {
+                if (mul >= 0.999) {
+                  d[i] = 255 - d[i];
+                  d[i + 1] = 255 - d[i + 1];
+                  d[i + 2] = 255 - d[i + 2];
+                } else {
+                  d[i] = Math.round(d[i] * dryW + (255 - d[i]) * mul);
+                  d[i + 1] = Math.round(d[i + 1] * dryW + (255 - d[i + 1]) * mul);
+                  d[i + 2] = Math.round(d[i + 2] * dryW + (255 - d[i + 2]) * mul);
+                }
               }
             }
-          }
-          bctx.putImageData(srcImg, 0, 0);
+            bctx.putImageData(srcImg, 0, 0);
+          });
         }
       }
 
@@ -2905,9 +2978,11 @@ export function drawProgramMonitorCanvas(
       if (shiftNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
         let dx = 0;
         let dy = 0;
+        let shiftMask = null;
         for (const sNode of shiftNodes) {
           const mul = evaluateNodeIntensity(sNode, tSec);
           if (mul <= 0.0001) continue;
+          if (!shiftMask && isEffectMaskActive(sNode)) shiftMask = sNode.effect_mask;
           const sp = sNode.params || {};
           if (sNode.effect === "chroma_aberration") {
             const spread = Number(sp.spread ?? 8) * mul;
@@ -2922,27 +2997,29 @@ export function drawProgramMonitorCanvas(
           }
         }
         if (dx !== 0 || dy !== 0) {
-          const srcImg = bctx.getImageData(0, 0, bw, bh);
-          const outImg = bctx.createImageData(bw, bh);
-          const s = srcImg.data;
-          const d = outImg.data;
-          for (let y = 0; y < bh; y++) {
-            const ry = Math.min(bh - 1, Math.max(0, y - dy));
-            const by = Math.min(bh - 1, Math.max(0, y + dy));
-            const rowOff = y * bw;
-            const rRowOff = ry * bw;
-            const bRowOff = by * bw;
-            for (let x = 0; x < bw; x++) {
-              const rx = Math.min(bw - 1, Math.max(0, x - dx));
-              const bx = Math.min(bw - 1, Math.max(0, x + dx));
-              const oi = (rowOff + x) * 4;
-              d[oi] = s[(rRowOff + rx) * 4];
-              d[oi + 1] = s[oi + 1];
-              d[oi + 2] = s[(bRowOff + bx) * 4 + 2];
-              d[oi + 3] = s[oi + 3];
+          runMaskedBufferPass(bctx, bw, bh, shiftMask, () => {
+            const srcImg = bctx.getImageData(0, 0, bw, bh);
+            const outImg = bctx.createImageData(bw, bh);
+            const s = srcImg.data;
+            const d = outImg.data;
+            for (let y = 0; y < bh; y++) {
+              const ry = Math.min(bh - 1, Math.max(0, y - dy));
+              const by = Math.min(bh - 1, Math.max(0, y + dy));
+              const rowOff = y * bw;
+              const rRowOff = ry * bw;
+              const bRowOff = by * bw;
+              for (let x = 0; x < bw; x++) {
+                const rx = Math.min(bw - 1, Math.max(0, x - dx));
+                const bx = Math.min(bw - 1, Math.max(0, x + dx));
+                const oi = (rowOff + x) * 4;
+                d[oi] = s[(rRowOff + rx) * 4];
+                d[oi + 1] = s[oi + 1];
+                d[oi + 2] = s[(bRowOff + bx) * 4 + 2];
+                d[oi + 3] = s[oi + 3];
+              }
             }
-          }
-          bctx.putImageData(outImg, 0, 0);
+            bctx.putImageData(outImg, 0, 0);
+          });
         }
       }
 
@@ -2950,47 +3027,51 @@ export function drawProgramMonitorCanvas(
       const lensNodes = pActiveFx.filter((n) => n.effect === "lens_distortion");
       if (lensNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
         let totalK1 = 0;
+        let lensMask = null;
         for (const lNode of lensNodes) {
           const mul = Math.min(1, evaluateNodeIntensity(lNode, tSec));
           if (mul <= 0.0001) continue;
+          if (!lensMask && isEffectMaskActive(lNode)) lensMask = lNode.effect_mask;
           const lp = lNode.params || {};
           const rawK1 = Math.min(0.5, Math.max(-0.5, Number(lp.k1 ?? -0.22)));
           totalK1 += rawK1 * mul;
         }
         if (Math.abs(totalK1) > 0.001) {
-          const srcImg = bctx.getImageData(0, 0, bw, bh);
-          const outImg = bctx.createImageData(bw, bh);
-          const s = srcImg.data;
-          const d = outImg.data;
-          const cx = bw * 0.5;
-          const cy = bh * 0.5;
-          const invR2Max = 1 / Math.max(1, cx * cx + cy * cy);
-          for (let y = 0; y < bh; y++) {
-            const dy = y - cy;
-            const dy2 = dy * dy;
-            const rowOff = y * bw;
-            for (let x = 0; x < bw; x++) {
-              const dx = x - cx;
-              const r2 = (dx * dx + dy2) * invR2Max;
-              const factor = 1 + totalK1 * r2;
-              const sx = Math.round(cx + dx * factor);
-              const sy = Math.round(cy + dy * factor);
-              const oi = (rowOff + x) * 4;
-              if (sx >= 0 && sx < bw && sy >= 0 && sy < bh) {
-                const si = (sy * bw + sx) * 4;
-                d[oi] = s[si];
-                d[oi + 1] = s[si + 1];
-                d[oi + 2] = s[si + 2];
-                d[oi + 3] = s[si + 3];
-              } else {
-                d[oi] = 0;
-                d[oi + 1] = 0;
-                d[oi + 2] = 0;
-                d[oi + 3] = 255;
+          runMaskedBufferPass(bctx, bw, bh, lensMask, () => {
+            const srcImg = bctx.getImageData(0, 0, bw, bh);
+            const outImg = bctx.createImageData(bw, bh);
+            const s = srcImg.data;
+            const d = outImg.data;
+            const cx = bw * 0.5;
+            const cy = bh * 0.5;
+            const invR2Max = 1 / Math.max(1, cx * cx + cy * cy);
+            for (let y = 0; y < bh; y++) {
+              const dy = y - cy;
+              const dy2 = dy * dy;
+              const rowOff = y * bw;
+              for (let x = 0; x < bw; x++) {
+                const dx = x - cx;
+                const r2 = (dx * dx + dy2) * invR2Max;
+                const factor = 1 + totalK1 * r2;
+                const sx = Math.round(cx + dx * factor);
+                const sy = Math.round(cy + dy * factor);
+                const oi = (rowOff + x) * 4;
+                if (sx >= 0 && sx < bw && sy >= 0 && sy < bh) {
+                  const si = (sy * bw + sx) * 4;
+                  d[oi] = s[si];
+                  d[oi + 1] = s[si + 1];
+                  d[oi + 2] = s[si + 2];
+                  d[oi + 3] = s[si + 3];
+                } else {
+                  d[oi] = 0;
+                  d[oi + 1] = 0;
+                  d[oi + 2] = 0;
+                  d[oi + 3] = 255;
+                }
               }
             }
-          }
-          bctx.putImageData(outImg, 0, 0);
+            bctx.putImageData(outImg, 0, 0);
+          });
         }
       }
 
@@ -2998,49 +3079,164 @@ export function drawProgramMonitorCanvas(
       const unsharpNodes = pActiveFx.filter((n) => n.effect === "unsharp_mask");
       if (unsharpNodes.length > 0 && bw >= 3 && bh >= 3 && !(pCkActive && pCkMatteView === "alpha_matte")) {
         let totalSharpen = 0;
+        let unsharpMask = null;
         for (const uNode of unsharpNodes) {
           const mul = Math.min(1, evaluateNodeIntensity(uNode, tSec));
           if (mul <= 0.0001) continue;
+          if (!unsharpMask && isEffectMaskActive(uNode)) unsharpMask = uNode.effect_mask;
           const up = uNode.params || {};
           const rawAmt = Math.min(3.0, Math.max(0.2, Number(up.sharpen_amount ?? 1.2)));
           totalSharpen += rawAmt * mul;
         }
         if (totalSharpen > 0.01) {
-          const srcImg = bctx.getImageData(0, 0, bw, bh);
-          const outImg = bctx.createImageData(bw, bh);
-          const s = srcImg.data;
-          const d = outImg.data;
-          const gain = Math.min(2.6, totalSharpen * 0.65);
-          const stride = bw * 4;
-          for (let y = 0; y < bh; y++) {
-            const rowOff = y * stride;
-            if (y === 0 || y === bh - 1) {
-              for (let x = 0; x < stride; x++) d[rowOff + x] = s[rowOff + x];
-              continue;
-            }
-            for (let x = 0; x < bw; x++) {
-              const oi = rowOff + x * 4;
-              if (x === 0 || x === bw - 1) {
-                d[oi] = s[oi];
-                d[oi + 1] = s[oi + 1];
-                d[oi + 2] = s[oi + 2];
-                d[oi + 3] = s[oi + 3];
+          runMaskedBufferPass(bctx, bw, bh, unsharpMask, () => {
+            const srcImg = bctx.getImageData(0, 0, bw, bh);
+            const outImg = bctx.createImageData(bw, bh);
+            const s = srcImg.data;
+            const d = outImg.data;
+            const gain = Math.min(2.6, totalSharpen * 0.65);
+            const stride = bw * 4;
+            for (let y = 0; y < bh; y++) {
+              const rowOff = y * stride;
+              if (y === 0 || y === bh - 1) {
+                for (let x = 0; x < stride; x++) d[rowOff + x] = s[rowOff + x];
                 continue;
               }
-              const upI = oi - stride;
-              const dnI = oi + stride;
-              const ltI = oi - 4;
-              const rtI = oi + 4;
-              for (let c = 0; c < 3; c++) {
-                const center = s[oi + c];
-                const blur4 = (s[upI + c] + s[dnI + c] + s[ltI + c] + s[rtI + c]) * 0.25;
-                const val = center + (center - blur4) * gain;
-                d[oi + c] = val < 0 ? 0 : val > 255 ? 255 : Math.round(val);
+              for (let x = 0; x < bw; x++) {
+                const oi = rowOff + x * 4;
+                if (x === 0 || x === bw - 1) {
+                  d[oi] = s[oi];
+                  d[oi + 1] = s[oi + 1];
+                  d[oi + 2] = s[oi + 2];
+                  d[oi + 3] = s[oi + 3];
+                  continue;
+                }
+                const upI = oi - stride;
+                const dnI = oi + stride;
+                const ltI = oi - 4;
+                const rtI = oi + 4;
+                for (let c = 0; c < 3; c++) {
+                  const center = s[oi + c];
+                  const blur4 = (s[upI + c] + s[dnI + c] + s[ltI + c] + s[rtI + c]) * 0.25;
+                  const val = center + (center - blur4) * gain;
+                  d[oi + c] = val < 0 ? 0 : val > 255 ? 255 : Math.round(val);
+                }
+                d[oi + 3] = s[oi + 3];
               }
-              d[oi + 3] = s[oi + 3];
             }
+            bctx.putImageData(outImg, 0, 0);
+          });
+        }
+      }
+
+      // Apply S_DirectionalBlur linear streak blur on frame buffer
+      const dirBlurNodes = pActiveFx.filter((n) => n.effect === "directional_blur");
+      if (dirBlurNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        for (const dbNode of dirBlurNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(dbNode, tSec));
+          if (mul <= 0.0001) continue;
+          const dbp = dbNode.params || {};
+          const blurAmt = Math.min(24, Math.max(1, Number(dbp.blur_amount ?? 8))) * mul;
+          const angleRad = (Math.min(180, Math.max(-180, Number(dbp.angle_deg ?? 0))) * Math.PI) / 180;
+          const stepSpan = Math.max(1, blurAmt * Math.max(0.45, bw / 960));
+          const ux = Math.cos(angleRad);
+          const uy = Math.sin(angleRad);
+          runMaskedBufferPass(bctx, bw, bh, dbNode.effect_mask, () => {
+            const srcImg = bctx.getImageData(0, 0, bw, bh);
+            const outImg = bctx.createImageData(bw, bh);
+            const s = srcImg.data;
+            const d = outImg.data;
+            const taps = 9;
+            const halfTaps = 4;
+            for (let y = 0; y < bh; y++) {
+              const rowOff = y * bw;
+              for (let x = 0; x < bw; x++) {
+                let accR = 0;
+                let accG = 0;
+                let accB = 0;
+                let accA = 0;
+                for (let k = -halfTaps; k <= halfTaps; k++) {
+                  const frac = k / halfTaps;
+                  const sx = Math.min(bw - 1, Math.max(0, Math.round(x + ux * stepSpan * frac)));
+                  const sy = Math.min(bh - 1, Math.max(0, Math.round(y + uy * stepSpan * frac)));
+                  const si = (sy * bw + sx) * 4;
+                  accR += s[si];
+                  accG += s[si + 1];
+                  accB += s[si + 2];
+                  accA += s[si + 3];
+                }
+                const oi = (rowOff + x) * 4;
+                d[oi] = Math.round(accR / taps);
+                d[oi + 1] = Math.round(accG / taps);
+                d[oi + 2] = Math.round(accB / taps);
+                d[oi + 3] = Math.round(accA / taps);
+              }
+            }
+            bctx.putImageData(outImg, 0, 0);
+          });
+        }
+      }
+
+      // Apply S_TiltShift miniature selective-focus bokeh & saturation pop on frame buffer
+      const tiltNodes = pActiveFx.filter((n) => n.effect === "tilt_shift");
+      if (tiltNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        for (const tNode of tiltNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(tNode, tSec));
+          if (mul <= 0.0001) continue;
+          const tp = tNode.params || {};
+          const focusY = Math.min(0.85, Math.max(0.15, Number(tp.focus_y ?? 0.52)));
+          const bandH = Math.min(0.55, Math.max(0.08, Number(tp.band_height ?? 0.24)));
+          const blurStr = Math.min(20, Math.max(2, Number(tp.blur_strength ?? 7))) * mul;
+          const satBoost = 1 + (Math.min(1.8, Math.max(1.0, Number(tp.sat_boost ?? 1.3))) - 1) * mul;
+          const halfBand = bandH * 0.5;
+          const feather = Math.max(0.08, bandH * 0.65);
+
+          _tiltScratchCanvas = ensureScratchCanvas(_tiltScratchCanvas, bw, bh);
+          if (_tiltScratchCanvas) {
+            const tctx = _tiltScratchCanvas.getContext("2d");
+            tctx.setTransform(1, 0, 0, 1, 0, 0);
+            tctx.clearRect(0, 0, bw, bh);
+            if (typeof tctx.filter === "string") {
+              const blurPx = Math.max(2, Math.round(blurStr * Math.max(0.5, bw / 640)));
+              tctx.filter = `blur(${blurPx}px) saturate(${satBoost.toFixed(3)})`;
+            }
+            tctx.drawImage(buf, 0, 0, bw, bh);
+            tctx.filter = "none";
+
+            runMaskedBufferPass(bctx, bw, bh, tNode.effect_mask, () => {
+              const dryImg = bctx.getImageData(0, 0, bw, bh);
+              const blurImg = tctx.getImageData(0, 0, bw, bh);
+              const d = dryImg.data;
+              const b = blurImg.data;
+              for (let y = 0; y < bh; y++) {
+                const ny = (y + 0.5) / bh;
+                const dist = Math.max(0, Math.abs(ny - focusY) - halfBand);
+                const blurW = Math.min(1, dist / feather) * mul;
+                const rowOff = y * bw;
+                for (let x = 0; x < bw; x++) {
+                  const idx = (rowOff + x) * 4;
+                  const r0 = d[idx];
+                  const g0 = d[idx + 1];
+                  const b0 = d[idx + 2];
+                  const luma = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+                  const sr = Math.min(255, Math.max(0, luma + (r0 - luma) * satBoost));
+                  const sg = Math.min(255, Math.max(0, luma + (g0 - luma) * satBoost));
+                  const sb = Math.min(255, Math.max(0, luma + (b0 - luma) * satBoost));
+                  if (blurW <= 0.001) {
+                    d[idx] = Math.round(sr);
+                    d[idx + 1] = Math.round(sg);
+                    d[idx + 2] = Math.round(sb);
+                  } else {
+                    const inv = 1 - blurW;
+                    d[idx] = Math.round(sr * inv + b[idx] * blurW);
+                    d[idx + 1] = Math.round(sg * inv + b[idx + 1] * blurW);
+                    d[idx + 2] = Math.round(sb * inv + b[idx + 2] * blurW);
+                  }
+                }
+              }
+              bctx.putImageData(dryImg, 0, 0);
+            });
           }
-          bctx.putImageData(outImg, 0, 0);
         }
       }
 
@@ -3101,11 +3297,8 @@ export function drawProgramMonitorCanvas(
     const fxOutW = frameW + overscanOut * 2;
     const fxOutH = frameH + overscanOut * 2;
 
-    // Apply optical/lighting FX passes over the 16:9 frame
-    if (!(pCkActive && pCkMatteView === "alpha_matte")) for (const node of pActiveFx) {
+    const renderOverlayFxNode = (octx, ox, oy, oW, oH, oOutX, oOutY, oOutW, oOutH, node, kfMul) => {
       const p = node.params || {};
-      const kfMul = evaluateNodeIntensity(node, tSec);
-      if (kfMul <= 0.0001) continue;
       if (node.effect === "glow") {
         const brightness = Number(p.brightness ?? 0.85) * kfMul;
         const widthPx = Number(p.width ?? 18);
@@ -3113,70 +3306,70 @@ export function drawProgramMonitorCanvas(
         const [tr, tg, tb] = hexToRgbTuple(p.tint || "#ffd8a8");
         const alpha = clamp01((brightness / 2.2) * (1.15 - threshold * 0.45));
 
-        if (buf && typeof ctx.filter === "string") {
-          ctx.save();
-          ctx.globalCompositeOperation = "screen";
-          ctx.globalAlpha = Math.min(0.85, alpha * 0.8);
-          ctx.filter = `blur(${Math.max(2, Math.round(widthPx * 0.45))}px)`;
-          ctx.drawImage(buf, fxOutX, fxOutY, fxOutW, fxOutH);
-          ctx.restore();
+        if (buf && typeof octx.filter === "string") {
+          octx.save();
+          octx.globalCompositeOperation = "screen";
+          octx.globalAlpha = Math.min(0.85, alpha * 0.8);
+          octx.filter = `blur(${Math.max(2, Math.round(widthPx * 0.45))}px)`;
+          octx.drawImage(buf, oOutX, oOutY, oOutW, oOutH);
+          octx.restore();
         }
 
-        const gx = fx + frameW * 0.72 + shiftX;
-        const gy = fy + frameH * 0.32 + shiftY;
+        const gx = ox + oW * 0.72 + shiftX;
+        const gy = oy + oH * 0.32 + shiftY;
         const gr = Math.max(24, widthPx * 2.4);
-        const gGrad = ctx.createRadialGradient(gx, gy, 2, gx, gy, gr);
+        const gGrad = octx.createRadialGradient(gx, gy, 2, gx, gy, gr);
         gGrad.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, ${Math.min(0.75, alpha * 0.85).toFixed(3)})`);
         gGrad.addColorStop(0.45, `rgba(${tr}, ${tg}, ${tb}, ${Math.min(0.4, alpha * 0.45).toFixed(3)})`);
         gGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-        ctx.save();
-        ctx.globalCompositeOperation = "screen";
-        ctx.fillStyle = gGrad;
-        ctx.fillRect(fx, fy, frameW, frameH);
-        ctx.restore();
+        octx.save();
+        octx.globalCompositeOperation = "screen";
+        octx.fillStyle = gGrad;
+        octx.fillRect(ox, oy, oW, oH);
+        octx.restore();
       } else if (node.effect === "lens_flare") {
-        const cx = fx + Number(p.center_x ?? 0.72) * frameW;
-        const cy = fy + Number(p.center_y ?? 0.28) * frameH;
+        const cx = ox + Number(p.center_x ?? 0.72) * oW;
+        const cy = oy + Number(p.center_y ?? 0.28) * oH;
         const brightness = Number(p.brightness ?? 0.95) * kfMul;
         const scale = Number(p.scale ?? 1.0);
         const [tr, tg, tb] = hexToRgbTuple(p.tint || "#7cc4ff");
         const alpha = clamp01(brightness * 0.75);
 
-        ctx.save();
-        ctx.globalCompositeOperation = "screen";
+        octx.save();
+        octx.globalCompositeOperation = "screen";
 
-        const haloR = Math.max(22, frameH * 0.36 * scale);
-        const halo = ctx.createRadialGradient(cx, cy, 1, cx, cy, haloR);
+        const haloR = Math.max(22, oH * 0.36 * scale);
+        const halo = octx.createRadialGradient(cx, cy, 1, cx, cy, haloR);
         halo.addColorStop(0, `rgba(255, 255, 255, ${Math.min(0.95, alpha).toFixed(3)})`);
         halo.addColorStop(0.22, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.75).toFixed(3)})`);
         halo.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-        ctx.fillStyle = halo;
-        ctx.beginPath();
-        ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
-        ctx.fill();
+        octx.fillStyle = halo;
+        octx.beginPath();
+        octx.arc(cx, cy, haloR, 0, Math.PI * 2);
+        octx.fill();
 
-        const streakHalfW = frameW * 0.45 * scale;
+        const streakHalfW = oW * 0.45 * scale;
         const streakH = Math.max(3, 8 * scale);
-        const sGrad = ctx.createLinearGradient(cx - streakHalfW, cy, cx + streakHalfW, cy);
+        const sGrad = octx.createLinearGradient(cx - streakHalfW, cy, cx + streakHalfW, cy);
         sGrad.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, 0)`);
         sGrad.addColorStop(0.42, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.65).toFixed(3)})`);
         sGrad.addColorStop(0.5, `rgba(255, 255, 255, ${Math.min(0.95, alpha).toFixed(3)})`);
         sGrad.addColorStop(0.58, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.65).toFixed(3)})`);
         sGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-        ctx.fillStyle = sGrad;
-        ctx.fillRect(cx - streakHalfW, cy - streakH / 2, streakHalfW * 2, streakH);
+        octx.fillStyle = sGrad;
+        octx.fillRect(cx - streakHalfW, cy - streakH / 2, streakHalfW * 2, streakH);
 
-        const midX = fx + frameW * 0.5;
-        const midY = fy + frameH * 0.5;
+        const midX = ox + oW * 0.5;
+        const midY = oy + oH * 0.5;
         const ghostX = midX - (cx - midX) * 0.55;
         const ghostY = midY - (cy - midY) * 0.55;
-        ctx.strokeStyle = `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.35).toFixed(3)})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(ghostX, ghostY, 14 * scale, 0, Math.PI * 2);
-        ctx.stroke();
+        octx.strokeStyle = `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.35).toFixed(3)})`;
+        octx.lineWidth = 2;
+        octx.beginPath();
+        octx.arc(ghostX, ghostY, 14 * scale, 0, Math.PI * 2);
+        octx.stroke();
 
-        ctx.restore();
+        octx.restore();
       } else if (node.effect === "flicker") {
         const amp = Number(p.amplitude ?? 0.18) * kfMul;
         const freq = Number(p.frequency ?? 8);
@@ -3187,13 +3380,13 @@ export function drawProgramMonitorCanvas(
               rand * Math.sin(tSec * freq * 1.73 * Math.PI * 2 + 1.7))) /
           (1 + rand);
         if (Math.abs(delta) > 0.005) {
-          ctx.save();
-          ctx.fillStyle =
+          octx.save();
+          octx.fillStyle =
             delta >= 0
               ? `rgba(255, 255, 255, ${Math.min(0.55, delta * 1.35).toFixed(3)})`
               : `rgba(0, 0, 0, ${Math.min(0.65, Math.abs(delta) * 1.45).toFixed(3)})`;
-          ctx.fillRect(fx, fy, frameW, frameH);
-          ctx.restore();
+          octx.fillRect(ox, oy, oW, oH);
+          octx.restore();
         }
       } else if (node.effect === "film_damage") {
         const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
@@ -3209,45 +3402,38 @@ export function drawProgramMonitorCanvas(
           };
           const speckCount = Math.round(grain * 6.5);
           for (let i = 0; i < speckCount; i++) {
-            const sx = fx + nextRand() * frameW;
-            const sy = fy + nextRand() * frameH;
+            const sx = ox + nextRand() * oW;
+            const sy = oy + nextRand() * oH;
             const bright = nextRand() > 0.5;
-            ctx.fillStyle = bright ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.28)";
-            ctx.fillRect(sx, sy, 1.5, 1.5);
+            octx.fillStyle = bright ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.28)";
+            octx.fillRect(sx, sy, 1.5, 1.5);
           }
 
           if (scratches > 0.03) {
             const lineCount = Math.max(1, Math.round(scratches * 4));
             for (let i = 0; i < lineCount; i++) {
               const xFrac = ((0.21 + i * 0.27 + ((playheadFrame * (i + 3)) % 17) * 0.008) % 0.92) + 0.04;
-              const lx = fx + frameW * xFrac;
-              ctx.strokeStyle =
+              const lx = ox + oW * xFrac;
+              octx.strokeStyle =
                 i % 2 === 0
                   ? `rgba(255,255,255,${Math.min(0.45, scratches * 0.42).toFixed(3)})`
                   : `rgba(10,10,12,${Math.min(0.55, scratches * 0.48).toFixed(3)})`;
-              ctx.lineWidth = 1;
-              ctx.beginPath();
-              ctx.moveTo(lx, fy);
-              ctx.lineTo(lx + (nextRand() - 0.5) * 1.5, fy + frameH);
-              ctx.stroke();
+              octx.lineWidth = 1;
+              octx.beginPath();
+              octx.moveTo(lx, oy);
+              octx.lineTo(lx + (nextRand() - 0.5) * 1.5, oy + oH);
+              octx.stroke();
             }
           }
 
           if (vignette > 0.02) {
-            const midX = fx + frameW / 2;
-            const midY = fy + frameH / 2;
-            const vig = ctx.createRadialGradient(
-              midX,
-              midY,
-              frameH * 0.25,
-              midX,
-              midY,
-              frameW * 0.65
-            );
+            const midX = ox + oW / 2;
+            const midY = oy + oH / 2;
+            const vig = octx.createRadialGradient(midX, midY, oH * 0.25, midX, midY, oW * 0.65);
             vig.addColorStop(0, "rgba(0,0,0,0)");
             vig.addColorStop(1, `rgba(0,0,0,${Math.min(0.82, vignette * 0.78).toFixed(3)})`);
-            ctx.fillStyle = vig;
-            ctx.fillRect(fx, fy, frameW, frameH);
+            octx.fillStyle = vig;
+            octx.fillRect(ox, oy, oW, oH);
           }
         }
       } else if (node.effect === "vignette") {
@@ -3255,20 +3441,20 @@ export function drawProgramMonitorCanvas(
         const intensity = Math.min(1, kfMul);
         if (intensity > 0.005) {
           const effAngle = rawAngle * intensity;
-          const midX = fx + frameW * 0.5;
-          const midY = fy + frameH * 0.5;
-          const innerR = Math.max(8, frameH * (0.44 - Math.min(0.28, effAngle * 0.22)));
-          const outerR = Math.hypot(frameW * 0.5, frameH * 0.5) * 1.05;
+          const midX = ox + oW * 0.5;
+          const midY = oy + oH * 0.5;
+          const innerR = Math.max(8, oH * (0.44 - Math.min(0.28, effAngle * 0.22)));
+          const outerR = Math.hypot(oW * 0.5, oH * 0.5) * 1.05;
           const edgeAlpha = Math.min(0.92, (0.22 + effAngle * 0.62) * intensity);
           const midAlpha = Math.min(0.45, edgeAlpha * 0.38);
-          const vig = ctx.createRadialGradient(midX, midY, innerR, midX, midY, outerR);
+          const vig = octx.createRadialGradient(midX, midY, innerR, midX, midY, outerR);
           vig.addColorStop(0, "rgba(0, 0, 0, 0)");
           vig.addColorStop(0.55, `rgba(0, 0, 0, ${midAlpha.toFixed(3)})`);
           vig.addColorStop(1, `rgba(0, 0, 0, ${edgeAlpha.toFixed(3)})`);
-          ctx.save();
-          ctx.fillStyle = vig;
-          ctx.fillRect(fx, fy, frameW, frameH);
-          ctx.restore();
+          octx.save();
+          octx.fillStyle = vig;
+          octx.fillRect(ox, oy, oW, oH);
+          octx.restore();
         }
       } else if (node.effect === "film_grain") {
         const strength = Math.min(40, Math.max(0, Number(p.strength ?? 14))) * kfMul;
@@ -3282,41 +3468,41 @@ export function drawProgramMonitorCanvas(
           const speckCount = Math.round(strength * 14);
           const brightAlpha = (0.08 + norm * 0.22).toFixed(3);
           const darkAlpha = (0.10 + norm * 0.26).toFixed(3);
-          ctx.save();
+          octx.save();
           for (let i = 0; i < speckCount; i++) {
-            const sx = fx + nextRand() * frameW;
-            const sy = fy + nextRand() * frameH;
+            const sx = ox + nextRand() * oW;
+            const sy = oy + nextRand() * oH;
             const sz = nextRand() > 0.72 ? 1.8 : 1.2;
-            ctx.fillStyle = nextRand() > 0.5
+            octx.fillStyle = nextRand() > 0.5
               ? `rgba(245, 242, 236, ${brightAlpha})`
               : `rgba(12, 12, 15, ${darkAlpha})`;
-            ctx.fillRect(sx, sy, sz, sz);
+            octx.fillRect(sx, sy, sz, sz);
           }
-          ctx.restore();
+          octx.restore();
         }
       } else if (node.effect === "optical_glow") {
         const intensity = clamp01(Number(p.glow_intensity ?? 0.45) * kfMul);
         const radius = Math.min(24, Math.max(2, Number(p.glow_radius ?? 10)));
         if (intensity > 0.005) {
-          if (buf && typeof ctx.filter === "string") {
-            ctx.save();
-            ctx.globalCompositeOperation = "screen";
-            ctx.globalAlpha = intensity;
-            const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, frameW / 640)));
-            ctx.filter = `blur(${blurPx}px)`;
-            ctx.drawImage(buf, fxOutX, fxOutY, fxOutW, fxOutH);
-            ctx.restore();
+          if (buf && typeof octx.filter === "string") {
+            octx.save();
+            octx.globalCompositeOperation = "screen";
+            octx.globalAlpha = intensity;
+            const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, oW / 640)));
+            octx.filter = `blur(${blurPx}px)`;
+            octx.drawImage(buf, oOutX, oOutY, oOutW, oOutH);
+            octx.restore();
           } else {
-            const midX = fx + frameW * 0.5 + shiftX;
-            const midY = fy + frameH * 0.5 + shiftY;
-            const gGrad = ctx.createRadialGradient(midX, midY, 4, midX, midY, Math.max(32, radius * 8));
+            const midX = ox + oW * 0.5 + shiftX;
+            const midY = oy + oH * 0.5 + shiftY;
+            const gGrad = octx.createRadialGradient(midX, midY, 4, midX, midY, Math.max(32, radius * 8));
             gGrad.addColorStop(0, `rgba(255, 244, 224, ${(intensity * 0.55).toFixed(3)})`);
             gGrad.addColorStop(1, "rgba(255, 244, 224, 0)");
-            ctx.save();
-            ctx.globalCompositeOperation = "screen";
-            ctx.fillStyle = gGrad;
-            ctx.fillRect(fx, fy, frameW, frameH);
-            ctx.restore();
+            octx.save();
+            octx.globalCompositeOperation = "screen";
+            octx.fillStyle = gGrad;
+            octx.fillRect(ox, oy, oW, oH);
+            octx.restore();
           }
         }
       } else if (node.effect === "halation") {
@@ -3326,9 +3512,9 @@ export function drawProgramMonitorCanvas(
           const halCanvas = buf
             ? (_halScratchCanvas = ensureScratchCanvas(_halScratchCanvas, bw, bh))
             : null;
-          if (halCanvas && buf && typeof ctx.filter === "string") {
+          if (halCanvas && buf && typeof octx.filter === "string") {
             const hctx = halCanvas.getContext("2d");
-            const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, frameW / 640)));
+            const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, oW / 640)));
             hctx.save();
             hctx.setTransform(1, 0, 0, 1, 0, 0);
             hctx.globalCompositeOperation = "source-over";
@@ -3341,54 +3527,218 @@ export function drawProgramMonitorCanvas(
             hctx.fillRect(0, 0, bw, bh);
             hctx.restore();
 
-            ctx.save();
-            ctx.globalCompositeOperation = "screen";
-            ctx.globalAlpha = Math.min(0.92, strength * 0.85);
-            ctx.drawImage(halCanvas, fxOutX, fxOutY, fxOutW, fxOutH);
-            ctx.restore();
+            octx.save();
+            octx.globalCompositeOperation = "screen";
+            octx.globalAlpha = Math.min(0.92, strength * 0.85);
+            octx.drawImage(halCanvas, oOutX, oOutY, oOutW, oOutH);
+            octx.restore();
           }
-          const hx = fx + frameW * 0.72 + shiftX;
-          const hy = fy + frameH * 0.30 + shiftY;
-          const hr = Math.max(28, radius * 4.2 * Math.max(0.5, frameW / 640));
-          const hGrad = ctx.createRadialGradient(hx, hy, 2, hx, hy, hr);
+          const hx = ox + oW * 0.72 + shiftX;
+          const hy = oy + oH * 0.30 + shiftY;
+          const hr = Math.max(28, radius * 4.2 * Math.max(0.5, oW / 640));
+          const hGrad = octx.createRadialGradient(hx, hy, 2, hx, hy, hr);
           hGrad.addColorStop(0, `rgba(255, 118, 48, ${(strength * 0.58).toFixed(3)})`);
           hGrad.addColorStop(0.38, `rgba(255, 58, 20, ${(strength * 0.34).toFixed(3)})`);
           hGrad.addColorStop(1, "rgba(255, 40, 12, 0)");
-          ctx.save();
-          ctx.globalCompositeOperation = "screen";
-          ctx.fillStyle = hGrad;
-          ctx.fillRect(fx, fy, frameW, frameH);
-          ctx.restore();
+          octx.save();
+          octx.globalCompositeOperation = "screen";
+          octx.fillStyle = hGrad;
+          octx.fillRect(ox, oy, oW, oH);
+          octx.restore();
+        }
+      } else if (node.effect === "pro_mist") {
+        const strength = clamp01(Number(p.diffusion_strength ?? 0.45) * kfMul);
+        const radius = Math.min(24, Math.max(2, Number(p.bloom_radius ?? 8)));
+        const warmth = Math.min(1, Math.max(-1, Number(p.warmth ?? 0.2)));
+        if (strength > 0.005) {
+          const tr = Math.round(255 - Math.max(0, -warmth) * 48);
+          const tg = Math.round(244 - Math.abs(warmth) * 14);
+          const tb = Math.round(230 - Math.max(0, warmth) * 68 + Math.max(0, -warmth) * 24);
+          if (buf && typeof octx.filter === "string") {
+            octx.save();
+            octx.globalCompositeOperation = "screen";
+            octx.globalAlpha = Math.min(0.75, strength * 0.65);
+            const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, oW / 640)));
+            octx.filter = `blur(${blurPx}px) brightness(1.12) contrast(1.18)`;
+            octx.drawImage(buf, oOutX, oOutY, oOutW, oOutH);
+            octx.restore();
+          }
+          // Subtle shadow veil + warm/cool diffusion bloom
+          octx.save();
+          octx.globalCompositeOperation = "screen";
+          octx.fillStyle = `rgba(${tr}, ${tg}, ${tb}, ${(strength * 0.14).toFixed(3)})`;
+          octx.fillRect(ox, oy, oW, oH);
+          const px = ox + oW * 0.65 + shiftX;
+          const py = oy + oH * 0.35 + shiftY;
+          const pr = Math.max(36, radius * 4.8 * Math.max(0.5, oW / 640));
+          const pGrad = octx.createRadialGradient(px, py, 2, px, py, pr);
+          pGrad.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, ${(strength * 0.42).toFixed(3)})`);
+          pGrad.addColorStop(0.5, `rgba(${tr}, ${tg}, ${tb}, ${(strength * 0.18).toFixed(3)})`);
+          pGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+          octx.fillStyle = pGrad;
+          octx.fillRect(ox, oy, oW, oH);
+          octx.restore();
+        }
+      } else if (node.effect === "prism_leak") {
+        const intensity = clamp01(Number(p.leak_intensity ?? 0.55) * kfMul);
+        const corner = String(p.leak_corner ?? "top_left");
+        const shiftPx = Math.round(Math.min(12, Math.max(0, Number(p.prism_shift_px ?? 4))));
+        if (intensity > 0.005) {
+          const coords = {
+            top_left: [0.06, 0.06],
+            top_right: [0.94, 0.06],
+            bottom_left: [0.06, 0.94],
+            bottom_right: [0.94, 0.94]
+          };
+          const [cxFrac, cyFrac] = coords[corner] || coords.top_left;
+          const lx = ox + oW * cxFrac;
+          const ly = oy + oH * cyFrac;
+          const lr = Math.max(oW, oH) * 0.68;
+          const leakGrad = octx.createRadialGradient(lx, ly, 2, lx, ly, lr);
+          leakGrad.addColorStop(0, `rgba(255, 224, 150, ${(intensity * 0.78).toFixed(3)})`);
+          leakGrad.addColorStop(0.32, `rgba(255, 138, 62, ${(intensity * 0.54).toFixed(3)})`);
+          leakGrad.addColorStop(0.66, `rgba(218, 68, 132, ${(intensity * 0.24).toFixed(3)})`);
+          leakGrad.addColorStop(1, "rgba(218, 68, 132, 0)");
+          octx.save();
+          octx.globalCompositeOperation = "screen";
+          octx.fillStyle = leakGrad;
+          octx.fillRect(ox, oy, oW, oH);
+          if (shiftPx > 0) {
+            const prismGrad = octx.createRadialGradient(
+              lx + shiftPx * 2,
+              ly + shiftPx,
+              2,
+              lx + shiftPx * 2,
+              ly + shiftPx,
+              lr * 0.55
+            );
+            prismGrad.addColorStop(0, `rgba(110, 210, 255, ${(intensity * 0.26).toFixed(3)})`);
+            prismGrad.addColorStop(1, "rgba(110, 210, 255, 0)");
+            octx.fillStyle = prismGrad;
+            octx.fillRect(ox, oy, oW, oH);
+          }
+          octx.restore();
         }
       } else if (node.effect === "scanlines") {
         const spacing = Math.round(Math.min(12, Math.max(2, Number(p.line_spacing_px ?? 4))));
         const opacity = Math.min(0.9, Math.max(0.1, Number(p.opacity ?? 0.45))) * Math.min(1, kfMul);
         if (opacity > 0.005) {
-          const stepPx = Math.max(2, Math.round(spacing * Math.max(0.5, frameH / 360)));
+          const stepPx = Math.max(2, Math.round(spacing * Math.max(0.5, oH / 360)));
           const lineH = stepPx >= 6 ? 2 : 1;
-          ctx.save();
-          ctx.fillStyle = `rgba(0, 0, 0, ${opacity.toFixed(3)})`;
-          for (let y = fy; y < fy + frameH; y += stepPx) {
-            ctx.fillRect(fx, y, frameW, lineH);
+          octx.save();
+          octx.fillStyle = `rgba(0, 0, 0, ${opacity.toFixed(3)})`;
+          for (let y = oy; y < oy + oH; y += stepPx) {
+            octx.fillRect(ox, y, oW, lineH);
           }
-          ctx.restore();
+          octx.restore();
         }
       } else if (node.effect === "letterbox") {
         const parsedRatio = Number.parseFloat(String(p.ratio ?? "2.39"));
         const ratioVal = Number.isFinite(parsedRatio)
           ? Math.min(2.39, Math.max(1.85, parsedRatio))
           : 2.39;
-        const frameAspect = frameW / Math.max(1, frameH);
+        const frameAspect = oW / Math.max(1, oH);
         const barH = (frameAspect < ratioVal
-          ? Math.max(0, (frameH - frameW / ratioVal) * 0.5)
+          ? Math.max(0, (oH - oW / ratioVal) * 0.5)
           : 0) * Math.min(1, kfMul);
         if (barH >= 0.5) {
-          ctx.save();
-          ctx.fillStyle = "#000000";
-          ctx.fillRect(fx, fy, frameW, barH);
-          ctx.fillRect(fx, fy + frameH - barH, frameW, barH);
-          ctx.restore();
+          octx.save();
+          octx.fillStyle = "#000000";
+          octx.fillRect(ox, oy, oW, barH);
+          octx.fillRect(ox, oy + oH - barH, oW, barH);
+          octx.restore();
         }
+      }
+    };
+
+    const OVERLAY_FX_SET = new Set([
+      "glow",
+      "lens_flare",
+      "flicker",
+      "film_damage",
+      "vignette",
+      "film_grain",
+      "optical_glow",
+      "halation",
+      "pro_mist",
+      "prism_leak",
+      "scanlines",
+      "letterbox"
+    ]);
+
+    // Apply optical/lighting FX passes over the 16:9 frame
+    if (!(pCkActive && pCkMatteView === "alpha_matte")) {
+      for (const node of pActiveFx) {
+        if (!OVERLAY_FX_SET.has(node.effect)) continue;
+        const kfMul = evaluateNodeIntensity(node, tSec);
+        if (kfMul <= 0.0001) continue;
+        if (isEffectMaskActive(node)) {
+          _fxMaskScratchCanvas = ensureScratchCanvas(_fxMaskScratchCanvas, bw, bh);
+          if (_fxMaskScratchCanvas) {
+            const mctx = _fxMaskScratchCanvas.getContext("2d");
+            const tfm = ctx.getTransform();
+            const sx = tfm.a || 1;
+            const sy = tfm.d || 1;
+            mctx.save();
+            mctx.setTransform(1, 0, 0, 1, 0, 0);
+            mctx.clearRect(0, 0, bw, bh);
+            mctx.drawImage(ctx.canvas, fx * sx, fy * sy, frameW * sx, frameH * sy, 0, 0, bw, bh);
+            mctx.restore();
+            const dryImg = mctx.getImageData(0, 0, bw, bh);
+            renderOverlayFxNode(
+              mctx,
+              0,
+              0,
+              bw,
+              bh,
+              fxOutX - fx,
+              fxOutY - fy,
+              fxOutW,
+              fxOutH,
+              node,
+              kfMul
+            );
+            const wetImg = mctx.getImageData(0, 0, bw, bh);
+            blendImageDataWithEffectMask(dryImg, wetImg, bw, bh, node.effect_mask);
+            mctx.putImageData(wetImg, 0, 0);
+            ctx.save();
+            ctx.drawImage(_fxMaskScratchCanvas, fx, fy, frameW, frameH);
+            ctx.restore();
+            continue;
+          }
+        }
+        renderOverlayFxNode(ctx, fx, fy, frameW, frameH, fxOutX, fxOutY, fxOutW, fxOutH, node, kfMul);
+      }
+      // Draw crisp dashed roto mask overlays for active masked FX nodes
+      for (const node of pActiveFx) {
+        if (!isEffectMaskActive(node)) continue;
+        const m = node.effect_mask;
+        const cx = fx + Math.min(0.95, Math.max(0.05, Number(m.center_x ?? 0.5))) * frameW;
+        const cy = fy + Math.min(0.95, Math.max(0.05, Number(m.center_y ?? 0.5))) * frameH;
+        const rx = Math.min(0.95, Math.max(0.05, Number(m.radius_x ?? 0.35))) * frameW;
+        const ry = Math.min(0.95, Math.max(0.05, Number(m.radius_y ?? 0.35))) * frameH;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(fx, fy, frameW, frameH);
+        ctx.clip();
+        ctx.strokeStyle = m.invert ? "rgba(245, 158, 11, 0.85)" : "rgba(45, 212, 191, 0.85)";
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        if (m.shape === "ellipse") {
+          ctx.ellipse(cx, cy, Math.max(4, rx), Math.max(4, ry), 0, 0, Math.PI * 2);
+        } else {
+          ctx.rect(cx - rx, cy - ry, Math.max(8, rx * 2), Math.max(8, ry * 2));
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(cx - 5, cy);
+        ctx.lineTo(cx + 5, cy);
+        ctx.moveTo(cx, cy - 5);
+        ctx.lineTo(cx, cy + 5);
+        ctx.stroke();
+        ctx.restore();
       }
     }
 

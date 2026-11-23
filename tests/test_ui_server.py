@@ -4063,7 +4063,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     )
                     # OpenFX categorized library & collapsible FFmpeg filtergraph drawer
                     assert page.locator("#fx-ofx-filterbar [data-fx-cat-filter]").count() == 5
-                    assert page.locator("#fx-ofx-groups [data-fx-add]").count() == 20
+                    assert page.locator("#fx-ofx-groups [data-fx-add]").count() == 24
                     assert page.locator("#fx-ofx-groups .fx-ofx-group:not(.is-hidden)").count() == 4
                     page.locator('[data-fx-cat-filter="film_retro"]').click()
                     assert (
@@ -5444,7 +5444,7 @@ def test_ui_sapphire_halation_letterbox_cinema_35mm_endpoints_and_assets(
     assert 'data-fx-add="halation"' in html_text
     assert 'data-fx-add="letterbox"' in html_text
     assert 'data-fx-preset="cinema_35mm"' in html_text
-    assert "20 FX" in html_text
+    assert "24 FX" in html_text
 
     for asset_name in (
         "index.html",
@@ -5599,7 +5599,7 @@ def test_ui_sapphire_camera_shake_lens_distortion_action_handheld_endpoints_and_
     assert 'data-fx-add="camera_shake"' in html_text
     assert 'data-fx-add="lens_distortion"' in html_text
     assert 'data-fx-preset="action_handheld"' in html_text
-    assert "20 FX" in html_text
+    assert "24 FX" in html_text
 
     i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
     for key in (
@@ -5678,7 +5678,7 @@ def test_ui_sapphire_scanlines_unsharp_mask_retro_vhs_endpoints_and_assets(
     assert 'data-fx-add="scanlines"' in html_text
     assert 'data-fx-add="unsharp_mask"' in html_text
     assert 'data-fx-preset="retro_vhs"' in html_text
-    assert "20 FX" in html_text
+    assert "24 FX" in html_text
 
     i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
     for key in (
@@ -5754,7 +5754,7 @@ def test_ui_sapphire_hue_shift_mirror_flip_neon_shift_endpoints_and_assets(
     assert 'data-fx-add="hue_shift"' in html_text
     assert 'data-fx-add="mirror_flip"' in html_text
     assert 'data-fx-preset="neon_shift"' in html_text
-    assert "20 FX" in html_text
+    assert "24 FX" in html_text
 
     i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
     for key in (
@@ -5833,7 +5833,7 @@ def test_ui_sapphire_mosaic_pixelate_invert_negative_retro_arcade_endpoints_and_
     assert 'data-fx-add="mosaic_pixelate"' in html_text
     assert 'data-fx-add="invert_negative"' in html_text
     assert 'data-fx-preset="retro_arcade"' in html_text
-    assert "20 FX" in html_text
+    assert "24 FX" in html_text
 
     i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
     for key in (
@@ -8912,6 +8912,246 @@ def test_ui_hsl_curves_playwright_e2e(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_fx_pro_optical_pack_and_effect_mask_api_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    url, _ = ui_server
+    status_p, _, raw_p = _http_call(f"{url}/api/fx/presets")
+    assert status_p == 200
+    presets_data = json.loads(raw_p.decode("utf-8"))
+    specs = presets_data["specs"]
+    for fx_id in ("pro_mist", "directional_blur", "tilt_shift", "prism_leak"):
+        assert fx_id in specs
+    assert len(specs) == 24
+    preset_ids = {p["id"] for p in presets_data["presets"]}
+    assert {
+        "black_promist_cinema",
+        "miniature_tilt_shift",
+        "anamorphic_prism_leak",
+    }.issubset(preset_ids)
+
+    payload = {
+        "nodes": [
+            {
+                "effect": "pro_mist",
+                "enabled": True,
+                "params": {
+                    "diffusion_strength": 0.5,
+                    "highlight_threshold": 0.52,
+                    "bloom_radius": 10,
+                    "warmth": 0.25,
+                },
+                "effect_mask": {
+                    "shape": "ellipse",
+                    "center_x": 0.5,
+                    "center_y": 0.5,
+                    "radius_x": 0.35,
+                    "radius_y": 0.35,
+                    "feather": 0.12,
+                    "invert": False,
+                },
+            },
+            {
+                "effect": "directional_blur",
+                "enabled": True,
+                "params": {"blur_amount": 8, "angle_deg": 30},
+            },
+            {
+                "effect": "tilt_shift",
+                "enabled": True,
+                "params": {
+                    "focus_y": 0.52,
+                    "band_height": 0.24,
+                    "blur_strength": 7,
+                    "sat_boost": 1.3,
+                },
+            },
+            {
+                "effect": "prism_leak",
+                "enabled": True,
+                "params": {
+                    "leak_intensity": 0.55,
+                    "leak_corner": "top_right",
+                    "prism_shift_px": 4,
+                },
+            },
+        ],
+        "duration_seconds": 10.0,
+        "width": 1920,
+        "height": 1080,
+    }
+    status_c, _, raw_c = _http_call(f"{url}/api/fx/compile", method="POST", payload=payload)
+    assert status_c == 200
+    compiled = json.loads(raw_c.decode("utf-8"))
+    assert compiled["active_effects"] == [
+        "pro_mist",
+        "directional_blur",
+        "tilt_shift",
+        "prism_leak",
+    ]
+    assert compiled["masked_effects"] == ["pro_mist"]
+    assert "maskedmerge" in compiled["filtergraph"]
+    assert "avgblur=sizeX=8:sizeY=1" in compiled["filtergraph"]
+    assert "hypot(X/W-0.94,Y/H-0.06)" in compiled["filtergraph"]
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for fx_id in ("pro_mist", "directional_blur", "tilt_shift", "prism_leak"):
+        assert f'data-fx-add="{fx_id}"' in html_text
+    for pid in ("black_promist_cinema", "miniature_tilt_shift", "anamorphic_prism_leak"):
+        assert f'data-fx-preset="{pid}"' in html_text
+    assert "24 FX" in html_text
+
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "demo_adapter.js",
+        "i18n.js",
+        "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+    demo_js = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    if shutil.which("node") is not None:
+        demo_url = (assets_dir / "demo_adapter.js").as_uri()
+        node_script = (
+            "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+            f"const mod = await import({json.dumps(demo_url)});\n"
+            "const client = mod.createApiClient();\n"
+            f"const res = await client.compileFx({json.dumps(payload)});\n"
+            "console.log(JSON.stringify(res));\n"
+        )
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        demo_compiled = json.loads(proc.stdout.strip())
+        assert demo_compiled["active_effects"] == compiled["active_effects"]
+        assert demo_compiled["masked_effects"] == compiled["masked_effects"]
+        assert "maskedmerge" in demo_compiled["filtergraph"]
+        assert "avgblur=sizeX=8:sizeY=1" in demo_compiled["filtergraph"]
+    assert "compileEffectMaskExprClient" in demo_js
+
+
+def test_fx_pro_optical_pack_and_effect_mask_playwright_responsive(
+    ui_server: tuple[str, Path],
+) -> None:
+    pw_api = pytest.importorskip("playwright.sync_api")
+    url, _ = ui_server
+    with pw_api.sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            page.on("pageerror", lambda exc: console_errors.append(str(exc)))
+            page.goto(url, wait_until="domcontentloaded")
+            page.click("#tab-fx")
+            page.wait_for_selector("#panel-fx:not(.is-hidden)")
+
+            # Apply Black Pro-Mist 1/4 1-click preset
+            page.click("[data-fx-preset='black_promist_cinema']")
+            page.wait_for_function(
+                "() => (document.getElementById('fx-filtergraph-output')?.textContent || '')"
+                ".includes('lutrgb=')"
+            )
+
+            # Add Directional Blur and Tilt-Shift and Prism Leak nodes
+            page.click("[data-fx-add='directional_blur']")
+            page.click("[data-fx-add='tilt_shift']")
+            page.click("[data-fx-add='prism_leak']")
+            page.wait_for_function(
+                "() => document.querySelectorAll('#fx-controls-stack .fx-node-card').length"
+                " === 6"
+            )
+
+            # Toggle Effect Mask -> Ellipse -> Invert on first FX card
+            first_mask_btn = page.locator("#fx-controls-stack .fx-mask-toggle-btn").first
+            first_mask_btn.click()
+            page.locator(
+                "#fx-controls-stack .fx-mask-panel [data-fx-mask-shape='ellipse']"
+            ).first.click()
+            page.locator("#fx-controls-stack .fx-mask-invert-btn").first.click()
+
+            page.wait_for_function(
+                "() => (document.getElementById('fx-filtergraph-output')?.textContent || '')"
+                ".includes('1-clip(')"
+            )
+            fg_text = page.locator("#fx-filtergraph-output").text_content() or ""
+            assert "maskedmerge" in fg_text
+            assert "1-clip(" in fg_text
+            kv_text = page.locator("#fx-compile-kv").text_content() or ""
+            assert "Mask: pro_mist" in kv_text
+
+            # Verify FX Program Monitor canvas painted live non-empty pixels
+            rendered_pixels = page.evaluate(
+                "() => {"
+                "  const c = document.getElementById('fx-program-canvas');"
+                "  const ctx = c.getContext('2d');"
+                "  const d = ctx.getImageData(0, 0, c.width, c.height).data;"
+                "  let lit = 0;"
+                "  for (let i = 0; i < d.length; i += 16) {"
+                "    if (d[i] + d[i+1] + d[i+2] > 90) lit++;"
+                "  }"
+                "  return lit;"
+                "}"
+            )
+            assert rendered_pixels > 100
+
+            # Check EN -> FR i18n switch
+            page.click("#lang-fr")
+            assert "Tous (24)" in (
+                page.locator("[data-fx-cat-filter='all']").text_content() or ""
+            )
+            assert "Inverser" in (
+                page.locator("#fx-controls-stack .fx-mask-invert-btn").first.text_content()
+                or ""
+            )
+            page.click("#lang-en")
+
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            for selector in (
+                "[data-fx-add='pro_mist']",
+                "#fx-controls-stack .fx-mask-toggle-btn",
+                "#fx-controls-stack .fx-mask-panel [data-fx-mask-shape='ellipse']",
+                "#fx-controls-stack .fx-mask-invert-btn",
+            ):
+                h = page.evaluate(
+                    f"() => document.querySelector({json.dumps(selector)})"
+                    ".getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {selector} too small: {h}px"
+
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()
 
 
 
