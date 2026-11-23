@@ -3084,6 +3084,14 @@ input[type="range"] {
   .pane-scroll {
     max-height: none;
   }
+  .btn-grab-still,
+  .still-download-btn {
+    min-height: 44px;
+  }
+  .still-delete-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 @media (max-width: 640px) {
