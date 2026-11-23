@@ -34,7 +34,9 @@ from taktcut.fx import ChromaKeyParams, FxNode, compile_fx_filtergraph
 from taktcut.models import (
     AscCdlParams,
     ClipTransformParams,
+    DialogueEqPresetId,
     HardwareCapabilities,
+    LoudnessPresetId,
     RationalFrameRate,
     RenderPlan,
     RenderProfile,
@@ -47,6 +49,8 @@ from taktcut.render import (
     build_render_plan,
     execute_render_plan,
     probe_hardware_capabilities,
+    validate_dialogue_eq,
+    validate_loudness_preset,
 )
 from taktcut.security import (
     LUT_SUFFIXES,
@@ -219,6 +223,8 @@ class RemoteRenderJobRequest(BaseModel):
     profile: RenderProfile = RenderProfile.WEB_H264
     fps: str | None = None
     target_lufs: float | None = None
+    loudness_preset: LoudnessPresetId = "off"
+    dialogue_eq: DialogueEqPresetId = "off"
     prefer_hw: bool = True
     chroma_key: ChromaKeyParams | None = None
     fx_stack: list[FxNode] = Field(default_factory=list)
@@ -232,6 +238,16 @@ class RemoteRenderJobRequest(BaseModel):
     transform_params: ClipTransformParams | None = None
     framing: FramingParams | None = None
     clip_duration_s: float | None = None
+
+    @field_validator("loudness_preset", mode="before")
+    @classmethod
+    def _validate_loudness_preset(cls, raw: Any) -> LoudnessPresetId:
+        return validate_loudness_preset(raw)
+
+    @field_validator("dialogue_eq", mode="before")
+    @classmethod
+    def _validate_dialogue_eq(cls, raw: Any) -> DialogueEqPresetId:
+        return validate_dialogue_eq(raw)
 
     @field_validator("input_filename", "output_filename")
     @classmethod
@@ -510,6 +526,8 @@ class RemoteRenderState:
             framing=req.framing,
             clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,
+            loudness_preset=req.loudness_preset,
+            dialogue_eq=req.dialogue_eq,
             prefer_hw=req.prefer_hw,
             caps=caps,
         )

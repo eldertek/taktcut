@@ -38,6 +38,7 @@ import {
   BPM_OFFSET_MAX_S,
   BPM_OFFSET_MIN_S,
   DELIVERY_PRESETS,
+  LOUDNESS_PRESET_LUFS,
   MARKER_COLOR_HEX,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
@@ -67,6 +68,7 @@ import {
   clampSplitWipePercent,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
+  compileFairlightAudioFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   computeInOutRangeMetrics,
@@ -95,6 +97,7 @@ import {
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
+  normalizeFairlightAudioParams,
   normalizeInOutRange,
   normalizeMarkerColor,
   removeStillById,
@@ -295,6 +298,10 @@ const state = {
     attack_ms: AUTO_DUCK_ATTACK_MS_DEFAULT,
     release_ms: AUTO_DUCK_RELEASE_MS_DEFAULT
   },
+  fairlight: {
+    loudness_preset: "youtube_14",
+    dialogue_eq: "off"
+  },
   vuMeter: {
     leftDb: -60,
     rightDb: -60,
@@ -481,6 +488,7 @@ function setLanguage(lang) {
   renderStillsGallery();
   renderUpdateButton();
   renderTimelineUI();
+  renderFairlightAudioUI();
   renderFxStack();
   renderDeliveryPresetStrip();
   updateTitleTimingBadges();
@@ -1093,6 +1101,7 @@ function renderTimelineAudioInspector() {
     }
   }
   renderAutoDuckInspector();
+  renderFairlightAudioUI();
   updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
 }
 
@@ -1145,6 +1154,91 @@ function renderAutoDuckInspector() {
   if (fgPreview) {
     fgPreview.textContent = duck.enabled ? compiled.filtergraph : t("timeline.duck.bypassed");
   }
+}
+
+function renderFairlightAudioUI() {
+  const fairlight = normalizeFairlightAudioParams(state.fairlight);
+  state.fairlight = fairlight;
+
+  const tlEq = byId("fairlight-dialogue-eq");
+  const tlLoud = byId("fairlight-loudness-preset");
+  const delEq = byId("render-dialogue-eq");
+  const delLoud = byId("render-loudness-preset");
+  const statusBadge = byId("fairlight-status-badge");
+  const tlPreview = byId("fairlight-af-preview");
+  const delPreview = byId("render-audio-af-preview");
+
+  if (tlEq) tlEq.value = fairlight.dialogue_eq;
+  if (delEq) delEq.value = fairlight.dialogue_eq;
+  if (tlLoud) tlLoud.value = fairlight.loudness_preset;
+  if (delLoud) delLoud.value = fairlight.loudness_preset;
+
+  const compiledFairlight = compileFairlightAudioFilterClient(fairlight);
+  if (statusBadge) {
+    if (compiledFairlight.is_identity) {
+      statusBadge.textContent = "BYPASS";
+      statusBadge.className = "nle-tag mono";
+    } else {
+      const tags = [];
+      if (fairlight.dialogue_eq !== "off") {
+        const eqTags = {
+          voice_clarity: "CLARITY",
+          podcast_warm: "WARM",
+          derumble: "HP100"
+        };
+        tags.push(eqTags[fairlight.dialogue_eq] || fairlight.dialogue_eq.toUpperCase());
+      }
+      if (fairlight.loudness_preset !== "off") {
+        const lufs = LOUDNESS_PRESET_LUFS[fairlight.loudness_preset];
+        tags.push(`${lufs.toFixed(0)} LUFS`);
+      }
+      statusBadge.textContent = tags.join(" | ");
+      statusBadge.className = "nle-tag mono is-pass";
+    }
+  }
+
+  if (tlPreview) {
+    tlPreview.textContent = compiledFairlight.filtergraph
+      ? `-af ${compiledFairlight.filtergraph}`
+      : t("timeline.fairlight.bypassed");
+  }
+
+  if (delPreview) {
+    const useClipAudioEl = byId("render-use-clip-audio");
+    const clipInfo =
+      useClipAudioEl && useClipAudioEl.checked ? getSelectedClipAudioPayload() : null;
+    const clipParams = clipInfo ? clipInfo.audio_params : { gain_db: 0, fade_in_s: 0, fade_out_s: 0, muted: false };
+    const clipDur = clipInfo ? clipInfo.clipDurationS : null;
+    const lufsEl = byId("render-lufs");
+    const lufsRaw = lufsEl ? lufsEl.value.trim() : "";
+    const parsedLufs = lufsRaw !== "" ? Number.parseFloat(lufsRaw) : null;
+    const fallbackLufs =
+      fairlight.loudness_preset === "off" && parsedLufs !== null && Number.isFinite(parsedLufs)
+        ? parsedLufs
+        : null;
+    const compiledFull = compileAudioFilterClient(clipParams, clipDur, fallbackLufs, fairlight);
+    delPreview.textContent = compiledFull.filtergraph ? `-af ${compiledFull.filtergraph}` : t("common.none");
+  }
+}
+
+function setFairlightState(patch, opts = {}) {
+  const { syncLufs = true, markCustom = true } = opts;
+  state.fairlight = normalizeFairlightAudioParams({ ...state.fairlight, ...patch });
+  if (syncLufs && Object.hasOwn(patch, "loudness_preset")) {
+    const lufsEl = byId("render-lufs");
+    if (lufsEl) {
+      if (state.fairlight.loudness_preset === "off") {
+        lufsEl.value = "";
+      } else {
+        const presetLufs = LOUDNESS_PRESET_LUFS[state.fairlight.loudness_preset];
+        if (Number.isFinite(presetLufs)) {
+          lufsEl.value = presetLufs.toFixed(1);
+        }
+      }
+    }
+  }
+  if (markCustom) markDeliverPresetCustom();
+  renderFairlightAudioUI();
 }
 
 function renderVuMeterReadout() {
@@ -1912,6 +2006,8 @@ function serializeFullProjectState() {
       encoder_preset: !isProres ? state.renderConfig.encoderPreset || "medium" : null,
       fps: fpsStr,
       target_lufs: targetLufs,
+      loudness_preset: normalizeFairlightAudioParams(state.fairlight).loudness_preset,
+      dialogue_eq: normalizeFairlightAudioParams(state.fairlight).dialogue_eq,
       lut_path: txt("render-lut-path", ""),
       input_path: txt("render-input-path", ".taktcut-samples/sample_rec709.mp4"),
       output_path: txt("render-output-path", "renders/delivery_web.mp4"),
@@ -2075,6 +2171,10 @@ function applyFullProjectState(project, validation) {
   }
   setVal("render-fps", del.fps || "25");
   setVal("render-lufs", del.target_lufs !== null && del.target_lufs !== undefined ? del.target_lufs : "");
+  state.fairlight = normalizeFairlightAudioParams({
+    loudness_preset: del.loudness_preset || "off",
+    dialogue_eq: del.dialogue_eq || "off"
+  });
   setVal("render-lut-path", del.lut_path || "");
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
@@ -2091,6 +2191,7 @@ function applyFullProjectState(project, validation) {
   setChk("render-prefer-hw", del.prefer_hw !== false);
 
   syncFramingControlsUI();
+  renderFairlightAudioUI();
   renderDeliveryPresetStrip();
   updateTimelineToolbarUI();
   updateIoRangeUI();
@@ -4272,7 +4373,12 @@ function applyDeliveryPreset(presetId) {
     audioEl.value = preset.audio_bitrate_kbps ? String(preset.audio_bitrate_kbps) : "pcm_s24le";
   }
   if (lufsEl && Number.isFinite(Number(preset.target_lufs))) {
-    lufsEl.value = Number(preset.target_lufs).toFixed(1);
+    const presetLufsVal = Number(preset.target_lufs);
+    lufsEl.value = presetLufsVal.toFixed(1);
+    const matchedPreset = Object.entries(LOUDNESS_PRESET_LUFS).find(
+      ([, v]) => Math.abs(v - presetLufsVal) < 0.05
+    );
+    state.fairlight.loudness_preset = matchedPreset ? matchedPreset[0] : "off";
   }
 
   state.framing.preset = preset.aspect_ratio;
@@ -4284,6 +4390,7 @@ function applyDeliveryPreset(presetId) {
   if (useFramingEl) useFramingEl.checked = true;
 
   syncFramingControlsUI();
+  renderFairlightAudioUI();
   renderDeliveryPresetStrip();
   redrawActiveCanvases();
   showBanner(`${getDeliveryPresetLabel(preset)} (${preset.width}x${preset.height}, ${preset.container.toUpperCase()})`, "info");
@@ -4372,6 +4479,8 @@ async function buildOrExecuteRender(execute) {
           }
         : null;
 
+    const fairlightPayload = normalizeFairlightAudioParams(state.fairlight);
+
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
       const bearer_token = byId("remote-bearer-token").value.trim();
@@ -4394,6 +4503,8 @@ async function buildOrExecuteRender(execute) {
         framing: framingPayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
+        loudness_preset: fairlightPayload.loudness_preset,
+        dialogue_eq: fairlightPayload.dialogue_eq,
         prefer_hw: preferHw
       });
       renderRemoteJobTelemetry(submitData);
@@ -4446,6 +4557,8 @@ async function buildOrExecuteRender(execute) {
       framing: framingPayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
+      loudness_preset: fairlightPayload.loudness_preset,
+      dialogue_eq: fairlightPayload.dialogue_eq,
       prefer_hw: preferHw,
       execute
     };
@@ -6388,6 +6501,44 @@ function wireClipAudioInspector() {
   }
 
   wireAutoDuckInspector();
+  wireFairlightAudioInspector();
+}
+
+function wireFairlightAudioInspector() {
+  const tlEq = byId("fairlight-dialogue-eq");
+  const tlLoud = byId("fairlight-loudness-preset");
+  const delEq = byId("render-dialogue-eq");
+  const delLoud = byId("render-loudness-preset");
+  const resetBtn = byId("btn-fairlight-reset");
+
+  if (tlEq) {
+    tlEq.addEventListener("change", () => {
+      setFairlightState({ dialogue_eq: tlEq.value }, { syncLufs: false, markCustom: false });
+    });
+  }
+  if (delEq) {
+    delEq.addEventListener("change", () => {
+      setFairlightState({ dialogue_eq: delEq.value }, { syncLufs: false, markCustom: true });
+    });
+  }
+  if (tlLoud) {
+    tlLoud.addEventListener("change", () => {
+      setFairlightState({ loudness_preset: tlLoud.value }, { syncLufs: true, markCustom: true });
+    });
+  }
+  if (delLoud) {
+    delLoud.addEventListener("change", () => {
+      setFairlightState({ loudness_preset: delLoud.value }, { syncLufs: true, markCustom: true });
+    });
+  }
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      setFairlightState(
+        { loudness_preset: "off", dialogue_eq: "off" },
+        { syncLufs: true, markCustom: true }
+      );
+    });
+  }
 }
 
 function wireAutoDuckInspector() {
@@ -8010,7 +8161,22 @@ function wireEvents() {
   }
   const renderLufsEl = byId("render-lufs");
   if (renderLufsEl) {
-    renderLufsEl.addEventListener("input", markDeliverPresetCustom);
+    renderLufsEl.addEventListener("input", () => {
+      const raw = renderLufsEl.value.trim();
+      const parsed = raw !== "" ? Number.parseFloat(raw) : null;
+      let matched = "off";
+      if (parsed !== null && Number.isFinite(parsed)) {
+        const hit = Object.entries(LOUDNESS_PRESET_LUFS).find(
+          ([, v]) => Math.abs(v - parsed) < 0.05
+        );
+        if (hit) matched = hit[0];
+      }
+      setFairlightState({ loudness_preset: matched }, { syncLufs: false, markCustom: true });
+    });
+  }
+  const renderUseClipAudioEl = byId("render-use-clip-audio");
+  if (renderUseClipAudioEl) {
+    renderUseClipAudioEl.addEventListener("change", renderFairlightAudioUI);
   }
   const renderResEl = byId("render-resolution");
   if (renderResEl) {
@@ -8164,6 +8330,7 @@ async function bootstrap() {
   wireEvents();
   syncFramingControlsUI();
   syncDeliverProfileControlsState();
+  renderFairlightAudioUI();
   renderDeliveryPresetStrip();
   syncColorInputsFromState();
   syncSplitWipeControls("color");

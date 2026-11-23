@@ -2,14 +2,17 @@ import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ASPECT_RATIO_PRESETS,
   DELIVERY_PRESETS,
+  LOUDNESS_PRESET_LUFS,
   TRANSITION_PRESETS,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
+  compileFairlightAudioFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransformFilterClient,
   compileTransitionFilterClient,
   getDeliveryPresetClient,
+  normalizeFairlightAudioParams,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -996,23 +999,48 @@ export function createApiClient() {
           }
         }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
-        const effectiveLufs =
-          body.target_lufs !== null && body.target_lufs !== undefined
-            ? body.target_lufs
-            : presetObj
-              ? presetObj.target_lufs
-              : null;
+        const hasLoudnessPreset =
+          body.loudness_preset !== null && body.loudness_preset !== undefined;
+        const fairlight = normalizeFairlightAudioParams({
+          loudness_preset: body.loudness_preset || "off",
+          dialogue_eq: body.dialogue_eq || "off"
+        });
+        let effectiveLufs = null;
+        if (fairlight.loudness_preset !== "off") {
+          effectiveLufs = LOUDNESS_PRESET_LUFS[fairlight.loudness_preset];
+        } else if (hasLoudnessPreset) {
+          effectiveLufs =
+            body.target_lufs !== null && body.target_lufs !== undefined ? body.target_lufs : null;
+        } else {
+          effectiveLufs =
+            body.target_lufs !== null && body.target_lufs !== undefined
+              ? body.target_lufs
+              : presetObj
+                ? presetObj.target_lufs
+                : null;
+        }
         if (body.audio_params) {
           const compiledAudio = compileAudioFilterClient(
             body.audio_params,
             body.clip_duration_s ?? null,
-            effectiveLufs
+            effectiveLufs,
+            fairlight
           );
           if (compiledAudio.filtergraph) afParts.push(compiledAudio.filtergraph);
-        } else if (effectiveLufs !== null && effectiveLufs !== undefined) {
-          const lufs = Number(effectiveLufs);
-          const lra = lufs >= -16.0 ? 11.0 : 7.0;
-          afParts.push(`loudnorm=I=${lufs.toFixed(1)}:TP=-1.0:LRA=${lra.toFixed(1)}`);
+        } else {
+          const compiledFairlight = compileFairlightAudioFilterClient(fairlight);
+          if (compiledFairlight.filtergraph) {
+            afParts.push(compiledFairlight.filtergraph);
+          }
+          if (
+            fairlight.loudness_preset === "off" &&
+            effectiveLufs !== null &&
+            effectiveLufs !== undefined
+          ) {
+            const lufs = Number(effectiveLufs);
+            const lra = lufs >= -16.0 ? 11.0 : 7.0;
+            afParts.push(`loudnorm=I=${lufs.toFixed(1)}:TP=-1.0:LRA=${lra.toFixed(1)}`);
+          }
         }
         const af = afParts.length > 0 ? afParts.join(",") : null;
         const argv = [
@@ -1058,6 +1086,8 @@ export function createApiClient() {
             audio_bitrate_kbps: effectiveAudioKbps,
             encoder_preset: effectiveEncPreset,
             target_lufs: effectiveLufs,
+            loudness_preset: fairlight.loudness_preset,
+            dialogue_eq: fairlight.dialogue_eq,
             target_width: targetWidth,
             target_height: targetHeight,
             framing_mode: framingMode,
@@ -1143,7 +1173,11 @@ export function createApiClient() {
         return compileAudioFilterClient(
           payload.audio_params || payload,
           payload.clip_duration_s ?? null,
-          payload.target_lufs ?? null
+          payload.target_lufs ?? null,
+          payload.fairlight || {
+            loudness_preset: payload.loudness_preset || "off",
+            dialogue_eq: payload.dialogue_eq || "off"
+          }
         );
       }
       return requestJson("/api/audio/compile", { method: "POST", body: payload });

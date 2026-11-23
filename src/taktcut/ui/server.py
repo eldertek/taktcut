@@ -63,7 +63,9 @@ from taktcut.fx import (
 from taktcut.models import (
     AscCdlParams,
     ClipTransformParams,
+    DialogueEqPresetId,
     HardwareCapabilities,
+    LoudnessPresetId,
     RationalFrameRate,
     RenderProfile,
     TimelineDocument,
@@ -96,6 +98,7 @@ from taktcut.render import (
     AutoDuckParams,
     ClipAudioParams,
     ClipRetimeParams,
+    FairlightAudioParams,
     FramingParams,
     build_render_plan,
     compile_audio_filter_result,
@@ -107,6 +110,8 @@ from taktcut.render import (
     list_aspect_presets,
     list_delivery_presets,
     probe_hardware_capabilities,
+    validate_dialogue_eq,
+    validate_loudness_preset,
 )
 from taktcut.subtitles import (
     CAPTION_FONT_SIZE_MAX,
@@ -402,6 +407,25 @@ def _build_auto_duck_params_from_payload(
             }
         )
     return None
+
+
+def _build_fairlight_params_from_payload(
+    payload: dict[str, Any],
+) -> tuple[LoudnessPresetId | None, DialogueEqPresetId | None]:
+    raw_fairlight = payload.get("fairlight")
+    if raw_fairlight is not None:
+        if not isinstance(raw_fairlight, dict):
+            raise ValueError("'fairlight' must be a JSON object")
+        validated = FairlightAudioParams.model_validate(raw_fairlight)
+        return validated.loudness_preset, validated.dialogue_eq
+
+    loudness_preset: LoudnessPresetId | None = None
+    dialogue_eq: DialogueEqPresetId | None = None
+    if "loudness_preset" in payload and payload["loudness_preset"] is not None:
+        loudness_preset = validate_loudness_preset(payload["loudness_preset"])
+    if "dialogue_eq" in payload and payload["dialogue_eq"] is not None:
+        dialogue_eq = validate_dialogue_eq(payload["dialogue_eq"])
+    return loudness_preset, dialogue_eq
 
 
 def _build_retime_params_from_payload(
@@ -1471,6 +1495,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 chroma_key_obj = _build_chroma_key_from_payload({"chroma_key": raw_chroma_key})
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+            loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1510,6 +1535,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 framing=framing_params,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
+                loudness_preset=loudness_preset,
+                dialogue_eq=dialogue_eq,
                 prefer_hw=prefer_hw,
                 caps=caps,
                 delivery_preset=delivery_preset,
@@ -1628,12 +1655,15 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 payload, allow_top_level=True
             )
             assert audio_params is not None
+            loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             raw_lufs = payload.get("target_lufs")
             target_lufs_val = float(raw_lufs) if raw_lufs not in (None, "") else None
             compiled_audio = compile_audio_filter_result(
                 audio_params,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs_val,
+                loudness_preset=loudness_preset,
+                dialogue_eq=dialogue_eq,
             )
             self._send_json(HTTPStatus.OK, compiled_audio.model_dump(mode="json"))
             return
@@ -1881,6 +1911,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 )
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+            loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1915,6 +1946,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 transform_params=transform_params,
                 framing=framing_params,
                 clip_duration_s=clip_duration_s,
+                loudness_preset=loudness_preset or "off",
+                dialogue_eq=dialogue_eq or "off",
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
             job = client.submit_job(job_req)

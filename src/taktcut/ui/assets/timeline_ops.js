@@ -15,6 +15,18 @@ export const AUTO_DUCK_ATTACK_MS_DEFAULT = 40;
 export const AUTO_DUCK_RELEASE_MS_MIN = 100;
 export const AUTO_DUCK_RELEASE_MS_MAX = 1500;
 export const AUTO_DUCK_RELEASE_MS_DEFAULT = 400;
+export const ALLOWED_LOUDNESS_PRESETS = ["off", "youtube_14", "reels_16", "broadcast_23"];
+export const ALLOWED_DIALOGUE_EQ_PRESETS = ["off", "voice_clarity", "podcast_warm", "derumble"];
+export const LOUDNESS_PRESET_LUFS = {
+  youtube_14: -14.0,
+  reels_16: -16.0,
+  broadcast_23: -23.0
+};
+export const DIALOGUE_EQ_FILTERS = {
+  voice_clarity: "highpass=f=80,equalizer=f=3000:t=q:w=1.2:g=3",
+  podcast_warm: "highpass=f=70,equalizer=f=180:t=q:w=1.0:g=2,equalizer=f=4000:t=q:w=1.2:g=2",
+  derumble: "highpass=f=100"
+};
 export const RETIME_SPEED_MIN = 0.25;
 export const RETIME_SPEED_MAX = 4.0;
 export const TRANSFORM_ZOOM_MIN = 10.0;
@@ -502,7 +514,41 @@ export function isTrackAudiblyMuted(track, allTracks) {
   return anySolo && !track.solo;
 }
 
-export function compileAudioFilterClient(params, clipDurationS = null, targetLufs = null) {
+export function normalizeFairlightAudioParams(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const rawLoud = typeof src.loudness_preset === "string" ? src.loudness_preset.trim().toLowerCase() : "off";
+  const rawEq = typeof src.dialogue_eq === "string" ? src.dialogue_eq.trim().toLowerCase() : "off";
+  return {
+    loudness_preset: ALLOWED_LOUDNESS_PRESETS.includes(rawLoud) ? rawLoud : "off",
+    dialogue_eq: ALLOWED_DIALOGUE_EQ_PRESETS.includes(rawEq) ? rawEq : "off"
+  };
+}
+
+export function compileFairlightAudioFilterClient(params) {
+  const norm = normalizeFairlightAudioParams(params);
+  const parts = [];
+  if (norm.dialogue_eq !== "off" && DIALOGUE_EQ_FILTERS[norm.dialogue_eq]) {
+    parts.push(DIALOGUE_EQ_FILTERS[norm.dialogue_eq]);
+  }
+  if (norm.loudness_preset !== "off" && Object.hasOwn(LOUDNESS_PRESET_LUFS, norm.loudness_preset)) {
+    const lufs = LOUDNESS_PRESET_LUFS[norm.loudness_preset];
+    parts.push(`loudnorm=I=${lufs.toFixed(1)}:TP=-1.0:LRA=11`);
+  }
+  const filtergraph = parts.join(",");
+  return {
+    filtergraph,
+    ffmpeg_af_args: filtergraph ? ["-af", filtergraph] : [],
+    is_identity: filtergraph === "",
+    params: norm
+  };
+}
+
+export function compileAudioFilterClient(
+  params,
+  clipDurationS = null,
+  targetLufs = null,
+  fairlightParams = null
+) {
   const p = params || {};
   const gainDb = clampNum(
     Number.isFinite(Number(p.gain_db)) ? Number(p.gain_db) : 0,
@@ -524,6 +570,7 @@ export function compileAudioFilterClient(params, clipDurationS = null, targetLuf
     clipDurationS !== null && clipDurationS !== undefined && Number.isFinite(Number(clipDurationS)) && Number(clipDurationS) > 0
       ? Number(clipDurationS)
       : null;
+  const fairlight = normalizeFairlightAudioParams(fairlightParams);
 
   const parts = [];
   if (muted) {
@@ -541,7 +588,16 @@ export function compileAudioFilterClient(params, clipDurationS = null, targetLuf
       const outSt = Math.max(0, dur - outD);
       if (outD > 1e-6) parts.push(`afade=t=out:st=${outSt.toFixed(3)}:d=${outD.toFixed(3)}`);
     }
-    if (targetLufs !== null && targetLufs !== undefined && Number.isFinite(Number(targetLufs))) {
+    if (fairlight.dialogue_eq !== "off" && DIALOGUE_EQ_FILTERS[fairlight.dialogue_eq]) {
+      parts.push(DIALOGUE_EQ_FILTERS[fairlight.dialogue_eq]);
+    }
+    if (
+      fairlight.loudness_preset !== "off" &&
+      Object.hasOwn(LOUDNESS_PRESET_LUFS, fairlight.loudness_preset)
+    ) {
+      const presetLufs = LOUDNESS_PRESET_LUFS[fairlight.loudness_preset];
+      parts.push(`loudnorm=I=${presetLufs.toFixed(1)}:TP=-1.0:LRA=11`);
+    } else if (targetLufs !== null && targetLufs !== undefined && Number.isFinite(Number(targetLufs))) {
       const lufs = Number(targetLufs);
       const lra = lufs >= -16.0 ? 11.0 : 7.0;
       parts.push(`loudnorm=I=${lufs.toFixed(1)}:TP=-1.0:LRA=${lra.toFixed(1)}`);
@@ -552,7 +608,9 @@ export function compileAudioFilterClient(params, clipDurationS = null, targetLuf
     filtergraph,
     ffmpeg_af_args: filtergraph ? ["-af", filtergraph] : [],
     is_identity: filtergraph === "",
-    params: { gain_db: gainDb, fade_in_s: fadeInS, fade_out_s: fadeOutS, muted }
+    params: { gain_db: gainDb, fade_in_s: fadeInS, fade_out_s: fadeOutS, muted },
+    loudness_preset: fairlight.loudness_preset,
+    dialogue_eq: fairlight.dialogue_eq
   };
 }
 

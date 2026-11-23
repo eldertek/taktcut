@@ -183,6 +183,8 @@ def compute_bpm_beat_frames(
 
 
 TransitionPresetId = Literal["fade", "fadeblack", "wipeleft", "slideright", "zoomin"]
+LoudnessPresetId = Literal["off", "youtube_14", "reels_16", "broadcast_23"]
+DialogueEqPresetId = Literal["off", "voice_clarity", "podcast_warm", "derumble"]
 
 ALLOWED_TRANSITION_PRESETS: frozenset[str] = frozenset(
     {"fade", "fadeblack", "wipeleft", "slideright", "zoomin"}
@@ -454,6 +456,8 @@ class RenderPlan(BaseModel):
     audio_bitrate_kbps: int | None = None
     encoder_preset: str | None = None
     target_lufs: float | None = None
+    loudness_preset: LoudnessPresetId = "off"
+    dialogue_eq: DialogueEqPresetId = "off"
     target_width: int | None = None
     target_height: int | None = None
     framing_mode: str | None = None

@@ -8,9 +8,9 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from taktcut.color import (
     REC709_FFMPEG_FLAGS,
@@ -21,7 +21,9 @@ from taktcut.color import (
 from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
     ClipTransformParams,
+    DialogueEqPresetId,
     HardwareCapabilities,
+    LoudnessPresetId,
     RationalFrameRate,
     RenderPlan,
     RenderProfile,
@@ -51,6 +53,22 @@ RETIME_SPEED_MAX: float = 4.0
 CLIP_DURATION_MAX_S: float = 86400.0
 TARGET_LUFS_MIN: float = -70.0
 TARGET_LUFS_MAX: float = -5.0
+ALLOWED_LOUDNESS_PRESETS: frozenset[str] = frozenset(
+    {"off", "youtube_14", "reels_16", "broadcast_23"}
+)
+ALLOWED_DIALOGUE_EQ_PRESETS: frozenset[str] = frozenset(
+    {"off", "voice_clarity", "podcast_warm", "derumble"}
+)
+LOUDNESS_PRESET_LUFS: dict[str, float] = {
+    "youtube_14": -14.0,
+    "reels_16": -16.0,
+    "broadcast_23": -23.0,
+}
+DIALOGUE_EQ_FILTERS: dict[str, str] = {
+    "voice_clarity": "highpass=f=80,equalizer=f=3000:t=q:w=1.2:g=3",
+    "podcast_warm": "highpass=f=70,equalizer=f=180:t=q:w=1.0:g=2,equalizer=f=4000:t=q:w=1.2:g=2",
+    "derumble": "highpass=f=100",
+}
 RENDER_CRF_MIN: int = 0
 RENDER_CRF_MAX: int = 51
 RENDER_AUDIO_BITRATE_KBPS_MIN: int = 64
@@ -140,13 +158,89 @@ class ClipAudioParams(BaseModel):
         )
 
 
+def validate_loudness_preset(raw: Any) -> LoudnessPresetId:
+    """Validate and normalize a Fairlight loudness target normalizer preset identifier."""
+    if not isinstance(raw, str):
+        raise ValueError(f"loudness_preset must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned not in ALLOWED_LOUDNESS_PRESETS:
+        allowed = ", ".join(sorted(ALLOWED_LOUDNESS_PRESETS))
+        raise ValueError(f"Unsupported loudness_preset {raw!r}; expected one of: {allowed}")
+    return cast(LoudnessPresetId, cleaned)
+
+
+def validate_dialogue_eq(raw: Any) -> DialogueEqPresetId:
+    """Validate and normalize a Fairlight dialogue EQ preset identifier."""
+    if not isinstance(raw, str):
+        raise ValueError(f"dialogue_eq must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned not in ALLOWED_DIALOGUE_EQ_PRESETS:
+        allowed = ", ".join(sorted(ALLOWED_DIALOGUE_EQ_PRESETS))
+        raise ValueError(f"Unsupported dialogue_eq {raw!r}; expected one of: {allowed}")
+    return cast(DialogueEqPresetId, cleaned)
+
+
+class FairlightAudioParams(BaseModel):
+    """Fairlight master Dialogue EQ and Loudness Target Normalizer parameters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    loudness_preset: LoudnessPresetId = "off"
+    dialogue_eq: DialogueEqPresetId = "off"
+
+    @field_validator("loudness_preset", mode="before")
+    @classmethod
+    def _validate_loudness_preset(cls, raw: Any) -> LoudnessPresetId:
+        return validate_loudness_preset(raw)
+
+    @field_validator("dialogue_eq", mode="before")
+    @classmethod
+    def _validate_dialogue_eq(cls, raw: Any) -> DialogueEqPresetId:
+        return validate_dialogue_eq(raw)
+
+    def is_identity(self) -> bool:
+        """Return True when both dialogue_eq and loudness_preset are bypassed ('off')."""
+        return self.loudness_preset == "off" and self.dialogue_eq == "off"
+
+
+def compile_dialogue_eq_filter(dialogue_eq: DialogueEqPresetId) -> str | None:
+    """Compile a validated Fairlight Dialogue EQ preset into an FFmpeg -af filter snippet."""
+    cleaned = validate_dialogue_eq(dialogue_eq)
+    if cleaned == "off":
+        return None
+    return DIALOGUE_EQ_FILTERS[cleaned]
+
+
+def compile_loudness_preset_filter(loudness_preset: LoudnessPresetId) -> str | None:
+    """Compile a validated Loudness Target Normalizer preset into FFmpeg loudnorm."""
+    cleaned = validate_loudness_preset(loudness_preset)
+    if cleaned == "off":
+        return None
+    lufs = LOUDNESS_PRESET_LUFS[cleaned]
+    return f"loudnorm=I={lufs:.1f}:TP=-1.0:LRA=11"
+
+
+def compile_fairlight_audio_filter(params: FairlightAudioParams) -> str | None:
+    """Compile Fairlight Dialogue EQ followed by Loudness Target Normalizer into -af."""
+    parts: list[str] = []
+    eq_af = compile_dialogue_eq_filter(params.dialogue_eq)
+    if eq_af is not None:
+        parts.append(eq_af)
+    loud_af = compile_loudness_preset_filter(params.loudness_preset)
+    if loud_af is not None:
+        parts.append(loud_af)
+    return ",".join(parts) if parts else None
+
+
 class AudioCompileResult(BaseModel):
-    """Compiled FFmpeg audio filtergraph and validated clip audio parameters."""
+    """Compiled FFmpeg audio filtergraph and validated clip/Fairlight audio parameters."""
 
     filtergraph: str
     ffmpeg_af_args: list[str]
     is_identity: bool
     params: ClipAudioParams
+    loudness_preset: LoudnessPresetId = "off"
+    dialogue_eq: DialogueEqPresetId = "off"
 
 
 def compile_audio_filter(
@@ -197,27 +291,46 @@ def compile_audio_filter_result(
     *,
     clip_duration_s: float | None = None,
     target_lufs: float | None = None,
+    loudness_preset: LoudnessPresetId | None = None,
+    dialogue_eq: DialogueEqPresetId | None = None,
 ) -> AudioCompileResult:
-    """Compile clip audio controls and optional loudnorm into an AudioCompileResult."""
+    """Compile clip audio controls, Fairlight dialogue EQ, and loudness into AudioCompileResult."""
+    resolved_loudness: LoudnessPresetId = (
+        validate_loudness_preset(loudness_preset) if loudness_preset is not None else "off"
+    )
+    resolved_eq: DialogueEqPresetId = (
+        validate_dialogue_eq(dialogue_eq) if dialogue_eq is not None else "off"
+    )
+
     af_parts: list[str] = []
     clip_af = compile_audio_filter(params, clip_duration_s=clip_duration_s)
     if clip_af is not None:
         af_parts.append(clip_af)
-    if target_lufs is not None and not params.muted:
-        validated_lufs = _validate_bounded_float(
-            target_lufs,
-            "target_lufs",
-            TARGET_LUFS_MIN,
-            TARGET_LUFS_MAX,
-        )
-        lra = 11.0 if validated_lufs >= -16.0 else 7.0
-        af_parts.append(f"loudnorm=I={validated_lufs:.1f}:TP=-1.0:LRA={lra:.1f}")
+    if not params.muted:
+        eq_af = compile_dialogue_eq_filter(resolved_eq)
+        if eq_af is not None:
+            af_parts.append(eq_af)
+        if resolved_loudness != "off":
+            loud_af = compile_loudness_preset_filter(resolved_loudness)
+            if loud_af is not None:
+                af_parts.append(loud_af)
+        elif target_lufs is not None:
+            validated_lufs = _validate_bounded_float(
+                target_lufs,
+                "target_lufs",
+                TARGET_LUFS_MIN,
+                TARGET_LUFS_MAX,
+            )
+            lra = 11.0 if validated_lufs >= -16.0 else 7.0
+            af_parts.append(f"loudnorm=I={validated_lufs:.1f}:TP=-1.0:LRA={lra:.1f}")
     fg = ",".join(af_parts)
     return AudioCompileResult(
         filtergraph=fg,
         ffmpeg_af_args=["-af", fg] if fg else [],
         is_identity=(fg == ""),
         params=params,
+        loudness_preset=resolved_loudness,
+        dialogue_eq=resolved_eq,
     )
 
 
@@ -1036,9 +1149,17 @@ def build_render_plan(
     video_crf: int | None = None,
     audio_bitrate_kbps: int | None = None,
     encoder_preset: str | None = None,
+    loudness_preset: LoudnessPresetId | None = None,
+    dialogue_eq: DialogueEqPresetId | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
+    resolved_loudness_preset: LoudnessPresetId = (
+        validate_loudness_preset(loudness_preset) if loudness_preset is not None else "off"
+    )
+    resolved_dialogue_eq: DialogueEqPresetId = (
+        validate_dialogue_eq(dialogue_eq) if dialogue_eq is not None else "off"
+    )
     resolved_profile = (
         profile
         if profile is not None
@@ -1113,11 +1234,16 @@ def build_render_plan(
             enabled=True,
         )
 
-    effective_lufs = (
-        target_lufs
-        if target_lufs is not None
-        else (preset_obj.target_lufs if preset_obj is not None else None)
-    )
+    if loudness_preset is not None and resolved_loudness_preset != "off":
+        effective_lufs: float | None = LOUDNESS_PRESET_LUFS[resolved_loudness_preset]
+    elif loudness_preset is not None and resolved_loudness_preset == "off":
+        effective_lufs = target_lufs
+    else:
+        effective_lufs = (
+            target_lufs
+            if target_lufs is not None
+            else (preset_obj.target_lufs if preset_obj is not None else None)
+        )
 
     retime_vf: str | None = None
     retime_af: str | None = None
@@ -1184,15 +1310,24 @@ def build_render_plan(
         clip_af = compile_audio_filter(audio_params, clip_duration_s=resolved_clip_dur)
         if clip_af is not None:
             af_parts.append(clip_af)
-    if effective_lufs is not None and not (audio_params is not None and audio_params.muted):
-        validated_lufs = _validate_bounded_float(
-            effective_lufs,
-            "target_lufs",
-            TARGET_LUFS_MIN,
-            TARGET_LUFS_MAX,
-        )
-        lra = 11.0 if validated_lufs >= -16.0 else 7.0
-        af_parts.append(f"loudnorm=I={validated_lufs:.1f}:TP=-1.0:LRA={lra:.1f}")
+    is_muted = audio_params is not None and audio_params.muted
+    if not is_muted:
+        eq_af = compile_dialogue_eq_filter(resolved_dialogue_eq)
+        if eq_af is not None:
+            af_parts.append(eq_af)
+        if resolved_loudness_preset != "off":
+            loud_af = compile_loudness_preset_filter(resolved_loudness_preset)
+            if loud_af is not None:
+                af_parts.append(loud_af)
+        elif effective_lufs is not None:
+            validated_lufs = _validate_bounded_float(
+                effective_lufs,
+                "target_lufs",
+                TARGET_LUFS_MIN,
+                TARGET_LUFS_MAX,
+            )
+            lra = 11.0 if validated_lufs >= -16.0 else 7.0
+            af_parts.append(f"loudnorm=I={validated_lufs:.1f}:TP=-1.0:LRA={lra:.1f}")
     audio_filter: str | None = ",".join(af_parts) if af_parts else None
 
     argv: list[str] = [
@@ -1272,6 +1407,8 @@ def build_render_plan(
         audio_bitrate_kbps=effective_audio_kbps,
         encoder_preset=effective_enc_preset,
         target_lufs=effective_lufs,
+        loudness_preset=resolved_loudness_preset,
+        dialogue_eq=resolved_dialogue_eq,
         target_width=target_width,
         target_height=target_height,
         framing_mode=framing_mode,

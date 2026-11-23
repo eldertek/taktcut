@@ -2352,6 +2352,44 @@ input[type="range"] {
   word-break: break-word;
 }
 
+.fairlight-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.fairlight-ctrl-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fairlight-ctrl-row label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.fairlight-ctrl-row select {
+  width: 100%;
+  min-width: 0;
+}
+
+#fairlight-af-preview,
+.af-chain-preview {
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  min-width: 0;
+}
+
 /* CLIP MOTION TRANSFORM INSPECTOR */
 .transform-inspector-dock {
   display: flex;
@@ -3088,7 +3126,8 @@ input[type="range"] {
   .mixer-btn,
   .btn-shortcuts-help,
   .still-delete-btn,
-  .audio-ctrl-row .btn-mini {
+  .audio-ctrl-row .btn-mini,
+  .fairlight-dock .btn-mini {
     min-width: 44px;
     min-height: 44px;
   }
@@ -3177,7 +3216,8 @@ input[type="range"] {
   .audio-ctrl-row label {
     grid-column: 1 / -1;
   }
-  .duck-params-row {
+  .duck-params-row,
+  .fairlight-ctrl-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 5px;
   }

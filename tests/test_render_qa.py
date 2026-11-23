@@ -24,6 +24,7 @@ from taktcut.render import (
     AutoDuckParams,
     ClipAudioParams,
     ClipRetimeParams,
+    FairlightAudioParams,
     FramingParams,
     build_atempo_stages,
     build_render_plan,
@@ -31,8 +32,11 @@ from taktcut.render import (
     compile_audio_filter_result,
     compile_auto_duck_filter,
     compile_auto_duck_filter_result,
+    compile_dialogue_eq_filter,
+    compile_fairlight_audio_filter,
     compile_framing_filter,
     compile_framing_filter_result,
+    compile_loudness_preset_filter,
     compile_retime_filter,
     compile_retime_filter_result,
     compile_transform_filter,
@@ -795,3 +799,114 @@ def test_compile_auto_duck_filter_and_strict_bounds(tmp_path: Path) -> None:
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     assert ducked_wav.is_file() and ducked_wav.stat().st_size > 1000
+
+
+def test_compile_fairlight_loudness_and_dialogue_eq_filters(tmp_path: Path) -> None:
+    default_fl = FairlightAudioParams()
+    assert default_fl.loudness_preset == "off"
+    assert default_fl.dialogue_eq == "off"
+    assert default_fl.is_identity() is True
+    assert compile_fairlight_audio_filter(default_fl) is None
+    assert compile_loudness_preset_filter("off") is None
+    assert compile_dialogue_eq_filter("off") is None
+
+    assert compile_loudness_preset_filter("youtube_14") == "loudnorm=I=-14.0:TP=-1.0:LRA=11"
+    assert compile_loudness_preset_filter("reels_16") == "loudnorm=I=-16.0:TP=-1.0:LRA=11"
+    assert compile_loudness_preset_filter("broadcast_23") == "loudnorm=I=-23.0:TP=-1.0:LRA=11"
+
+    assert (
+        compile_dialogue_eq_filter("voice_clarity")
+        == "highpass=f=80,equalizer=f=3000:t=q:w=1.2:g=3"
+    )
+    assert (
+        compile_dialogue_eq_filter("podcast_warm")
+        == "highpass=f=70,equalizer=f=180:t=q:w=1.0:g=2,equalizer=f=4000:t=q:w=1.2:g=2"
+    )
+    assert compile_dialogue_eq_filter("derumble") == "highpass=f=100"
+
+    combined = FairlightAudioParams(loudness_preset="youtube_14", dialogue_eq="voice_clarity")
+    assert combined.is_identity() is False
+    assert compile_fairlight_audio_filter(combined) == (
+        "highpass=f=80,equalizer=f=3000:t=q:w=1.2:g=3,loudnorm=I=-14.0:TP=-1.0:LRA=11"
+    )
+
+    compiled_res = compile_audio_filter_result(
+        ClipAudioParams(gain_db=-2.5, fade_in_s=0.2),
+        clip_duration_s=3.0,
+        loudness_preset="reels_16",
+        dialogue_eq="podcast_warm",
+    )
+    assert compiled_res.is_identity is False
+    assert compiled_res.loudness_preset == "reels_16"
+    assert compiled_res.dialogue_eq == "podcast_warm"
+    assert compiled_res.filtergraph == (
+        "volume=-2.50dB,afade=t=in:st=0.000:d=0.200,"
+        "highpass=f=70,equalizer=f=180:t=q:w=1.0:g=2,equalizer=f=4000:t=q:w=1.2:g=2,"
+        "loudnorm=I=-16.0:TP=-1.0:LRA=11"
+    )
+    assert compiled_res.ffmpeg_af_args == ["-af", compiled_res.filtergraph]
+
+    muted_res = compile_audio_filter_result(
+        ClipAudioParams(gain_db=3.0, muted=True),
+        loudness_preset="broadcast_23",
+        dialogue_eq="derumble",
+    )
+    assert muted_res.filtergraph == "volume=0"
+
+    # Strict validation checks
+    for bad_loud in ("", "spotify_14", "youtube_14;evil", 14, True, None):
+        with pytest.raises((ValidationError, ValueError)):
+            FairlightAudioParams(loudness_preset=bad_loud)  # type: ignore[arg-type]
+    for bad_eq in ("", "bass_boost", "highpass=f=80;evil", 80, False, None):
+        with pytest.raises((ValidationError, ValueError)):
+            FairlightAudioParams(dialogue_eq=bad_eq)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        FairlightAudioParams.model_validate({"loudness_preset": "off", "extra_field": 1})
+
+    # RenderPlan integration + real FFmpeg execution on synthetic audio
+    src = tmp_path / "fairlight_src.mp4"
+    _generate_synthetic_clip(src)
+
+    for eq_id, loud_id, expected_lufs in (
+        ("voice_clarity", "youtube_14", -14.0),
+        ("podcast_warm", "reels_16", -16.0),
+        ("derumble", "broadcast_23", -23.0),
+    ):
+        out = tmp_path / f"fairlight_{eq_id}_{loud_id}.mp4"
+        plan = build_render_plan(
+            input_path=src,
+            output_path=out,
+            profile=RenderProfile.WEB_H264,
+            fps=RationalFrameRate(num=25, den=1),
+            loudness_preset=loud_id,  # type: ignore[arg-type]
+            dialogue_eq=eq_id,  # type: ignore[arg-type]
+            prefer_hw=False,
+        )
+        assert plan.loudness_preset == loud_id
+        assert plan.dialogue_eq == eq_id
+        assert plan.target_lufs == expected_lufs
+        assert plan.audio_filter is not None
+        assert f"loudnorm=I={expected_lufs:.1f}:TP=-1.0:LRA=11" in plan.audio_filter
+        res = execute_render_plan(plan)
+        assert res.success is True, res.stderr_tail
+        assert res.bytes_written > 0
+        loud_report = audit_loudness(
+            out,
+            target_lufs=expected_lufs,
+            tolerance_lu=2.0,
+            max_true_peak_dbtp=-0.5,
+        )
+        assert loud_report.passed is True, loud_report
+
+    # Explicit loudness_preset='off' with target_lufs=None suppresses delivery preset loudnorm
+    off_plan = build_render_plan(
+        input_path=src,
+        output_path=tmp_path / "fairlight_off.mp4",
+        delivery_preset="youtube_1080p_h264",
+        loudness_preset="off",
+        dialogue_eq="derumble",
+        target_lufs=None,
+        prefer_hw=False,
+    )
+    assert off_plan.audio_filter == "highpass=f=100"
+    assert off_plan.target_lufs is None

@@ -381,6 +381,8 @@ def _mutated_dict(mutator: Any) -> dict[str, Any]:
         lambda d: d["delivery"].__setitem__("video_crf", True),
         lambda d: d["delivery"].__setitem__("fps", "0/0"),
         lambda d: d["delivery"].__setitem__("target_lufs", 2.0),
+        lambda d: d["delivery"].__setitem__("loudness_preset", "spotify_14"),
+        lambda d: d["delivery"].__setitem__("dialogue_eq", "highpass=f=80;evil"),
         lambda d: d["delivery"].__setitem__("input_path", "bad\x00.mp4"),
         lambda d: d["timeline"]["tracks"][0]["clips"][0].__setitem__("speed_rate", 10.0),
         lambda d: d["timeline"]["tracks"][0]["clips"][0]["transform"].__setitem__(
@@ -491,5 +493,35 @@ def test_project_fx_optical_glow_and_rgb_split_roundtrip() -> None:
     for bad_shift in (-1, 15):
         bad_payload = export_project_dict(loaded)
         bad_payload["fx"]["nodes"][1]["params"]["chroma_shift_px"] = bad_shift
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+
+def test_project_fairlight_loudness_and_dialogue_eq_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    proj.delivery.loudness_preset = "broadcast_23"
+    proj.delivery.dialogue_eq = "podcast_warm"
+    proj.delivery.target_lufs = -23.0
+
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.loudness_preset == "broadcast_23"
+    assert loaded.delivery.dialogue_eq == "podcast_warm"
+    assert loaded.delivery.target_lufs == pytest.approx(-23.0)
+
+    proj_path = tmp_path / "fairlight_session.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.loudness_preset == "broadcast_23"
+    assert disk_loaded.delivery.dialogue_eq == "podcast_warm"
+
+    for bad_field, bad_val in (
+        ("loudness_preset", "cinema_24"),
+        ("loudness_preset", 14),
+        ("dialogue_eq", "compressor_heavy"),
+        ("dialogue_eq", True),
+    ):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"][bad_field] = bad_val
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)

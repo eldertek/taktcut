@@ -22,6 +22,8 @@ from taktcut.fx import (
 )
 from taktcut.models import (
     BpmGridConfig,
+    DialogueEqPresetId,
+    LoudnessPresetId,
     RationalFrameRate,
     RenderProfile,
     TimelineDocument,
@@ -37,6 +39,8 @@ from taktcut.render import (
     DeliveryPresetId,
     EncoderPresetId,
     FramingParams,
+    validate_dialogue_eq,
+    validate_loudness_preset,
 )
 from taktcut.subtitles import SubtitleTrackParams
 from taktcut.titles import TitleOverlayParams, apply_title_preset
@@ -151,6 +155,8 @@ class ProjectDeliveryState(BaseModel):
     encoder_preset: EncoderPresetId | None = "medium"
     fps: str = "25"
     target_lufs: float | None = -14.0
+    loudness_preset: LoudnessPresetId = "off"
+    dialogue_eq: DialogueEqPresetId = "off"
     lut_path: str = ""
     input_path: str = ".taktcut-samples/sample_rec709.mp4"
     output_path: str = "renders/delivery_web.mp4"
@@ -189,6 +195,16 @@ class ProjectDeliveryState(BaseModel):
         if raw is None:
             return None
         return _require_finite_float(raw, "target_lufs", TARGET_LUFS_MIN, TARGET_LUFS_MAX)
+
+    @field_validator("loudness_preset", mode="before")
+    @classmethod
+    def _validate_loudness_preset(cls, raw: Any) -> LoudnessPresetId:
+        return validate_loudness_preset(raw)
+
+    @field_validator("dialogue_eq", mode="before")
+    @classmethod
+    def _validate_dialogue_eq(cls, raw: Any) -> DialogueEqPresetId:
+        return validate_dialogue_eq(raw)
 
     @field_validator("fps", mode="before")
     @classmethod

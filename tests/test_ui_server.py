@@ -947,6 +947,7 @@ import {{
   clampSplitWipePercent,
   collectSnapTargets,
   compileAudioFilterClient,
+  compileFairlightAudioFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
@@ -969,6 +970,7 @@ import {{
   normalizeClipAudio,
   normalizeClipRetime,
   normalizeClipTransition,
+  normalizeFairlightAudioParams,
   normalizeInOutRange,
   normalizeMarkerColor,
   removeStillById,
@@ -1090,6 +1092,32 @@ const compiledAf = compileAudioFilterClient(
 assert.equal(
   compiledAf.filtergraph,
   "volume=-6.00dB,afade=t=in:st=0.000:d=1.000,afade=t=out:st=8.500:d=1.500"
+);
+
+const normFl = normalizeFairlightAudioParams({{
+  loudness_preset: "bad",
+  dialogue_eq: "voice_clarity"
+}});
+assert.equal(normFl.loudness_preset, "off");
+assert.equal(normFl.dialogue_eq, "voice_clarity");
+
+const compiledFl = compileFairlightAudioFilterClient({{
+  loudness_preset: "youtube_14",
+  dialogue_eq: "podcast_warm"
+}});
+assert.equal(
+  compiledFl.filtergraph,
+  "highpass=f=70,equalizer=f=180:t=q:w=1.0:g=2,equalizer=f=4000:t=q:w=1.2:g=2,loudnorm=I=-14.0:TP=-1.0:LRA=11"
+);
+const compiledAfFairlight = compileAudioFilterClient(
+  {{ gain_db: -2.0, fade_in_s: 0.0, fade_out_s: 0.0, muted: false }},
+  4.0,
+  null,
+  {{ loudness_preset: "broadcast_23", dialogue_eq: "derumble" }}
+);
+assert.equal(
+  compiledAfFairlight.filtergraph,
+  "volume=-2.00dB,highpass=f=100,loudnorm=I=-23.0:TP=-1.0:LRA=11"
 );
 
 const retimeNormDefault = normalizeClipRetime(doc.tracks[0].clips[0]);
@@ -2756,3 +2784,109 @@ def test_ui_sapphire_optical_glow_and_rgb_split_endpoints_and_assets(
     demo_js = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
     assert "\u2014" not in demo_js and "\u2013" not in demo_js
     assert "innerHTML" not in demo_js
+
+
+def test_ui_fairlight_loudness_and_dialogue_eq_endpoints_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    comp_status, _, comp_raw = _http_call(
+        f"{base_url}/api/audio/compile",
+        method="POST",
+        payload={
+            "gain_db": -1.5,
+            "loudness_preset": "reels_16",
+            "dialogue_eq": "voice_clarity",
+        },
+    )
+    assert comp_status == 200
+    comp_data = json.loads(comp_raw.decode("utf-8"))
+    assert comp_data["loudness_preset"] == "reels_16"
+    assert comp_data["dialogue_eq"] == "voice_clarity"
+    assert comp_data["filtergraph"] == (
+        "volume=-1.50dB,highpass=f=80,equalizer=f=3000:t=q:w=1.2:g=3,"
+        "loudnorm=I=-16.0:TP=-1.0:LRA=11"
+    )
+
+    for bad_payload in (
+        {"loudness_preset": "invalid_lufs"},
+        {"dialogue_eq": "highpass=f=80;evil"},
+        {"fairlight": "not-an-object"},
+        {"fairlight": {"loudness_preset": "off", "extra_key": 1}},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/audio/compile",
+            method="POST",
+            payload=bad_payload,
+        )
+        assert bad_status == 400
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/fairlight_broadcast.mp4",
+            "profile": "web_h264",
+            "loudness_preset": "broadcast_23",
+            "dialogue_eq": "podcast_warm",
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan_data = json.loads(plan_raw.decode("utf-8"))
+    assert plan_data["plan"]["loudness_preset"] == "broadcast_23"
+    assert plan_data["plan"]["dialogue_eq"] == "podcast_warm"
+    assert plan_data["plan"]["target_lufs"] == -23.0
+    assert plan_data["plan"]["audio_filter"] == (
+        "highpass=f=70,equalizer=f=180:t=q:w=1.0:g=2,equalizer=f=4000:t=q:w=1.2:g=2,"
+        "loudnorm=I=-23.0:TP=-1.0:LRA=11"
+    )
+
+    bad_plan_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/bad.mp4",
+            "loudness_preset": "unknown_target",
+        },
+    )
+    assert bad_plan_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "timeline-fairlight-dock",
+        "fairlight-dialogue-eq",
+        "fairlight-loudness-preset",
+        "fairlight-status-badge",
+        "fairlight-af-preview",
+        "btn-fairlight-reset",
+        "render-loudness-preset",
+        "render-dialogue-eq",
+        "render-audio-af-preview",
+    ):
+        assert f'id="{elem_id}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    assert '"Fairlight Dialogue EQ & Loudness"' in i18n_text
+    assert '"Fairlight EQ Dialogue & Sonie"' in i18n_text
+    assert '"Normaliseur Sonie Cible"' in i18n_text
+
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "timeline_ops.js",
+        "demo_adapter.js",
+        "i18n.js",
+        "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"

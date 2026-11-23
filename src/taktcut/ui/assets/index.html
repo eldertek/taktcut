@@ -361,6 +361,36 @@
                     <div id="auto-duck-fg-preview" class="telemetry-note mono" data-i18n="timeline.duck.bypassed">Sidechain auto-ducking bypassed.</div>
                   </div>
                 </div>
+                <div id="timeline-fairlight-dock" class="fairlight-dock">
+                  <div class="pane-subheader">
+                    <span data-i18n="timeline.fairlight.title">Fairlight Dialogue EQ &amp; Loudness</span>
+                    <div class="viewer-controls">
+                      <span id="fairlight-status-badge" class="nle-tag mono">BYPASS</span>
+                      <button type="button" id="btn-fairlight-reset" class="btn btn-mini" data-i18n="timeline.fairlight.reset" aria-label="Reset Fairlight EQ and Loudness">Rst</button>
+                    </div>
+                  </div>
+                  <div id="fairlight-controls" class="audio-ctrl-grid mono">
+                    <div class="fairlight-ctrl-row">
+                      <label for="fairlight-dialogue-eq" data-i18n="timeline.fairlight.eq">Dialogue EQ</label>
+                      <select id="fairlight-dialogue-eq" class="input-control mono">
+                        <option value="off" data-i18n="fairlight.eq.off">Off (Bypass)</option>
+                        <option value="voice_clarity" data-i18n="fairlight.eq.voice_clarity">Voice Clarity (HP 80 Hz +3 dB @ 3 kHz)</option>
+                        <option value="podcast_warm" data-i18n="fairlight.eq.podcast_warm">Podcast Warm (HP 70 Hz +2 dB @ 180 Hz / 4 kHz)</option>
+                        <option value="derumble" data-i18n="fairlight.eq.derumble">De-Rumble (HP 100 Hz)</option>
+                      </select>
+                    </div>
+                    <div class="fairlight-ctrl-row">
+                      <label for="fairlight-loudness-preset" data-i18n="timeline.fairlight.loudness">Loudness Target</label>
+                      <select id="fairlight-loudness-preset" class="input-control mono">
+                        <option value="off" data-i18n="fairlight.loudness.off">Off (Bypass)</option>
+                        <option value="youtube_14" data-i18n="fairlight.loudness.youtube_14">YouTube (-14 LUFS / -1.0 dBTP)</option>
+                        <option value="reels_16" data-i18n="fairlight.loudness.reels_16">Reels / TikTok (-16 LUFS / -1.0 dBTP)</option>
+                        <option value="broadcast_23" data-i18n="fairlight.loudness.broadcast_23">Broadcast EBU R128 (-23 LUFS / -1.0 dBTP)</option>
+                      </select>
+                    </div>
+                    <div id="fairlight-af-preview" class="telemetry-note mono" data-i18n="timeline.fairlight.bypassed">Fairlight EQ &amp; Loudness bypassed.</div>
+                  </div>
+                </div>
               </div>
 
               <div id="timeline-retime-inspector" class="retime-inspector-dock">
@@ -1343,6 +1373,30 @@
                   <label for="render-lufs" data-i18n="render.label.lufs">Target Loudness (LUFS)</label>
                   <input type="number" id="render-lufs" class="input-control mono" step="0.5" value="-14.0" placeholder="-14.0">
                 </div>
+              </div>
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="render-loudness-preset" data-i18n="render.label.loudnessPreset">Loudness Target Normalizer</label>
+                  <select id="render-loudness-preset" class="input-control mono">
+                    <option value="off" data-i18n="fairlight.loudness.off">Off (Bypass)</option>
+                    <option value="youtube_14" data-i18n="fairlight.loudness.youtube_14">YouTube (-14 LUFS / -1.0 dBTP)</option>
+                    <option value="reels_16" data-i18n="fairlight.loudness.reels_16">Reels / TikTok (-16 LUFS / -1.0 dBTP)</option>
+                    <option value="broadcast_23" data-i18n="fairlight.loudness.broadcast_23">Broadcast EBU R128 (-23 LUFS / -1.0 dBTP)</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label for="render-dialogue-eq" data-i18n="render.label.dialogueEq">Fairlight Dialogue EQ</label>
+                  <select id="render-dialogue-eq" class="input-control mono">
+                    <option value="off" data-i18n="fairlight.eq.off">Off (Bypass)</option>
+                    <option value="voice_clarity" data-i18n="fairlight.eq.voice_clarity">Voice Clarity (HP 80 Hz +3 dB @ 3 kHz)</option>
+                    <option value="podcast_warm" data-i18n="fairlight.eq.podcast_warm">Podcast Warm (HP 70 Hz +2 dB @ 180 Hz / 4 kHz)</option>
+                    <option value="derumble" data-i18n="fairlight.eq.derumble">De-Rumble (HP 100 Hz)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <label for="render-audio-af-preview" data-i18n="render.label.afChain">Audio Filter Chain (-af)</label>
+                <div id="render-audio-af-preview" class="code-box af-chain-preview mono" aria-live="polite">(none)</div>
               </div>
               <div class="form-row">
                 <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
