@@ -6,6 +6,7 @@ import {
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
   drawFramesCanvas,
+  drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
   drawProgramMonitorCanvas,
@@ -53,6 +54,11 @@ import {
   DYNAMIC_ZOOM_DEFAULT,
   FAIRLIGHT_EQ_BAND_ORDER,
   FAIRLIGHT_EQ_BAND_SPECS,
+  HSL_CURVE_MODES,
+  HSL_CURVE_PRESETS,
+  HSL_HUE_ANCHOR_DEGREES,
+  HSL_HUE_BOUNDS,
+  HSL_HUE_VECTORS,
   LOUDNESS_PRESET_LUFS,
   MARKER_COLOR_HEX,
   MAX_COLOR_NODES,
@@ -138,6 +144,7 @@ import {
   countSyncLockedTracks,
   createDefaultColorCurves,
   createDefaultColorNodeTree,
+  createDefaultHslCurves,
   createDefaultPowerWindow,
   createDefaultQualifier,
   createEmptyTransformKeyframes,
@@ -186,6 +193,8 @@ import {
   isColorCurvesIdentity,
   isColorNodeIdentity,
   isCurveChannelIdentity,
+  isHslCurveChannelIdentity,
+  isHslCurvesIdentity,
   isPointerOnSplitWipeDivider,
   isPowerWindowActive,
   isQualifierActive,
@@ -204,6 +213,7 @@ import {
   normalizeCurvePoints,
   normalizeFairlightAudioParams,
   normalizeFairlightAudioRackParams,
+  normalizeHslCurves,
   normalizeInOutRange,
   normalizePlanarTrackerClient,
   normalizeStabilizerClient,
@@ -497,9 +507,12 @@ const state = {
   qualifierPickMode: false,
   qualifierPickDrag: false,
   qualifierLastSample: null,
+  colorCurvesMode: "yrgb",
   colorCurvesChannel: "master",
   colorCurvesSelectedPt: -1,
   colorCurvesDrag: null,
+  hslCurvesSelectedVec: "reds",
+  hslCurvesDrag: null,
   wipeRatio: 0.5,
   colorSplitWipe: {
     enabled: true,
@@ -1244,13 +1257,23 @@ function redrawActiveCanvases() {
       byId("qual-spectrum-canvas"),
       activeNode ? activeNode.qualifier : createDefaultQualifier()
     );
-    drawColorCurvesCanvas(
-      byId("color-curves-canvas"),
-      activeNode ? activeNode.curves : createDefaultColorCurves(),
-      state.colorCurvesChannel,
-      state.colorCurvesSelectedPt,
-      { previewCanvas, cdl: activeColorChain }
-    );
+    const curvesCanvasEl = byId("color-curves-canvas");
+    if (HSL_CURVE_MODES.includes(state.colorCurvesMode)) {
+      drawHslCurvesCanvas(
+        curvesCanvasEl,
+        activeNode ? activeNode.hsl_curves : createDefaultHslCurves(),
+        state.colorCurvesMode,
+        state.hslCurvesSelectedVec
+      );
+    } else {
+      drawColorCurvesCanvas(
+        curvesCanvasEl,
+        activeNode ? activeNode.curves : createDefaultColorCurves(),
+        state.colorCurvesChannel,
+        state.colorCurvesSelectedPt,
+        { previewCanvas, cdl: activeColorChain }
+      );
+    }
     drawColorWheel(byId("wheel-lift"), "lift", state.colorGrade.lift);
     drawColorWheel(byId("wheel-gamma"), "gamma", state.colorGrade.gamma);
     drawColorWheel(byId("wheel-gain"), "gain", state.colorGrade.gain);
@@ -6683,6 +6706,9 @@ function renderColorNodeTreeUI() {
     if (!isColorCurvesIdentity(node.curves)) {
       metaRow.appendChild(dom("span", "color-node-crv-tag", "CRV"));
     }
+    if (!isHslCurvesIdentity(node.hsl_curves)) {
+      metaRow.appendChild(dom("span", "color-node-crv-tag", "HSL"));
+    }
     if (isQualifierActive(node.qualifier)) {
       const qualLabel = node.qualifier.invert ? "INV QUAL" : "QUAL";
       metaRow.appendChild(
@@ -6999,20 +7025,89 @@ function getActiveCurvePresetId(curves) {
   return "";
 }
 
+function getActiveHslCurvePresetId(hslCurves) {
+  const h = normalizeHslCurves(hslCurves);
+  if (isHslCurvesIdentity(h)) return "neutral";
+  for (const preset of Object.values(HSL_CURVE_PRESETS)) {
+    const p = normalizeHslCurves(preset.hsl_curves);
+    const matches = HSL_CURVE_MODES.every((mode) =>
+      HSL_HUE_VECTORS.every((vec) => Math.abs((h[mode][vec] || 0) - (p[mode][vec] || 0)) < 1e-3)
+    );
+    if (matches) return preset.id;
+  }
+  return "";
+}
+
+function formatHslVectorReadout(mode, vectorId, val) {
+  const deg = HSL_HUE_ANCHOR_DEGREES[vectorId] || 0;
+  const label = vectorId.toUpperCase();
+  if (mode === "hue_vs_hue") {
+    const sign = val > 0 ? "+" : "";
+    return `${label} (${deg}°) | ${sign}${val.toFixed(1)} deg`;
+  }
+  if (mode === "hue_vs_sat") {
+    const pct = Math.round(val * 100);
+    const sign = pct > 0 ? "+" : "";
+    return `${label} (${deg}°) | ${sign}${pct}% SAT`;
+  }
+  const sign = val > 0 ? "+" : "";
+  return `${label} (${deg}°) | ${sign}${val.toFixed(2)} LUM`;
+}
+
 function renderColorCurvesControlsUI(activeNode) {
   const curves = normalizeColorCurves(activeNode ? activeNode.curves : null);
+  const hslCurves = normalizeHslCurves(activeNode ? activeNode.hsl_curves : null);
+  const mode = HSL_CURVE_MODES.includes(state.colorCurvesMode) ? state.colorCurvesMode : "yrgb";
+  const isHslMode = mode !== "yrgb";
   const ch = CURVE_CHANNELS.includes(state.colorCurvesChannel) ? state.colorCurvesChannel : "master";
   const pts = normalizeCurvePoints(curves[ch]);
   if (state.colorCurvesSelectedPt >= pts.length) {
     state.colorCurvesSelectedPt = -1;
   }
+  const selVec = HSL_HUE_VECTORS.includes(state.hslCurvesSelectedVec)
+    ? state.hslCurvesSelectedVec
+    : "reds";
+
+  const titleEl = byId("curves-dock-title");
+  if (titleEl) {
+    const key = isHslMode ? "color.curves.hslTitle" : "color.curves.title";
+    titleEl.setAttribute("data-i18n", key);
+    titleEl.textContent = t(key);
+  }
+  const hintEl = byId("curves-hint-text");
+  if (hintEl) {
+    const key = isHslMode ? "color.curves.hslHint" : "color.curves.hint";
+    hintEl.setAttribute("data-i18n", key);
+    hintEl.textContent = t(key);
+  }
+
+  for (const btn of document.querySelectorAll("[data-curve-mode]")) {
+    const isSel = btn.getAttribute("data-curve-mode") === mode;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  byId("curves-channel-group")?.classList.toggle("is-hidden", isHslMode);
+  byId("hsl-vector-strip")?.classList.toggle("is-hidden", !isHslMode);
+  byId("curves-preset-strip")?.classList.toggle("is-hidden", isHslMode);
+  byId("hsl-curves-preset-strip")?.classList.toggle("is-hidden", !isHslMode);
 
   const badge = byId("curves-status-badge");
   if (badge) {
     const activeChannels = CURVE_CHANNELS.filter((c) => !isCurveChannelIdentity(curves[c]));
-    if (activeChannels.length === 0) {
+    const activeHslModes = HSL_CURVE_MODES.filter((m) => !isHslCurveChannelIdentity(hslCurves[m]));
+    if (activeChannels.length === 0 && activeHslModes.length === 0) {
       badge.textContent = "LINEAR";
       badge.className = "nle-tag mono";
+    } else if (activeChannels.length > 0 && activeHslModes.length > 0) {
+      badge.textContent = "YRGB+HSL";
+      badge.className = "nle-tag is-blue mono";
+    } else if (activeHslModes.length > 0) {
+      const mTags = activeHslModes.map((m) =>
+        m === "hue_vs_hue" ? "HvH" : m === "hue_vs_sat" ? "HvS" : "HvL"
+      );
+      badge.textContent = `HSL | ${mTags.join("+")}`;
+      badge.className = "nle-tag is-blue mono";
     } else {
       const labels = activeChannels.map((c) => (c === "master" ? "Y" : c[0].toUpperCase()));
       badge.textContent = `ACTIVE | ${labels.join("+")}`;
@@ -7026,6 +7121,12 @@ function renderColorCurvesControlsUI(activeNode) {
     btn.setAttribute("aria-pressed", isSel ? "true" : "false");
   }
 
+  for (const btn of document.querySelectorAll("[data-hsl-vector]")) {
+    const isSel = btn.getAttribute("data-hsl-vector") === selVec;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
   const matchedPreset = getActiveCurvePresetId(curves);
   for (const btn of document.querySelectorAll("[data-curve-preset]")) {
     const isSel = btn.getAttribute("data-curve-preset") === matchedPreset;
@@ -7033,20 +7134,38 @@ function renderColorCurvesControlsUI(activeNode) {
     btn.setAttribute("aria-pressed", isSel ? "true" : "false");
   }
 
+  const matchedHslPreset = getActiveHslCurvePresetId(hslCurves);
+  for (const btn of document.querySelectorAll("[data-hsl-preset]")) {
+    const isSel = btn.getAttribute("data-hsl-preset") === matchedHslPreset;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
   const selIdx = state.colorCurvesSelectedPt;
-  const canDelete = selIdx > 0 && selIdx < pts.length - 1;
+  const canDelete = !isHslMode && selIdx > 0 && selIdx < pts.length - 1;
   const delBtn = byId("btn-curves-delete-pt");
-  if (delBtn) delBtn.disabled = !canDelete;
+  if (delBtn) {
+    delBtn.disabled = !canDelete;
+    delBtn.classList.toggle("is-hidden", isHslMode);
+  }
 
   const rstChBtn = byId("btn-curves-reset-ch");
-  if (rstChBtn) rstChBtn.disabled = isCurveChannelIdentity(pts);
+  if (rstChBtn) {
+    rstChBtn.disabled = isHslMode
+      ? isHslCurveChannelIdentity(hslCurves[mode])
+      : isCurveChannelIdentity(pts);
+  }
 
   const rstAllBtn = byId("btn-curves-reset-all");
-  if (rstAllBtn) rstAllBtn.disabled = isColorCurvesIdentity(curves);
+  if (rstAllBtn) {
+    rstAllBtn.disabled = isColorCurvesIdentity(curves) && isHslCurvesIdentity(hslCurves);
+  }
 
   const readout = byId("curves-point-readout");
   if (readout) {
-    if (selIdx >= 0 && selIdx < pts.length) {
+    if (isHslMode) {
+      readout.textContent = formatHslVectorReadout(mode, selVec, hslCurves[mode][selVec] || 0);
+    } else if (selIdx >= 0 && selIdx < pts.length) {
       const [px, py] = pts[selIdx];
       readout.textContent = `PT ${selIdx + 1}/${pts.length} | IN ${px.toFixed(2)} | OUT ${py.toFixed(2)}`;
     } else {
@@ -7055,17 +7174,9 @@ function renderColorCurvesControlsUI(activeNode) {
   }
 }
 
-function updateActiveColorCurvesChannel(channel, nextPoints, shouldCompile = true, immediateCompile = false) {
+function commitNodeCurvePatch(patch, shouldCompile = true, immediateCompile = false) {
   const active = syncActiveColorGradeFromTree();
-  const ch = CURVE_CHANNELS.includes(channel) ? channel : "master";
-  const curCurves = normalizeColorCurves(active.curves);
-  const nextCurves = normalizeColorCurves({
-    ...curCurves,
-    [ch]: nextPoints
-  });
-  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
-    curves: nextCurves
-  });
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, patch);
   syncActiveColorGradeFromTree();
   renderColorNodeTreeUI();
   if (state.activeTab === "color") {
@@ -7078,20 +7189,44 @@ function updateActiveColorCurvesChannel(channel, nextPoints, shouldCompile = tru
   }
 }
 
+function updateActiveColorCurvesChannel(channel, nextPoints, shouldCompile = true, immediateCompile = false) {
+  const active = syncActiveColorGradeFromTree();
+  const ch = CURVE_CHANNELS.includes(channel) ? channel : "master";
+  const curCurves = normalizeColorCurves(active.curves);
+  const nextCurves = normalizeColorCurves({
+    ...curCurves,
+    [ch]: nextPoints
+  });
+  commitNodeCurvePatch({ curves: nextCurves }, shouldCompile, immediateCompile);
+}
+
+function updateActiveHslCurveVector(mode, vectorId, value, shouldCompile = true, immediateCompile = false) {
+  if (!HSL_CURVE_MODES.includes(mode) || !HSL_HUE_VECTORS.includes(vectorId)) return;
+  const active = syncActiveColorGradeFromTree();
+  const curHsl = normalizeHslCurves(active.hsl_curves);
+  const bounds = HSL_HUE_BOUNDS[mode];
+  const clamped = Math.min(bounds.max, Math.max(bounds.min, Number(value) || 0));
+  const nextHsl = normalizeHslCurves({
+    ...curHsl,
+    [mode]: {
+      ...curHsl[mode],
+      [vectorId]: Math.round(clamped * 10000) / 10000
+    }
+  });
+  commitNodeCurvePatch({ hsl_curves: nextHsl }, shouldCompile, immediateCompile);
+}
+
 function applyColorCurvePresetAction(presetId) {
   const preset = COLOR_CURVE_PRESETS[presetId];
   if (!preset) return;
-  const active = syncActiveColorGradeFromTree();
   state.colorCurvesSelectedPt = -1;
-  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
-    curves: normalizeColorCurves(preset.curves)
-  });
-  syncActiveColorGradeFromTree();
-  renderColorNodeTreeUI();
-  if (state.activeTab === "color") {
-    redrawActiveCanvases();
-  }
-  compileColorNow();
+  commitNodeCurvePatch({ curves: normalizeColorCurves(preset.curves) }, true, true);
+}
+
+function applyHslCurvePresetAction(presetId) {
+  const preset = HSL_CURVE_PRESETS[presetId];
+  if (!preset) return;
+  commitNodeCurvePatch({ hsl_curves: normalizeHslCurves(preset.hsl_curves) }, true, true);
 }
 
 function selectColorNodeAction(nodeId) {
@@ -7182,8 +7317,16 @@ async function compileColorNow() {
     const hasCurves = serializedNodes.some(
       (n) => n.curves && !isColorCurvesIdentity(n.curves)
     );
+    const hasHslCurves = serializedNodes.some(
+      (n) => n.hsl_curves && !isHslCurvesIdentity(n.hsl_curves)
+    );
     const payload =
-      serializedNodes.length === 1 && !serializedNodes[0].lut_table && !hasPw && !hasQual && !hasCurves
+      serializedNodes.length === 1 &&
+      !serializedNodes[0].lut_table &&
+      !hasPw &&
+      !hasQual &&
+      !hasCurves &&
+      !hasHslCurves
         ? { grade: state.colorGrade }
         : { nodes: serializedNodes };
     const compiled = await api.compileColorGrade(payload);
@@ -15584,6 +15727,35 @@ function wireEvents() {
     });
   }
 
+  for (const btn of document.querySelectorAll("[data-curve-mode]")) {
+    btn.addEventListener("click", () => {
+      const nextMode = btn.getAttribute("data-curve-mode") || "yrgb";
+      if (nextMode !== "yrgb" && !HSL_CURVE_MODES.includes(nextMode)) return;
+      state.colorCurvesMode = nextMode;
+      state.colorCurvesDrag = null;
+      state.hslCurvesDrag = null;
+      renderColorNodeTreeUI();
+      if (state.activeTab === "color") redrawActiveCanvases();
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-hsl-vector]")) {
+    btn.addEventListener("click", () => {
+      const vec = btn.getAttribute("data-hsl-vector") || "reds";
+      if (!HSL_HUE_VECTORS.includes(vec)) return;
+      state.hslCurvesSelectedVec = vec;
+      renderColorNodeTreeUI();
+      if (state.activeTab === "color") redrawActiveCanvases();
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-hsl-preset]")) {
+    btn.addEventListener("click", () => {
+      const presetId = btn.getAttribute("data-hsl-preset") || "neutral";
+      applyHslCurvePresetAction(presetId);
+    });
+  }
+
   for (const btn of document.querySelectorAll("[data-curve-channel]")) {
     btn.addEventListener("click", () => {
       const ch = btn.getAttribute("data-curve-channel") || "master";
@@ -15603,6 +15775,7 @@ function wireEvents() {
   }
 
   byId("btn-curves-delete-pt")?.addEventListener("click", () => {
+    if (HSL_CURVE_MODES.includes(state.colorCurvesMode)) return;
     const active = syncActiveColorGradeFromTree();
     const ch = state.colorCurvesChannel || "master";
     const pts = normalizeCurvePoints(normalizeColorCurves(active.curves)[ch]);
@@ -15614,33 +15787,46 @@ function wireEvents() {
   });
 
   byId("btn-curves-reset-ch")?.addEventListener("click", () => {
+    if (HSL_CURVE_MODES.includes(state.colorCurvesMode)) {
+      const mode = state.colorCurvesMode;
+      const active = syncActiveColorGradeFromTree();
+      const curHsl = normalizeHslCurves(active.hsl_curves);
+      commitNodeCurvePatch(
+        { hsl_curves: normalizeHslCurves({ ...curHsl, [mode]: {} }) },
+        true,
+        true
+      );
+      return;
+    }
     const ch = state.colorCurvesChannel || "master";
     state.colorCurvesSelectedPt = -1;
     updateActiveColorCurvesChannel(ch, [[0, 0], [1, 1]], true, true);
   });
 
   byId("btn-curves-reset-all")?.addEventListener("click", () => {
-    const active = syncActiveColorGradeFromTree();
     state.colorCurvesSelectedPt = -1;
-    state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
-      curves: createDefaultColorCurves()
-    });
-    syncActiveColorGradeFromTree();
-    renderColorNodeTreeUI();
-    if (state.activeTab === "color") redrawActiveCanvases();
-    compileColorNow();
+    commitNodeCurvePatch(
+      {
+        curves: createDefaultColorCurves(),
+        hsl_curves: createDefaultHslCurves()
+      },
+      true,
+      true
+    );
   });
 
   const curvesCanvas = byId("color-curves-canvas");
   if (curvesCanvas) {
     const getCurveCanvasCoords = (ev) => {
       const rect = curvesCanvas.getBoundingClientRect();
-      const geom = curvesCanvas._curvesGeom || {
-        pad: 14,
+      const isHsl = HSL_CURVE_MODES.includes(state.colorCurvesMode);
+      const fallbackPad = isHsl ? 16 : 14;
+      const geom = (isHsl ? curvesCanvas._hslGeom : curvesCanvas._curvesGeom) || {
+        pad: fallbackPad,
         width: Math.max(176, rect.width),
-        height: Math.max(176, rect.height),
-        plotW: Math.max(40, rect.width - 28),
-        plotH: Math.max(40, rect.height - 28)
+        height: 196,
+        plotW: Math.max(40, rect.width - fallbackPad * 2),
+        plotH: Math.max(40, 196 - fallbackPad * 2 - (isHsl ? 10 : 0))
       };
       const scaleX = rect.width > 0 ? geom.width / rect.width : 1;
       const scaleY = rect.height > 0 ? geom.height / rect.height : 1;
@@ -15649,6 +15835,28 @@ function wireEvents() {
       const u = Math.min(1, Math.max(0, (px - geom.pad) / geom.plotW));
       const v = Math.min(1, Math.max(0, 1 - (py - geom.pad) / geom.plotH));
       return { px, py, u, v, geom };
+    };
+
+    const findNearestHslVector = (px, geom) => {
+      if (geom && Array.isArray(geom.points) && geom.points.length > 0) {
+        let bestVec = geom.points[0].vector;
+        let bestDx = Infinity;
+        for (const pt of geom.points) {
+          const dx = Math.abs(px - pt.x);
+          if (dx < bestDx) {
+            bestDx = dx;
+            bestVec = pt.vector;
+          }
+        }
+        return bestVec;
+      }
+      return state.hslCurvesSelectedVec || "reds";
+    };
+
+    const hslValueFromV = (v, mode) => {
+      const bounds = HSL_HUE_BOUNDS[mode] || HSL_HUE_BOUNDS.hue_vs_hue;
+      const raw = bounds.min + v * (bounds.max - bounds.min);
+      return Math.min(bounds.max, Math.max(bounds.min, raw));
     };
 
     const findCurveKnotNear = (px, py, geom) => {
@@ -15669,6 +15877,18 @@ function wireEvents() {
       if (ev.button === 2) return;
       curvesCanvas.focus();
       const { px, py, u, v, geom } = getCurveCanvasCoords(ev);
+      if (HSL_CURVE_MODES.includes(state.colorCurvesMode)) {
+        const mode = state.colorCurvesMode;
+        const vec = findNearestHslVector(px, geom);
+        state.hslCurvesSelectedVec = vec;
+        state.hslCurvesDrag = { mode, vector: vec };
+        const nextVal = hslValueFromV(v, mode);
+        updateActiveHslCurveVector(mode, vec, nextVal, false, false);
+        try {
+          curvesCanvas.setPointerCapture(ev.pointerId);
+        } catch (_) {}
+        return;
+      }
       const ch = state.colorCurvesChannel || "master";
       const active = syncActiveColorGradeFromTree();
       let pts = normalizeCurvePoints(normalizeColorCurves(active.curves)[ch]);
@@ -15698,6 +15918,12 @@ function wireEvents() {
     });
 
     curvesCanvas.addEventListener("pointermove", (ev) => {
+      if (state.hslCurvesDrag) {
+        const { v } = getCurveCanvasCoords(ev);
+        const { mode, vector } = state.hslCurvesDrag;
+        updateActiveHslCurveVector(mode, vector, hslValueFromV(v, mode), false, false);
+        return;
+      }
       if (!state.colorCurvesDrag) return;
       const { u, v } = getCurveCanvasCoords(ev);
       const { channel, index } = state.colorCurvesDrag;
@@ -15719,6 +15945,14 @@ function wireEvents() {
     });
 
     const endCurveDrag = (ev) => {
+      if (state.hslCurvesDrag) {
+        state.hslCurvesDrag = null;
+        try {
+          if (ev && ev.pointerId !== undefined) curvesCanvas.releasePointerCapture(ev.pointerId);
+        } catch (_) {}
+        scheduleColorCompile();
+        return;
+      }
       if (!state.colorCurvesDrag) return;
       state.colorCurvesDrag = null;
       try {
@@ -15731,6 +15965,12 @@ function wireEvents() {
 
     const removeKnotAtEvent = (ev) => {
       const { px, py, geom } = getCurveCanvasCoords(ev);
+      if (HSL_CURVE_MODES.includes(state.colorCurvesMode)) {
+        const vec = findNearestHslVector(px, geom);
+        state.hslCurvesSelectedVec = vec;
+        updateActiveHslCurveVector(state.colorCurvesMode, vec, 0.0, true, true);
+        return;
+      }
       const hitIdx = findCurveKnotNear(px, py, geom);
       const ch = state.colorCurvesChannel || "master";
       const active = syncActiveColorGradeFromTree();
@@ -15748,6 +15988,47 @@ function wireEvents() {
     });
 
     curvesCanvas.addEventListener("keydown", (ev) => {
+      if (HSL_CURVE_MODES.includes(state.colorCurvesMode)) {
+        const mode = state.colorCurvesMode;
+        const bounds = HSL_HUE_BOUNDS[mode];
+        const vec = HSL_HUE_VECTORS.includes(state.hslCurvesSelectedVec)
+          ? state.hslCurvesSelectedVec
+          : "reds";
+        const vecIdx = HSL_HUE_VECTORS.indexOf(vec);
+        if (ev.key === "ArrowLeft") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          state.hslCurvesSelectedVec = HSL_HUE_VECTORS[(vecIdx + 5) % 6];
+          renderColorNodeTreeUI();
+          if (state.activeTab === "color") redrawActiveCanvases();
+          return;
+        }
+        if (ev.key === "ArrowRight") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          state.hslCurvesSelectedVec = HSL_HUE_VECTORS[(vecIdx + 1) % 6];
+          renderColorNodeTreeUI();
+          if (state.activeTab === "color") redrawActiveCanvases();
+          return;
+        }
+        if (ev.key === "0" || ev.key === "Delete" || ev.key === "Backspace") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          updateActiveHslCurveVector(mode, vec, 0.0, true, true);
+          return;
+        }
+        const delta = ev.shiftKey ? bounds.step * 0.25 : bounds.step;
+        let dv = 0;
+        if (ev.key === "ArrowUp") dv = delta;
+        else if (ev.key === "ArrowDown") dv = -delta;
+        else return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const active = syncActiveColorGradeFromTree();
+        const curVal = normalizeHslCurves(active.hsl_curves)[mode][vec] || 0;
+        updateActiveHslCurveVector(mode, vec, curVal + dv, true, false);
+        return;
+      }
       const idx = state.colorCurvesSelectedPt;
       const ch = state.colorCurvesChannel || "master";
       const active = syncActiveColorGradeFromTree();

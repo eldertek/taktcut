@@ -44,6 +44,7 @@ from taktcut.color import (
     compile_color_node_chain,
     list_color_curves_presets,
     list_color_presets,
+    list_hsl_curve_presets,
     list_qualifier_presets,
     parse_cdl_xml,
     parse_cube_lut,
@@ -1401,6 +1402,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "curve_presets": [
                         p.model_dump(mode="json") for p in list_color_curves_presets()
                     ],
+                    "hsl_curve_presets": [
+                        p.model_dump(mode="json") for p in list_hsl_curve_presets()
+                    ],
                     "qualifier_presets": [
                         p.model_dump(mode="json") for p in list_qualifier_presets()
                     ],
@@ -1906,12 +1910,16 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, compiled_chain.model_dump(mode="json"))
                 return
             grade = _build_color_grade_from_payload(payload)
-            if isinstance(payload.get("curves"), dict) or isinstance(
-                payload.get("qualifier"), dict
+            if (
+                isinstance(payload.get("curves"), dict)
+                or isinstance(payload.get("hsl_curves"), dict)
+                or isinstance(payload.get("qualifier"), dict)
             ):
                 node_payload: dict[str, Any] = {"grade": grade}
                 if isinstance(payload.get("curves"), dict):
                     node_payload["curves"] = payload["curves"]
+                if isinstance(payload.get("hsl_curves"), dict):
+                    node_payload["hsl_curves"] = payload["hsl_curves"]
                 if isinstance(payload.get("qualifier"), dict):
                     node_payload["qualifier"] = payload["qualifier"]
                 single_node = ColorNodeParams.model_validate(node_payload)

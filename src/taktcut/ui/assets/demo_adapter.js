@@ -3,6 +3,7 @@ import {
   ASPECT_RATIO_PRESETS,
   COLOR_CURVE_PRESETS,
   DELIVERY_PRESETS,
+  HSL_CURVE_PRESETS,
   LOUDNESS_PRESET_LUFS,
   PLANAR_TRACKER_PRESETS_CLIENT,
   QUALIFIER_PRESETS,
@@ -197,11 +198,13 @@ function compileColorClient(payload, opts = {}) {
   if (
     payload &&
     ((payload.curves && typeof payload.curves === "object") ||
+      (payload.hsl_curves && typeof payload.hsl_curves === "object") ||
       (payload.qualifier && typeof payload.qualifier === "object"))
   ) {
     const singleNode = createColorNode(1, {
       grade: payload.grade || payload,
       curves: payload.curves,
+      hsl_curves: payload.hsl_curves,
       qualifier: payload.qualifier
     });
     return compileColorNodeChainClient([singleNode], opts.pix_fmt || null);
@@ -2493,6 +2496,7 @@ export function createApiClient() {
         return {
           presets: [],
           curve_presets: Object.values(COLOR_CURVE_PRESETS),
+          hsl_curve_presets: Object.values(HSL_CURVE_PRESETS),
           qualifier_presets: Object.values(QUALIFIER_PRESETS),
           bounds: {}
         };

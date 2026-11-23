@@ -2271,11 +2271,17 @@
 
               <!-- DAVINCI CUSTOM YRGB CURVES + LUMETRI TONE CONTROLS -->
               <div class="color-curves-tone-split">
-                <div id="color-curves-dock" class="color-curves-dock" role="region" aria-label="Custom YRGB Spline Curves">
+                <div id="color-curves-dock" class="color-curves-dock" role="region" aria-label="Custom YRGB and 6-Vector HSL Curves">
                   <div class="curves-toolbar">
                     <div class="curves-title-group">
-                      <span class="pane-subheader-label" data-i18n="color.curves.title">Custom Curves (YRGB)</span>
+                      <span id="curves-dock-title" class="pane-subheader-label" data-i18n="color.curves.title">Custom Curves (YRGB)</span>
                       <span id="curves-status-badge" class="nle-tag mono">LINEAR</span>
+                    </div>
+                    <div id="curves-mode-group" class="curves-mode-group" role="group" aria-label="Curve Mode">
+                      <button type="button" class="btn btn-mini curves-mode-btn is-active" data-curve-mode="yrgb" aria-pressed="true" data-i18n="color.curves.modeYrgb">YRGB</button>
+                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_hue" aria-pressed="false" data-i18n="color.curves.modeHueHue">Hue vs Hue</button>
+                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_sat" aria-pressed="false" data-i18n="color.curves.modeHueSat">Hue vs Sat</button>
+                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_lum" aria-pressed="false" data-i18n="color.curves.modeHueLum">Hue vs Lum</button>
                     </div>
                     <div id="curves-channel-group" class="curves-channel-group" role="group" aria-label="Curve Channel">
                       <button type="button" class="btn btn-mini curves-ch-btn is-active" data-curve-channel="master" aria-pressed="true" data-i18n="color.curves.chMaster">YRGB</button>
@@ -2283,14 +2289,22 @@
                       <button type="button" class="btn btn-mini curves-ch-btn curves-ch-green" data-curve-channel="green" aria-pressed="false">G</button>
                       <button type="button" class="btn btn-mini curves-ch-btn curves-ch-blue" data-curve-channel="blue" aria-pressed="false">B</button>
                     </div>
+                    <div id="hsl-vector-strip" class="hsl-vector-strip is-hidden" role="group" aria-label="HSL Hue Vector">
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-reds is-active" data-hsl-vector="reds" aria-pressed="true" title="Reds (0 deg)">R</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-yellows" data-hsl-vector="yellows" aria-pressed="false" title="Yellows (60 deg)">Y</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-greens" data-hsl-vector="greens" aria-pressed="false" title="Greens (120 deg)">G</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-cyans" data-hsl-vector="cyans" aria-pressed="false" title="Cyans (180 deg)">C</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-blues" data-hsl-vector="blues" aria-pressed="false" title="Blues (240 deg)">B</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-magentas" data-hsl-vector="magentas" aria-pressed="false" title="Magentas (300 deg)">M</button>
+                    </div>
                     <div class="curves-actions">
                       <button type="button" id="btn-curves-delete-pt" class="btn btn-mini" disabled title="Remove selected interior knot (Delete)" data-i18n="color.curves.delPt">Del Pt</button>
                       <button type="button" id="btn-curves-reset-ch" class="btn btn-mini" title="Reset active channel curve" data-i18n="color.curves.resetCh">Rst Ch</button>
-                      <button type="button" id="btn-curves-reset-all" class="btn btn-mini" title="Reset all YRGB curves" data-i18n="color.curves.resetAll">Rst All</button>
+                      <button type="button" id="btn-curves-reset-all" class="btn btn-mini" title="Reset all curves" data-i18n="color.curves.resetAll">Rst All</button>
                     </div>
                   </div>
                   <div class="curves-stage">
-                    <canvas id="color-curves-canvas" class="color-curves-canvas" tabindex="0" aria-label="Custom YRGB spline curve editor"></canvas>
+                    <canvas id="color-curves-canvas" class="color-curves-canvas" tabindex="0" aria-label="Custom YRGB and HSL curve editor"></canvas>
                     <div class="curves-meta-rail">
                       <div id="curves-point-readout" class="curves-point-readout mono" aria-live="polite">PT -- | IN -- | OUT --</div>
                       <div id="curves-preset-strip" class="curves-preset-strip" role="group" aria-label="Curve Presets">
@@ -2301,7 +2315,15 @@
                         <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="warm_gold" aria-pressed="false" data-i18n="color.curves.preset.warmGold">Warm Gold</button>
                         <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="cool_shadows" aria-pressed="false" data-i18n="color.curves.preset.coolShadows">Cool Shadows</button>
                       </div>
-                      <div class="curves-hint mono" data-i18n="color.curves.hint">Click curve to add knot, drag to shape, double-click or Del to remove.</div>
+                      <div id="hsl-curves-preset-strip" class="curves-preset-strip is-hidden" role="group" aria-label="HSL Curve Presets">
+                        <button type="button" class="btn btn-chip hsl-preset-btn is-active" data-hsl-preset="neutral" aria-pressed="true" data-i18n="color.hsl.preset.neutral">Neutral</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="teal_orange_push" aria-pressed="false" data-i18n="color.hsl.preset.tealOrange">Teal &amp; Orange</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="skin_polish" aria-pressed="false" data-i18n="color.hsl.preset.skinPolish">Skin Polish</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="foliage_emerald" aria-pressed="false" data-i18n="color.hsl.preset.foliage">Emerald Foliage</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="sky_deepen" aria-pressed="false" data-i18n="color.hsl.preset.sky">Sky Polarizer</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="muted_greens" aria-pressed="false" data-i18n="color.hsl.preset.mutedGreens">Muted Greens</button>
+                      </div>
+                      <div id="curves-hint-text" class="curves-hint mono" data-i18n="color.curves.hint">Click curve to add knot, drag to shape, double-click or Del to remove.</div>
                     </div>
                   </div>
                 </div>

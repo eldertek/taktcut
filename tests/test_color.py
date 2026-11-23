@@ -12,11 +12,15 @@ from pydantic import ValidationError
 from taktcut.color import (
     COLOR_GRADE_PRESETS,
     CURVE_CHANNELS,
+    HSL_CURVE_MODES,
+    HSL_HUE_VECTORS,
     POWER_WINDOW_SHAPES,
     QUALIFIER_PRESET_IDS,
     ColorCurvesParams,
     ColorGradeParams,
     ColorNodeParams,
+    HslCurvesParams,
+    HslCurveVectorValues,
     PowerWindowParams,
     QualifierParams,
     apply_color_preset,
@@ -30,14 +34,19 @@ from taktcut.color import (
     compile_color_grade,
     compile_color_grade_filter,
     compile_color_node_chain,
+    compile_hsl_curves_filter,
     compile_power_window_mask_expr,
     compile_qualifier_mask_expr,
     evaluate_curve_pchip,
+    evaluate_periodic_hue_curve,
     get_color_curves_preset,
     get_color_preset,
+    get_hsl_curve_preset,
     get_qualifier_preset,
+    hsl_to_rgb,
     list_color_curves_presets,
     list_color_presets,
+    list_hsl_curve_presets,
     list_qualifier_presets,
     normalize_curve_points,
     parse_cdl_xml,
@@ -812,3 +821,134 @@ def test_hsl_qualifier_ffmpeg_execution_runtime() -> None:
     assert px_mid[0] - px_mid[2] > 90
     # Right (blue + outside qualifier): stays blue
     assert px_right[2] - px_right[0] > 120
+
+
+def test_hsl_curves_math_presets_validation_and_cube_bake(tmp_path: Path) -> None:
+    assert HSL_CURVE_MODES == ("hue_vs_hue", "hue_vs_sat", "hue_vs_lum")
+    assert len(HSL_HUE_VECTORS) == 6
+    presets = list_hsl_curve_presets()
+    assert len(presets) == 6
+    assert get_hsl_curve_preset("neutral").hsl_curves.is_identity() is True
+    teal_orange = get_hsl_curve_preset("teal_orange_push").hsl_curves
+    assert teal_orange.is_identity() is False
+
+    with pytest.raises(ValueError, match="Unknown HSL curves preset"):
+        get_hsl_curve_preset("nonexistent")
+
+    with pytest.raises((ValueError, ValidationError)):
+        HslCurvesParams.model_validate({"hue_vs_hue": {"reds": 60.0}})
+    with pytest.raises((ValueError, ValidationError)):
+        HslCurvesParams.model_validate({"hue_vs_sat": {"greens": -1.5}})
+    with pytest.raises((ValueError, ValidationError)):
+        HslCurvesParams.model_validate({"hue_vs_lum": {"blues": 0.9}})
+
+    # Periodic spline passes through all 6 anchors and wraps seamlessly at 0 == 360
+    anchors = [10.0, -5.0, 20.0, 0.0, -15.0, 5.0]
+    for idx, expected in enumerate(anchors):
+        assert evaluate_periodic_hue_curve(anchors, idx * 60.0) == pytest.approx(
+            expected, abs=1e-6
+        )
+    assert evaluate_periodic_hue_curve(anchors, 359.99) == pytest.approx(
+        evaluate_periodic_hue_curve(anchors, 0.01), abs=0.05
+    )
+
+    # RGB -> HSL -> RGB roundtrip
+    for sample in ((0.85, 0.25, 0.15), (0.2, 0.75, 0.45), (0.3, 0.4, 0.9), (0.5, 0.5, 0.5)):
+        h, s, lum = rgb_to_hsl(*sample)
+        r_back, g_back, b_back = hsl_to_rgb(h, s, lum)
+        assert (r_back, g_back, b_back) == pytest.approx(sample, abs=1e-5)
+
+    # Neutral grays stay untouched even under aggressive Hue vs Hue / Hue vs Lum curves
+    hsl_shift = HslCurvesParams(
+        hue_vs_hue=HslCurveVectorValues(reds=30.0, greens=-25.0),
+        hue_vs_sat=HslCurveVectorValues(greens=-1.0),
+        hue_vs_lum=HslCurveVectorValues(blues=-0.4),
+    )
+    assert hsl_shift.apply_rgb(0.5, 0.5, 0.5) == pytest.approx((0.5, 0.5, 0.5), abs=1e-5)
+
+    # Pure green is desaturated to neutral gray while pure red rotates toward yellow
+    gr_out = hsl_shift.apply_rgb(0.1, 0.85, 0.1)
+    assert abs(gr_out[1] - gr_out[0]) < 1e-4
+    red_out = hsl_shift.apply_rgb(0.9, 0.15, 0.15)
+    assert red_out[1] > 0.45
+
+    assert compile_hsl_curves_filter(HslCurvesParams()) == ""
+    fg_hsl = compile_hsl_curves_filter(hsl_shift)
+    assert "huesaturation=colors=r:hue=30.00" in fg_hsl
+    assert "huesaturation=colors=g:hue=-25.00:saturation=-1.0000" in fg_hsl
+    assert "huesaturation=colors=b:hue=0.00:saturation=0.0000:intensity=-0.4000" in fg_hsl
+
+    node = ColorNodeParams(
+        id="node-1",
+        label="HSL Grade",
+        enabled=True,
+        hsl_curves=hsl_shift,
+    )
+    assert node.has_hsl_curves() is True
+    assert node.is_identity() is False
+    compiled = compile_color_node_chain([node], pix_fmt="yuv420p")
+    assert compiled.has_hsl_curves is True
+    assert compiled.is_identity is False
+    assert "huesaturation=colors=g" in compiled.filtergraph
+
+    cube_path = tmp_path / "hsl_curves_test.cube"
+    info = bake_color_node_chain_to_cube([node], cube_path, size=17, title="hsl_bake")
+    assert info.entry_count == 17**3
+    _lut_info, table = parse_cube_lut_text(cube_path.read_text(encoding="utf-8"))
+    # Pure green corner (r=0, g=16, b=0) -> desaturated
+    green_idx = 0 * 17 * 17 + 16 * 17 + 0
+    gr, gg, gb = table[green_idx]
+    assert abs(gg - gr) < 0.05 and abs(gg - gb) < 0.05
+
+
+def test_hsl_curves_ffmpeg_execution_runtime() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    assert ffmpeg_bin is not None
+    node = ColorNodeParams(
+        id="node-1",
+        label="HSL Mute Greens",
+        enabled=True,
+        hsl_curves=HslCurvesParams(
+            hue_vs_sat=HslCurveVectorValues(greens=-1.0),
+            hue_vs_lum=HslCurveVectorValues(blues=-0.30),
+        ),
+    )
+    fg = compile_color_node_chain([node], pix_fmt="rgb24").filtergraph
+    # Left half (X < 16) is bright green, right half (16 <= X < 32) is vibrant blue
+    lavfi_src = (
+        "color=c=0x20d820:s=16x16:d=0.1,format=rgb24[a];"
+        "color=c=0x2060e8:s=16x16:d=0.1,format=rgb24[b];"
+        "[a][b]hstack=inputs=2"
+    )
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        lavfi_src,
+        "-vf",
+        fg,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    assert proc.returncode == 0, f"FFmpeg rejected HSL curves graph: {proc.stderr.decode()}"
+    raw = proc.stdout
+    assert len(raw) == 32 * 16 * 3
+    row_offset = 8 * 32 * 3
+    px_green = (raw[row_offset + 8 * 3], raw[row_offset + 8 * 3 + 1], raw[row_offset + 8 * 3 + 2])
+    px_blue = (
+        raw[row_offset + 24 * 3],
+        raw[row_offset + 24 * 3 + 1],
+        raw[row_offset + 24 * 3 + 2],
+    )
+    # Green half is strongly desaturated (G-R drops from 184 to ~51)
+    assert abs(px_green[1] - px_green[0]) < 65
+    # Blue half remains predominantly blue
+    assert px_blue[2] - px_blue[0] > 90

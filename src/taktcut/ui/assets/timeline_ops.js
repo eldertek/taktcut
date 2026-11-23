@@ -5878,6 +5878,42 @@ export function rgbToHslClient(r, g, b) {
   return [hue, sat, lum];
 }
 
+export function hslToRgbClient(hueDeg, sat, lum) {
+  const h = ((Number(hueDeg) % 360.0) + 360.0) % 360.0;
+  const s = clampUnitColor(sat);
+  const l = clampUnitColor(lum);
+  if (s <= 1e-6) {
+    return [l, l, l];
+  }
+  const c = (1.0 - Math.abs(2.0 * l - 1.0)) * s;
+  const hp = h / 60.0;
+  const x = c * (1.0 - Math.abs((hp % 2.0) - 1.0));
+  const m = l - 0.5 * c;
+  let r1 = 0;
+  let g1 = 0;
+  let b1 = 0;
+  if (hp < 1.0) {
+    r1 = c;
+    g1 = x;
+  } else if (hp < 2.0) {
+    r1 = x;
+    g1 = c;
+  } else if (hp < 3.0) {
+    g1 = c;
+    b1 = x;
+  } else if (hp < 4.0) {
+    g1 = x;
+    b1 = c;
+  } else if (hp < 5.0) {
+    r1 = x;
+    b1 = c;
+  } else {
+    r1 = c;
+    b1 = x;
+  }
+  return [clampUnitColor(r1 + m), clampUnitColor(g1 + m), clampUnitColor(b1 + m)];
+}
+
 export function createDefaultQualifier(overrides = {}) {
   return normalizeQualifier({ ...QUALIFIER_DEFAULTS, ...overrides });
 }
@@ -6282,6 +6318,214 @@ export function compileColorCurvesFilterClient(curves) {
   return `curves=${opts.join(":")}`;
 }
 
+export const HSL_CURVE_MODES = ["hue_vs_hue", "hue_vs_sat", "hue_vs_lum"];
+export const HSL_HUE_VECTORS = ["reds", "yellows", "greens", "cyans", "blues", "magentas"];
+export const HSL_HUE_FFMPEG_FLAGS = {
+  reds: "r",
+  yellows: "y",
+  greens: "g",
+  cyans: "c",
+  blues: "b",
+  magentas: "m"
+};
+export const HSL_HUE_ANCHOR_DEGREES = {
+  reds: 0,
+  yellows: 60,
+  greens: 120,
+  cyans: 180,
+  blues: 240,
+  magentas: 300
+};
+export const HSL_HUE_BOUNDS = {
+  hue_vs_hue: { min: -45.0, max: 45.0, step: 1.0, unit: "deg" },
+  hue_vs_sat: { min: -1.0, max: 1.0, step: 0.02, unit: "pct" },
+  hue_vs_lum: { min: -0.5, max: 0.5, step: 0.01, unit: "lum" }
+};
+
+export const HSL_CURVE_PRESETS = {
+  neutral: {
+    id: "neutral",
+    label: "Neutral",
+    hsl_curves: {}
+  },
+  teal_orange_push: {
+    id: "teal_orange_push",
+    label: "Teal & Orange",
+    hsl_curves: {
+      hue_vs_hue: { reds: 8.0, yellows: -10.0, cyans: -8.0 },
+      hue_vs_sat: { reds: 0.25, yellows: 0.15, greens: -0.45, cyans: 0.4, blues: 0.25, magentas: -0.5 },
+      hue_vs_lum: { cyans: -0.15, blues: -0.18 }
+    }
+  },
+  skin_polish: {
+    id: "skin_polish",
+    label: "Skin Polish",
+    hsl_curves: {
+      hue_vs_hue: { reds: 5.0, yellows: -6.0 },
+      hue_vs_sat: { reds: -0.1, yellows: -0.12 },
+      hue_vs_lum: { reds: 0.08, yellows: 0.1 }
+    }
+  },
+  foliage_emerald: {
+    id: "foliage_emerald",
+    label: "Emerald Foliage",
+    hsl_curves: {
+      hue_vs_hue: { yellows: 16.0, greens: 12.0 },
+      hue_vs_sat: { yellows: -0.15, greens: 0.2 },
+      hue_vs_lum: { greens: -0.16 }
+    }
+  },
+  sky_deepen: {
+    id: "sky_deepen",
+    label: "Sky Polarizer",
+    hsl_curves: {
+      hue_vs_sat: { cyans: 0.3, blues: 0.4 },
+      hue_vs_lum: { cyans: -0.2, blues: -0.24 }
+    }
+  },
+  muted_greens: {
+    id: "muted_greens",
+    label: "Muted Greens",
+    hsl_curves: {
+      hue_vs_sat: { yellows: -0.25, greens: -0.55, cyans: -0.3, magentas: -0.35 },
+      hue_vs_lum: { greens: -0.1 }
+    }
+  }
+};
+
+function normalizeHslVectorChannel(raw, minVal, maxVal) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const out = {};
+  for (const vec of HSL_HUE_VECTORS) {
+    const num = Number(src[vec]);
+    const clamped = Number.isFinite(num) ? Math.min(maxVal, Math.max(minVal, num)) : 0.0;
+    out[vec] = Math.round(clamped * 10000) / 10000;
+  }
+  return out;
+}
+
+export function createDefaultHslCurves(overrides = {}) {
+  const src = overrides && typeof overrides === "object" ? overrides : {};
+  return {
+    hue_vs_hue: normalizeHslVectorChannel(
+      src.hue_vs_hue,
+      HSL_HUE_BOUNDS.hue_vs_hue.min,
+      HSL_HUE_BOUNDS.hue_vs_hue.max
+    ),
+    hue_vs_sat: normalizeHslVectorChannel(
+      src.hue_vs_sat,
+      HSL_HUE_BOUNDS.hue_vs_sat.min,
+      HSL_HUE_BOUNDS.hue_vs_sat.max
+    ),
+    hue_vs_lum: normalizeHslVectorChannel(
+      src.hue_vs_lum,
+      HSL_HUE_BOUNDS.hue_vs_lum.min,
+      HSL_HUE_BOUNDS.hue_vs_lum.max
+    )
+  };
+}
+
+export function normalizeHslCurves(raw) {
+  return createDefaultHslCurves(raw);
+}
+
+export function isHslCurveChannelIdentity(channel) {
+  if (!channel || typeof channel !== "object") return true;
+  return HSL_HUE_VECTORS.every((vec) => Math.abs(Number(channel[vec]) || 0) <= 1e-4);
+}
+
+export function isHslCurvesIdentity(hslCurves) {
+  const h = normalizeHslCurves(hslCurves);
+  return (
+    isHslCurveChannelIdentity(h.hue_vs_hue) &&
+    isHslCurveChannelIdentity(h.hue_vs_sat) &&
+    isHslCurveChannelIdentity(h.hue_vs_lum)
+  );
+}
+
+export function evaluatePeriodicHueCurveClient(values6, hueDeg) {
+  const h = ((Number(hueDeg) % 360.0) + 360.0) % 360.0;
+  const sector = h / 60.0;
+  const i1 = Math.floor(sector) % 6;
+  const t = sector - Math.floor(sector);
+  const p0 = Number(values6[(i1 + 5) % 6]) || 0;
+  const p1 = Number(values6[i1]) || 0;
+  const p2 = Number(values6[(i1 + 1) % 6]) || 0;
+  const p3 = Number(values6[(i1 + 2) % 6]) || 0;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (
+    0.5 *
+    (2.0 * p1 +
+      (-p0 + p2) * t +
+      (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+      (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+  );
+}
+
+function smoothstepClient(edge0, edge1, x) {
+  const span = edge1 - edge0;
+  if (Math.abs(span) <= 1e-6) return x >= edge1 ? 1.0 : 0.0;
+  const t = clampUnitColor((x - edge0) / span);
+  return t * t * (3.0 - 2.0 * t);
+}
+
+export function applyHslCurvesRgbClient(r, g, b, hslCurves) {
+  const h = normalizeHslCurves(hslCurves);
+  const rc = clampUnitColor(r);
+  const gc = clampUnitColor(g);
+  const bc = clampUnitColor(b);
+  if (isHslCurvesIdentity(h)) return [rc, gc, bc];
+  const [hue, sat, lum] = rgbToHslClient(rc, gc, bc);
+  if (sat <= 1e-4) return [rc, gc, bc];
+  const chromaWeight = smoothstepClient(0.0, 0.08, sat);
+  let dh = 0.0;
+  if (!isHslCurveChannelIdentity(h.hue_vs_hue)) {
+    const vals = HSL_HUE_VECTORS.map((v) => h.hue_vs_hue[v]);
+    const raw = evaluatePeriodicHueCurveClient(vals, hue);
+    dh =
+      Math.min(HSL_HUE_BOUNDS.hue_vs_hue.max, Math.max(HSL_HUE_BOUNDS.hue_vs_hue.min, raw)) *
+      chromaWeight;
+  }
+  let ds = 0.0;
+  if (!isHslCurveChannelIdentity(h.hue_vs_sat)) {
+    const vals = HSL_HUE_VECTORS.map((v) => h.hue_vs_sat[v]);
+    const raw = evaluatePeriodicHueCurveClient(vals, hue);
+    ds = Math.min(HSL_HUE_BOUNDS.hue_vs_sat.max, Math.max(HSL_HUE_BOUNDS.hue_vs_sat.min, raw));
+  }
+  let dl = 0.0;
+  if (!isHslCurveChannelIdentity(h.hue_vs_lum)) {
+    const vals = HSL_HUE_VECTORS.map((v) => h.hue_vs_lum[v]);
+    const raw = evaluatePeriodicHueCurveClient(vals, hue);
+    dl =
+      Math.min(HSL_HUE_BOUNDS.hue_vs_lum.max, Math.max(HSL_HUE_BOUNDS.hue_vs_lum.min, raw)) *
+      chromaWeight;
+  }
+  const nextHue = (((hue + dh) % 360.0) + 360.0) % 360.0;
+  const nextSat = clampUnitColor(sat * (1.0 + ds));
+  const nextLum = clampUnitColor(lum + dl * 0.35);
+  return hslToRgbClient(nextHue, nextSat, nextLum);
+}
+
+export function compileHslCurvesFilterClient(hslCurves) {
+  const h = normalizeHslCurves(hslCurves);
+  if (isHslCurvesIdentity(h)) return "";
+  const stages = [];
+  for (const vec of HSL_HUE_VECTORS) {
+    const dh = Number(h.hue_vs_hue[vec]) || 0;
+    const ds = Number(h.hue_vs_sat[vec]) || 0;
+    const dl = Number(h.hue_vs_lum[vec]) || 0;
+    if (Math.abs(dh) <= 1e-4 && Math.abs(ds) <= 1e-4 && Math.abs(dl) <= 1e-4) {
+      continue;
+    }
+    const flag = HSL_HUE_FFMPEG_FLAGS[vec];
+    stages.push(
+      `huesaturation=colors=${flag}:hue=${dh.toFixed(2)}:saturation=${ds.toFixed(4)}:intensity=${dl.toFixed(4)}`
+    );
+  }
+  return stages.join(",");
+}
+
 export function createColorNode(index = 1, overrides = {}) {
   const safeIdx = Math.max(1, Math.round(Number(index) || 1));
   return {
@@ -6298,6 +6542,7 @@ export function createColorNode(index = 1, overrides = {}) {
     enabled: overrides.enabled !== false,
     grade: normalizeColorGrade(overrides.grade),
     curves: normalizeColorCurves(overrides.curves),
+    hsl_curves: normalizeHslCurves(overrides.hsl_curves),
     power_window: normalizePowerWindow(overrides.power_window),
     qualifier: normalizeQualifier(overrides.qualifier),
     lut: normalizeNodeLut(overrides.lut)
@@ -6312,6 +6557,7 @@ export function normalizeColorNode(raw, index = 0) {
     enabled: n.enabled,
     grade: n.grade,
     curves: n.curves,
+    hsl_curves: n.hsl_curves,
     power_window: n.power_window,
     qualifier: n.qualifier,
     lut: n.lut
@@ -6357,6 +6603,7 @@ export function isColorNodeIdentity(node) {
   if (!node || node.enabled === false) return true;
   if (!isColorGradeIdentity(node.grade)) return false;
   if (!isColorCurvesIdentity(node.curves)) return false;
+  if (!isHslCurvesIdentity(node.hsl_curves)) return false;
   if (node.lut && Number(node.lut.mix ?? 1.0) > 1e-6) return false;
   return true;
 }
@@ -6380,6 +6627,7 @@ export function addColorNodeToTree(tree, opts = {}) {
     label: defaultLabel,
     grade: opts.grade,
     curves: opts.curves,
+    hsl_curves: opts.hsl_curves,
     power_window: opts.power_window,
     qualifier: opts.qualifier,
     lut: opts.lut
@@ -6494,6 +6742,10 @@ export function updateColorNodeInTree(tree, nodeId, patch = {}) {
           patch.curves !== undefined
             ? normalizeColorCurves(patch.curves)
             : normalizeColorCurves(n.curves),
+        hsl_curves:
+          patch.hsl_curves !== undefined
+            ? normalizeHslCurves(patch.hsl_curves)
+            : normalizeHslCurves(n.hsl_curves),
         power_window:
           patch.power_window !== undefined
             ? normalizePowerWindow(patch.power_window)
@@ -6508,6 +6760,20 @@ export function updateColorNodeInTree(tree, nodeId, patch = {}) {
   };
 }
 
+function applySingleColorNodeCoreClient(curR, curG, curB, node) {
+  let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+  if (!isColorCurvesIdentity(node.curves)) {
+    [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
+  }
+  if (!isHslCurvesIdentity(node.hsl_curves)) {
+    [outR, outG, outB] = applyHslCurvesRgbClient(outR, outG, outB, node.hsl_curves);
+  }
+  if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
+    [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
+  }
+  return [outR, outG, outB];
+}
+
 export function applyColorNodeChainRgbClient(r, g, b, treeOrNodes) {
   const nodes = Array.isArray(treeOrNodes)
     ? treeOrNodes
@@ -6519,13 +6785,7 @@ export function applyColorNodeChainRgbClient(r, g, b, treeOrNodes) {
   let curB = clampUnitColor(b);
   for (const node of nodes) {
     if (!node || node.enabled === false) continue;
-    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
-    if (!isColorCurvesIdentity(node.curves)) {
-      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
-    }
-    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
-      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
-    }
+    const [outR, outG, outB] = applySingleColorNodeCoreClient(curR, curG, curB, node);
     if (isQualifierActive(node.qualifier)) {
       const qMask = evaluateQualifierMask(node.qualifier, curR, curG, curB);
       curR = clampUnitColor(curR + (outR - curR) * qMask);
@@ -6551,13 +6811,7 @@ export function applyColorNodeChainRgbAtClient(r, g, b, u, v, treeOrNodes) {
   let curB = clampUnitColor(b);
   for (const node of nodes) {
     if (!node || node.enabled === false) continue;
-    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
-    if (!isColorCurvesIdentity(node.curves)) {
-      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
-    }
-    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
-      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
-    }
+    const [outR, outG, outB] = applySingleColorNodeCoreClient(curR, curG, curB, node);
     const hasPw = isPowerWindowActive(node.power_window);
     const hasQual = isQualifierActive(node.qualifier);
     if (hasPw || hasQual) {
@@ -6600,13 +6854,7 @@ export function evaluateActiveNodeMaskAtClient(r, g, b, u, v, treeOrNodes, activ
       return clampUnitColor(m);
     }
     if (node.enabled === false) continue;
-    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
-    if (!isColorCurvesIdentity(node.curves)) {
-      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
-    }
-    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
-      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
-    }
+    const [outR, outG, outB] = applySingleColorNodeCoreClient(curR, curG, curB, node);
     const hasPw = isPowerWindowActive(node.power_window);
     const hasQual = isQualifierActive(node.qualifier);
     if (hasPw || hasQual) {
@@ -6641,13 +6889,7 @@ export function applyColorNodesBeforeTargetClient(r, g, b, u, v, treeOrNodes, ta
     if (!node) continue;
     if (node.id === targetId) break;
     if (node.enabled === false) continue;
-    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
-    if (!isColorCurvesIdentity(node.curves)) {
-      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
-    }
-    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
-      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
-    }
+    const [outR, outG, outB] = applySingleColorNodeCoreClient(curR, curG, curB, node);
     const hasPw = isPowerWindowActive(node.power_window);
     const hasQual = isQualifierActive(node.qualifier);
     if (hasPw || hasQual) {
@@ -6703,6 +6945,7 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
   let hasLutNodes = false;
   let hasPowerWindows = false;
   let hasCurves = false;
+  let hasHslCurves = false;
   let hasQualifiers = false;
   let pwIdx = 0;
 
@@ -6722,6 +6965,11 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
       hasCurves = true;
       const curvesFg = compileColorCurvesFilterClient(node.curves);
       if (curvesFg) nodeStages.push(curvesFg);
+    }
+    if (!isHslCurvesIdentity(node.hsl_curves)) {
+      hasHslCurves = true;
+      const hslFg = compileHslCurvesFilterClient(node.hsl_curves);
+      if (hslFg) nodeStages.push(hslFg);
     }
     if (nodeStages.length > 0) {
       const nodeFg = nodeStages.join(",");
@@ -6792,6 +7040,7 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
     has_lut_nodes: hasLutNodes,
     has_power_windows: hasPowerWindows,
     has_curves: hasCurves,
+    has_hsl_curves: hasHslCurves,
     has_qualifiers: hasQualifiers
   };
 }
@@ -6805,6 +7054,7 @@ export function serializeColorNodeForApi(node) {
     enabled: norm.enabled,
     grade: norm.grade,
     curves: normalizeColorCurves(norm.curves),
+    hsl_curves: normalizeHslCurves(norm.hsl_curves),
     power_window: normalizePowerWindow(norm.power_window),
     qualifier: normalizeQualifier(norm.qualifier),
     lut_title: lut ? lut.title : "",
@@ -6840,6 +7090,7 @@ export function deserializeColorNodeFromApi(rawNode, index = 0) {
     enabled: n.enabled,
     grade: n.grade,
     curves: n.curves,
+    hsl_curves: n.hsl_curves,
     power_window: n.power_window,
     qualifier: n.qualifier,
     lut

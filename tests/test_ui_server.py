@@ -8655,5 +8655,264 @@ def test_ui_fairlight_broadcast_audio_rack_e2e(tmp_path: Path) -> None:
         thread.join(timeout=5)
 
 
+def test_ui_hsl_curves_endpoints_project_roundtrip_and_js_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _workspace = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/color/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    hsl_presets = presets_data["hsl_curve_presets"]
+    assert len(hsl_presets) == 6
+    assert any(p["id"] == "teal_orange_push" for p in hsl_presets)
+
+    hsl_payload = {
+        "hue_vs_hue": {"reds": 12.0, "yellows": -8.0},
+        "hue_vs_sat": {"greens": -0.60, "cyans": 0.35},
+        "hue_vs_lum": {"blues": -0.22},
+    }
+    nodes_payload = [
+        {
+            "id": "node-1",
+            "label": "HSL 6-Vector",
+            "enabled": True,
+            "hsl_curves": hsl_payload,
+        }
+    ]
+    comp_status, _, comp_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"nodes": nodes_payload, "pix_fmt": "yuv420p"},
+    )
+    assert comp_status == 200
+    comp = json.loads(comp_raw.decode("utf-8"))
+    assert comp["is_identity"] is False
+    assert comp["has_hsl_curves"] is True
+    assert "huesaturation=colors=r:hue=12.00" in comp["filtergraph"]
+    assert "huesaturation=colors=g:hue=0.00:saturation=-0.6000" in comp["filtergraph"]
+    assert "huesaturation=colors=b:hue=0.00:saturation=0.0000:intensity=-0.2200" in comp[
+        "filtergraph"
+    ]
+
+    shortcut_status, _, shortcut_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"hsl_curves": hsl_payload},
+    )
+    assert shortcut_status == 200
+    shortcut = json.loads(shortcut_raw.decode("utf-8"))
+    assert shortcut["has_hsl_curves"] is True
+
+    bake_status, _, baked_raw = _http_call(
+        f"{base_url}/api/color/bake",
+        method="POST",
+        payload={"nodes": nodes_payload, "size": 5, "title": "api_hsl_bake"},
+    )
+    assert bake_status == 200
+    baked = json.loads(baked_raw.decode("utf-8"))
+    assert "LUT_3D_SIZE 5" in baked["cube_text"]
+
+    sample_status, _, sample_raw = _http_call(f"{base_url}/api/sample")
+    assert sample_status == 200
+    doc = json.loads(sample_raw.decode("utf-8"))["document"]
+    exp_status, _, exp_raw = _http_call(
+        f"{base_url}/api/project/export",
+        method="POST",
+        payload={
+            "project": {
+                "schema_version": "taktcut.project.v1",
+                "project_name": "HSL_Curves_Roundtrip",
+                "timeline": doc,
+                "color": {"nodes": nodes_payload, "selected_node_id": "node-1"},
+            }
+        },
+    )
+    assert exp_status == 200
+    exported_text = json.loads(exp_raw.decode("utf-8"))["project_json"]
+    imp_status, _, imp_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={"project_json": exported_text},
+    )
+    assert imp_status == 200
+    imp_node = json.loads(imp_raw.decode("utf-8"))["project"]["color"]["nodes"][0]
+    assert imp_node["hsl_curves"]["hue_vs_hue"]["reds"] == pytest.approx(12.0)
+    assert imp_node["hsl_curves"]["hue_vs_sat"]["greens"] == pytest.approx(-0.6)
+    assert imp_node["hsl_curves"]["hue_vs_lum"]["blues"] == pytest.approx(-0.22)
+
+    # Verify JS client & demo_adapter.js static-demo parity
+    node_bin = shutil.which("node")
+    assert node_bin is not None
+    assets_dir = Path(__file__).resolve().parent.parent / "src" / "taktcut" / "ui" / "assets"
+    ops_uri = (assets_dir / "timeline_ops.js").as_uri()
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    js_script = f"""
+globalThis.window = {{ location: {{ protocol: 'https:', search: '' }}, devicePixelRatio: 1 }};
+globalThis.document = {{ createElement: () => ({{ getContext: () => null }}) }};
+const ops = await import({json.dumps(ops_uri)});
+const demo = await import({json.dumps(demo_uri)});
+const hsl = {json.dumps(hsl_payload)};
+const node = ops.createColorNode(1, {{ hsl_curves: hsl }});
+const compiled = ops.compileColorNodeChainClient([node], 'yuv420p');
+if (!compiled.has_hsl_curves) throw new Error('Expected has_hsl_curves=true');
+if (!compiled.filtergraph.includes('huesaturation=colors=r:hue=12.00')) {{
+  throw new Error('Unexpected JS filtergraph: ' + compiled.filtergraph);
+}}
+const [rOut, gOut, bOut] = ops.applyHslCurvesRgbClient(0.1, 0.85, 0.1, hsl);
+if (gOut - rOut >= 0.35) throw new Error('Expected green sat reduction');
+const gray = ops.applyHslCurvesRgbClient(0.5, 0.5, 0.5, hsl);
+if (Math.abs(gray[0] - 0.5) > 1e-5) throw new Error('Expected gray neutrality');
+const client = demo.createApiClient({{ mode: 'static-demo' }});
+await client.initHealth();
+const presetResp = await client.getColorPresets();
+if (!Array.isArray(presetResp.hsl_curve_presets) || presetResp.hsl_curve_presets.length !== 6) {{
+  throw new Error('Expected 6 demo hsl_curve_presets');
+}}
+const demoComp = await client.compileColorGrade({{ hsl_curves: hsl }});
+if (!demoComp.has_hsl_curves || !demoComp.filtergraph.includes('huesaturation=colors=b')) {{
+  throw new Error('Demo compileColorGrade parity failed');
+}}
+const cube = ops.bakeColorNodeChainToCubeTextClient([node], 5, 'js_hsl_bake');
+if (!cube.includes('LUT_3D_SIZE 5')) throw new Error('Missing LUT_3D_SIZE 5');
+console.log('HSL_JS_PARITY_OK');
+"""
+    proc = subprocess.run(
+        [node_bin, "--input-type=module", "-e", js_script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node parity failed: {proc.stderr}\n{proc.stdout}"
+    assert "HSL_JS_PARITY_OK" in proc.stdout
+
+
+def test_ui_hsl_curves_playwright_e2e(tmp_path: Path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    workspace = tmp_path / "hsl_pw_ws"
+    workspace.mkdir()
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=workspace)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#tab-color")
+                page.click("#tab-color")
+                page.wait_for_selector("#color-curves-dock")
+
+                # Switch Curve Mode to Hue vs Hue
+                page.click("[data-curve-mode='hue_vs_hue']")
+                page.wait_for_function(
+                    "() => document.getElementById('hsl-vector-strip')"
+                    " && !document.getElementById('hsl-vector-strip')"
+                    ".classList.contains('is-hidden')"
+                )
+                assert (
+                    page.locator("[data-curve-mode='hue_vs_hue']").get_attribute("aria-pressed")
+                    == "true"
+                )
+
+                # Verify rainbow hue spectrum canvas rendered pixels
+                hsl_pixels = page.evaluate(
+                    "() => {"
+                    "  const c = document.getElementById('color-curves-canvas');"
+                    "  const ctx = c.getContext('2d');"
+                    "  const d = ctx.getImageData(0, 0, c.width, c.height).data;"
+                    "  let colored = 0;"
+                    "  for (let i = 0; i < d.length; i += 16) {"
+                    "    const spread = Math.max(d[i], d[i+1], d[i+2])"
+                    " - Math.min(d[i], d[i+1], d[i+2]);"
+                    "    if (spread > 18) colored++;"
+                    "  }"
+                    "  return colored;"
+                    "}"
+                )
+                assert hsl_pixels > 50
+
+                # Apply Teal & Orange HSL Curve Preset
+                page.click("[data-hsl-preset='teal_orange_push']")
+                page.wait_for_function(
+                    "() => (document.getElementById('color-filtergraph-output')?.textContent || '')"
+                    ".includes('huesaturation=colors=r')"
+                )
+                filter_text = page.locator("#color-filtergraph-output").text_content() or ""
+                assert "huesaturation=colors=r:hue=8.00" in filter_text
+                assert "huesaturation=colors=g" in filter_text
+                assert "HSL" in (page.locator("#curves-status-badge").text_content() or "")
+
+                # Switch to Hue vs Sat, select Greens, nudge down via keyboard
+                page.click("[data-curve-mode='hue_vs_sat']")
+                page.click("[data-hsl-vector='greens']")
+                canvas = page.locator("#color-curves-canvas")
+                canvas.focus()
+                page.keyboard.press("ArrowDown")
+                readout_text = page.locator("#curves-point-readout").text_content() or ""
+                assert "GREENS (120°)" in readout_text
+                assert "-47% SAT" in readout_text
+
+                # Switch to FR and check diacritics, then back to EN
+                page.click("#lang-fr")
+                assert "Teinte / Teinte" in (
+                    page.locator("[data-curve-mode='hue_vs_hue']").text_content() or ""
+                )
+                assert "Feuillage Émeraude" in (
+                    page.locator("[data-hsl-preset='foliage_emerald']").text_content() or ""
+                )
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for selector in (
+                    "[data-curve-mode='hue_vs_hue']",
+                    "[data-hsl-vector='greens']",
+                    "[data-hsl-preset='teal_orange_push']",
+                ):
+                    h = page.evaluate(
+                        f"() => document.querySelector({json.dumps(selector)})"
+                        ".getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {selector} too small: {h}px"
+
+                # Reset all curves cleanly
+                page.click("#btn-curves-reset-all")
+                page.wait_for_function(
+                    "() => document.getElementById('curves-status-badge')?.textContent"
+                    " === 'LINEAR'"
+                )
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 
 

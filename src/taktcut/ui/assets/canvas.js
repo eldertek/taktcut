@@ -2,6 +2,10 @@ import {
   CLIP_LABEL_COLORS,
   CURVE_CHANNELS,
   FAIRLIGHT_EQ_BAND_SPECS,
+  HSL_CURVE_MODES,
+  HSL_HUE_ANCHOR_DEGREES,
+  HSL_HUE_BOUNDS,
+  HSL_HUE_VECTORS,
   MARKER_COLOR_HEX,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
@@ -23,6 +27,7 @@ import {
   evaluateFairlightDynamicsTransferDb,
   evaluateFairlightEqBandDb,
   evaluateFairlightEqCurveDb,
+  evaluatePeriodicHueCurveClient,
   evaluateRetimeSourceOffset,
   evaluateRetimeSpeedAt,
   evaluateTrackPointClient,
@@ -51,6 +56,7 @@ import {
   normalizeColorCurves,
   normalizeCurvePoints,
   normalizeFairlightAudioRackParams,
+  normalizeHslCurves,
   normalizePlanarTrackerClient,
   normalizePowerWindow,
   normalizeQualifier,
@@ -6738,6 +6744,178 @@ export function drawColorCurvesCanvas(
     points: renderedPts
   };
   canvas._curvesGeom = geom;
+  return geom;
+}
+
+const HSL_VECTOR_COLORS = {
+  reds: "#ff4b4b",
+  yellows: "#ffd23f",
+  greens: "#3ad97b",
+  cyans: "#2ce6ff",
+  blues: "#4b8bff",
+  magentas: "#e85dff"
+};
+
+const HSL_VECTOR_SHORT = {
+  reds: "R",
+  yellows: "Y",
+  greens: "G",
+  cyans: "C",
+  blues: "B",
+  magentas: "M"
+};
+
+export function drawHslCurvesCanvas(
+  canvas,
+  rawHslCurves,
+  rawMode = "hue_vs_hue",
+  selectedVector = "reds"
+) {
+  if (!canvas) return null;
+  const selfRect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+  const width = Math.max(176, Math.floor(selfRect && selfRect.width > 0 ? selfRect.width : 212));
+  const height = 196;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const mode = HSL_CURVE_MODES.includes(rawMode) ? rawMode : "hue_vs_hue";
+  const hsl = normalizeHslCurves(rawHslCurves);
+  const channel = hsl[mode];
+  const bounds = HSL_HUE_BOUNDS[mode];
+  const selVec = HSL_HUE_VECTORS.includes(selectedVector) ? selectedVector : "reds";
+
+  const pad = 16;
+  const plotW = Math.max(40, width - pad * 2);
+  const plotH = Math.max(40, height - pad * 2 - 10);
+  const toX = (deg) => pad + (Math.max(0, Math.min(360, deg)) / 360) * plotW;
+  const toY = (val) => {
+    const norm = (val - bounds.min) / Math.max(1e-6, bounds.max - bounds.min);
+    return pad + (1 - clamp01(norm)) * plotH;
+  };
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+
+  // Hue spectrum gradient backdrop
+  const grad = ctx.createLinearGradient(pad, 0, pad + plotW, 0);
+  grad.addColorStop(0.0, "rgba(255, 75, 75, 0.22)");
+  grad.addColorStop(1 / 6, "rgba(255, 210, 63, 0.22)");
+  grad.addColorStop(2 / 6, "rgba(58, 217, 123, 0.22)");
+  grad.addColorStop(3 / 6, "rgba(44, 230, 255, 0.22)");
+  grad.addColorStop(4 / 6, "rgba(75, 139, 255, 0.22)");
+  grad.addColorStop(5 / 6, "rgba(232, 93, 255, 0.22)");
+  grad.addColorStop(1.0, "rgba(255, 75, 75, 0.22)");
+  ctx.fillStyle = "#14161c";
+  ctx.fillRect(pad, pad, plotW, plotH);
+  ctx.fillStyle = grad;
+  ctx.fillRect(pad, pad, plotW, plotH);
+
+  // Horizontal quarter lines & zero baseline
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const gy = Math.round(pad + (i / 4) * plotH) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(pad, gy);
+    ctx.lineTo(pad + plotW, gy);
+    ctx.stroke();
+  }
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.34)";
+  ctx.setLineDash([4, 4]);
+  const zeroY = Math.round(toY(0)) + 0.5;
+  ctx.beginPath();
+  ctx.moveTo(pad, zeroY);
+  ctx.lineTo(pad + plotW, zeroY);
+  ctx.stroke();
+  ctx.restore();
+
+  // Vertical anchor lines at 0, 60, 120, 180, 240, 300, 360
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+  for (const vec of HSL_HUE_VECTORS) {
+    const gx = Math.round(toX(HSL_HUE_ANCHOR_DEGREES[vec])) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(gx, pad);
+    ctx.lineTo(gx, pad + plotH);
+    ctx.stroke();
+  }
+
+  // Smooth periodic Catmull-Rom curve across 0..360 deg
+  const vals6 = HSL_HUE_VECTORS.map((v) => Number(channel[v]) || 0);
+  const steps = 180;
+  ctx.strokeStyle = "#f4f7fb";
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const deg = (i / steps) * 360;
+    const rawVal = evaluatePeriodicHueCurveClient(vals6, deg);
+    const clampedVal = Math.min(bounds.max, Math.max(bounds.min, rawVal));
+    const px = toX(deg);
+    const py = toY(clampedVal);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // Periodic wrap-around ghost dot for Red at 360 deg
+  ctx.save();
+  ctx.globalAlpha = 0.55;
+  ctx.fillStyle = HSL_VECTOR_COLORS.reds;
+  ctx.beginPath();
+  ctx.arc(toX(360), toY(vals6[0]), 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 6 interactive vector anchor handles + labels
+  const points = [];
+  ctx.font = "600 9px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const vec of HSL_HUE_VECTORS) {
+    const deg = HSL_HUE_ANCHOR_DEGREES[vec];
+    const val = Number(channel[vec]) || 0;
+    const px = toX(deg);
+    const py = toY(val);
+    const color = HSL_VECTOR_COLORS[vec];
+    const isSel = vec === selVec;
+    points.push({ vector: vec, deg, value: val, x: px, y: py });
+
+    if (isSel) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
+      ctx.beginPath();
+      ctx.arc(px, py, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = isSel ? color : "#14151a";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isSel ? 2.2 : 1.8;
+    ctx.beginPath();
+    ctx.arc(px, py, isSel ? 5.5 : 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = isSel ? "#ffffff" : color;
+    ctx.fillText(HSL_VECTOR_SHORT[vec], px, pad + plotH + 4);
+  }
+
+  const geom = {
+    pad,
+    plotW,
+    plotH,
+    width,
+    height,
+    mode,
+    selectedVector: selVec,
+    bounds,
+    points
+  };
+  canvas._hslGeom = geom;
   return geom;
 }
 

@@ -3758,13 +3758,57 @@ input[type="range"] {
 }
 
 .curves-title-group,
+.curves-mode-group,
 .curves-channel-group,
+.hsl-vector-strip,
 .curves-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
+}
+
+.curves-mode-btn.is-active {
+  background: rgba(88, 166, 255, 0.18);
+  border-color: #58a6ff;
+  color: #cfe4ff;
+}
+
+.hsl-vec-btn.hsl-vec-reds.is-active {
+  background: rgba(255, 75, 75, 0.2);
+  border-color: #ff4b4b;
+  color: #ffb1b1;
+}
+
+.hsl-vec-btn.hsl-vec-yellows.is-active {
+  background: rgba(255, 210, 63, 0.2);
+  border-color: #ffd23f;
+  color: #ffe99e;
+}
+
+.hsl-vec-btn.hsl-vec-greens.is-active {
+  background: rgba(58, 217, 123, 0.2);
+  border-color: #3ad97b;
+  color: #9cf2bf;
+}
+
+.hsl-vec-btn.hsl-vec-cyans.is-active {
+  background: rgba(44, 230, 255, 0.2);
+  border-color: #2ce6ff;
+  color: #a6f5ff;
+}
+
+.hsl-vec-btn.hsl-vec-blues.is-active {
+  background: rgba(75, 139, 255, 0.2);
+  border-color: #4b8bff;
+  color: #adc9ff;
+}
+
+.hsl-vec-btn.hsl-vec-magentas.is-active {
+  background: rgba(232, 93, 255, 0.2);
+  border-color: #e85dff;
+  color: #f4b5ff;
 }
 
 .curves-ch-btn.is-active {
@@ -3836,7 +3880,8 @@ input[type="range"] {
   min-width: 0;
 }
 
-.curves-preset-btn {
+.curves-preset-btn,
+.hsl-preset-btn {
   justify-content: center;
   text-align: center;
   font-size: 10px;
@@ -6724,8 +6769,11 @@ input[type="range"] {
   #btn-qual-reset,
   .qual-param-row input[type="range"],
   .qual-param-row .input-num,
+  .curves-mode-btn,
   .curves-ch-btn,
+  .hsl-vec-btn,
   .curves-preset-btn,
+  .hsl-preset-btn,
   #btn-curves-delete-pt,
   #btn-curves-reset-ch,
   #btn-curves-reset-all {
@@ -6740,7 +6788,9 @@ input[type="range"] {
   #btn-qual-highlight,
   #btn-qual-invert,
   #btn-qual-reset,
+  .curves-mode-btn,
   .curves-ch-btn,
+  .hsl-vec-btn,
   #btn-curves-delete-pt,
   #btn-curves-reset-ch,
   #btn-curves-reset-all {
@@ -7039,8 +7089,11 @@ input[type="range"] {
   .clip-label-pill,
   .fade-quick-btn,
   #btn-clip-fade-reset-all,
+  .curves-mode-btn,
   .curves-ch-btn,
+  .hsl-vec-btn,
   .curves-preset-btn,
+  .hsl-preset-btn,
   #btn-curves-delete-pt,
   #btn-curves-reset-ch,
   #btn-curves-reset-all {

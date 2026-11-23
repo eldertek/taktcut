@@ -101,6 +101,48 @@ ColorCurvesPresetId = Literal[
     "cool_shadows",
 ]
 
+HslCurveMode = Literal["hue_vs_hue", "hue_vs_sat", "hue_vs_lum"]
+HSL_CURVE_MODES: tuple[HslCurveMode, ...] = ("hue_vs_hue", "hue_vs_sat", "hue_vs_lum")
+HslHueVectorId = Literal["reds", "yellows", "greens", "cyans", "blues", "magentas"]
+HSL_HUE_VECTORS: tuple[HslHueVectorId, ...] = (
+    "reds",
+    "yellows",
+    "greens",
+    "cyans",
+    "blues",
+    "magentas",
+)
+HSL_HUE_FFMPEG_FLAGS: dict[HslHueVectorId, str] = {
+    "reds": "r",
+    "yellows": "y",
+    "greens": "g",
+    "cyans": "c",
+    "blues": "b",
+    "magentas": "m",
+}
+HSL_HUE_ANCHOR_DEGREES: dict[HslHueVectorId, float] = {
+    "reds": 0.0,
+    "yellows": 60.0,
+    "greens": 120.0,
+    "cyans": 180.0,
+    "blues": 240.0,
+    "magentas": 300.0,
+}
+HSL_HUE_VS_HUE_MIN: float = -45.0
+HSL_HUE_VS_HUE_MAX: float = 45.0
+HSL_HUE_VS_SAT_MIN: float = -1.0
+HSL_HUE_VS_SAT_MAX: float = 1.0
+HSL_HUE_VS_LUM_MIN: float = -0.5
+HSL_HUE_VS_LUM_MAX: float = 0.5
+HslCurvesPresetId = Literal[
+    "neutral",
+    "teal_orange_push",
+    "skin_polish",
+    "foliage_emerald",
+    "sky_deepen",
+    "muted_greens",
+]
+
 
 def _clamp_unit(value: float) -> float:
     if value < 0.0:
@@ -856,6 +898,32 @@ def rgb_to_hsl(r: float, g: float, b: float) -> tuple[float, float, float]:
     return (hue, sat, lum)
 
 
+def hsl_to_rgb(hue_deg: float, sat: float, lum: float) -> tuple[float, float, float]:
+    """Convert (hue_deg, saturation [0, 1], luminance [0, 1]) back to unit RGB [0, 1]."""
+    h = ((float(hue_deg) % 360.0) + 360.0) % 360.0
+    s = _clamp_unit(float(sat))
+    l_val = _clamp_unit(float(lum))
+    if s <= 1e-6:
+        return (l_val, l_val, l_val)
+    c = (1.0 - abs(2.0 * l_val - 1.0)) * s
+    h_prime = h / 60.0
+    x = c * (1.0 - abs((h_prime % 2.0) - 1.0))
+    m = l_val - 0.5 * c
+    if h_prime < 1.0:
+        r1, g1, b1 = c, x, 0.0
+    elif h_prime < 2.0:
+        r1, g1, b1 = x, c, 0.0
+    elif h_prime < 3.0:
+        r1, g1, b1 = 0.0, c, x
+    elif h_prime < 4.0:
+        r1, g1, b1 = 0.0, x, c
+    elif h_prime < 5.0:
+        r1, g1, b1 = x, 0.0, c
+    else:
+        r1, g1, b1 = c, 0.0, x
+    return (_clamp_unit(r1 + m), _clamp_unit(g1 + m), _clamp_unit(b1 + m))
+
+
 def _eval_band_weight(val: float, lo: float, hi: float, soft: float) -> float:
     w = 1.0
     if lo > 0.0:
@@ -1465,6 +1533,250 @@ def compile_color_curves_filter(curves: ColorCurvesParams) -> str:
     return f"curves={':'.join(opts)}"
 
 
+def evaluate_periodic_hue_curve(values: Sequence[float], hue_deg: float) -> float:
+    """Evaluate a 6-anchor periodic Catmull-Rom curve over [0, 360) hue degrees."""
+    if len(values) != 6:
+        raise ValueError(f"Expected 6 hue anchors, got {len(values)}")
+    h = ((float(hue_deg) % 360.0) + 360.0) % 360.0
+    sector = h / 60.0
+    i1 = int(math.floor(sector)) % 6
+    t = sector - math.floor(sector)
+    p0 = float(values[(i1 - 1) % 6])
+    p1 = float(values[i1])
+    p2 = float(values[(i1 + 1) % 6])
+    p3 = float(values[(i1 + 2) % 6])
+    t2 = t * t
+    t3 = t2 * t
+    return 0.5 * (
+        (2.0 * p1)
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+    )
+
+
+class HslCurveVectorValues(BaseModel):
+    """Six primary/secondary hue vector offsets (R=0, Y=60, G=120, C=180, B=240, M=300)."""
+
+    reds: float = 0.0
+    yellows: float = 0.0
+    greens: float = 0.0
+    cyans: float = 0.0
+    blues: float = 0.0
+    magentas: float = 0.0
+
+    def as_tuple(self) -> tuple[float, float, float, float, float, float]:
+        """Return ordered 6-anchor values from Red (0 deg) through Magenta (300 deg)."""
+        return (
+            self.reds,
+            self.yellows,
+            self.greens,
+            self.cyans,
+            self.blues,
+            self.magentas,
+        )
+
+    def is_identity(self) -> bool:
+        """Return True when all 6 hue anchors are zero."""
+        return all(abs(v) <= 1e-6 for v in self.as_tuple())
+
+
+def _coerce_hsl_vector_channel(
+    raw: Any,
+    lo: float,
+    hi: float,
+    field_name: str,
+) -> HslCurveVectorValues:
+    if isinstance(raw, HslCurveVectorValues):
+        data = raw.model_dump()
+    elif isinstance(raw, dict):
+        data = dict(raw)
+    elif raw is None:
+        data = {}
+    else:
+        raise ValueError(f"{field_name} must be an object or HslCurveVectorValues")
+    cleaned: dict[str, float] = {}
+    for vec in HSL_HUE_VECTORS:
+        val = data.get(vec, 0.0)
+        cleaned[vec] = _validate_bounded_float(val, f"{field_name}.{vec}", lo, hi)
+    return HslCurveVectorValues(**cleaned)
+
+
+class HslCurvesParams(BaseModel):
+    """DaVinci Resolve 6-vector Hue vs Hue, Hue vs Sat, and Hue vs Lum curves."""
+
+    hue_vs_hue: HslCurveVectorValues = Field(default_factory=HslCurveVectorValues)
+    hue_vs_sat: HslCurveVectorValues = Field(default_factory=HslCurveVectorValues)
+    hue_vs_lum: HslCurveVectorValues = Field(default_factory=HslCurveVectorValues)
+
+    @field_validator("hue_vs_hue", mode="before")
+    @classmethod
+    def _validate_hue_vs_hue(cls, raw: Any) -> HslCurveVectorValues:
+        return _coerce_hsl_vector_channel(
+            raw, HSL_HUE_VS_HUE_MIN, HSL_HUE_VS_HUE_MAX, "hue_vs_hue"
+        )
+
+    @field_validator("hue_vs_sat", mode="before")
+    @classmethod
+    def _validate_hue_vs_sat(cls, raw: Any) -> HslCurveVectorValues:
+        return _coerce_hsl_vector_channel(
+            raw, HSL_HUE_VS_SAT_MIN, HSL_HUE_VS_SAT_MAX, "hue_vs_sat"
+        )
+
+    @field_validator("hue_vs_lum", mode="before")
+    @classmethod
+    def _validate_hue_vs_lum(cls, raw: Any) -> HslCurveVectorValues:
+        return _coerce_hsl_vector_channel(
+            raw, HSL_HUE_VS_LUM_MIN, HSL_HUE_VS_LUM_MAX, "hue_vs_lum"
+        )
+
+    def is_identity(self) -> bool:
+        """Return True when all three 6-vector HSL curves are neutral."""
+        return (
+            self.hue_vs_hue.is_identity()
+            and self.hue_vs_sat.is_identity()
+            and self.hue_vs_lum.is_identity()
+        )
+
+    def apply_rgb(self, r: float, g: float, b: float) -> tuple[float, float, float]:
+        """Apply periodic Hue vs Hue, Hue vs Sat, and Hue vs Lum adjustments to [0, 1] RGB."""
+        rc = _clamp_unit(r)
+        gc = _clamp_unit(g)
+        bc = _clamp_unit(b)
+        if self.is_identity():
+            return (rc, gc, bc)
+        hue, sat, lum = rgb_to_hsl(rc, gc, bc)
+        if sat <= 1e-4:
+            return (rc, gc, bc)
+        chroma_weight = _smoothstep(0.0, 0.08, sat)
+        dh = 0.0
+        if not self.hue_vs_hue.is_identity():
+            raw_dh = evaluate_periodic_hue_curve(self.hue_vs_hue.as_tuple(), hue)
+            dh = max(HSL_HUE_VS_HUE_MIN, min(HSL_HUE_VS_HUE_MAX, raw_dh)) * chroma_weight
+        ds = 0.0
+        if not self.hue_vs_sat.is_identity():
+            raw_ds = evaluate_periodic_hue_curve(self.hue_vs_sat.as_tuple(), hue)
+            ds = max(HSL_HUE_VS_SAT_MIN, min(HSL_HUE_VS_SAT_MAX, raw_ds))
+        dl = 0.0
+        if not self.hue_vs_lum.is_identity():
+            raw_dl = evaluate_periodic_hue_curve(self.hue_vs_lum.as_tuple(), hue)
+            dl = max(HSL_HUE_VS_LUM_MIN, min(HSL_HUE_VS_LUM_MAX, raw_dl)) * chroma_weight
+        next_hue = (hue + dh) % 360.0
+        next_sat = _clamp_unit(sat * (1.0 + ds))
+        next_lum = _clamp_unit(lum + dl * 0.35)
+        return hsl_to_rgb(next_hue, next_sat, next_lum)
+
+
+class HslCurvesPreset(BaseModel):
+    """Curated DaVinci-style 6-vector HSL Curves preset."""
+
+    id: HslCurvesPresetId
+    name: str
+    description: str
+    hsl_curves: HslCurvesParams
+
+
+HSL_CURVE_PRESETS: tuple[HslCurvesPreset, ...] = (
+    HslCurvesPreset(
+        id="neutral",
+        name="Neutral",
+        description="Flat zeroed 6-vector Hue vs Hue, Hue vs Sat, and Hue vs Lum curves.",
+        hsl_curves=HslCurvesParams(),
+    ),
+    HslCurvesPreset(
+        id="teal_orange_push",
+        name="Teal & Orange",
+        description="Push skin toward warm amber, enrich cyan/blue tones, and mute green/magenta.",
+        hsl_curves=HslCurvesParams(
+            hue_vs_hue=HslCurveVectorValues(reds=8.0, yellows=-10.0, cyans=-8.0),
+            hue_vs_sat=HslCurveVectorValues(
+                reds=0.25,
+                yellows=0.15,
+                greens=-0.45,
+                cyans=0.40,
+                blues=0.25,
+                magentas=-0.50,
+            ),
+            hue_vs_lum=HslCurveVectorValues(cyans=-0.15, blues=-0.18),
+        ),
+    ),
+    HslCurvesPreset(
+        id="skin_polish",
+        name="Skin Polish",
+        description="Unify red/yellow skin hues with gentle highlight smoothing.",
+        hsl_curves=HslCurvesParams(
+            hue_vs_hue=HslCurveVectorValues(reds=5.0, yellows=-6.0),
+            hue_vs_sat=HslCurveVectorValues(reds=-0.10, yellows=-0.12),
+            hue_vs_lum=HslCurveVectorValues(reds=0.08, yellows=0.10),
+        ),
+    ),
+    HslCurvesPreset(
+        id="foliage_emerald",
+        name="Emerald Foliage",
+        description="Shift yellow-greens toward rich cinema emerald and deepen foliage luma.",
+        hsl_curves=HslCurvesParams(
+            hue_vs_hue=HslCurveVectorValues(yellows=16.0, greens=12.0),
+            hue_vs_sat=HslCurveVectorValues(yellows=-0.15, greens=0.20),
+            hue_vs_lum=HslCurveVectorValues(greens=-0.16),
+        ),
+    ),
+    HslCurvesPreset(
+        id="sky_deepen",
+        name="Sky Polarizer",
+        description="Simulate a circular polarizer by enriching and darkening cyan/blue skies.",
+        hsl_curves=HslCurvesParams(
+            hue_vs_sat=HslCurveVectorValues(cyans=0.30, blues=0.40),
+            hue_vs_lum=HslCurveVectorValues(cyans=-0.20, blues=-0.24),
+        ),
+    ),
+    HslCurvesPreset(
+        id="muted_greens",
+        name="Muted Greens",
+        description="Desaturate distracting greens, cyans, and magentas while preserving skin.",
+        hsl_curves=HslCurvesParams(
+            hue_vs_sat=HslCurveVectorValues(
+                yellows=-0.25,
+                greens=-0.55,
+                cyans=-0.30,
+                magentas=-0.35,
+            ),
+            hue_vs_lum=HslCurveVectorValues(greens=-0.10),
+        ),
+    ),
+)
+
+
+def list_hsl_curve_presets() -> tuple[HslCurvesPreset, ...]:
+    """Return all built-in 6-vector HSL curve presets."""
+    return HSL_CURVE_PRESETS
+
+
+def get_hsl_curve_preset(preset_id: str) -> HslCurvesPreset:
+    """Resolve a built-in 6-vector HSL curve preset by id."""
+    for preset in HSL_CURVE_PRESETS:
+        if preset.id == preset_id:
+            return preset
+    raise ValueError(f"Unknown HSL curves preset {preset_id!r}")
+
+
+def compile_hsl_curves_filter(hsl_curves: HslCurvesParams) -> str:
+    """Compile HslCurvesParams into FFmpeg per-sector huesaturation filter stages."""
+    if hsl_curves.is_identity():
+        return ""
+    stages: list[str] = []
+    for vec in HSL_HUE_VECTORS:
+        dh = float(getattr(hsl_curves.hue_vs_hue, vec))
+        ds = float(getattr(hsl_curves.hue_vs_sat, vec))
+        dl = float(getattr(hsl_curves.hue_vs_lum, vec))
+        if abs(dh) <= 1e-4 and abs(ds) <= 1e-4 and abs(dl) <= 1e-4:
+            continue
+        flag = HSL_HUE_FFMPEG_FLAGS[vec]
+        stages.append(
+            f"huesaturation=colors={flag}:hue={dh:.2f}:saturation={ds:.4f}:intensity={dl:.4f}"
+        )
+    return ",".join(stages)
+
+
 class ColorNodeParams(BaseModel):
     """A single serial color grading node combining Wheels/Tone, Curves, Power Window, and LUT."""
 
@@ -1473,6 +1785,7 @@ class ColorNodeParams(BaseModel):
     enabled: bool = True
     grade: ColorGradeParams = Field(default_factory=ColorGradeParams)
     curves: ColorCurvesParams = Field(default_factory=ColorCurvesParams)
+    hsl_curves: HslCurvesParams = Field(default_factory=HslCurvesParams)
     power_window: PowerWindowParams = Field(default_factory=PowerWindowParams)
     qualifier: QualifierParams = Field(default_factory=QualifierParams)
     lut_title: str = ""
@@ -1584,24 +1897,32 @@ class ColorNodeParams(BaseModel):
         """Return True when this node has non-identity YRGB spline curves."""
         return not self.curves.is_identity()
 
+    def has_hsl_curves(self) -> bool:
+        """Return True when this node has non-identity 6-vector HSL curves."""
+        return not self.hsl_curves.is_identity()
+
     def is_identity(self) -> bool:
-        """Return True when disabled or grade, curves, and LUT mix are neutral."""
+        """Return True when disabled or grade, curves, HSL curves, and LUT mix are neutral."""
         if not self.enabled:
             return True
         if not self.grade.is_identity():
             return False
         if not self.curves.is_identity():
             return False
+        if not self.hsl_curves.is_identity():
+            return False
         return not (self.has_lut() and self.lut_mix > 1e-6)
 
     def apply_rgb(self, r: float, g: float, b: float) -> tuple[float, float, float]:
-        """Apply this node's grade, YRGB curves, and optional .cube LUT to [0, 1] RGB."""
+        """Apply this node's grade, curves, HSL curves, and optional .cube LUT to RGB."""
         in_rgb = (_clamp_unit(r), _clamp_unit(g), _clamp_unit(b))
         if not self.enabled:
             return in_rgb
         out_r, out_g, out_b = self.grade.apply_rgb(in_rgb[0], in_rgb[1], in_rgb[2])
         if not self.curves.is_identity():
             out_r, out_g, out_b = self.curves.apply_rgb(out_r, out_g, out_b)
+        if not self.hsl_curves.is_identity():
+            out_r, out_g, out_b = self.hsl_curves.apply_rgb(out_r, out_g, out_b)
         if (
             self.lut_table is not None
             and self.lut_size is not None
@@ -1661,6 +1982,7 @@ class ColorNodeChainCompileResult(BaseModel):
     has_lut_nodes: bool
     has_power_windows: bool = False
     has_curves: bool = False
+    has_hsl_curves: bool = False
     has_qualifiers: bool = False
 
 
@@ -1698,6 +2020,10 @@ def compile_color_node_chain_filter(
             curves_fg = compile_color_curves_filter(node.curves)
             if curves_fg:
                 node_stages.append(curves_fg)
+        if not node.hsl_curves.is_identity():
+            hsl_fg = compile_hsl_curves_filter(node.hsl_curves)
+            if hsl_fg:
+                node_stages.append(hsl_fg)
         if not node_stages:
             continue
         node_fg = ",".join(node_stages)
@@ -1767,6 +2093,7 @@ def compile_color_node_chain(
     has_lut_nodes = any(n.enabled and n.has_lut() and n.lut_mix > 1e-6 for n in validated)
     has_power_windows = any(n.enabled and n.power_window.is_active() for n in validated)
     has_curves = any(n.enabled and not n.curves.is_identity() for n in validated)
+    has_hsl_curves = any(n.enabled and not n.hsl_curves.is_identity() for n in validated)
     has_qualifiers = any(n.enabled and n.qualifier.is_active() for n in validated)
     return ColorNodeChainCompileResult(
         filtergraph=fg,
@@ -1777,6 +2104,7 @@ def compile_color_node_chain(
         has_lut_nodes=has_lut_nodes,
         has_power_windows=has_power_windows,
         has_curves=has_curves,
+        has_hsl_curves=has_hsl_curves,
         has_qualifiers=has_qualifiers,
     )
 
