@@ -99,7 +99,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.26"
+    assert health["version"] == "0.1.27"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -961,7 +961,7 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "media-pool-info-kv",
     ):
         assert elem_id in html_text
-    assert "v0.1.26" in html_text
+    assert "v0.1.27" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
@@ -3475,7 +3475,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 wm_preset_draft.click()
                 assert wm_input.input_value() == "DRAFT - CLIENT REVIEW"
                 assert wm_preset_draft.get_attribute("aria-pressed") == "true"
-                wm_opacity.fill("0.50")
+                wm_opacity.fill("0.5")
                 wm_opacity.dispatch_event("input")
                 assert page.locator("#render-watermark-opacity-value").text_content() == "0.50"
                 page.locator("#btn-build-render-plan").click()
@@ -3739,7 +3739,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 rf_9_16.click()
                 assert rf_chk.is_checked() is True
                 assert rf_9_16.get_attribute("aria-pressed") == "true"
-                rf_pan_x.fill("0.40")
+                rf_pan_x.fill("0.4")
                 rf_pan_x.dispatch_event("input")
                 rf_pan_y.fill("-0.25")
                 rf_pan_y.dispatch_event("input")
