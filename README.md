@@ -1,22 +1,22 @@
 # taktcut
 
 [![CI](https://github.com/eldertek/taktcut/actions/workflows/ci.yml/badge.svg)](https://github.com/eldertek/taktcut/actions/workflows/ci.yml)
-[![Release v0.1.12](https://img.shields.io/badge/release-v0.1.12-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.12)
+[![Release v0.1.13](https://img.shields.io/badge/release-v0.1.13-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.13)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-e68442.svg)](LICENSE)
 
-Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, ASC CDL / `.cube` color pipeline, 16 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
+Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
 
-`taktcut` (`v0.1.12`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
+`taktcut` (`v0.1.13`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
 
 - **1-Click Desktop Download (Windows / macOS / Linux)**: [https://eclipse-technology.eu/taktcut/](https://eclipse-technology.eu/taktcut/)
 - **Live Browser Demo**: [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)
 
 ![taktcut Web Studio GUI](docs/screenshot-desktop.png)
 
-## What's New in v0.1.12
+## What's New in v0.1.13
 
-- **16 Boris FX Sapphire-Inspired FX & Chroma Key**: Added `S_Shake` Handheld (`camera_shake`), `S_LensDistortion`, `S_ScanLines`, and `S_Sharpen` (Unsharp Mask) plus 1-click presets `action_handheld` and `retro_vhs` alongside `S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `cinema_35mm` preset, keyframe curves, and **Chroma Key (Green/Blue Screen)** with real-time Canvas preview and deterministic FFmpeg filtergraph compilation.
+- **20 Boris FX Sapphire-Inspired FX & Chroma Key**: Added `S_HueSatBright` (`hue_shift`), `S_FlipFlop` (`mirror_flip`), `S_Mosaic` (`mosaic_pixelate`), and `S_Invert` (`invert_negative`) plus 1-click presets `neon_shift` and `retro_arcade` alongside `S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `S_Shake` Handheld (`camera_shake`), `S_LensDistortion`, `S_ScanLines`, `S_Sharpen`, `cinema_35mm` / `action_handheld` / `retro_vhs` presets, keyframe curves, and **Chroma Key (Green/Blue Screen)** with real-time Canvas preview and deterministic FFmpeg filtergraph compilation.
 - **DaVinci Dynamic Zoom / Ken Burns**: Real-time Canvas motion preview, Timeline Inspector selector (`slow_zoom_in`, `slow_zoom_out`, `pan_left_to_right`, `pan_right_to_left`), and deterministic FFmpeg filtergraph compilation.
 - **Split-Screen Wipe (Before/After) & DaVinci Still Gallery (`Shift+S`)**: Interactive Before/After split-screen wipe monitor across FX & Color plus DaVinci-style **Still Gallery** (`Shift+S` frame grab, compare, and export).
 - **Fairlight Loudness (`-14 / -16 / -23 LUFS`) & Dialogue EQ**: Integrated Fairlight master **Dialogue EQ** presets and **Loudness Target Normalizer** (`-14 LUFS` YouTube, `-16 LUFS` Reels/TikTok, `-23 LUFS` Broadcast EBU R128) with live metering.
@@ -89,7 +89,7 @@ taktcut-ui --desktop --workspace-dir /path/to/your/project
 
 Six docked workstation pages:
 1. **Timeline**: Media Pool loader (`.drp`, `.drt`, `.fcpxml`, `.otio`/`.otioz`, or sample fixture), Program Monitor with J/K/L shuttle, I/O range & safe guides, Docked Multi-Track Timeline (`V1`, `V2`, `A1`, `A2`) with Magnetic Snap, Razor Blade, Ripple Delete (`Shift+Backspace`), **Fairlight Loudness (`-14/-16/-23 LUFS`) & Dialogue EQ**, Motion Transform/PiP & **Dynamic Zoom / Ken Burns**, Retime, Cut Transitions, BPM Beat Grid, Markers, continuity validation, and `.otio`/`.otioz` + `.taktcut.json` export.
-2. **FX**: 16 Boris FX Sapphire-inspired GPU/FFmpeg FX (`S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `S_Shake` Handheld, `S_LensDistortion`, `S_ScanLines`, `S_Sharpen`), **Split-Screen Wipe (Before/After)**, **DaVinci Still Gallery (`Shift+S`)**, **Chroma Key**, keyframe curve editor, and 1-click presets (`cinema_35mm`, `action_handheld`, `retro_vhs`, etc.).
+2. **FX**: 20 Boris FX Sapphire-inspired GPU/FFmpeg FX (`S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `S_Shake` Handheld, `S_LensDistortion`, `S_ScanLines`, `S_Sharpen`, `S_HueSatBright`, `S_FlipFlop`, `S_Mosaic`, `S_Invert`), **Split-Screen Wipe (Before/After)**, **DaVinci Still Gallery (`Shift+S`)**, **Chroma Key**, keyframe curve editor, and 1-click presets (`cinema_35mm`, `action_handheld`, `retro_vhs`, `neon_shift`, `retro_arcade`, etc.).
 3. **Titles**: Interactive Titles & Lower-Thirds generator plus **SRT / VTT Subtitles** cue editor and burn-in controls.
 4. **Color**: Interactive **Lift / Gamma / Gain** DaVinci Color Wheels & Primary Bars, Rec.709 **Split-Screen Wipe (Before/After)** monitor, **DaVinci Still Gallery (`Shift+S`)**, live **RGB Parade / Luma Waveform / Vectorscope**, `.cdl` import, and 3D `.cube` LUT baking.
 5. **Deliver**: One-click Delivery Presets, Aspect Ratio framing (`16:9`, `9:16`, `1:1`, `4:5`), host `NVENC`/CPU encoder probe, **Remote GPU Render Node (`NVENC`)** dispatch, deterministic Rec.709 FFmpeg render planning & execution, studio LUT linking, and Fairlight EBU R128 loudness (`-14/-16/-23 LUFS`) + Dialogue EQ.
