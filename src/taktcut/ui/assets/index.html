@@ -812,29 +812,68 @@
               <div class="pane-divider"></div>
 
               <div class="pane-subheader">
-                <span data-i18n="fx.library.addEffect">Add Sapphire Effect Node</span>
+                <span data-i18n="fx.library.addEffect">Add OpenFX / Sapphire Node</span>
               </div>
-              <div class="fx-add-strip">
-                <button type="button" class="btn btn-chip mono" data-fx-add="glow">+ Glow</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="optical_glow">+ Optical Glow</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="halation" data-i18n="fx.add.halation">+ Halation</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="shake">+ Shake</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="camera_shake" data-i18n="fx.add.camera_shake">+ Camera Shake</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="flicker">+ Flicker</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="lens_flare">+ Lens Flare</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="lens_distortion" data-i18n="fx.add.lens_distortion">+ Lens Distortion</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="film_damage">+ Film Damage</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="chroma_aberration">+ Chroma Split</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="rgb_split">+ RGB Split</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="vignette">+ Vignette</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="film_grain">+ Film Grain</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="scanlines" data-i18n="fx.add.scanlines">+ ScanLines</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="unsharp_mask" data-i18n="fx.add.unsharp_mask">+ Unsharp Mask</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="hue_shift" data-i18n="fx.add.hue_shift">+ Hue Shift</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="mirror_flip" data-i18n="fx.add.mirror_flip">+ Mirror Flip</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="mosaic_pixelate" data-i18n="fx.add.mosaic_pixelate">+ Mosaic Pixel</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="invert_negative" data-i18n="fx.add.invert_negative">+ Invert Neg</button>
-                <button type="button" class="btn btn-chip mono" data-fx-add="letterbox" data-i18n="fx.add.letterbox">+ Letterbox</button>
+              <div id="fx-ofx-filterbar" class="fx-ofx-filterbar" role="group" aria-label="OpenFX Categories">
+                <button type="button" class="btn btn-chip fx-ofx-tab is-active" data-fx-cat-filter="all" aria-pressed="true" data-i18n="fx.ofx.cat.all">All (20)</button>
+                <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="light_glow" aria-pressed="false" data-i18n="fx.ofx.cat.lightGlow">Light &amp; Glow</button>
+                <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="lens_blur" aria-pressed="false" data-i18n="fx.ofx.cat.lensBlur">Lens &amp; Blur</button>
+                <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="film_retro" aria-pressed="false" data-i18n="fx.ofx.cat.filmRetro">Film &amp; Retro</button>
+                <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="key_transform" aria-pressed="false" data-i18n="fx.ofx.cat.keyTransform">Key &amp; Transform</button>
+              </div>
+              <div id="fx-ofx-groups" class="fx-ofx-groups">
+                <section class="fx-ofx-group" data-fx-category="light_glow">
+                  <div class="fx-ofx-group-head">
+                    <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.lightGlow">Light &amp; Glow</span>
+                    <span class="fx-ofx-count mono">5</span>
+                  </div>
+                  <div class="fx-add-strip">
+                    <button type="button" class="btn btn-chip mono" data-fx-add="glow">+ Glow</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="optical_glow">+ Optical Glow</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="halation" data-i18n="fx.add.halation">+ Halation</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="flicker">+ Flicker</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="lens_flare">+ Lens Flare</button>
+                  </div>
+                </section>
+                <section class="fx-ofx-group" data-fx-category="lens_blur">
+                  <div class="fx-ofx-group-head">
+                    <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.lensBlur">Lens &amp; Blur</span>
+                    <span class="fx-ofx-count mono">5</span>
+                  </div>
+                  <div class="fx-add-strip">
+                    <button type="button" class="btn btn-chip mono" data-fx-add="shake">+ Shake</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="camera_shake" data-i18n="fx.add.camera_shake">+ Camera Shake</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="lens_distortion" data-i18n="fx.add.lens_distortion">+ Lens Distortion</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="chroma_aberration">+ Chroma Split</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="unsharp_mask" data-i18n="fx.add.unsharp_mask">+ Unsharp Mask</button>
+                  </div>
+                </section>
+                <section class="fx-ofx-group" data-fx-category="film_retro">
+                  <div class="fx-ofx-group-head">
+                    <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.filmRetro">Film &amp; Retro</span>
+                    <span class="fx-ofx-count mono">5</span>
+                  </div>
+                  <div class="fx-add-strip">
+                    <button type="button" class="btn btn-chip mono" data-fx-add="film_damage">+ Film Damage</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="rgb_split">+ RGB Split</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="vignette">+ Vignette</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="film_grain">+ Film Grain</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="scanlines" data-i18n="fx.add.scanlines">+ ScanLines</button>
+                  </div>
+                </section>
+                <section class="fx-ofx-group" data-fx-category="key_transform">
+                  <div class="fx-ofx-group-head">
+                    <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.keyTransform">Key &amp; Transform</span>
+                    <span class="fx-ofx-count mono">5</span>
+                  </div>
+                  <div class="fx-add-strip">
+                    <button type="button" class="btn btn-chip mono" data-fx-add="hue_shift" data-i18n="fx.add.hue_shift">+ Hue Shift</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="mirror_flip" data-i18n="fx.add.mirror_flip">+ Mirror Flip</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="mosaic_pixelate" data-i18n="fx.add.mosaic_pixelate">+ Mosaic Pixel</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="invert_negative" data-i18n="fx.add.invert_negative">+ Invert Neg</button>
+                    <button type="button" class="btn btn-chip mono" data-fx-add="letterbox" data-i18n="fx.add.letterbox">+ Letterbox</button>
+                  </div>
+                </section>
               </div>
             </div>
           </aside>
@@ -996,7 +1035,15 @@
                 <button type="button" id="btn-fx-send-render" class="btn btn-secondary" data-i18n="fx.compiler.btnDeliver">Use in Deliver</button>
               </div>
               <div id="fx-compile-kv" class="kv-grid mono"></div>
-              <pre id="fx-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+              <details id="fx-filtergraph-drawer" class="fg-drawer">
+                <summary class="fg-drawer-summary">
+                  <span class="fg-drawer-label" data-i18n="fx.compiler.drawerTitle">FFmpeg Filtergraph (CLI)</span>
+                  <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+                </summary>
+                <div class="fg-drawer-body">
+                  <pre id="fx-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+                </div>
+              </details>
             </div>
           </aside>
         </div>
@@ -1195,7 +1242,15 @@
                     <button type="button" id="btn-subtitle-copy-fg" class="btn btn-mini" data-i18n="subtitles.btn.copyFg">Copy</button>
                   </div>
                 </div>
-                <pre id="subtitle-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+                <details id="subtitle-filtergraph-drawer" class="fg-drawer">
+                  <summary class="fg-drawer-summary">
+                    <span class="fg-drawer-label" data-i18n="subtitles.compiler.drawerTitle">FFmpeg Subtitles Filtergraph (CLI)</span>
+                    <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+                  </summary>
+                  <div class="fg-drawer-body">
+                    <pre id="subtitle-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+                  </div>
+                </details>
               </div>
             </div>
           </div>
@@ -1214,7 +1269,15 @@
               <button type="button" id="btn-title-send-render" class="btn btn-secondary" data-i18n="titles.compiler.btnDeliver">Use in Deliver</button>
             </div>
             <div id="title-compile-kv" class="kv-grid mono"></div>
-            <pre id="title-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+            <details id="title-filtergraph-drawer" class="fg-drawer">
+              <summary class="fg-drawer-summary">
+                <span class="fg-drawer-label" data-i18n="titles.compiler.drawerTitle">FFmpeg drawtext Filtergraph (CLI)</span>
+                <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+              </summary>
+              <div class="fg-drawer-body">
+                <pre id="title-filtergraph-output" class="code-box mono" aria-live="polite"></pre>
+              </div>
+            </details>
           </div>
         </section>
       </section>

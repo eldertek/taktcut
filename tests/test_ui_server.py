@@ -3246,6 +3246,16 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     title_fg = page.locator("#title-filtergraph-output").text_content() or ""
                     assert "drawbox=" in title_fg
                     assert "drawtext=" in title_fg
+                    assert page.locator("#title-filtergraph-drawer").get_attribute("open") is None
+                    assert (
+                        page.locator("#subtitle-filtergraph-drawer").get_attribute("open") is None
+                    )
+                    page.locator("#title-filtergraph-drawer > summary").click()
+                    assert (
+                        page.locator("#title-filtergraph-drawer").get_attribute("open") is not None
+                    )
+                    assert page.locator("#title-filtergraph-output").is_visible() is True
+                    page.locator("#title-filtergraph-drawer > summary").click()
 
                 # Verify FX Studio + Chroma Key / Green Screen Studio & Matte View at all viewports
                 page.locator("#tab-fx").click()
@@ -3341,6 +3351,26 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                         page.locator("#fx-stills-gallery .still-card").count()
                         == before_fx_stills + 2
                     )
+                    # OpenFX categorized library & collapsible FFmpeg filtergraph drawer
+                    assert page.locator("#fx-ofx-filterbar [data-fx-cat-filter]").count() == 5
+                    assert page.locator("#fx-ofx-groups [data-fx-add]").count() == 20
+                    assert page.locator("#fx-ofx-groups .fx-ofx-group:not(.is-hidden)").count() == 4
+                    page.locator('[data-fx-cat-filter="film_retro"]').click()
+                    assert (
+                        page.locator('[data-fx-cat-filter="film_retro"]').get_attribute(
+                            "aria-pressed"
+                        )
+                        == "true"
+                    )
+                    assert page.locator("#fx-ofx-groups .fx-ofx-group:not(.is-hidden)").count() == 1
+                    assert page.locator('[data-fx-add="film_grain"]').is_visible() is True
+                    page.locator('[data-fx-cat-filter="all"]').click()
+                    assert page.locator("#fx-ofx-groups .fx-ofx-group:not(.is-hidden)").count() == 4
+                    assert page.locator("#fx-filtergraph-drawer").get_attribute("open") is None
+                    page.locator("#fx-filtergraph-drawer > summary").click()
+                    assert page.locator("#fx-filtergraph-drawer").get_attribute("open") is not None
+                    assert page.locator("#fx-filtergraph-output").is_visible() is True
+                    page.locator("#fx-filtergraph-drawer > summary").click()
 
                 # Verify Deliver Quick-Export Preset Strip & DaVinci Compact Sub-Tabs
                 page.locator("#tab-render").click()

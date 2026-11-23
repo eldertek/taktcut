@@ -9735,6 +9735,20 @@ function wireEvents() {
       if (pid) applyFxPreset(pid);
     });
   }
+  for (const btn of document.querySelectorAll("[data-fx-cat-filter]")) {
+    btn.addEventListener("click", () => {
+      const cat = btn.getAttribute("data-fx-cat-filter") || "all";
+      for (const tab of document.querySelectorAll("[data-fx-cat-filter]")) {
+        const active = (tab.getAttribute("data-fx-cat-filter") || "all") === cat;
+        tab.classList.toggle("is-active", active);
+        tab.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+      for (const group of document.querySelectorAll(".fx-ofx-group[data-fx-category]")) {
+        const groupCat = group.getAttribute("data-fx-category") || "";
+        group.classList.toggle("is-hidden", cat !== "all" && groupCat !== cat);
+      }
+    });
+  }
   for (const btn of document.querySelectorAll("[data-fx-add]")) {
     btn.addEventListener("click", () => {
       const eff = btn.getAttribute("data-fx-add");

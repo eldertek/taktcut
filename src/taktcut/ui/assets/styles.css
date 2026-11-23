@@ -1212,10 +1212,140 @@ body {
   color: var(--text-muted);
 }
 
+.fx-ofx-filterbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fx-ofx-tab {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fx-ofx-tab.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #f4a46b;
+}
+
+.fx-ofx-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fx-ofx-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 7px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.fx-ofx-group.is-hidden {
+  display: none;
+}
+
+.fx-ofx-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.fx-ofx-group-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.fx-ofx-count {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
 .fx-add-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+.fg-drawer {
+  border: 1px solid var(--border-inner);
+  background: var(--bg-workbench);
+  min-width: 0;
+}
+
+.fg-drawer-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  min-height: 32px;
+  background: var(--bg-header);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.fg-drawer-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fg-drawer-summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid var(--text-muted);
+  transition: transform 0.14s ease, border-left-color 0.14s ease;
+  flex-shrink: 0;
+}
+
+.fg-drawer[open] > .fg-drawer-summary::before {
+  transform: rotate(90deg);
+  border-left-color: var(--accent-amber);
+}
+
+.fg-drawer-summary:hover {
+  background: var(--bg-hover);
+}
+
+.fg-drawer-summary:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: -2px;
+}
+
+.fg-drawer-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fg-drawer-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.fg-drawer-body {
+  padding: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
 }
 
 .fx-stack {
@@ -4571,7 +4701,9 @@ input[type="range"] {
   #panel-fx .input-select,
   #panel-fx .input-num,
   #panel-fx .input-control,
-  #panel-fx input[type="range"] {
+  #panel-fx input[type="range"],
+  #panel-fx .fx-ofx-tab,
+  .fg-drawer-summary {
     min-height: 44px;
   }
   #panel-fx .fx-bypass-btn,
