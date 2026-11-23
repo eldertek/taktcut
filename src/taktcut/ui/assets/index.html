@@ -2366,6 +2366,59 @@
                   </div>
                 </div>
               </div>
+
+              <!-- DAVINCI COLOR WARPER (2D HUE-SATURATION SPIDER GRID) -->
+              <div id="color-warper-dock" class="color-warper-dock" role="region" aria-label="Color Warper Hue-Saturation Spider Grid">
+                <div class="warper-toolbar">
+                  <div class="warper-title-group">
+                    <span class="pane-subheader-label" data-i18n="color.warper.title">Color Warper (Hue-Sat Grid)</span>
+                    <span id="warper-status-badge" class="nle-tag mono">IDENTITY</span>
+                  </div>
+                  <div id="warper-preset-strip" class="warper-preset-strip" role="group" aria-label="Color Warper Presets">
+                    <button type="button" class="btn btn-chip warper-preset-btn is-active" data-warper-preset="neutral" aria-pressed="true" data-i18n="color.warper.preset.neutral">Neutral</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="kodak_warm_skin" aria-pressed="false" data-i18n="color.warper.preset.kodak">Kodak Skin</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="teal_orange_warp" aria-pressed="false" data-i18n="color.warper.preset.tealOrange">Teal &amp; Orange</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="emerald_cinema" aria-pressed="false" data-i18n="color.warper.preset.emerald">Emerald</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="pastel_editorial" aria-pressed="false" data-i18n="color.warper.preset.pastel">Pastel</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="cyber_neon" aria-pressed="false" data-i18n="color.warper.preset.cyber">Cyber Neon</button>
+                  </div>
+                  <div class="warper-actions">
+                    <button type="button" id="btn-warper-reset-pt" class="btn btn-mini" disabled title="Reset selected spider-grid vertex (Delete)" data-i18n="color.warper.resetPt">Rst Pt</button>
+                    <button type="button" id="btn-warper-reset-all" class="btn btn-mini" disabled title="Reset entire Color Warper grid" data-i18n="color.warper.resetAll">Rst All</button>
+                  </div>
+                </div>
+                <div class="warper-stage">
+                  <canvas id="color-warper-canvas" class="color-warper-canvas" tabindex="0" aria-label="Color Warper 2D Hue-Saturation Spider Grid"></canvas>
+                  <div class="warper-meta-rail">
+                    <div id="warper-point-readout" class="warper-point-readout mono" aria-live="polite">PT R3 | H +0.0° | S +0.00</div>
+                    <div class="warper-axis-strip" role="group" aria-label="Select Hue Axis">
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-reds is-active" data-warper-hue="0" aria-pressed="true">R</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-yellows" data-warper-hue="1" aria-pressed="false">Y</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-greens" data-warper-hue="2" aria-pressed="false">G</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-cyans" data-warper-hue="3" aria-pressed="false">C</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-blues" data-warper-hue="4" aria-pressed="false">B</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-magentas" data-warper-hue="5" aria-pressed="false">M</button>
+                      <span class="warper-ring-sep" aria-hidden="true">|</span>
+                      <button type="button" class="btn btn-mini warper-ring-btn" data-warper-ring="0" aria-pressed="false">33%</button>
+                      <button type="button" class="btn btn-mini warper-ring-btn" data-warper-ring="1" aria-pressed="false">67%</button>
+                      <button type="button" class="btn btn-mini warper-ring-btn is-active" data-warper-ring="2" aria-pressed="true">100%</button>
+                    </div>
+                    <div class="warper-param-grid mono">
+                      <div class="warper-param-row">
+                        <label for="warper-hue-range" data-i18n="color.warper.hueShift">Hue Shift (deg)</label>
+                        <input type="range" id="warper-hue-range" min="-60" max="60" step="0.5" value="0">
+                        <input type="number" id="warper-hue-num" class="input-num" min="-60" max="60" step="0.5" value="0.0" aria-label="Color Warper Hue Shift degrees">
+                      </div>
+                      <div class="warper-param-row">
+                        <label for="warper-sat-range" data-i18n="color.warper.satShift">Sat Shift</label>
+                        <input type="range" id="warper-sat-range" min="-0.60" max="0.60" step="0.01" value="0">
+                        <input type="number" id="warper-sat-num" class="input-num" min="-0.60" max="0.60" step="0.01" value="0.00" aria-label="Color Warper Saturation Shift">
+                      </div>
+                    </div>
+                    <div class="curves-hint mono" data-i18n="color.warper.hint">Drag any spider-grid node to warp Hue and Saturation simultaneously. Double-click node or Rst Pt to reset.</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
 

@@ -1,5 +1,10 @@
 import {
   CLIP_LABEL_COLORS,
+  COLOR_WARPER_BOUNDS,
+  COLOR_WARPER_HUE_COUNT,
+  COLOR_WARPER_HUE_LABELS,
+  COLOR_WARPER_RING_RADII,
+  COLOR_WARPER_SAT_RINGS,
   CURVE_CHANNELS,
   FAIRLIGHT_EQ_BAND_SPECS,
   HSL_CURVE_MODES,
@@ -46,6 +51,7 @@ import {
   hasClipDveStyling,
   hasTransformKeyframes,
   isClipTransformIdentity,
+  isColorWarperIdentity,
   isCurveChannelIdentity,
   isPowerWindowActive,
   isQualifierActive,
@@ -54,6 +60,7 @@ import {
   normalizeClipTransform,
   normalizeClipTransition,
   normalizeColorCurves,
+  normalizeColorWarper,
   normalizeCurvePoints,
   normalizeFairlightAudioRackParams,
   normalizeHslCurves,
@@ -7583,4 +7590,255 @@ export function renderFairlightDynamicsCanvas(canvas, rawRackParams, liveInputDb
   ctx.textBaseline = "top";
   ctx.fillText("GR", barX + barW * 0.5, padT + plotH + 4);
   return { plotW, plotH, grDb };
+}
+
+const COLOR_WARPER_AXIS_HEX = [
+  "#ff4b4b", // 0: Red
+  "#ffd23f", // 1: Yellow
+  "#3ad97b", // 2: Green
+  "#2ce6ff", // 3: Cyan
+  "#4b8bff", // 4: Blue
+  "#e85dff" // 5: Magenta
+];
+
+function warperPolarToXy(cx, cy, radius, hueDeg, satRatio) {
+  const rad = ((hueDeg - 90) * Math.PI) / 180;
+  return {
+    x: cx + Math.cos(rad) * (satRatio * radius),
+    y: cy + Math.sin(rad) * (satRatio * radius)
+  };
+}
+
+export function drawColorWarperCanvas(canvas, rawWarper, selectedPoint = null, opts = {}) {
+  if (!canvas) return null;
+  const warper = normalizeColorWarper(rawWarper);
+  const selfRect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+  const width = Math.max(180, Math.floor(selfRect && selfRect.width > 0 ? selfRect.width : 238));
+  const height = Math.max(180, Math.floor(selfRect && selfRect.height > 0 ? selfRect.height : 212));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+
+  const cx = width * 0.5;
+  const cy = height * 0.5;
+  const maxR = Math.max(46, Math.min(width, height) * 0.37);
+
+  // Subtle polar hue wheel backdrop inside maxR
+  const sliceCount = 72;
+  for (let i = 0; i < sliceCount; i += 1) {
+    const a0 = ((i * 5 - 92.5) * Math.PI) / 180;
+    const a1 = (((i + 1) * 5 - 87.5) * Math.PI) / 180;
+    const hueDeg = i * 5;
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.12);
+    grad.addColorStop(0, "rgba(255,255,255,0.03)");
+    grad.addColorStop(0.5, `hsla(${hueDeg}, 85%, 52%, 0.10)`);
+    grad.addColorStop(1, `hsla(${hueDeg}, 92%, 55%, 0.18)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, maxR * 1.12, a0, a1);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Reference concentric saturation rings and home spokes
+  ctx.save();
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.2)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  for (const rFrac of COLOR_WARPER_RING_RADII) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, maxR * rFrac, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  for (let hIdx = 0; hIdx < COLOR_WARPER_HUE_COUNT; hIdx += 1) {
+    const end = warperPolarToXy(cx, cy, maxR, hIdx * 60, 1.08);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Compute home & warped coordinates for all 6x3 nodes
+  const nodes = [];
+  for (let rIdx = 0; rIdx < COLOR_WARPER_SAT_RINGS; rIdx += 1) {
+    for (let hIdx = 0; hIdx < COLOR_WARPER_HUE_COUNT; hIdx += 1) {
+      const pt = warper.points[rIdx * COLOR_WARPER_HUE_COUNT + hIdx];
+      const baseAngle = hIdx * 60;
+      const baseSat = COLOR_WARPER_RING_RADII[rIdx];
+      const home = warperPolarToXy(cx, cy, maxR, baseAngle, baseSat);
+      const warpedSat = Math.max(0.08, Math.min(1.22, baseSat + pt.sat_offset));
+      const pos = warperPolarToXy(cx, cy, maxR, baseAngle + pt.hue_offset, warpedSat);
+      nodes.push({
+        hue_idx: hIdx,
+        ring_idx: rIdx,
+        hue_offset: pt.hue_offset,
+        sat_offset: pt.sat_offset,
+        homeX: home.x,
+        homeY: home.y,
+        x: pos.x,
+        y: pos.y
+      });
+    }
+  }
+  const getNode = (hIdx, rIdx) => nodes[rIdx * COLOR_WARPER_HUE_COUNT + hIdx];
+
+  // Draw warped spider-web rings (closed polygons across 6 spokes)
+  for (let rIdx = 0; rIdx < COLOR_WARPER_SAT_RINGS; rIdx += 1) {
+    ctx.beginPath();
+    for (let hIdx = 0; hIdx < COLOR_WARPER_HUE_COUNT; hIdx += 1) {
+      const n = getNode(hIdx, rIdx);
+      if (hIdx === 0) ctx.moveTo(n.x, n.y);
+      else ctx.lineTo(n.x, n.y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = rIdx === 2 ? "rgba(226, 232, 240, 0.72)" : "rgba(186, 198, 218, 0.50)";
+    ctx.lineWidth = rIdx === 2 ? 1.5 : 1.15;
+    ctx.stroke();
+  }
+
+  // Draw warped radial spokes from neutral center through rings 0..2
+  for (let hIdx = 0; hIdx < COLOR_WARPER_HUE_COUNT; hIdx += 1) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    for (let rIdx = 0; rIdx < COLOR_WARPER_SAT_RINGS; rIdx += 1) {
+      const n = getNode(hIdx, rIdx);
+      ctx.lineTo(n.x, n.y);
+    }
+    ctx.strokeStyle = COLOR_WARPER_AXIS_HEX[hIdx];
+    ctx.globalAlpha = 0.65;
+    ctx.lineWidth = 1.35;
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+
+    // Outer hue label
+    const lblPos = warperPolarToXy(cx, cy, maxR, hIdx * 60, 1.18);
+    ctx.fillStyle = COLOR_WARPER_AXIS_HEX[hIdx];
+    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(COLOR_WARPER_HUE_LABELS[hIdx] || "", lblPos.x, lblPos.y);
+  }
+
+  // Pinned neutral center anchor
+  ctx.fillStyle = "#e2e8f0";
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  const selH = selectedPoint ? Number(selectedPoint.hue_idx) : -1;
+  const selR = selectedPoint ? Number(selectedPoint.ring_idx) : -1;
+  const hoverH = opts && opts.hoverPoint ? Number(opts.hoverPoint.hue_idx) : -1;
+  const hoverR = opts && opts.hoverPoint ? Number(opts.hoverPoint.ring_idx) : -1;
+
+  // Draw displacement vectors + control node handles
+  for (const n of nodes) {
+    const isWarped = Math.abs(n.hue_offset) > 1e-3 || Math.abs(n.sat_offset) > 1e-4;
+    if (isWarped) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(n.homeX, n.homeY);
+      ctx.lineTo(n.x, n.y);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+      ctx.beginPath();
+      ctx.arc(n.homeX, n.homeY, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    const isSel = n.hue_idx === selH && n.ring_idx === selR;
+    const isHover = n.hue_idx === hoverH && n.ring_idx === hoverR;
+    const nodeColor = COLOR_WARPER_AXIS_HEX[n.hue_idx];
+
+    if (isSel || isHover) {
+      ctx.fillStyle = isSel ? "rgba(230, 132, 66, 0.28)" : "rgba(255, 255, 255, 0.18)";
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, isSel ? 9.5 : 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = isWarped || isSel ? nodeColor : "#1c1f28";
+    ctx.strokeStyle = isSel ? "#ffffff" : nodeColor;
+    ctx.lineWidth = isSel ? 2.1 : 1.6;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, isSel ? 5.2 : 4.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Subtle status badge in corner
+  if (!isColorWarperIdentity(warper)) {
+    ctx.fillStyle = "rgba(230, 132, 66, 0.92)";
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("6x3 WARP", 8, 7);
+  } else {
+    ctx.fillStyle = "rgba(148, 163, 184, 0.65)";
+    ctx.font = "600 9px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("6x3 GRID", 8, 7);
+  }
+
+  const geom = { cx, cy, maxR, width, height, nodes };
+  canvas._colorWarperGeom = geom;
+  return geom;
+}
+
+export function hitTestColorWarperPoint(canvas, clientX, clientY) {
+  if (!canvas || !canvas._colorWarperGeom) return null;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  let best = null;
+  let bestDist = 18;
+  for (const n of canvas._colorWarperGeom.nodes) {
+    const d = Math.hypot(x - n.x, y - n.y);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = { hue_idx: n.hue_idx, ring_idx: n.ring_idx };
+    }
+  }
+  return best;
+}
+
+export function clientPosToColorWarperOffset(canvas, clientX, clientY, hueIdx, ringIdx) {
+  const geom = canvas && canvas._colorWarperGeom;
+  if (!geom) return { hue_offset: 0, sat_offset: 0 };
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const dx = x - geom.cx;
+  const dy = y - geom.cy;
+  const distRatio = Math.max(0.08, Math.min(1.22, Math.hypot(dx, dy) / Math.max(1, geom.maxR)));
+  const baseSat = COLOR_WARPER_RING_RADII[ringIdx] ?? 0.3333;
+  const rawSatOffset = distRatio - baseSat;
+  const satOffset = Math.max(
+    COLOR_WARPER_BOUNDS.sat_offset.min,
+    Math.min(COLOR_WARPER_BOUNDS.sat_offset.max, rawSatOffset)
+  );
+  const angleDeg = (((Math.atan2(dy, dx) * 180) / Math.PI + 90) % 360 + 360) % 360;
+  const baseAngle = (Number(hueIdx) || 0) * 60;
+  const rawDiff = ((angleDeg - baseAngle + 540) % 360) - 180;
+  const hueOffset = Math.max(
+    COLOR_WARPER_BOUNDS.hue_offset.min,
+    Math.min(COLOR_WARPER_BOUNDS.hue_offset.max, rawDiff)
+  );
+  return {
+    hue_offset: Math.round(hueOffset * 10) / 10,
+    sat_offset: Math.round(satOffset * 1000) / 1000
+  };
 }

@@ -11,6 +11,9 @@ from pydantic import ValidationError
 
 from taktcut.color import (
     COLOR_GRADE_PRESETS,
+    COLOR_WARPER_HUE_COUNT,
+    COLOR_WARPER_POINT_COUNT,
+    COLOR_WARPER_SAT_RINGS,
     CURVE_CHANNELS,
     HSL_CURVE_MODES,
     HSL_HUE_VECTORS,
@@ -19,6 +22,8 @@ from taktcut.color import (
     ColorCurvesParams,
     ColorGradeParams,
     ColorNodeParams,
+    ColorWarperParams,
+    ColorWarperPoint,
     HslCurvesParams,
     HslCurveVectorValues,
     PowerWindowParams,
@@ -28,12 +33,14 @@ from taktcut.color import (
     bake_cdl_to_cube,
     bake_color_grade_to_cube,
     bake_color_node_chain_to_cube,
+    bake_color_warper_to_cube,
     build_curve_lut_256,
     build_rec709_lut_filter,
     compile_color_curves_filter,
     compile_color_grade,
     compile_color_grade_filter,
     compile_color_node_chain,
+    compile_color_warper_filter,
     compile_hsl_curves_filter,
     compile_power_window_mask_expr,
     compile_qualifier_mask_expr,
@@ -41,11 +48,13 @@ from taktcut.color import (
     evaluate_periodic_hue_curve,
     get_color_curves_preset,
     get_color_preset,
+    get_color_warper_preset,
     get_hsl_curve_preset,
     get_qualifier_preset,
     hsl_to_rgb,
     list_color_curves_presets,
     list_color_presets,
+    list_color_warper_presets,
     list_hsl_curve_presets,
     list_qualifier_presets,
     normalize_curve_points,
@@ -952,3 +961,140 @@ def test_hsl_curves_ffmpeg_execution_runtime() -> None:
     assert abs(px_green[1] - px_green[0]) < 65
     # Blue half remains predominantly blue
     assert px_blue[2] - px_blue[0] > 90
+
+
+def test_color_warper_spider_grid_validation_interpolation_and_cube_bake(tmp_path: Path) -> None:
+    assert COLOR_WARPER_HUE_COUNT == 6
+    assert COLOR_WARPER_SAT_RINGS == 3
+    assert COLOR_WARPER_POINT_COUNT == 18
+
+    presets = list_color_warper_presets()
+    assert len(presets) == 6
+    assert get_color_warper_preset("neutral").color_warper.is_identity() is True
+    teal_warp = get_color_warper_preset("teal_orange_warp").color_warper
+    assert teal_warp.is_identity() is False
+
+    with pytest.raises(ValueError, match="Unknown Color Warper preset"):
+        get_color_warper_preset("invalid_preset")
+
+    # Strict validation rejects out-of-bounds, bool indices, and duplicate vertices
+    with pytest.raises((ValueError, ValidationError)):
+        ColorWarperPoint.model_validate({"hue_idx": True, "ring_idx": 0})
+    with pytest.raises((ValueError, ValidationError)):
+        ColorWarperPoint.model_validate({"hue_idx": 6, "ring_idx": 0})
+    with pytest.raises((ValueError, ValidationError)):
+        ColorWarperPoint.model_validate({"hue_idx": 0, "ring_idx": 0, "hue_offset": 90.0})
+    with pytest.raises((ValueError, ValidationError)):
+        ColorWarperPoint.model_validate({"hue_idx": 0, "ring_idx": 0, "sat_offset": 0.9})
+    with pytest.raises((ValueError, ValidationError)):
+        ColorWarperParams.model_validate(
+            {
+                "points": [
+                    {"hue_idx": 0, "ring_idx": 1, "hue_offset": 5.0},
+                    {"hue_idx": 0, "ring_idx": 1, "hue_offset": 8.0},
+                ]
+            }
+        )
+
+    # Sparse initialization populates all 18 vertices in canonical (ring_idx, hue_idx) order
+    warper = ColorWarperParams(
+        points=[
+            ColorWarperPoint(hue_idx=0, ring_idx=2, hue_offset=28.0, sat_offset=0.10),
+            ColorWarperPoint(hue_idx=2, ring_idx=2, hue_offset=0.0, sat_offset=-0.55),
+        ]
+    )
+    assert len(warper.points) == 18
+    assert warper.get_point(0, 2).hue_offset == pytest.approx(28.0)
+    assert warper.get_point(2, 2).sat_offset == pytest.approx(-0.55)
+    assert warper.get_point(4, 1).is_identity() is True
+
+    # Exact interpolation at vertex coordinates & pinned zero at neutral sat=0
+    assert warper.evaluate_shift(0.0, 0.0) == (0.0, 0.0)
+    dh0, ds0 = warper.evaluate_shift(0.0, 1.0)
+    assert dh0 == pytest.approx(28.0, abs=1e-6)
+    assert ds0 == pytest.approx(0.10, abs=1e-6)
+    dh2, ds2 = warper.evaluate_shift(120.0, 1.0)
+    assert dh2 == pytest.approx(0.0, abs=1e-6)
+    assert ds2 == pytest.approx(-0.55, abs=1e-6)
+
+    # Neutral grays stay untouched even under strong outer-ring warping
+    assert warper.apply_rgb(0.5, 0.5, 0.5) == pytest.approx((0.5, 0.5, 0.5), abs=1e-5)
+
+    # Pure red rotates toward orange-yellow; pure green loses saturation
+    red_out = warper.apply_rgb(0.95, 0.05, 0.05)
+    assert red_out[1] > 0.35
+    gr_out = warper.apply_rgb(0.05, 0.90, 0.05)
+    assert (gr_out[1] - gr_out[0]) < 0.55
+
+    assert compile_color_warper_filter(ColorWarperParams()) == ""
+    fg_warp = compile_color_warper_filter(warper)
+    assert "huesaturation=colors=r:hue=12.60" in fg_warp
+    assert "huesaturation=colors=g:hue=0.00:saturation=-0.2475" in fg_warp
+
+    node = ColorNodeParams(id="node-1", label="Warper", enabled=True, color_warper=warper)
+    assert node.has_color_warper() is True
+    assert node.is_identity() is False
+    compiled = compile_color_node_chain([node], pix_fmt="yuv420p")
+    assert compiled.has_color_warper is True
+    assert compiled.is_identity is False
+    assert "huesaturation=colors=r" in compiled.filtergraph
+
+    cube_path = tmp_path / "color_warper_test.cube"
+    info = bake_color_warper_to_cube(warper, cube_path, size=17, title="warper_bake")
+    assert info.entry_count == 17**3
+    _lut_info, table = parse_cube_lut_text(cube_path.read_text(encoding="utf-8"))
+    # Pure red corner (r=16, g=0, b=0) -> green channel lifted due to +28 deg hue rotation
+    red_idx = 0 * 17 * 17 + 0 * 17 + 16
+    rr, rg, _rb = table[red_idx]
+    assert rg > 0.35 and rr > 0.85
+
+
+def test_color_warper_ffmpeg_execution_runtime() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    assert ffmpeg_bin is not None
+    warper = ColorWarperParams(
+        points=[
+            ColorWarperPoint(hue_idx=2, ring_idx=1, sat_offset=-0.50),
+            ColorWarperPoint(hue_idx=2, ring_idx=2, sat_offset=-0.60),
+            ColorWarperPoint(hue_idx=0, ring_idx=2, hue_offset=35.0),
+        ]
+    )
+    node = ColorNodeParams(id="node-1", label="Warper FX", enabled=True, color_warper=warper)
+    fg = compile_color_node_chain([node], pix_fmt="rgb24").filtergraph
+    lavfi_src = (
+        "color=c=0xd82020:s=16x16:d=0.1,format=rgb24[a];"
+        "color=c=0x20d820:s=16x16:d=0.1,format=rgb24[b];"
+        "[a][b]hstack=inputs=2"
+    )
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        lavfi_src,
+        "-vf",
+        fg,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    assert proc.returncode == 0, f"FFmpeg rejected Color Warper graph: {proc.stderr.decode()}"
+    raw = proc.stdout
+    assert len(raw) == 32 * 16 * 3
+    row_offset = 8 * 32 * 3
+    px_red = (raw[row_offset + 8 * 3], raw[row_offset + 8 * 3 + 1], raw[row_offset + 8 * 3 + 2])
+    px_green = (
+        raw[row_offset + 24 * 3],
+        raw[row_offset + 24 * 3 + 1],
+        raw[row_offset + 24 * 3 + 2],
+    )
+    # Red shifted toward warm orange-yellow (green channel boosted)
+    assert px_red[1] > 45
+    # Green saturation pulled down relative to input (216 - 32 = 184)
+    assert (px_green[1] - px_green[0]) < 130

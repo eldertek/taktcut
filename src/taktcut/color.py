@@ -143,6 +143,23 @@ HslCurvesPresetId = Literal[
     "muted_greens",
 ]
 
+COLOR_WARPER_HUE_COUNT: int = 6
+COLOR_WARPER_SAT_RINGS: int = 3
+COLOR_WARPER_POINT_COUNT: int = COLOR_WARPER_HUE_COUNT * COLOR_WARPER_SAT_RINGS
+COLOR_WARPER_RING_RADII: tuple[float, float, float] = (1.0 / 3.0, 2.0 / 3.0, 1.0)
+COLOR_WARPER_HUE_OFFSET_MIN: float = -60.0
+COLOR_WARPER_HUE_OFFSET_MAX: float = 60.0
+COLOR_WARPER_SAT_OFFSET_MIN: float = -0.60
+COLOR_WARPER_SAT_OFFSET_MAX: float = 0.60
+ColorWarperPresetId = Literal[
+    "neutral",
+    "kodak_warm_skin",
+    "teal_orange_warp",
+    "emerald_cinema",
+    "pastel_editorial",
+    "cyber_neon",
+]
+
 
 def _clamp_unit(value: float) -> float:
     if value < 0.0:
@@ -1777,8 +1794,323 @@ def compile_hsl_curves_filter(hsl_curves: HslCurvesParams) -> str:
     return ",".join(stages)
 
 
+def _default_warper_points() -> list[ColorWarperPoint]:
+    return [
+        ColorWarperPoint(hue_idx=h, ring_idx=r)
+        for r in range(COLOR_WARPER_SAT_RINGS)
+        for h in range(COLOR_WARPER_HUE_COUNT)
+    ]
+
+
+class ColorWarperPoint(BaseModel):
+    """Single polar control vertex on the 6x3 DaVinci Color Warper spider grid."""
+
+    hue_idx: int = Field(ge=0, lt=COLOR_WARPER_HUE_COUNT)
+    ring_idx: int = Field(ge=0, lt=COLOR_WARPER_SAT_RINGS)
+    hue_offset: float = Field(
+        default=0.0, ge=COLOR_WARPER_HUE_OFFSET_MIN, le=COLOR_WARPER_HUE_OFFSET_MAX
+    )
+    sat_offset: float = Field(
+        default=0.0, ge=COLOR_WARPER_SAT_OFFSET_MIN, le=COLOR_WARPER_SAT_OFFSET_MAX
+    )
+
+    @field_validator("hue_idx", "ring_idx", mode="before")
+    @classmethod
+    def _validate_index_int(cls, raw: Any, info: Any) -> int:
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise ValueError(f"{info.field_name} must be an integer, got {raw!r}")
+        return raw
+
+    @field_validator("hue_offset", mode="before")
+    @classmethod
+    def _validate_hue_offset(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "hue_offset", COLOR_WARPER_HUE_OFFSET_MIN, COLOR_WARPER_HUE_OFFSET_MAX
+        )
+
+    @field_validator("sat_offset", mode="before")
+    @classmethod
+    def _validate_sat_offset(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "sat_offset", COLOR_WARPER_SAT_OFFSET_MIN, COLOR_WARPER_SAT_OFFSET_MAX
+        )
+
+    def is_identity(self) -> bool:
+        """Return True when this control vertex has zero hue and saturation offset."""
+        return abs(self.hue_offset) <= 1e-4 and abs(self.sat_offset) <= 1e-4
+
+
+def _normalize_warper_points(raw: Any) -> list[ColorWarperPoint]:
+    if raw is None:
+        return _default_warper_points()
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("ColorWarperParams.points must be a list of control points")
+    grid: dict[tuple[int, int], ColorWarperPoint] = {}
+    for item in raw:
+        pt = item if isinstance(item, ColorWarperPoint) else ColorWarperPoint.model_validate(item)
+        key = (pt.ring_idx, pt.hue_idx)
+        if key in grid:
+            raise ValueError(
+                f"Duplicate Color Warper vertex at hue_idx={pt.hue_idx}, ring_idx={pt.ring_idx}"
+            )
+        grid[key] = pt
+    out: list[ColorWarperPoint] = []
+    for r_idx in range(COLOR_WARPER_SAT_RINGS):
+        for h_idx in range(COLOR_WARPER_HUE_COUNT):
+            out.append(
+                grid.get((r_idx, h_idx))
+                or ColorWarperPoint(hue_idx=h_idx, ring_idx=r_idx)
+            )
+    return out
+
+
+class ColorWarperParams(BaseModel):
+    """DaVinci Resolve Studio 2D Hue-Saturation Spider Grid Color Warper."""
+
+    points: list[ColorWarperPoint] = Field(default_factory=_default_warper_points)
+
+    @field_validator("points", mode="before")
+    @classmethod
+    def _validate_points(cls, raw: Any) -> list[ColorWarperPoint]:
+        return _normalize_warper_points(raw)
+
+    def get_point(self, hue_idx: int, ring_idx: int) -> ColorWarperPoint:
+        """Return the control point at (hue_idx, ring_idx)."""
+        if hue_idx < 0 or hue_idx >= COLOR_WARPER_HUE_COUNT:
+            raise ValueError(f"hue_idx out of range: {hue_idx}")
+        if ring_idx < 0 or ring_idx >= COLOR_WARPER_SAT_RINGS:
+            raise ValueError(f"ring_idx out of range: {ring_idx}")
+        return self.points[ring_idx * COLOR_WARPER_HUE_COUNT + hue_idx]
+
+    def is_identity(self) -> bool:
+        """Return True when every vertex in the 6x3 spider grid is at zero offset."""
+        return all(pt.is_identity() for pt in self.points)
+
+    def evaluate_shift(self, hue_deg: float, sat: float) -> tuple[float, float]:
+        """Evaluate smooth bilinear polar (hue_deg_offset, sat_offset) at (hue_deg, sat)."""
+        if self.is_identity():
+            return (0.0, 0.0)
+        sc = _clamp_unit(sat)
+        if sc <= 1e-6:
+            return (0.0, 0.0)
+
+        h_pos = ((hue_deg % 360.0) / 60.0) % COLOR_WARPER_HUE_COUNT
+        h0 = int(math.floor(h_pos)) % COLOR_WARPER_HUE_COUNT
+        h1 = (h0 + 1) % COLOR_WARPER_HUE_COUNT
+        hf = h_pos - math.floor(h_pos)
+        ht = hf * hf * (3.0 - 2.0 * hf)
+
+        s_scaled = sc * COLOR_WARPER_SAT_RINGS
+        if s_scaled <= 1.0:
+            r_lo = -1
+            r_hi = 0
+            rf = s_scaled
+        elif s_scaled <= 2.0:
+            r_lo = 0
+            r_hi = 1
+            rf = s_scaled - 1.0
+        else:
+            r_lo = 1
+            r_hi = 2
+            rf = min(1.0, s_scaled - 2.0)
+        rt = rf * rf * (3.0 - 2.0 * rf)
+
+        def _val(h_i: int, r_i: int) -> tuple[float, float]:
+            if r_i < 0:
+                return (0.0, 0.0)
+            pt = self.points[r_i * COLOR_WARPER_HUE_COUNT + h_i]
+            return (pt.hue_offset, pt.sat_offset)
+
+        dh00, ds00 = _val(h0, r_lo)
+        dh10, ds10 = _val(h1, r_lo)
+        dh01, ds01 = _val(h0, r_hi)
+        dh11, ds11 = _val(h1, r_hi)
+
+        dh0 = dh00 + (dh10 - dh00) * ht
+        dh1 = dh01 + (dh11 - dh01) * ht
+        ds0 = ds00 + (ds10 - ds00) * ht
+        ds1 = ds01 + (ds11 - ds01) * ht
+
+        return (dh0 + (dh1 - dh0) * rt, ds0 + (ds1 - ds0) * rt)
+
+    def apply_rgb(self, r: float, g: float, b: float) -> tuple[float, float, float]:
+        """Apply 2D Hue-Saturation spider-grid warp to normalized [0, 1] RGB."""
+        rc = _clamp_unit(r)
+        gc = _clamp_unit(g)
+        bc = _clamp_unit(b)
+        if self.is_identity():
+            return (rc, gc, bc)
+        hue, sat, lum = rgb_to_hsl(rc, gc, bc)
+        if sat <= 1e-4:
+            return (rc, gc, bc)
+        dh, ds = self.evaluate_shift(hue, sat)
+        chroma_weight = _smoothstep(0.0, 0.06, sat)
+        next_hue = (hue + dh * chroma_weight) % 360.0
+        next_sat = _clamp_unit(sat + ds * chroma_weight)
+        return hsl_to_rgb(next_hue, next_sat, lum)
+
+
+class ColorWarperPreset(BaseModel):
+    """Curated DaVinci Resolve Studio Color Warper spider-grid preset."""
+
+    id: ColorWarperPresetId
+    name: str
+    description: str
+    color_warper: ColorWarperParams
+
+
+def _warper_from_sparse(
+    *entries: tuple[int, int, float, float],
+) -> ColorWarperParams:
+    pts = [
+        ColorWarperPoint(hue_idx=h, ring_idx=r, hue_offset=dh, sat_offset=ds)
+        for h, r, dh, ds in entries
+    ]
+    return ColorWarperParams(points=pts)
+
+
+COLOR_WARPER_PRESETS: tuple[ColorWarperPreset, ...] = (
+    ColorWarperPreset(
+        id="neutral",
+        name="Neutral",
+        description="Flat 6x3 Color Warper spider grid with zero hue or saturation displacement.",
+        color_warper=ColorWarperParams(),
+    ),
+    ColorWarperPreset(
+        id="kodak_warm_skin",
+        name="Kodak Warm Skin",
+        description="Pulls reds and yellows toward golden Kodak skin tones while enriching blues.",
+        color_warper=_warper_from_sparse(
+            (0, 0, 6.0, 0.05),
+            (0, 1, 8.0, 0.08),
+            (0, 2, 5.0, 0.06),
+            (1, 0, -6.0, 0.04),
+            (1, 1, -8.0, 0.06),
+            (4, 1, -4.0, 0.12),
+            (4, 2, -6.0, 0.16),
+        ),
+    ),
+    ColorWarperPreset(
+        id="teal_orange_warp",
+        name="Teal & Orange",
+        description="Warps greens/cyans toward cinema teal, warms skin axes, and tames magenta.",
+        color_warper=_warper_from_sparse(
+            (0, 1, 10.0, 0.14),
+            (0, 2, 12.0, 0.18),
+            (1, 1, -12.0, 0.12),
+            (1, 2, -14.0, 0.14),
+            (2, 1, 20.0, -0.14),
+            (2, 2, 24.0, -0.22),
+            (3, 1, 10.0, 0.18),
+            (3, 2, 12.0, 0.24),
+            (4, 1, -10.0, 0.12),
+            (5, 1, 6.0, -0.24),
+            (5, 2, 8.0, -0.30),
+        ),
+    ),
+    ColorWarperPreset(
+        id="emerald_cinema",
+        name="Emerald Cinema",
+        description="Shifts yellow-green foliage toward rich emerald while keeping skin balanced.",
+        color_warper=_warper_from_sparse(
+            (1, 1, 14.0, -0.06),
+            (1, 2, 18.0, -0.10),
+            (2, 1, 16.0, 0.16),
+            (2, 2, 18.0, 0.22),
+            (3, 1, -6.0, 0.08),
+            (4, 2, 4.0, 0.10),
+        ),
+    ),
+    ColorWarperPreset(
+        id="pastel_editorial",
+        name="Pastel Editorial",
+        description="Pulls outer high-saturation rings inward for soft editorial film pastel.",
+        color_warper=_warper_from_sparse(
+            (0, 1, 4.0, -0.14),
+            (0, 2, 6.0, -0.28),
+            (1, 1, -4.0, -0.14),
+            (1, 2, -6.0, -0.26),
+            (2, 1, 4.0, -0.16),
+            (2, 2, 6.0, -0.30),
+            (3, 1, -4.0, -0.14),
+            (3, 2, -6.0, -0.26),
+            (4, 1, -4.0, -0.14),
+            (4, 2, -6.0, -0.28),
+            (5, 1, 4.0, -0.16),
+            (5, 2, 6.0, -0.30),
+        ),
+    ),
+    ColorWarperPreset(
+        id="cyber_neon",
+        name="Cyber Neon",
+        description=(
+            "Expands outer rings outward and swings blues/magentas toward electric cyan-violet."
+        ),
+        color_warper=_warper_from_sparse(
+            (0, 1, -6.0, 0.18),
+            (0, 2, -8.0, 0.28),
+            (2, 1, 18.0, 0.12),
+            (3, 1, 8.0, 0.26),
+            (3, 2, 10.0, 0.36),
+            (4, 1, -14.0, 0.24),
+            (4, 2, -16.0, 0.34),
+            (5, 1, -12.0, 0.26),
+            (5, 2, -14.0, 0.38),
+        ),
+    ),
+)
+
+
+def list_color_warper_presets() -> tuple[ColorWarperPreset, ...]:
+    """Return all built-in DaVinci Color Warper presets."""
+    return COLOR_WARPER_PRESETS
+
+
+def get_color_warper_preset(preset_id: str) -> ColorWarperPreset:
+    """Resolve a built-in Color Warper preset by id."""
+    for preset in COLOR_WARPER_PRESETS:
+        if preset.id == preset_id:
+            return preset
+    raise ValueError(f"Unknown Color Warper preset {preset_id!r}")
+
+
+def compile_color_warper_filter(warper: ColorWarperParams) -> str:
+    """Compile ColorWarperParams into FFmpeg per-sector huesaturation filter stages."""
+    if warper.is_identity():
+        return ""
+    ring_weights = (0.20, 0.35, 0.45)
+    stages: list[str] = []
+    for h_idx, vec in enumerate(HSL_HUE_VECTORS):
+        dh = sum(
+            warper.get_point(h_idx, r_idx).hue_offset * ring_weights[r_idx]
+            for r_idx in range(COLOR_WARPER_SAT_RINGS)
+        )
+        ds = sum(
+            warper.get_point(h_idx, r_idx).sat_offset * ring_weights[r_idx]
+            for r_idx in range(COLOR_WARPER_SAT_RINGS)
+        )
+        if abs(dh) <= 1e-4 and abs(ds) <= 1e-4:
+            continue
+        flag = HSL_HUE_FFMPEG_FLAGS[vec]
+        stages.append(
+            f"huesaturation=colors={flag}:hue={dh:.2f}:saturation={ds:.4f}"
+        )
+    return ",".join(stages)
+
+
+def bake_color_warper_to_cube(
+    warper: ColorWarperParams,
+    out_path: Path,
+    size: int = 33,
+    title: str = "taktcut_color_warper",
+) -> CubeLutInfo:
+    """Bake a ColorWarperParams 2D spider grid into a precision 3D .cube LUT."""
+    node = ColorNodeParams(color_warper=warper)
+    return bake_color_node_chain_to_cube([node], out_path, size=size, title=title)
+
+
 class ColorNodeParams(BaseModel):
-    """A single serial color grading node combining Wheels/Tone, Curves, Power Window, and LUT."""
+    """A single serial color grading node combining Wheels/Tone, Curves, Warper, Mask, and LUT."""
 
     id: str = "node-1"
     label: str = "Primary"
@@ -1786,6 +2118,7 @@ class ColorNodeParams(BaseModel):
     grade: ColorGradeParams = Field(default_factory=ColorGradeParams)
     curves: ColorCurvesParams = Field(default_factory=ColorCurvesParams)
     hsl_curves: HslCurvesParams = Field(default_factory=HslCurvesParams)
+    color_warper: ColorWarperParams = Field(default_factory=ColorWarperParams)
     power_window: PowerWindowParams = Field(default_factory=PowerWindowParams)
     qualifier: QualifierParams = Field(default_factory=QualifierParams)
     lut_title: str = ""
@@ -1901,8 +2234,12 @@ class ColorNodeParams(BaseModel):
         """Return True when this node has non-identity 6-vector HSL curves."""
         return not self.hsl_curves.is_identity()
 
+    def has_color_warper(self) -> bool:
+        """Return True when this node has non-identity 2D Color Warper displacements."""
+        return not self.color_warper.is_identity()
+
     def is_identity(self) -> bool:
-        """Return True when disabled or grade, curves, HSL curves, and LUT mix are neutral."""
+        """Return True when disabled or all grade, curve, warper, and LUT settings are neutral."""
         if not self.enabled:
             return True
         if not self.grade.is_identity():
@@ -1911,10 +2248,12 @@ class ColorNodeParams(BaseModel):
             return False
         if not self.hsl_curves.is_identity():
             return False
+        if not self.color_warper.is_identity():
+            return False
         return not (self.has_lut() and self.lut_mix > 1e-6)
 
     def apply_rgb(self, r: float, g: float, b: float) -> tuple[float, float, float]:
-        """Apply this node's grade, curves, HSL curves, and optional .cube LUT to RGB."""
+        """Apply this node's grade, curves, HSL curves, Color Warper, and .cube LUT to RGB."""
         in_rgb = (_clamp_unit(r), _clamp_unit(g), _clamp_unit(b))
         if not self.enabled:
             return in_rgb
@@ -1923,6 +2262,8 @@ class ColorNodeParams(BaseModel):
             out_r, out_g, out_b = self.curves.apply_rgb(out_r, out_g, out_b)
         if not self.hsl_curves.is_identity():
             out_r, out_g, out_b = self.hsl_curves.apply_rgb(out_r, out_g, out_b)
+        if not self.color_warper.is_identity():
+            out_r, out_g, out_b = self.color_warper.apply_rgb(out_r, out_g, out_b)
         if (
             self.lut_table is not None
             and self.lut_size is not None
@@ -1983,6 +2324,7 @@ class ColorNodeChainCompileResult(BaseModel):
     has_power_windows: bool = False
     has_curves: bool = False
     has_hsl_curves: bool = False
+    has_color_warper: bool = False
     has_qualifiers: bool = False
 
 
@@ -2024,6 +2366,10 @@ def compile_color_node_chain_filter(
             hsl_fg = compile_hsl_curves_filter(node.hsl_curves)
             if hsl_fg:
                 node_stages.append(hsl_fg)
+        if not node.color_warper.is_identity():
+            warper_fg = compile_color_warper_filter(node.color_warper)
+            if warper_fg:
+                node_stages.append(warper_fg)
         if not node_stages:
             continue
         node_fg = ",".join(node_stages)
@@ -2094,6 +2440,7 @@ def compile_color_node_chain(
     has_power_windows = any(n.enabled and n.power_window.is_active() for n in validated)
     has_curves = any(n.enabled and not n.curves.is_identity() for n in validated)
     has_hsl_curves = any(n.enabled and not n.hsl_curves.is_identity() for n in validated)
+    has_color_warper = any(n.enabled and not n.color_warper.is_identity() for n in validated)
     has_qualifiers = any(n.enabled and n.qualifier.is_active() for n in validated)
     return ColorNodeChainCompileResult(
         filtergraph=fg,
@@ -2105,6 +2452,7 @@ def compile_color_node_chain(
         has_power_windows=has_power_windows,
         has_curves=has_curves,
         has_hsl_curves=has_hsl_curves,
+        has_color_warper=has_color_warper,
         has_qualifiers=has_qualifiers,
     )
 

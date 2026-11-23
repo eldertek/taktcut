@@ -2,6 +2,10 @@ import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ASPECT_RATIO_PRESETS,
   COLOR_CURVE_PRESETS,
+  COLOR_WARPER_BOUNDS,
+  COLOR_WARPER_HUE_COUNT,
+  COLOR_WARPER_PRESETS_CLIENT,
+  COLOR_WARPER_SAT_RINGS,
   DELIVERY_PRESETS,
   HSL_CURVE_PRESETS,
   LOUDNESS_PRESET_LUFS,
@@ -199,12 +203,14 @@ function compileColorClient(payload, opts = {}) {
     payload &&
     ((payload.curves && typeof payload.curves === "object") ||
       (payload.hsl_curves && typeof payload.hsl_curves === "object") ||
+      (payload.color_warper && typeof payload.color_warper === "object") ||
       (payload.qualifier && typeof payload.qualifier === "object"))
   ) {
     const singleNode = createColorNode(1, {
       grade: payload.grade || payload,
       curves: payload.curves,
       hsl_curves: payload.hsl_curves,
+      color_warper: payload.color_warper,
       qualifier: payload.qualifier
     });
     return compileColorNodeChainClient([singleNode], opts.pix_fmt || null);
@@ -2606,8 +2612,18 @@ export function createApiClient() {
           presets: [],
           curve_presets: Object.values(COLOR_CURVE_PRESETS),
           hsl_curve_presets: Object.values(HSL_CURVE_PRESETS),
+          warper_presets: COLOR_WARPER_PRESETS_CLIENT,
           qualifier_presets: Object.values(QUALIFIER_PRESETS),
-          bounds: {}
+          bounds: {
+            color_warper: {
+              hue_count: COLOR_WARPER_HUE_COUNT,
+              sat_rings: COLOR_WARPER_SAT_RINGS,
+              hue_offset_min: COLOR_WARPER_BOUNDS.hue_offset.min,
+              hue_offset_max: COLOR_WARPER_BOUNDS.hue_offset.max,
+              sat_offset_min: COLOR_WARPER_BOUNDS.sat_offset.min,
+              sat_offset_max: COLOR_WARPER_BOUNDS.sat_offset.max
+            }
+          }
         };
       }
       return requestJson("/api/color/presets");

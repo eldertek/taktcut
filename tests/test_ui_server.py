@@ -9154,5 +9154,229 @@ def test_fx_pro_optical_pack_and_effect_mask_playwright_responsive(
             browser.close()
 
 
+def test_color_warper_api_presets_compile_bake_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    url, _ = ui_server
+    st_p, _, raw_p = _http_call(f"{url}/api/color/presets")
+    assert st_p == 200
+    presets_data = json.loads(raw_p.decode("utf-8"))
+    warper_presets = presets_data["warper_presets"]
+    assert len(warper_presets) == 6
+    assert any(p["id"] == "teal_orange_warp" for p in warper_presets)
+    assert presets_data["bounds"]["color_warper"]["hue_count"] == 6
+    assert presets_data["bounds"]["color_warper"]["sat_rings"] == 3
+
+    warper_payload = {
+        "points": [
+            {"hue_idx": 0, "ring_idx": 2, "hue_offset": 24.0, "sat_offset": 0.15},
+            {"hue_idx": 2, "ring_idx": 1, "hue_offset": 12.0, "sat_offset": -0.30},
+        ]
+    }
+    node_req = {
+        "nodes": [
+            {
+                "id": "node-1",
+                "label": "Warper",
+                "enabled": True,
+                "color_warper": warper_payload,
+            }
+        ],
+        "pix_fmt": "yuv420p",
+    }
+    st_c, _, raw_c = _http_call(f"{url}/api/color/compile", method="POST", payload=node_req)
+    assert st_c == 200
+    compiled = json.loads(raw_c.decode("utf-8"))
+    assert compiled["is_identity"] is False
+    assert compiled["has_color_warper"] is True
+    assert "huesaturation=colors=r" in compiled["filtergraph"]
+
+    st_s, _, raw_s = _http_call(
+        f"{url}/api/color/compile",
+        method="POST",
+        payload={"color_warper": warper_payload},
+    )
+    assert st_s == 200
+    standalone_compiled = json.loads(raw_s.decode("utf-8"))
+    assert standalone_compiled["has_color_warper"] is True
+    assert "huesaturation=colors=g" in standalone_compiled["filtergraph"]
+
+    st_b, _, raw_b = _http_call(
+        f"{url}/api/color/bake",
+        method="POST",
+        payload={
+            "nodes": node_req["nodes"],
+            "size": 17,
+            "title": "warper_cube",
+        },
+    )
+    assert st_b == 200
+    baked = json.loads(raw_b.decode("utf-8"))
+    assert baked["info"]["entry_count"] == 17**3
+    assert "LUT_3D_SIZE 17" in baked["cube_text"]
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "demo_adapter.js",
+        "i18n.js",
+        "styles.css",
+        "timeline_ops.js",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+    if shutil.which("node") is not None:
+        demo_url = (assets_dir / "demo_adapter.js").as_uri()
+        node_script = (
+            "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+            f"const mod = await import({json.dumps(demo_url)});\n"
+            "const client = mod.createApiClient();\n"
+            "const pres = await client.getColorPresets();\n"
+            f"const comp = await client.compileColorGrade({json.dumps(node_req)});\n"
+            "console.log(JSON.stringify({ presCount: pres.warper_presets.length, comp }));\n"
+        )
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        out = json.loads(proc.stdout.strip())
+        assert out["presCount"] == 6
+        assert out["comp"]["has_color_warper"] is True
+        assert out["comp"]["filtergraph"] == compiled["filtergraph"]
+
+
+def test_color_warper_spider_grid_playwright_responsive(
+    ui_server: tuple[str, Path],
+) -> None:
+    pw_api = pytest.importorskip("playwright.sync_api")
+    url, _ = ui_server
+    with pw_api.sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            page.on("pageerror", lambda exc: console_errors.append(str(exc)))
+            page.goto(url, wait_until="domcontentloaded")
+            page.click("#tab-color")
+            page.wait_for_selector("#panel-color:not(.is-hidden)")
+            page.wait_for_selector("#color-warper-dock")
+
+            # Verify Color Warper canvas painted spider grid
+            painted_px = page.evaluate(
+                "() => {"
+                "  const c = document.getElementById('color-warper-canvas');"
+                "  const ctx = c.getContext('2d');"
+                "  const d = ctx.getImageData(0, 0, c.width, c.height).data;"
+                "  let lit = 0;"
+                "  for (let i = 0; i < d.length; i += 16) {"
+                "    if (d[i] + d[i+1] + d[i+2] > 120) lit++;"
+                "  }"
+                "  return lit;"
+                "}"
+            )
+            assert painted_px > 50
+
+            # Apply Teal & Orange warper preset
+            page.click("[data-warper-preset='teal_orange_warp']")
+            page.wait_for_function(
+                "() => (document.getElementById('warper-status-badge')?.textContent || '')"
+                ".includes('WARPED')"
+            )
+            page.wait_for_function(
+                "() => (document.getElementById('color-filtergraph-output')?.textContent || '')"
+                ".includes('huesaturation=colors=')"
+            )
+            assert "WARP" in (
+                page.locator("#color-node-graph .color-node-warp-tag").first.text_content() or ""
+            )
+
+            # Reset grid, select Cyan spoke (3) ring 2 (100%), nudge hue via numeric input
+            page.click("#btn-warper-reset-all")
+            page.wait_for_function(
+                "() => (document.getElementById('warper-status-badge')?.textContent || '')"
+                ".includes('IDENTITY')"
+            )
+            page.click("[data-warper-hue='3']")
+            page.click("[data-warper-ring='2']")
+            hue_num = page.locator("#warper-hue-num")
+            hue_num.fill("18")
+            hue_num.dispatch_event("change")
+            page.wait_for_function(
+                "() => (document.getElementById('warper-point-readout')?.textContent || '')"
+                ".includes('PT C3 | H +18.0 deg')"
+            )
+            page.wait_for_function(
+                "() => (document.getElementById('color-filtergraph-output')?.textContent || '')"
+                ".includes('huesaturation=colors=c:hue=8.10')"
+            )
+
+            # Reset single point
+            page.click("#btn-warper-reset-pt")
+            page.wait_for_function(
+                "() => (document.getElementById('warper-status-badge')?.textContent || '')"
+                ".includes('IDENTITY')"
+            )
+
+            # Keyboard arrow nudge on canvas
+            page.click("[data-warper-preset='kodak_warm_skin']")
+            warper_canvas = page.locator("#color-warper-canvas")
+            warper_canvas.focus()
+            page.keyboard.press("ArrowRight")
+            assert "WARPED" in (page.locator("#warper-status-badge").text_content() or "")
+
+            # EN -> FR i18n check
+            page.click("#lang-fr")
+            assert "DÉFORMÉ" in (page.locator("#warper-status-badge").text_content() or "")
+            assert "Peau Kodak" in (
+                page.locator("[data-warper-preset='kodak_warm_skin']").text_content() or ""
+            )
+            page.click("#lang-en")
+
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            for selector in (
+                "[data-warper-preset='teal_orange_warp']",
+                "[data-warper-hue='0']",
+                "[data-warper-ring='2']",
+                "#btn-warper-reset-pt",
+                "#btn-warper-reset-all",
+            ):
+                h = page.evaluate(
+                    f"() => document.querySelector({json.dumps(selector)})"
+                    ".getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {selector} too small: {h}px"
+
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()
+
+
 
 

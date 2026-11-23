@@ -1,10 +1,12 @@
 import {
   captureCleanColorStill,
   captureCleanFxStill,
+  clientPosToColorWarperOffset,
   computeCueWordTimingsCanvas,
   drawColorCurvesCanvas,
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
+  drawColorWarperCanvas,
   drawFramesCanvas,
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
@@ -18,6 +20,7 @@ import {
   drawTransformGraphCanvas,
   findActiveSubtitleCue,
   framesToSmpte,
+  hitTestColorWarperPoint,
   renderFairlightDynamicsCanvas,
   renderFairlightEqCurveCanvas,
   sampleColorViewerInputRgb,
@@ -49,6 +52,11 @@ import {
   BPM_OFFSET_MAX_S,
   BPM_OFFSET_MIN_S,
   COLOR_CURVE_PRESETS,
+  COLOR_WARPER_BOUNDS,
+  COLOR_WARPER_HUE_COUNT,
+  COLOR_WARPER_HUE_LABELS,
+  COLOR_WARPER_PRESETS_CLIENT,
+  COLOR_WARPER_SAT_RINGS,
   CURVE_CHANNELS,
   DELIVERY_PRESETS,
   DYNAMIC_ZOOM_DEFAULT,
@@ -144,6 +152,7 @@ import {
   countSyncLockedTracks,
   createDefaultColorCurves,
   createDefaultColorNodeTree,
+  createDefaultColorWarper,
   createDefaultHslCurves,
   createDefaultPowerWindow,
   createDefaultQualifier,
@@ -179,6 +188,7 @@ import {
   formatYoutubeChaptersFromMarkers,
   getAspectRatioPreset,
   getClipTrimBounds,
+  getColorWarperPoint,
   getSelectedColorNode,
   getTransformKeyframeCount,
   getTransformPresetClient,
@@ -192,6 +202,7 @@ import {
   isClipTransformIdentity,
   isColorCurvesIdentity,
   isColorNodeIdentity,
+  isColorWarperIdentity,
   isCurveChannelIdentity,
   isHslCurveChannelIdentity,
   isHslCurvesIdentity,
@@ -210,6 +221,7 @@ import {
   normalizeColorCurves,
   normalizeColorGrade,
   normalizeColorNodeTree,
+  normalizeColorWarper,
   normalizeCurvePoints,
   normalizeFairlightAudioParams,
   normalizeFairlightAudioRackParams,
@@ -245,6 +257,7 @@ import {
   serializeColorNodeForApi,
   setAllTracksSyncLockInDocument,
   setClipLabelColor,
+  setColorWarperPointOffset,
   setInOutRange,
   slideClipInDocument,
   slipClipInDocument,
@@ -513,6 +526,9 @@ const state = {
   colorCurvesDrag: null,
   hslCurvesSelectedVec: "reds",
   hslCurvesDrag: null,
+  colorWarperSelectedPt: { hue_idx: 0, ring_idx: 2 },
+  colorWarperHoverPt: null,
+  colorWarperDrag: null,
   wipeRatio: 0.5,
   colorSplitWipe: {
     enabled: true,
@@ -1274,6 +1290,12 @@ function redrawActiveCanvases() {
         { previewCanvas, cdl: activeColorChain }
       );
     }
+    drawColorWarperCanvas(
+      byId("color-warper-canvas"),
+      activeNode ? activeNode.color_warper : createDefaultColorWarper(),
+      state.colorWarperSelectedPt,
+      { hoverPoint: state.colorWarperHoverPt }
+    );
     drawColorWheel(byId("wheel-lift"), "lift", state.colorGrade.lift);
     drawColorWheel(byId("wheel-gamma"), "gamma", state.colorGrade.gamma);
     drawColorWheel(byId("wheel-gain"), "gain", state.colorGrade.gain);
@@ -6929,6 +6951,9 @@ function renderColorNodeTreeUI() {
     if (!isHslCurvesIdentity(node.hsl_curves)) {
       metaRow.appendChild(dom("span", "color-node-crv-tag", "HSL"));
     }
+    if (!isColorWarperIdentity(node.color_warper)) {
+      metaRow.appendChild(dom("span", "color-node-warp-tag", "WARP"));
+    }
     if (isQualifierActive(node.qualifier)) {
       const qualLabel = node.qualifier.invert ? "INV QUAL" : "QUAL";
       metaRow.appendChild(
@@ -6963,6 +6988,7 @@ function renderColorNodeTreeUI() {
   renderPowerWindowControlsUI(activeNode);
   renderQualifierControlsUI(activeNode);
   renderColorCurvesControlsUI(activeNode);
+  renderColorWarperControlsUI(activeNode);
 }
 
 const QUALIFIER_CONTROL_DEFS = [
@@ -7449,6 +7475,126 @@ function applyHslCurvePresetAction(presetId) {
   commitNodeCurvePatch({ hsl_curves: normalizeHslCurves(preset.hsl_curves) }, true, true);
 }
 
+function getActiveColorWarperPresetId(warper) {
+  const w = normalizeColorWarper(warper);
+  for (const preset of COLOR_WARPER_PRESETS_CLIENT) {
+    const p = normalizeColorWarper(preset.color_warper);
+    let matches = true;
+    for (let i = 0; i < w.points.length; i += 1) {
+      if (
+        Math.abs(w.points[i].hue_offset - p.points[i].hue_offset) > 0.05 ||
+        Math.abs(w.points[i].sat_offset - p.points[i].sat_offset) > 0.002
+      ) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return preset.id;
+  }
+  return "";
+}
+
+function renderColorWarperControlsUI(activeNode) {
+  const warper = normalizeColorWarper(activeNode ? activeNode.color_warper : null);
+  const isIdentity = isColorWarperIdentity(warper);
+  const sel = state.colorWarperSelectedPt || { hue_idx: 0, ring_idx: 2 };
+  const hIdx = Math.max(0, Math.min(COLOR_WARPER_HUE_COUNT - 1, Math.round(Number(sel.hue_idx) || 0)));
+  const rIdx = Math.max(0, Math.min(COLOR_WARPER_SAT_RINGS - 1, Math.round(Number(sel.ring_idx) || 0)));
+  state.colorWarperSelectedPt = { hue_idx: hIdx, ring_idx: rIdx };
+  const pt = getColorWarperPoint(warper, hIdx, rIdx);
+
+  const badge = byId("warper-status-badge");
+  if (badge) {
+    badge.textContent = isIdentity
+      ? t("color.warper.statusIdentity")
+      : t("color.warper.statusWarped");
+    badge.className = `nle-tag ${isIdentity ? "" : "is-active "}mono`;
+  }
+
+  const matchedPreset = getActiveColorWarperPresetId(warper);
+  for (const btn of document.querySelectorAll("[data-warper-preset]")) {
+    const isSel = btn.getAttribute("data-warper-preset") === matchedPreset;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  for (const btn of document.querySelectorAll("[data-warper-hue]")) {
+    const isSel = Number(btn.getAttribute("data-warper-hue")) === hIdx;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  for (const btn of document.querySelectorAll("[data-warper-ring]")) {
+    const isSel = Number(btn.getAttribute("data-warper-ring")) === rIdx;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  const rstPtBtn = byId("btn-warper-reset-pt");
+  if (rstPtBtn) {
+    rstPtBtn.disabled =
+      Math.abs(pt.hue_offset) <= 1e-4 && Math.abs(pt.sat_offset) <= 1e-4;
+  }
+  const rstAllBtn = byId("btn-warper-reset-all");
+  if (rstAllBtn) {
+    rstAllBtn.disabled = isIdentity;
+  }
+
+  const readout = byId("warper-point-readout");
+  if (readout) {
+    const lbl = COLOR_WARPER_HUE_LABELS[hIdx] || "R";
+    const hSign = pt.hue_offset >= 0 ? "+" : "";
+    const sSign = pt.sat_offset >= 0 ? "+" : "";
+    readout.textContent = `PT ${lbl}${rIdx + 1} | H ${hSign}${pt.hue_offset.toFixed(1)} deg | S ${sSign}${pt.sat_offset.toFixed(2)}`;
+  }
+
+  const hueRange = byId("warper-hue-range");
+  const hueNum = byId("warper-hue-num");
+  const satRange = byId("warper-sat-range");
+  const satNum = byId("warper-sat-num");
+  if (hueRange) hueRange.value = String(pt.hue_offset);
+  if (hueNum && document.activeElement !== hueNum) hueNum.value = pt.hue_offset.toFixed(1);
+  if (satRange) satRange.value = String(pt.sat_offset);
+  if (satNum && document.activeElement !== satNum) satNum.value = pt.sat_offset.toFixed(2);
+}
+
+function updateActiveColorWarperPoint(
+  hueIdx,
+  ringIdx,
+  hueOffset,
+  satOffset,
+  shouldCompile = true,
+  immediateCompile = false
+) {
+  const active = syncActiveColorGradeFromTree();
+  const nextWarper = setColorWarperPointOffset(
+    active.color_warper,
+    hueIdx,
+    ringIdx,
+    hueOffset,
+    satOffset
+  );
+  commitNodeCurvePatch({ color_warper: nextWarper }, shouldCompile, immediateCompile);
+}
+
+function applyColorWarperPresetAction(presetId) {
+  const preset = COLOR_WARPER_PRESETS_CLIENT.find((p) => p.id === presetId);
+  if (!preset) return;
+  commitNodeCurvePatch(
+    { color_warper: normalizeColorWarper(preset.color_warper) },
+    true,
+    true
+  );
+}
+
+function resetColorWarperPointAction(hueIdx, ringIdx) {
+  updateActiveColorWarperPoint(hueIdx, ringIdx, 0.0, 0.0, true, true);
+}
+
+function resetColorWarperAllAction() {
+  commitNodeCurvePatch({ color_warper: createDefaultColorWarper() }, true, true);
+}
+
 function selectColorNodeAction(nodeId) {
   state.colorNodeTree = selectColorNodeInTree(state.colorNodeTree, nodeId);
   syncActiveColorGradeFromTree();
@@ -7514,6 +7660,8 @@ function resetSelectedColorNodeAction() {
   state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
     grade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
     curves: createDefaultColorCurves(),
+    hsl_curves: createDefaultHslCurves(),
+    color_warper: createDefaultColorWarper(),
     power_window: createDefaultPowerWindow(),
     qualifier: createDefaultQualifier(),
     lut: null
@@ -7540,13 +7688,17 @@ async function compileColorNow() {
     const hasHslCurves = serializedNodes.some(
       (n) => n.hsl_curves && !isHslCurvesIdentity(n.hsl_curves)
     );
+    const hasColorWarper = serializedNodes.some(
+      (n) => n.color_warper && !isColorWarperIdentity(n.color_warper)
+    );
     const payload =
       serializedNodes.length === 1 &&
       !serializedNodes[0].lut_table &&
       !hasPw &&
       !hasQual &&
       !hasCurves &&
-      !hasHslCurves
+      !hasHslCurves &&
+      !hasColorWarper
         ? { grade: state.colorGrade }
         : { nodes: serializedNodes };
     const compiled = await api.compileColorGrade(payload);
@@ -16283,6 +16435,177 @@ function wireEvents() {
         i === idx ? [Math.round(nx * 10000) / 10000, Math.round(ny * 10000) / 10000] : p
       );
       updateActiveColorCurvesChannel(ch, updated, true, false);
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-warper-preset]")) {
+    btn.addEventListener("click", () => {
+      applyColorWarperPresetAction(btn.getAttribute("data-warper-preset") || "neutral");
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-warper-hue]")) {
+    btn.addEventListener("click", () => {
+      const h = Math.max(0, Math.min(COLOR_WARPER_HUE_COUNT - 1, Number(btn.getAttribute("data-warper-hue")) || 0));
+      const cur = state.colorWarperSelectedPt || { hue_idx: 0, ring_idx: 2 };
+      state.colorWarperSelectedPt = { hue_idx: h, ring_idx: cur.ring_idx };
+      renderColorNodeTreeUI();
+      if (state.activeTab === "color") redrawActiveCanvases();
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-warper-ring]")) {
+    btn.addEventListener("click", () => {
+      const r = Math.max(0, Math.min(COLOR_WARPER_SAT_RINGS - 1, Number(btn.getAttribute("data-warper-ring")) || 0));
+      const cur = state.colorWarperSelectedPt || { hue_idx: 0, ring_idx: 2 };
+      state.colorWarperSelectedPt = { hue_idx: cur.hue_idx, ring_idx: r };
+      renderColorNodeTreeUI();
+      if (state.activeTab === "color") redrawActiveCanvases();
+    });
+  }
+
+  byId("btn-warper-reset-pt")?.addEventListener("click", () => {
+    const sel = state.colorWarperSelectedPt || { hue_idx: 0, ring_idx: 2 };
+    resetColorWarperPointAction(sel.hue_idx, sel.ring_idx);
+  });
+
+  byId("btn-warper-reset-all")?.addEventListener("click", () => {
+    resetColorWarperAllAction();
+  });
+
+  const bindWarperField = (rangeId, numId, fieldKey, minVal, maxVal) => {
+    const rangeEl = byId(rangeId);
+    const numEl = byId(numId);
+    const applyVal = (rawVal, immediate) => {
+      const sel = state.colorWarperSelectedPt || { hue_idx: 0, ring_idx: 2 };
+      const active = syncActiveColorGradeFromTree();
+      const pt = getColorWarperPoint(active.color_warper, sel.hue_idx, sel.ring_idx);
+      const clamped = Math.min(maxVal, Math.max(minVal, rawVal));
+      const nextHue = fieldKey === "hue" ? clamped : pt.hue_offset;
+      const nextSat = fieldKey === "sat" ? clamped : pt.sat_offset;
+      updateActiveColorWarperPoint(sel.hue_idx, sel.ring_idx, nextHue, nextSat, true, immediate);
+    };
+    rangeEl?.addEventListener("input", () => {
+      const v = Number(rangeEl.value);
+      if (Number.isFinite(v)) applyVal(v, false);
+    });
+    rangeEl?.addEventListener("change", () => {
+      const v = Number(rangeEl.value);
+      if (Number.isFinite(v)) applyVal(v, true);
+    });
+    numEl?.addEventListener("input", () => {
+      const txt = numEl.value.trim();
+      if (txt === "" || txt === "-" || txt === "." || txt === "-.") return;
+      const v = Number(txt);
+      if (Number.isFinite(v)) applyVal(v, false);
+    });
+    numEl?.addEventListener("change", () => {
+      const v = Number(numEl.value);
+      if (Number.isFinite(v)) {
+        applyVal(v, true);
+      } else {
+        renderColorNodeTreeUI();
+      }
+    });
+  };
+  bindWarperField(
+    "warper-hue-range",
+    "warper-hue-num",
+    "hue",
+    COLOR_WARPER_BOUNDS.hue_offset.min,
+    COLOR_WARPER_BOUNDS.hue_offset.max
+  );
+  bindWarperField(
+    "warper-sat-range",
+    "warper-sat-num",
+    "sat",
+    COLOR_WARPER_BOUNDS.sat_offset.min,
+    COLOR_WARPER_BOUNDS.sat_offset.max
+  );
+
+  const warperCanvas = byId("color-warper-canvas");
+  if (warperCanvas) {
+    warperCanvas.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      const hit = hitTestColorWarperPoint(warperCanvas, ev.clientX, ev.clientY);
+      if (!hit) return;
+      state.colorWarperSelectedPt = { hue_idx: hit.hue_idx, ring_idx: hit.ring_idx };
+      state.colorWarperDrag = { hue_idx: hit.hue_idx, ring_idx: hit.ring_idx };
+      warperCanvas.setPointerCapture?.(ev.pointerId);
+      warperCanvas.focus({ preventScroll: true });
+      renderColorNodeTreeUI();
+      if (state.activeTab === "color") redrawActiveCanvases();
+    });
+
+    warperCanvas.addEventListener("pointermove", (ev) => {
+      if (state.colorWarperDrag) {
+        const { hue_idx, ring_idx } = state.colorWarperDrag;
+        const { hue_offset, sat_offset } = clientPosToColorWarperOffset(
+          warperCanvas,
+          ev.clientX,
+          ev.clientY,
+          hue_idx,
+          ring_idx
+        );
+        updateActiveColorWarperPoint(hue_idx, ring_idx, hue_offset, sat_offset, true, false);
+        return;
+      }
+      const hit = hitTestColorWarperPoint(warperCanvas, ev.clientX, ev.clientY);
+      const prev = state.colorWarperHoverPt;
+      const changed =
+        (hit ? hit.hue_idx : -1) !== (prev ? prev.hue_idx : -1) ||
+        (hit ? hit.ring_idx : -1) !== (prev ? prev.ring_idx : -1);
+      if (changed) {
+        state.colorWarperHoverPt = hit;
+        if (state.activeTab === "color") redrawActiveCanvases();
+      }
+    });
+
+    const endWarperDrag = () => {
+      if (state.colorWarperDrag) {
+        state.colorWarperDrag = null;
+        compileColorNow();
+      }
+    };
+    warperCanvas.addEventListener("pointerup", endWarperDrag);
+    warperCanvas.addEventListener("pointercancel", endWarperDrag);
+    warperCanvas.addEventListener("pointerleave", () => {
+      if (!state.colorWarperDrag && state.colorWarperHoverPt) {
+        state.colorWarperHoverPt = null;
+        if (state.activeTab === "color") redrawActiveCanvases();
+      }
+    });
+
+    warperCanvas.addEventListener("dblclick", (ev) => {
+      const hit = hitTestColorWarperPoint(warperCanvas, ev.clientX, ev.clientY);
+      if (!hit) return;
+      state.colorWarperSelectedPt = { hue_idx: hit.hue_idx, ring_idx: hit.ring_idx };
+      resetColorWarperPointAction(hit.hue_idx, hit.ring_idx);
+    });
+
+    warperCanvas.addEventListener("keydown", (ev) => {
+      const sel = state.colorWarperSelectedPt || { hue_idx: 0, ring_idx: 2 };
+      if (ev.key === "Delete" || ev.key === "Backspace" || ev.key === "0") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        resetColorWarperPointAction(sel.hue_idx, sel.ring_idx);
+        return;
+      }
+      if (ev.key === "Tab") return;
+      const active = syncActiveColorGradeFromTree();
+      const pt = getColorWarperPoint(active.color_warper, sel.hue_idx, sel.ring_idx);
+      const hStep = ev.shiftKey ? 1.0 : 4.0;
+      const sStep = ev.shiftKey ? 0.01 : 0.05;
+      let nextH = pt.hue_offset;
+      let nextS = pt.sat_offset;
+      if (ev.key === "ArrowLeft") nextH -= hStep;
+      else if (ev.key === "ArrowRight") nextH += hStep;
+      else if (ev.key === "ArrowUp") nextS += sStep;
+      else if (ev.key === "ArrowDown") nextS -= sStep;
+      else return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      updateActiveColorWarperPoint(sel.hue_idx, sel.ring_idx, nextH, nextS, true, false);
     });
   }
 

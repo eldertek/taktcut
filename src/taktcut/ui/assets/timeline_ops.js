@@ -6526,6 +6526,268 @@ export function compileHslCurvesFilterClient(hslCurves) {
   return stages.join(",");
 }
 
+export const COLOR_WARPER_HUE_COUNT = 6;
+export const COLOR_WARPER_SAT_RINGS = 3;
+export const COLOR_WARPER_RING_RADII = [1.0 / 3.0, 2.0 / 3.0, 1.0];
+export const COLOR_WARPER_HUE_LABELS = ["R", "Y", "G", "C", "B", "M"];
+export const COLOR_WARPER_BOUNDS = {
+  hue_offset: { min: -60.0, max: 60.0 },
+  sat_offset: { min: -0.6, max: 0.6 }
+};
+
+function buildWarperFromSparse(entries) {
+  const pts = [];
+  const byKey = new Map();
+  for (const [h, r, dh, ds] of entries) {
+    byKey.set(`${r}:${h}`, { hue_idx: h, ring_idx: r, hue_offset: dh, sat_offset: ds });
+  }
+  for (let r = 0; r < COLOR_WARPER_SAT_RINGS; r += 1) {
+    for (let h = 0; h < COLOR_WARPER_HUE_COUNT; h += 1) {
+      pts.push(byKey.get(`${r}:${h}`) || { hue_idx: h, ring_idx: r, hue_offset: 0.0, sat_offset: 0.0 });
+    }
+  }
+  return { points: pts };
+}
+
+export const COLOR_WARPER_PRESETS_CLIENT = [
+  {
+    id: "neutral",
+    name: "Neutral",
+    description: "Flat 6x3 Color Warper spider grid with zero hue or saturation displacement.",
+    color_warper: buildWarperFromSparse([])
+  },
+  {
+    id: "kodak_warm_skin",
+    name: "Kodak Warm Skin",
+    description: "Pulls reds and yellows toward golden Kodak skin tones while enriching blues.",
+    color_warper: buildWarperFromSparse([
+      [0, 0, 6.0, 0.05],
+      [0, 1, 8.0, 0.08],
+      [0, 2, 5.0, 0.06],
+      [1, 0, -6.0, 0.04],
+      [1, 1, -8.0, 0.06],
+      [4, 1, -4.0, 0.12],
+      [4, 2, -6.0, 0.16]
+    ])
+  },
+  {
+    id: "teal_orange_warp",
+    name: "Teal & Orange",
+    description: "Warps greens/cyans toward cinema teal, warms skin axes, and tames magenta.",
+    color_warper: buildWarperFromSparse([
+      [0, 1, 10.0, 0.14],
+      [0, 2, 12.0, 0.18],
+      [1, 1, -12.0, 0.12],
+      [1, 2, -14.0, 0.14],
+      [2, 1, 20.0, -0.14],
+      [2, 2, 24.0, -0.22],
+      [3, 1, 10.0, 0.18],
+      [3, 2, 12.0, 0.24],
+      [4, 1, -10.0, 0.12],
+      [5, 1, 6.0, -0.24],
+      [5, 2, 8.0, -0.3]
+    ])
+  },
+  {
+    id: "emerald_cinema",
+    name: "Emerald Cinema",
+    description: "Shifts yellow-green foliage toward rich emerald while keeping skin balanced.",
+    color_warper: buildWarperFromSparse([
+      [1, 1, 14.0, -0.06],
+      [1, 2, 18.0, -0.1],
+      [2, 1, 16.0, 0.16],
+      [2, 2, 18.0, 0.22],
+      [3, 1, -6.0, 0.08],
+      [4, 2, 4.0, 0.1]
+    ])
+  },
+  {
+    id: "pastel_editorial",
+    name: "Pastel Editorial",
+    description: "Pulls outer high-saturation rings inward for soft editorial film pastel.",
+    color_warper: buildWarperFromSparse([
+      [0, 1, 4.0, -0.14],
+      [0, 2, 6.0, -0.28],
+      [1, 1, -4.0, -0.14],
+      [1, 2, -6.0, -0.26],
+      [2, 1, 4.0, -0.16],
+      [2, 2, 6.0, -0.3],
+      [3, 1, -4.0, -0.14],
+      [3, 2, -6.0, -0.26],
+      [4, 1, -4.0, -0.14],
+      [4, 2, -6.0, -0.28],
+      [5, 1, 4.0, -0.16],
+      [5, 2, 6.0, -0.3]
+    ])
+  },
+  {
+    id: "cyber_neon",
+    name: "Cyber Neon",
+    description: "Expands outer rings outward and swings blues/magentas toward electric cyan-violet.",
+    color_warper: buildWarperFromSparse([
+      [0, 1, -6.0, 0.18],
+      [0, 2, -8.0, 0.28],
+      [2, 1, 18.0, 0.12],
+      [3, 1, 8.0, 0.26],
+      [3, 2, 10.0, 0.36],
+      [4, 1, -14.0, 0.24],
+      [4, 2, -16.0, 0.34],
+      [5, 1, -12.0, 0.26],
+      [5, 2, -14.0, 0.38]
+    ])
+  }
+];
+
+export function createDefaultColorWarper() {
+  return buildWarperFromSparse([]);
+}
+
+export function normalizeColorWarper(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const list = Array.isArray(src.points) ? src.points : [];
+  const byKey = new Map();
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const h = Math.round(Number(item.hue_idx));
+    const r = Math.round(Number(item.ring_idx));
+    if (!Number.isInteger(h) || h < 0 || h >= COLOR_WARPER_HUE_COUNT) continue;
+    if (!Number.isInteger(r) || r < 0 || r >= COLOR_WARPER_SAT_RINGS) continue;
+    const dhRaw = Number(item.hue_offset ?? 0.0);
+    const dsRaw = Number(item.sat_offset ?? 0.0);
+    const dh = Number.isFinite(dhRaw)
+      ? Math.min(COLOR_WARPER_BOUNDS.hue_offset.max, Math.max(COLOR_WARPER_BOUNDS.hue_offset.min, dhRaw))
+      : 0.0;
+    const ds = Number.isFinite(dsRaw)
+      ? Math.min(COLOR_WARPER_BOUNDS.sat_offset.max, Math.max(COLOR_WARPER_BOUNDS.sat_offset.min, dsRaw))
+      : 0.0;
+    byKey.set(`${r}:${h}`, {
+      hue_idx: h,
+      ring_idx: r,
+      hue_offset: Math.round(dh * 1000) / 1000,
+      sat_offset: Math.round(ds * 10000) / 10000
+    });
+  }
+  const points = [];
+  for (let r = 0; r < COLOR_WARPER_SAT_RINGS; r += 1) {
+    for (let h = 0; h < COLOR_WARPER_HUE_COUNT; h += 1) {
+      points.push(byKey.get(`${r}:${h}`) || { hue_idx: h, ring_idx: r, hue_offset: 0.0, sat_offset: 0.0 });
+    }
+  }
+  return { points };
+}
+
+export function isColorWarperIdentity(warper) {
+  const w = normalizeColorWarper(warper);
+  return w.points.every((pt) => Math.abs(pt.hue_offset) <= 1e-4 && Math.abs(pt.sat_offset) <= 1e-4);
+}
+
+export function getColorWarperPoint(warper, hueIdx, ringIdx) {
+  const w = normalizeColorWarper(warper);
+  const h = Math.max(0, Math.min(COLOR_WARPER_HUE_COUNT - 1, Math.round(Number(hueIdx) || 0)));
+  const r = Math.max(0, Math.min(COLOR_WARPER_SAT_RINGS - 1, Math.round(Number(ringIdx) || 0)));
+  return w.points[r * COLOR_WARPER_HUE_COUNT + h];
+}
+
+export function setColorWarperPointOffset(warper, hueIdx, ringIdx, hueOffset, satOffset) {
+  const w = normalizeColorWarper(warper);
+  const h = Math.max(0, Math.min(COLOR_WARPER_HUE_COUNT - 1, Math.round(Number(hueIdx) || 0)));
+  const r = Math.max(0, Math.min(COLOR_WARPER_SAT_RINGS - 1, Math.round(Number(ringIdx) || 0)));
+  const dh = Number.isFinite(Number(hueOffset))
+    ? Math.min(COLOR_WARPER_BOUNDS.hue_offset.max, Math.max(COLOR_WARPER_BOUNDS.hue_offset.min, Number(hueOffset)))
+    : 0.0;
+  const ds = Number.isFinite(Number(satOffset))
+    ? Math.min(COLOR_WARPER_BOUNDS.sat_offset.max, Math.max(COLOR_WARPER_BOUNDS.sat_offset.min, Number(satOffset)))
+    : 0.0;
+  w.points[r * COLOR_WARPER_HUE_COUNT + h] = {
+    hue_idx: h,
+    ring_idx: r,
+    hue_offset: Math.round(dh * 100) / 100,
+    sat_offset: Math.round(ds * 1000) / 1000
+  };
+  return w;
+}
+
+export function evaluateColorWarperShiftClient(hueDeg, sat, warper) {
+  const w = normalizeColorWarper(warper);
+  const sc = clampUnitColor(sat);
+  if (sc <= 1e-6) return [0.0, 0.0];
+  const hNorm = ((((Number(hueDeg) || 0) % 360.0) + 360.0) % 360.0) / 60.0;
+  const h0 = Math.floor(hNorm) % COLOR_WARPER_HUE_COUNT;
+  const h1 = (h0 + 1) % COLOR_WARPER_HUE_COUNT;
+  const hf = hNorm - Math.floor(hNorm);
+  const ht = hf * hf * (3.0 - 2.0 * hf);
+
+  const sScaled = sc * COLOR_WARPER_SAT_RINGS;
+  let rLo;
+  let rHi;
+  let rf;
+  if (sScaled <= 1.0) {
+    rLo = -1;
+    rHi = 0;
+    rf = sScaled;
+  } else if (sScaled <= 2.0) {
+    rLo = 0;
+    rHi = 1;
+    rf = sScaled - 1.0;
+  } else {
+    rLo = 1;
+    rHi = 2;
+    rf = Math.min(1.0, sScaled - 2.0);
+  }
+  const rt = rf * rf * (3.0 - 2.0 * rf);
+
+  const ptVal = (hIdx, rIdx) => {
+    if (rIdx < 0) return [0.0, 0.0];
+    const pt = w.points[rIdx * COLOR_WARPER_HUE_COUNT + hIdx];
+    return [pt.hue_offset, pt.sat_offset];
+  };
+  const [dh00, ds00] = ptVal(h0, rLo);
+  const [dh10, ds10] = ptVal(h1, rLo);
+  const [dh01, ds01] = ptVal(h0, rHi);
+  const [dh11, ds11] = ptVal(h1, rHi);
+
+  const dh0 = dh00 + (dh10 - dh00) * ht;
+  const dh1 = dh01 + (dh11 - dh01) * ht;
+  const ds0 = ds00 + (ds10 - ds00) * ht;
+  const ds1 = ds01 + (ds11 - ds01) * ht;
+  return [dh0 + (dh1 - dh0) * rt, ds0 + (ds1 - ds0) * rt];
+}
+
+export function applyColorWarperRgbClient(r, g, b, warper) {
+  const rc = clampUnitColor(r);
+  const gc = clampUnitColor(g);
+  const bc = clampUnitColor(b);
+  if (isColorWarperIdentity(warper)) return [rc, gc, bc];
+  const [hue, sat, lum] = rgbToHslClient(rc, gc, bc);
+  if (sat <= 1e-4) return [rc, gc, bc];
+  const [dh, ds] = evaluateColorWarperShiftClient(hue, sat, warper);
+  const chromaWeight = smoothstepClient(0.0, 0.06, sat);
+  const nextHue = (((hue + dh * chromaWeight) % 360.0) + 360.0) % 360.0;
+  const nextSat = clampUnitColor(sat + ds * chromaWeight);
+  return hslToRgbClient(nextHue, nextSat, lum);
+}
+
+export function compileColorWarperFilterClient(warper) {
+  const w = normalizeColorWarper(warper);
+  if (isColorWarperIdentity(w)) return "";
+  const ringWeights = [0.2, 0.35, 0.45];
+  const stages = [];
+  for (let hIdx = 0; hIdx < HSL_HUE_VECTORS.length; hIdx += 1) {
+    const vec = HSL_HUE_VECTORS[hIdx];
+    let dh = 0;
+    let ds = 0;
+    for (let rIdx = 0; rIdx < COLOR_WARPER_SAT_RINGS; rIdx += 1) {
+      const pt = w.points[rIdx * COLOR_WARPER_HUE_COUNT + hIdx];
+      dh += pt.hue_offset * ringWeights[rIdx];
+      ds += pt.sat_offset * ringWeights[rIdx];
+    }
+    if (Math.abs(dh) <= 1e-4 && Math.abs(ds) <= 1e-4) continue;
+    const flag = HSL_HUE_FFMPEG_FLAGS[vec];
+    stages.push(`huesaturation=colors=${flag}:hue=${dh.toFixed(2)}:saturation=${ds.toFixed(4)}`);
+  }
+  return stages.join(",");
+}
+
 export function createColorNode(index = 1, overrides = {}) {
   const safeIdx = Math.max(1, Math.round(Number(index) || 1));
   return {
@@ -6543,6 +6805,7 @@ export function createColorNode(index = 1, overrides = {}) {
     grade: normalizeColorGrade(overrides.grade),
     curves: normalizeColorCurves(overrides.curves),
     hsl_curves: normalizeHslCurves(overrides.hsl_curves),
+    color_warper: normalizeColorWarper(overrides.color_warper),
     power_window: normalizePowerWindow(overrides.power_window),
     qualifier: normalizeQualifier(overrides.qualifier),
     lut: normalizeNodeLut(overrides.lut)
@@ -6558,6 +6821,7 @@ export function normalizeColorNode(raw, index = 0) {
     grade: n.grade,
     curves: n.curves,
     hsl_curves: n.hsl_curves,
+    color_warper: n.color_warper,
     power_window: n.power_window,
     qualifier: n.qualifier,
     lut: n.lut
@@ -6604,6 +6868,7 @@ export function isColorNodeIdentity(node) {
   if (!isColorGradeIdentity(node.grade)) return false;
   if (!isColorCurvesIdentity(node.curves)) return false;
   if (!isHslCurvesIdentity(node.hsl_curves)) return false;
+  if (!isColorWarperIdentity(node.color_warper)) return false;
   if (node.lut && Number(node.lut.mix ?? 1.0) > 1e-6) return false;
   return true;
 }
@@ -6746,6 +7011,10 @@ export function updateColorNodeInTree(tree, nodeId, patch = {}) {
           patch.hsl_curves !== undefined
             ? normalizeHslCurves(patch.hsl_curves)
             : normalizeHslCurves(n.hsl_curves),
+        color_warper:
+          patch.color_warper !== undefined
+            ? normalizeColorWarper(patch.color_warper)
+            : normalizeColorWarper(n.color_warper),
         power_window:
           patch.power_window !== undefined
             ? normalizePowerWindow(patch.power_window)
@@ -6767,6 +7036,9 @@ function applySingleColorNodeCoreClient(curR, curG, curB, node) {
   }
   if (!isHslCurvesIdentity(node.hsl_curves)) {
     [outR, outG, outB] = applyHslCurvesRgbClient(outR, outG, outB, node.hsl_curves);
+  }
+  if (!isColorWarperIdentity(node.color_warper)) {
+    [outR, outG, outB] = applyColorWarperRgbClient(outR, outG, outB, node.color_warper);
   }
   if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
     [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
@@ -6946,6 +7218,7 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
   let hasPowerWindows = false;
   let hasCurves = false;
   let hasHslCurves = false;
+  let hasColorWarper = false;
   let hasQualifiers = false;
   let pwIdx = 0;
 
@@ -6970,6 +7243,11 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
       hasHslCurves = true;
       const hslFg = compileHslCurvesFilterClient(node.hsl_curves);
       if (hslFg) nodeStages.push(hslFg);
+    }
+    if (!isColorWarperIdentity(node.color_warper)) {
+      hasColorWarper = true;
+      const warperFg = compileColorWarperFilterClient(node.color_warper);
+      if (warperFg) nodeStages.push(warperFg);
     }
     if (nodeStages.length > 0) {
       const nodeFg = nodeStages.join(",");
@@ -7041,6 +7319,7 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
     has_power_windows: hasPowerWindows,
     has_curves: hasCurves,
     has_hsl_curves: hasHslCurves,
+    has_color_warper: hasColorWarper,
     has_qualifiers: hasQualifiers
   };
 }
@@ -7055,6 +7334,7 @@ export function serializeColorNodeForApi(node) {
     grade: norm.grade,
     curves: normalizeColorCurves(norm.curves),
     hsl_curves: normalizeHslCurves(norm.hsl_curves),
+    color_warper: normalizeColorWarper(norm.color_warper),
     power_window: normalizePowerWindow(norm.power_window),
     qualifier: normalizeQualifier(norm.qualifier),
     lut_title: lut ? lut.title : "",
@@ -7091,6 +7371,7 @@ export function deserializeColorNodeFromApi(rawNode, index = 0) {
     grade: n.grade,
     curves: n.curves,
     hsl_curves: n.hsl_curves,
+    color_warper: n.color_warper,
     power_window: n.power_window,
     qualifier: n.qualifier,
     lut

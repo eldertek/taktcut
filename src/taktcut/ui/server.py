@@ -27,6 +27,12 @@ from taktcut import __version__
 from taktcut.color import (
     COLOR_BALANCE_MAX,
     COLOR_BALANCE_MIN,
+    COLOR_WARPER_HUE_COUNT,
+    COLOR_WARPER_HUE_OFFSET_MAX,
+    COLOR_WARPER_HUE_OFFSET_MIN,
+    COLOR_WARPER_SAT_OFFSET_MAX,
+    COLOR_WARPER_SAT_OFFSET_MIN,
+    COLOR_WARPER_SAT_RINGS,
     CONTRAST_MAX,
     CONTRAST_MIN,
     MAX_COLOR_NODES,
@@ -44,6 +50,7 @@ from taktcut.color import (
     compile_color_node_chain,
     list_color_curves_presets,
     list_color_presets,
+    list_color_warper_presets,
     list_hsl_curve_presets,
     list_qualifier_presets,
     parse_cdl_xml,
@@ -1405,6 +1412,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "hsl_curve_presets": [
                         p.model_dump(mode="json") for p in list_hsl_curve_presets()
                     ],
+                    "warper_presets": [
+                        p.model_dump(mode="json") for p in list_color_warper_presets()
+                    ],
                     "qualifier_presets": [
                         p.model_dump(mode="json") for p in list_qualifier_presets()
                     ],
@@ -1434,6 +1444,14 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                             "min": TEMPERATURE_MIN,
                             "max": TEMPERATURE_MAX,
                             "default": 0.0,
+                        },
+                        "color_warper": {
+                            "hue_count": COLOR_WARPER_HUE_COUNT,
+                            "sat_rings": COLOR_WARPER_SAT_RINGS,
+                            "hue_offset_min": COLOR_WARPER_HUE_OFFSET_MIN,
+                            "hue_offset_max": COLOR_WARPER_HUE_OFFSET_MAX,
+                            "sat_offset_min": COLOR_WARPER_SAT_OFFSET_MIN,
+                            "sat_offset_max": COLOR_WARPER_SAT_OFFSET_MAX,
                         },
                     },
                 },
@@ -1913,6 +1931,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             if (
                 isinstance(payload.get("curves"), dict)
                 or isinstance(payload.get("hsl_curves"), dict)
+                or isinstance(payload.get("color_warper"), dict)
                 or isinstance(payload.get("qualifier"), dict)
             ):
                 node_payload: dict[str, Any] = {"grade": grade}
@@ -1920,6 +1939,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     node_payload["curves"] = payload["curves"]
                 if isinstance(payload.get("hsl_curves"), dict):
                     node_payload["hsl_curves"] = payload["hsl_curves"]
+                if isinstance(payload.get("color_warper"), dict):
+                    node_payload["color_warper"] = payload["color_warper"]
                 if isinstance(payload.get("qualifier"), dict):
                     node_payload["qualifier"] = payload["qualifier"]
                 single_node = ColorNodeParams.model_validate(node_payload)
