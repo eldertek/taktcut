@@ -4251,6 +4251,76 @@ input[type="range"] {
   min-width: 0;
 }
 
+.dve-layout-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dve-accordion {
+  border: 1px solid var(--border-inner);
+  background: var(--bg-panel);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.dve-accordion-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.dve-accordion-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dve-accordion[open] > .dve-accordion-summary {
+  border-bottom: 1px solid var(--border-inner);
+  color: var(--text-primary);
+}
+
+.dve-accordion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+
+.dve-subhead-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dve-ctrl-row {
+  grid-template-columns: 74px minmax(0, 1fr) 58px;
+}
+
+.dve-border-row {
+  grid-template-columns: 74px minmax(0, 1fr) 58px 28px;
+}
+
+.dve-color-picker {
+  width: 28px;
+  height: 22px;
+  padding: 1px;
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  background: var(--bg-workbench);
+  cursor: pointer;
+}
+
 .transform-preset-btn {
   text-align: center;
   white-space: normal;
@@ -6515,6 +6585,26 @@ input[type="range"] {
   }
   .transform-preset-strip {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .dve-layout-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dve-accordion-summary,
+  .dve-color-picker,
+  #btn-dve-overlay,
+  #btn-dve-split-grid,
+  #btn-clip-dve-crop-reset,
+  #btn-clip-dve-shadow-reset {
+    min-height: 44px;
+  }
+  .dve-color-picker {
+    width: 44px;
+  }
+  .audio-ctrl-row.dve-ctrl-row {
+    grid-template-columns: minmax(0, 1fr) 64px;
+  }
+  .audio-ctrl-row.dve-border-row {
+    grid-template-columns: minmax(0, 1fr) 58px 44px;
   }
   .transform-preset-btn {
     min-height: 44px;

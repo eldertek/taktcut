@@ -278,6 +278,8 @@
                   <span id="program-framing-badge" class="nle-tag mono">1920x1080</span>
                 </div>
                 <div class="safe-guides-group" role="group" aria-label="Broadcast and social safe guides">
+                  <button type="button" id="btn-dve-overlay" class="btn btn-mini is-active" aria-pressed="true" data-i18n="timeline.dve.handles" title="Interactive DVE PiP / Crop Handles on Program Monitor">DVE Handles</button>
+                  <button type="button" id="btn-dve-split-grid" class="btn btn-mini" aria-pressed="false" data-i18n="timeline.dve.splitGrid" title="Toggle 2x1 / 2x2 Split-Screen Alignment Grid">Split Grid</button>
                   <button type="button" id="btn-safe-guides" class="btn btn-mini" aria-pressed="false" data-i18n="timeline.framing.safeGuides">Safe Guides</button>
                   <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="actionSafe" aria-pressed="true" data-i18n="timeline.framing.actionSafe">Action 90%</button>
                   <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="titleSafe" aria-pressed="true" data-i18n="timeline.framing.titleSafe">Title 80%</button>
@@ -429,9 +431,19 @@
                   </div>
                 </div>
                 <div id="clip-transform-controls" class="transform-ctrl-box mono">
-                  <div id="clip-transform-presets" class="transform-preset-strip" role="group" aria-label="Transform Presets">
+                  <div id="clip-transform-presets" class="transform-preset-strip dve-layout-strip" role="group" aria-label="DVE PiP and Split-Screen Layout Presets">
                     <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="full_frame" aria-pressed="false" data-i18n="timeline.transform.presetFull">Full Frame</button>
                     <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="pip_bottom_right" aria-pressed="false" data-i18n="timeline.transform.presetPip">PiP Bottom-Right</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="pip_top_left" aria-pressed="false" data-i18n="timeline.transform.presetPipTl">PiP Top-Left</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="pip_soft_callout" aria-pressed="false" data-i18n="timeline.transform.presetPipSoft">Soft PiP</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_2x1_left" aria-pressed="false" data-i18n="timeline.transform.presetSplit2x1L">Split 2x1 L</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_2x1_right" aria-pressed="false" data-i18n="timeline.transform.presetSplit2x1R">Split 2x1 R</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_1x2_top" aria-pressed="false" data-i18n="timeline.transform.presetSplit1x2T">Split 1x2 T</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_1x2_bottom" aria-pressed="false" data-i18n="timeline.transform.presetSplit1x2B">Split 1x2 B</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_2x2_tl" aria-pressed="false" data-i18n="timeline.transform.presetQuadTl">Quad TL</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_2x2_tr" aria-pressed="false" data-i18n="timeline.transform.presetQuadTr">Quad TR</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_2x2_bl" aria-pressed="false" data-i18n="timeline.transform.presetQuadBl">Quad BL</button>
+                    <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="split_2x2_br" aria-pressed="false" data-i18n="timeline.transform.presetQuadBr">Quad BR</button>
                     <button type="button" class="btn btn-mini transform-preset-btn" data-transform-preset="zoom_punch_115" aria-pressed="false" data-i18n="timeline.transform.presetPunch">Zoom Punch 115%</button>
                   </div>
                   <div class="transform-dz-row">
@@ -479,6 +491,84 @@
                     <button type="button" id="btn-clip-transform-opacity-kf" class="btn btn-mini kf-diamond-btn" data-kf-param="opacity_pct" aria-pressed="false" aria-label="Toggle opacity keyframe at playhead" title="Toggle Opacity Keyframe">&#9670;</button>
                     <button type="button" id="btn-clip-transform-opacity-reset" class="btn btn-mini" aria-label="Reset clip opacity">Rst</button>
                   </div>
+
+                  <details id="dve-crop-accordion" class="dve-accordion">
+                    <summary class="dve-accordion-summary">
+                      <span data-i18n="timeline.dve.cropTitle">DVE Crop &amp; Feather Border</span>
+                      <span id="clip-dve-crop-badge" class="nle-tag mono">OFF</span>
+                    </summary>
+                    <div class="dve-accordion-body">
+                      <div class="dve-subhead-row">
+                        <span class="telemetry-note" data-i18n="timeline.dve.cropHint">Edge Trim (0-45%) &amp; Alpha Feather</span>
+                        <button type="button" id="btn-clip-dve-crop-reset" class="btn btn-mini" data-i18n="timeline.dve.resetCrop">Reset Crop/Border</button>
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-crop-left-range" data-i18n="timeline.dve.cropLeft">Crop Left (%)</label>
+                        <input type="range" id="clip-dve-crop-left-range" min="0" max="45" step="0.5" value="0">
+                        <input type="number" id="clip-dve-crop-left-num" class="input-num" min="0" max="45" step="0.5" value="0.0" aria-label="Crop left percentage">
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-crop-right-range" data-i18n="timeline.dve.cropRight">Crop Right (%)</label>
+                        <input type="range" id="clip-dve-crop-right-range" min="0" max="45" step="0.5" value="0">
+                        <input type="number" id="clip-dve-crop-right-num" class="input-num" min="0" max="45" step="0.5" value="0.0" aria-label="Crop right percentage">
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-crop-top-range" data-i18n="timeline.dve.cropTop">Crop Top (%)</label>
+                        <input type="range" id="clip-dve-crop-top-range" min="0" max="45" step="0.5" value="0">
+                        <input type="number" id="clip-dve-crop-top-num" class="input-num" min="0" max="45" step="0.5" value="0.0" aria-label="Crop top percentage">
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-crop-bottom-range" data-i18n="timeline.dve.cropBottom">Crop Bottom (%)</label>
+                        <input type="range" id="clip-dve-crop-bottom-range" min="0" max="45" step="0.5" value="0">
+                        <input type="number" id="clip-dve-crop-bottom-num" class="input-num" min="0" max="45" step="0.5" value="0.0" aria-label="Crop bottom percentage">
+                      </div>
+                      <div class="audio-ctrl-row dve-border-row">
+                        <label for="clip-dve-border-width-range" data-i18n="timeline.dve.borderWidth">Border (px)</label>
+                        <input type="range" id="clip-dve-border-width-range" min="0" max="32" step="1" value="0">
+                        <input type="number" id="clip-dve-border-width-num" class="input-num" min="0" max="32" step="1" value="0.0" aria-label="Border width in pixels">
+                        <input type="color" id="clip-dve-border-color" class="dve-color-picker" value="#ffffff" aria-label="DVE border color">
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-border-feather-range" data-i18n="timeline.dve.borderFeather">Feather (px)</label>
+                        <input type="range" id="clip-dve-border-feather-range" min="0" max="40" step="1" value="0">
+                        <input type="number" id="clip-dve-border-feather-num" class="input-num" min="0" max="40" step="1" value="0.0" aria-label="Edge feather blur in pixels">
+                      </div>
+                    </div>
+                  </details>
+
+                  <details id="dve-shadow-accordion" class="dve-accordion">
+                    <summary class="dve-accordion-summary">
+                      <span data-i18n="timeline.dve.shadowTitle">DVE Drop Shadow</span>
+                      <span id="clip-dve-shadow-badge" class="nle-tag mono">OFF</span>
+                    </summary>
+                    <div class="dve-accordion-body">
+                      <div class="dve-subhead-row">
+                        <span class="telemetry-note" data-i18n="timeline.dve.shadowHint">Perspective PiP Lift &amp; Softness</span>
+                        <button type="button" id="btn-clip-dve-shadow-reset" class="btn btn-mini" data-i18n="timeline.dve.resetShadow">Reset Shadow</button>
+                      </div>
+                      <div class="audio-ctrl-row dve-border-row">
+                        <label for="clip-dve-shadow-opacity-range" data-i18n="timeline.dve.shadowOpacity">Opacity (%)</label>
+                        <input type="range" id="clip-dve-shadow-opacity-range" min="0" max="100" step="1" value="0">
+                        <input type="number" id="clip-dve-shadow-opacity-num" class="input-num" min="0" max="100" step="1" value="0.0" aria-label="Drop shadow opacity percentage">
+                        <input type="color" id="clip-dve-shadow-color" class="dve-color-picker" value="#000000" aria-label="Drop shadow color">
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-shadow-blur-range" data-i18n="timeline.dve.shadowBlur">Blur (px)</label>
+                        <input type="range" id="clip-dve-shadow-blur-range" min="0" max="40" step="1" value="12">
+                        <input type="number" id="clip-dve-shadow-blur-num" class="input-num" min="0" max="40" step="1" value="12.0" aria-label="Drop shadow blur in pixels">
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-shadow-offx-range" data-i18n="timeline.dve.shadowOffX">Offset X (px)</label>
+                        <input type="range" id="clip-dve-shadow-offx-range" min="-48" max="48" step="1" value="10">
+                        <input type="number" id="clip-dve-shadow-offx-num" class="input-num" min="-48" max="48" step="1" value="10.0" aria-label="Drop shadow horizontal offset">
+                      </div>
+                      <div class="audio-ctrl-row dve-ctrl-row">
+                        <label for="clip-dve-shadow-offy-range" data-i18n="timeline.dve.shadowOffY">Offset Y (px)</label>
+                        <input type="range" id="clip-dve-shadow-offy-range" min="-48" max="48" step="1" value="12">
+                        <input type="number" id="clip-dve-shadow-offy-num" class="input-num" min="-48" max="48" step="1" value="12.0" aria-label="Drop shadow vertical offset">
+                      </div>
+                    </div>
+                  </details>
 
                   <div id="transform-graph-editor" class="transform-graph-editor" role="region" aria-label="Transform Keyframe Bezier Graph Editor">
                     <div class="transform-graph-header">

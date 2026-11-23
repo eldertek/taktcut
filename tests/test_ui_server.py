@@ -7898,4 +7898,192 @@ def test_ui_karaoke_subtitles_ass_and_playwright_e2e(
             browser.close()
 
 
+def test_dve_pip_split_screen_api_client_parity_and_playwright(tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+
+    try:
+        p_status, _, p_raw = _http_call(f"{base_url}/api/transform/presets")
+        assert p_status == 200
+        presets_data = json.loads(p_raw.decode("utf-8"))
+        assert len(presets_data["presets"]) == 13
+        assert presets_data["bounds"]["crop_pct"]["sum_max"] == 85.0
+
+        pip_payload = {
+            "transform_params": {
+                "zoom_pct": 28.0,
+                "pos_x_pct": 32.0,
+                "pos_y_pct": 32.0,
+                "crop_left_pct": 10.0,
+                "crop_right_pct": 10.0,
+                "border_width_px": 3.0,
+                "border_color": "#e68442",
+                "border_feather_px": 14.0,
+                "shadow_opacity_pct": 55.0,
+                "shadow_blur_px": 14.0,
+                "shadow_offset_x_px": 8.0,
+                "shadow_offset_y_px": 10.0,
+                "shadow_color": "#000000",
+            },
+            "pix_fmt": "yuv420p",
+        }
+        c_status, _, c_raw = _http_call(
+            f"{base_url}/api/transform/compile",
+            method="POST",
+            payload=pip_payload,
+        )
+        assert c_status == 200
+        compiled = json.loads(c_raw.decode("utf-8"))
+        assert compiled["is_identity"] is False
+        assert "crop=w=" in compiled["filtergraph"]
+        assert "pad=w=iw+6:h=ih+6:x=3:y=3:color=0xe68442" in compiled["filtergraph"]
+        assert "alphamerge" in compiled["filtergraph"]
+        assert "lutrgb=r=0:g=0:b=0" in compiled["filtergraph"]
+
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/transform/compile",
+            method="POST",
+            payload={"crop_left_pct": 45.0, "crop_right_pct": 45.0},
+        )
+        assert bad_status == 400
+
+        bad_color_status, _, _ = _http_call(
+            f"{base_url}/api/transform/compile",
+            method="POST",
+            payload={"border_color": "javascript:alert(1)"},
+        )
+        assert bad_color_status == 400
+
+        node = shutil.which("node")
+        if node:
+            assets_url = (
+                Path(__file__).resolve().parents[1]
+                / "src"
+                / "taktcut"
+                / "ui"
+                / "assets"
+                / "timeline_ops.js"
+            ).as_uri()
+            script = f"""
+import assert from "node:assert/strict";
+import {{
+  compileTransformFilterClient,
+  getTransformPresetClient,
+  normalizeClipTransform
+}} from "{assets_url}";
+
+const pipPreset = getTransformPresetClient("pip_bottom_right");
+assert.ok(pipPreset);
+const cPip = compileTransformFilterClient(pipPreset, "yuv420p");
+assert.equal(cPip.is_identity, false);
+assert.ok(cPip.filtergraph.includes("pad=w=iw+6:h=ih+6:x=3:y=3:color=0xe68442"));
+assert.ok(cPip.filtergraph.includes("lutrgb=r=0:g=0:b=0"));
+
+const payloadJson = {json.dumps(pip_payload["transform_params"])};
+const cPayload = compileTransformFilterClient(payloadJson, "yuv420p");
+assert.equal(cPayload.filtergraph, {json.dumps(compiled["filtergraph"])});
+
+const normClamp = normalizeClipTransform({{ crop_left_pct: 45, crop_right_pct: 45 }});
+assert.ok(normClamp.crop_left_pct + normClamp.crop_right_pct <= 85.0);
+"""
+            proc = subprocess.run(
+                [node, "--input-type=module"],
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed:\n{proc.stderr}\n{proc.stdout}"
+
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                console_errors: list[str] = []
+                page.on(
+                    "console",
+                    lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+                )
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#timeline-index-list .timeline-index-row")
+
+                # Select first video clip via Timeline Index
+                page.locator("#timeline-index-list .timeline-index-row").first.click()
+                page.wait_for_function(
+                    "() => !document.getElementById('clip-transform-zoom-range')?.disabled"
+                )
+
+                # Toggle Split Grid and apply PiP Bottom-Right preset
+                page.click("#btn-dve-split-grid")
+                assert page.locator("#btn-dve-split-grid").get_attribute("aria-pressed") == "true"
+                page.click('[data-transform-preset="pip_bottom_right"]')
+                page.wait_for_function(
+                    "() => document.getElementById('clip-dve-shadow-badge')"
+                    "?.textContent?.includes('55%')"
+                )
+                assert page.locator("#clip-dve-crop-badge").text_content() == "3px"
+
+                # Open DVE Crop & Feather Border accordion and set Crop Left + Feather
+                page.locator("#dve-crop-accordion summary").click()
+                page.fill("#clip-dve-crop-left-num", "15")
+                page.dispatch_event("#clip-dve-crop-left-num", "change")
+                page.fill("#clip-dve-border-feather-num", "12")
+                page.dispatch_event("#clip-dve-border-feather-num", "change")
+                page.wait_for_function(
+                    "() => document.getElementById('clip-dve-crop-badge')"
+                    "?.textContent?.includes('CROP')"
+                )
+
+                # Apply Split 2x1 Left preset
+                page.click('[data-transform-preset="split_2x1_left"]')
+                assert page.locator("#clip-dve-crop-left-num").input_value() == "25.0"
+                assert page.locator("#clip-transform-posx-num").input_value() == "-25.0"
+
+                # Drag inside Program Monitor DVE box to reposition
+                box = page.locator("#timeline-program-canvas").bounding_box()
+                assert box is not None
+                cx = box["x"] + box["width"] * 0.25
+                cy = box["y"] + box["height"] * 0.5
+                page.mouse.move(cx, cy)
+                page.mouse.down()
+                page.mouse.move(cx + 24, cy + 12, steps=4)
+                page.mouse.up()
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in ("btn-dve-overlay", "btn-dve-split-grid", "btn-clip-dve-crop-reset"):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 

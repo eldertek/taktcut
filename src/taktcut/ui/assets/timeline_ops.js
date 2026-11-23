@@ -82,6 +82,35 @@ export const TRANSFORM_ROT_DEFAULT = 0.0;
 export const TRANSFORM_OPACITY_MIN = 0.0;
 export const TRANSFORM_OPACITY_MAX = 100.0;
 export const TRANSFORM_OPACITY_DEFAULT = 100.0;
+export const TRANSFORM_CROP_MIN = 0.0;
+export const TRANSFORM_CROP_MAX = 45.0;
+export const TRANSFORM_CROP_SUM_MAX = 85.0;
+export const TRANSFORM_CROP_DEFAULT = 0.0;
+export const TRANSFORM_BORDER_WIDTH_MIN = 0.0;
+export const TRANSFORM_BORDER_WIDTH_MAX = 32.0;
+export const TRANSFORM_BORDER_WIDTH_DEFAULT = 0.0;
+export const TRANSFORM_BORDER_COLOR_DEFAULT = "#ffffff";
+export const TRANSFORM_BORDER_FEATHER_MIN = 0.0;
+export const TRANSFORM_BORDER_FEATHER_MAX = 40.0;
+export const TRANSFORM_BORDER_FEATHER_DEFAULT = 0.0;
+export const TRANSFORM_SHADOW_OPACITY_MIN = 0.0;
+export const TRANSFORM_SHADOW_OPACITY_MAX = 100.0;
+export const TRANSFORM_SHADOW_OPACITY_DEFAULT = 0.0;
+export const TRANSFORM_SHADOW_BLUR_MIN = 0.0;
+export const TRANSFORM_SHADOW_BLUR_MAX = 40.0;
+export const TRANSFORM_SHADOW_BLUR_DEFAULT = 12.0;
+export const TRANSFORM_SHADOW_OFFSET_MIN = -48.0;
+export const TRANSFORM_SHADOW_OFFSET_MAX = 48.0;
+export const TRANSFORM_SHADOW_OFFSET_X_DEFAULT = 10.0;
+export const TRANSFORM_SHADOW_OFFSET_Y_DEFAULT = 12.0;
+export const TRANSFORM_SHADOW_COLOR_DEFAULT = "#000000";
+const TRANSFORM_HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+export function normalizeTransformHexColor(raw, fallback = "#ffffff") {
+  if (typeof raw !== "string") return fallback;
+  const cleaned = raw.trim().toLowerCase();
+  return TRANSFORM_HEX_COLOR_RE.test(cleaned) ? cleaned : fallback;
+}
 export const DYNAMIC_ZOOM_DEFAULT = "off";
 export const DYNAMIC_ZOOM_DEFAULT_DURATION_S = 5.0;
 export const DYNAMIC_ZOOM_SCALE_FACTOR = 1.15;
@@ -219,33 +248,312 @@ export const TRANSFORM_PRESETS = [
     id: "full_frame",
     label: "Full Frame",
     label_fr: "Plein Cadre",
+    category: "motion",
     zoom_pct: 100.0,
     pos_x_pct: 0.0,
     pos_y_pct: 0.0,
     rotation_deg: 0.0,
     opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 0.0,
+    border_color: "#ffffff",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
     dynamic_zoom: "off"
   },
   {
     id: "pip_bottom_right",
     label: "PiP Bottom-Right",
     label_fr: "PiP Bas-Droite",
+    category: "pip",
     zoom_pct: 28.0,
     pos_x_pct: 32.0,
     pos_y_pct: 32.0,
     rotation_deg: 0.0,
     opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 3.0,
+    border_color: "#e68442",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 55.0,
+    shadow_blur_px: 14.0,
+    shadow_offset_x_px: 8.0,
+    shadow_offset_y_px: 10.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "pip_top_left",
+    label: "PiP Top-Left",
+    label_fr: "PiP Haut-Gauche",
+    category: "pip",
+    zoom_pct: 28.0,
+    pos_x_pct: -32.0,
+    pos_y_pct: -32.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 3.0,
+    border_color: "#689cff",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 55.0,
+    shadow_blur_px: 14.0,
+    shadow_offset_x_px: 8.0,
+    shadow_offset_y_px: 10.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "pip_soft_callout",
+    label: "Soft Feather PiP",
+    label_fr: "PiP Contour Doux",
+    category: "pip",
+    zoom_pct: 30.0,
+    pos_x_pct: 30.0,
+    pos_y_pct: -28.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 0.0,
+    border_color: "#ffffff",
+    border_feather_px: 18.0,
+    shadow_opacity_pct: 45.0,
+    shadow_blur_px: 16.0,
+    shadow_offset_x_px: 6.0,
+    shadow_offset_y_px: 8.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_2x1_left",
+    label: "Split 2x1 Left",
+    label_fr: "Split 2x1 Gauche",
+    category: "split",
+    zoom_pct: 100.0,
+    pos_x_pct: -25.0,
+    pos_y_pct: 0.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 25.0,
+    crop_right_pct: 25.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_2x1_right",
+    label: "Split 2x1 Right",
+    label_fr: "Split 2x1 Droite",
+    category: "split",
+    zoom_pct: 100.0,
+    pos_x_pct: 25.0,
+    pos_y_pct: 0.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 25.0,
+    crop_right_pct: 25.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_1x2_top",
+    label: "Split 1x2 Top",
+    label_fr: "Split 1x2 Haut",
+    category: "split",
+    zoom_pct: 100.0,
+    pos_x_pct: 0.0,
+    pos_y_pct: -25.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 25.0,
+    crop_bottom_pct: 25.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_1x2_bottom",
+    label: "Split 1x2 Bottom",
+    label_fr: "Split 1x2 Bas",
+    category: "split",
+    zoom_pct: 100.0,
+    pos_x_pct: 0.0,
+    pos_y_pct: 25.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 25.0,
+    crop_bottom_pct: 25.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_2x2_tl",
+    label: "Quad 2x2 TL",
+    label_fr: "Quad 2x2 HG",
+    category: "split",
+    zoom_pct: 50.0,
+    pos_x_pct: -25.0,
+    pos_y_pct: -25.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_2x2_tr",
+    label: "Quad 2x2 TR",
+    label_fr: "Quad 2x2 HD",
+    category: "split",
+    zoom_pct: 50.0,
+    pos_x_pct: 25.0,
+    pos_y_pct: -25.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_2x2_bl",
+    label: "Quad 2x2 BL",
+    label_fr: "Quad 2x2 BG",
+    category: "split",
+    zoom_pct: 50.0,
+    pos_x_pct: -25.0,
+    pos_y_pct: 25.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
+    dynamic_zoom: "off"
+  },
+  {
+    id: "split_2x2_br",
+    label: "Quad 2x2 BR",
+    label_fr: "Quad 2x2 BD",
+    category: "split",
+    zoom_pct: 50.0,
+    pos_x_pct: 25.0,
+    pos_y_pct: 25.0,
+    rotation_deg: 0.0,
+    opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 2.0,
+    border_color: "#141416",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
     dynamic_zoom: "off"
   },
   {
     id: "zoom_punch_115",
     label: "Zoom Punch 115%",
     label_fr: "Zoom Punch 115%",
+    category: "motion",
     zoom_pct: 115.0,
     pos_x_pct: 0.0,
     pos_y_pct: 0.0,
     rotation_deg: 0.0,
     opacity_pct: 100.0,
+    crop_left_pct: 0.0,
+    crop_right_pct: 0.0,
+    crop_top_pct: 0.0,
+    crop_bottom_pct: 0.0,
+    border_width_px: 0.0,
+    border_color: "#ffffff",
+    border_feather_px: 0.0,
+    shadow_opacity_pct: 0.0,
+    shadow_blur_px: 12.0,
+    shadow_offset_x_px: 10.0,
+    shadow_offset_y_px: 12.0,
+    shadow_color: "#000000",
     dynamic_zoom: "off"
   }
 ];
@@ -983,6 +1291,13 @@ export function normalizeClipTransform(clipOrTransform) {
             clipOrTransform.pos_y_pct !== undefined ||
             clipOrTransform.rotation_deg !== undefined ||
             clipOrTransform.opacity_pct !== undefined ||
+            clipOrTransform.crop_left_pct !== undefined ||
+            clipOrTransform.crop_right_pct !== undefined ||
+            clipOrTransform.crop_top_pct !== undefined ||
+            clipOrTransform.crop_bottom_pct !== undefined ||
+            clipOrTransform.border_width_px !== undefined ||
+            clipOrTransform.border_feather_px !== undefined ||
+            clipOrTransform.shadow_opacity_pct !== undefined ||
             clipOrTransform.dynamic_zoom !== undefined ||
             clipOrTransform.keyframes !== undefined)
         ? clipOrTransform
@@ -998,6 +1313,50 @@ export function normalizeClipTransform(clipOrTransform) {
     TRANSFORM_OPACITY_MIN,
     TRANSFORM_OPACITY_MAX
   );
+  let cropLeft = clampNum(numOr(src.crop_left_pct, TRANSFORM_CROP_DEFAULT), TRANSFORM_CROP_MIN, TRANSFORM_CROP_MAX);
+  let cropRight = clampNum(numOr(src.crop_right_pct, TRANSFORM_CROP_DEFAULT), TRANSFORM_CROP_MIN, TRANSFORM_CROP_MAX);
+  if (cropLeft + cropRight > TRANSFORM_CROP_SUM_MAX) {
+    const excess = cropLeft + cropRight - TRANSFORM_CROP_SUM_MAX;
+    cropRight = Math.max(0, cropRight - excess);
+  }
+  let cropTop = clampNum(numOr(src.crop_top_pct, TRANSFORM_CROP_DEFAULT), TRANSFORM_CROP_MIN, TRANSFORM_CROP_MAX);
+  let cropBottom = clampNum(numOr(src.crop_bottom_pct, TRANSFORM_CROP_DEFAULT), TRANSFORM_CROP_MIN, TRANSFORM_CROP_MAX);
+  if (cropTop + cropBottom > TRANSFORM_CROP_SUM_MAX) {
+    const excess = cropTop + cropBottom - TRANSFORM_CROP_SUM_MAX;
+    cropBottom = Math.max(0, cropBottom - excess);
+  }
+  const borderWidth = clampNum(
+    numOr(src.border_width_px, TRANSFORM_BORDER_WIDTH_DEFAULT),
+    TRANSFORM_BORDER_WIDTH_MIN,
+    TRANSFORM_BORDER_WIDTH_MAX
+  );
+  const borderColor = normalizeTransformHexColor(src.border_color, TRANSFORM_BORDER_COLOR_DEFAULT);
+  const borderFeather = clampNum(
+    numOr(src.border_feather_px, TRANSFORM_BORDER_FEATHER_DEFAULT),
+    TRANSFORM_BORDER_FEATHER_MIN,
+    TRANSFORM_BORDER_FEATHER_MAX
+  );
+  const shadowOpacity = clampNum(
+    numOr(src.shadow_opacity_pct, TRANSFORM_SHADOW_OPACITY_DEFAULT),
+    TRANSFORM_SHADOW_OPACITY_MIN,
+    TRANSFORM_SHADOW_OPACITY_MAX
+  );
+  const shadowBlur = clampNum(
+    numOr(src.shadow_blur_px, TRANSFORM_SHADOW_BLUR_DEFAULT),
+    TRANSFORM_SHADOW_BLUR_MIN,
+    TRANSFORM_SHADOW_BLUR_MAX
+  );
+  const shadowOffX = clampNum(
+    numOr(src.shadow_offset_x_px, TRANSFORM_SHADOW_OFFSET_X_DEFAULT),
+    TRANSFORM_SHADOW_OFFSET_MIN,
+    TRANSFORM_SHADOW_OFFSET_MAX
+  );
+  const shadowOffY = clampNum(
+    numOr(src.shadow_offset_y_px, TRANSFORM_SHADOW_OFFSET_Y_DEFAULT),
+    TRANSFORM_SHADOW_OFFSET_MIN,
+    TRANSFORM_SHADOW_OFFSET_MAX
+  );
+  const shadowColor = normalizeTransformHexColor(src.shadow_color, TRANSFORM_SHADOW_COLOR_DEFAULT);
   const dynamicZoom = normalizeDynamicZoomPreset(src.dynamic_zoom);
   const keyframes = normalizeTransformKeyframes(src.keyframes);
   return {
@@ -1006,9 +1365,46 @@ export function normalizeClipTransform(clipOrTransform) {
     pos_y_pct: Number(posY.toFixed(1)),
     rotation_deg: Number(rot.toFixed(1)),
     opacity_pct: Number(opacity.toFixed(1)),
+    crop_left_pct: Number(cropLeft.toFixed(1)),
+    crop_right_pct: Number(cropRight.toFixed(1)),
+    crop_top_pct: Number(cropTop.toFixed(1)),
+    crop_bottom_pct: Number(cropBottom.toFixed(1)),
+    border_width_px: Number(borderWidth.toFixed(1)),
+    border_color: borderColor,
+    border_feather_px: Number(borderFeather.toFixed(1)),
+    shadow_opacity_pct: Number(shadowOpacity.toFixed(1)),
+    shadow_blur_px: Number(shadowBlur.toFixed(1)),
+    shadow_offset_x_px: Number(shadowOffX.toFixed(1)),
+    shadow_offset_y_px: Number(shadowOffY.toFixed(1)),
+    shadow_color: shadowColor,
     dynamic_zoom: dynamicZoom,
     keyframes
   };
+}
+
+export function hasClipDveCrop(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return (
+    norm.crop_left_pct > 1e-4 ||
+    norm.crop_right_pct > 1e-4 ||
+    norm.crop_top_pct > 1e-4 ||
+    norm.crop_bottom_pct > 1e-4
+  );
+}
+
+export function hasClipDveBorderOrFeather(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return norm.border_width_px >= 0.5 || norm.border_feather_px >= 1.0;
+}
+
+export function hasClipDveDropShadow(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return norm.shadow_opacity_pct > 1e-4;
+}
+
+export function hasClipDveStyling(transformOrClip) {
+  const norm = normalizeClipTransform(transformOrClip);
+  return hasClipDveCrop(norm) || hasClipDveBorderOrFeather(norm) || hasClipDveDropShadow(norm);
 }
 
 export function hasStaticClipTransform(transformOrClip) {
@@ -1026,6 +1422,7 @@ export function isClipTransformIdentity(transformOrClip) {
   const norm = normalizeClipTransform(transformOrClip);
   return (
     !hasStaticClipTransform(norm) &&
+    !hasClipDveStyling(norm) &&
     norm.dynamic_zoom === DYNAMIC_ZOOM_DEFAULT &&
     !hasTransformKeyframes(norm)
   );
@@ -1080,13 +1477,12 @@ export function evaluateTransformParamSpeedAtTime(transformOrClip, paramName, ti
 export function evaluateClipTransformAtTime(transformOrClip, timeSec) {
   const norm = normalizeClipTransform(transformOrClip);
   return {
+    ...norm,
     zoom_pct: evaluateTransformParamAtTime(norm, "zoom_pct", timeSec),
     pos_x_pct: evaluateTransformParamAtTime(norm, "pos_x_pct", timeSec),
     pos_y_pct: evaluateTransformParamAtTime(norm, "pos_y_pct", timeSec),
     rotation_deg: evaluateTransformParamAtTime(norm, "rotation_deg", timeSec),
-    opacity_pct: evaluateTransformParamAtTime(norm, "opacity_pct", timeSec),
-    dynamic_zoom: norm.dynamic_zoom,
-    keyframes: norm.keyframes
+    opacity_pct: evaluateTransformParamAtTime(norm, "opacity_pct", timeSec)
   };
 }
 
@@ -1126,6 +1522,18 @@ export function formatTransformBadgeText(transformOrClip) {
   }
   if (Math.abs(norm.opacity_pct - 100.0) > 0.05) {
     parts.push(`${Math.round(norm.opacity_pct)}%OP`);
+  }
+  if (hasClipDveCrop(norm)) {
+    parts.push("CROP");
+  }
+  if (norm.border_width_px >= 0.5) {
+    parts.push(`BDR ${Math.round(norm.border_width_px)}`);
+  }
+  if (norm.border_feather_px >= 1.0) {
+    parts.push(`FTH ${Math.round(norm.border_feather_px)}`);
+  }
+  if (hasClipDveDropShadow(norm)) {
+    parts.push("SHAD");
   }
   if (norm.dynamic_zoom && norm.dynamic_zoom !== DYNAMIC_ZOOM_DEFAULT) {
     parts.push(getDynamicZoomShortTag(norm.dynamic_zoom));
@@ -1233,6 +1641,7 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
   const norm = normalizeClipTransform(params);
   const isIdentity = isClipTransformIdentity(norm);
   const hasKfs = hasTransformKeyframes(norm);
+  const hasDve = hasClipDveStyling(norm);
   const kfCount = getTransformKeyframeCount(norm);
   const kfParams = getTransformKeyframedParams(norm);
   if (isIdentity) {
@@ -1246,7 +1655,7 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
       params: norm
     };
   }
-  if (!hasKfs && norm.opacity_pct <= 1e-6) {
+  if (!hasKfs && !hasDve && norm.opacity_pct <= 1e-6) {
     const parts = ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill", "setsar=1"];
     if (pixFmt) parts.push(`format=${pixFmt}`);
     const fg = parts.join(",");
@@ -1261,7 +1670,7 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
     };
   }
   const dzGraph = compileDynamicZoomFilterClient(norm.dynamic_zoom, clipDurationS);
-  if (!hasKfs && !hasStaticClipTransform(norm) && dzGraph) {
+  if (!hasKfs && !hasStaticClipTransform(norm) && !hasDve && dzGraph) {
     const fg = pixFmt ? `${dzGraph},format=${pixFmt}` : dzGraph;
     return {
       filtergraph: fg,
@@ -1279,7 +1688,18 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
   const kfRot = norm.keyframes.rotation_deg.length > 0;
   const kfOpacity = norm.keyframes.opacity_pct.length > 0;
 
-  const fgSteps = [];
+  const preFeatherSteps = [];
+  if (hasClipDveCrop(norm)) {
+    const cl = norm.crop_left_pct / 100.0;
+    const cr = norm.crop_right_pct / 100.0;
+    const ct = norm.crop_top_pct / 100.0;
+    const cb = norm.crop_bottom_pct / 100.0;
+    const cw = Math.max(0.15, 1.0 - cl - cr);
+    const ch = Math.max(0.15, 1.0 - ct - cb);
+    preFeatherSteps.push(
+      `crop=w='max(2,trunc(iw*${cw.toFixed(6)}/2)*2)':h='max(2,trunc(ih*${ch.toFixed(6)}/2)*2)':x='trunc(iw*${cl.toFixed(6)}/2)*2':y='trunc(ih*${ct.toFixed(6)}/2)*2'`
+    );
+  }
   if (kfZoom) {
     const zExpr = _buildTransformKeyframeFfmpegExprClient(
       norm.keyframes.zoom_pct,
@@ -1289,17 +1709,31 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
       3.0,
       "t"
     );
-    fgSteps.push(`scale=w='trunc(iw*(${zExpr})/2)*2':h='trunc(ih*(${zExpr})/2)*2':eval=frame:flags=lanczos`);
+    preFeatherSteps.push(
+      `scale=w='trunc(iw*(${zExpr})/2)*2':h='trunc(ih*(${zExpr})/2)*2':eval=frame:flags=lanczos`
+    );
   } else if (Math.abs(norm.zoom_pct - 100.0) > 1e-4) {
     const zScale = norm.zoom_pct / 100.0;
-    fgSteps.push(
+    preFeatherSteps.push(
       `scale=w=ceil(iw*${zScale.toFixed(6)}/2)*2:h=ceil(ih*${zScale.toFixed(6)}/2)*2:flags=lanczos`
     );
   }
+  if (norm.border_width_px >= 0.5) {
+    const bw = Math.max(1, Math.round(norm.border_width_px));
+    const ffBorder = `0x${norm.border_color.slice(1).toLowerCase()}`;
+    if (!hasClipDveCrop(norm) && !kfZoom && norm.zoom_pct >= 99.9) {
+      preFeatherSteps.push(`drawbox=x=0:y=0:w=iw:h=ih:color=${ffBorder}:t=${bw}`);
+    } else {
+      preFeatherSteps.push(`pad=w=iw+${2 * bw}:h=ih+${2 * bw}:x=${bw}:y=${bw}:color=${ffBorder}`);
+    }
+  }
+
+  const hasFeather = norm.border_feather_px >= 1.0;
+  const postFeatherSteps = [];
   const hasStaticRot = !kfRot && Math.abs(norm.rotation_deg) > 1e-4;
   const hasStaticOpacity = !kfOpacity && Math.abs(norm.opacity_pct - 100.0) > 1e-4;
-  if (kfRot || hasStaticRot || hasStaticOpacity) {
-    fgSteps.push("format=yuva420p");
+  if ((kfRot || hasStaticRot || hasStaticOpacity) && !hasFeather) {
+    postFeatherSteps.push("format=yuva420p");
   }
   if (kfRot) {
     const radExpr = _buildTransformKeyframeFfmpegExprClient(
@@ -1310,15 +1744,18 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
       null,
       "t"
     );
-    fgSteps.push(`rotate='${radExpr}':ow=iw:oh=ih:c=black@0`);
+    postFeatherSteps.push(`rotate='${radExpr}':ow=iw:oh=ih:c=black@0`);
   } else if (hasStaticRot) {
     const rad = (norm.rotation_deg * Math.PI) / 180.0;
-    fgSteps.push(`rotate=${rad.toFixed(6)}:ow=rotw(${rad.toFixed(6)}):oh=roth(${rad.toFixed(6)}):c=black@0`);
+    postFeatherSteps.push(
+      `rotate=${rad.toFixed(6)}:ow=rotw(${rad.toFixed(6)}):oh=roth(${rad.toFixed(6)}):c=black@0`
+    );
   }
   if (hasStaticOpacity) {
     const alpha = norm.opacity_pct / 100.0;
-    fgSteps.push(`colorchannelmixer=aa=${alpha.toFixed(4)}`);
+    postFeatherSteps.push(`colorchannelmixer=aa=${alpha.toFixed(4)}`);
   }
+
   let xExpr;
   if (kfPosX) {
     const dxExpr = _buildTransformKeyframeFfmpegExprClient(
@@ -1349,13 +1786,89 @@ export function compileTransformFilterClient(params, pixFmt = null, clipDuration
     const dy = norm.pos_y_pct / 100.0;
     yExpr = Math.abs(dy) <= 1e-6 ? "(H-h)/2" : `(H-h)/2+H*(${dy.toFixed(4)})`;
   }
-  const fgChain = fgSteps.join(",");
-  const needsOverlay = Boolean(fgChain) || kfPosX || kfPosY || hasStaticClipTransform(norm);
+
+  const preChain = preFeatherSteps.join(",");
+  const postChain = postFeatherSteps.join(",");
+  const hasShadow = hasClipDveDropShadow(norm);
+  const needsOverlay =
+    Boolean(preChain) ||
+    Boolean(postChain) ||
+    hasFeather ||
+    hasShadow ||
+    kfPosX ||
+    kfPosY ||
+    hasStaticClipTransform(norm);
+
   let graph = "";
   if (needsOverlay) {
-    graph = fgChain
-      ? `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_fg]${fgChain}[xf_ov];[xf_blk][xf_ov]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`
-      : `split[xf_bg][xf_fg];[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];[xf_blk][xf_fg]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+    const fgSegments = [];
+    if (hasFeather) {
+      const fPx = Math.max(2, Math.round(norm.border_feather_px));
+      const sigma = Math.max(1.0, fPx * 0.45).toFixed(2);
+      const lead = preChain ? `${preChain},` : "";
+      let fGraph =
+        `[xf_fg]${lead}format=yuva420p,split[xf_fc][xf_fm];` +
+        `[xf_fm]format=gray,` +
+        `drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill,` +
+        `drawbox=x=0:y=0:w=iw:h='min(ih/4,${fPx})':color=black:t=fill,` +
+        `drawbox=x=0:y='ih-min(ih/4,${fPx})':w=iw:h='min(ih/4,${fPx})':color=black:t=fill,` +
+        `drawbox=x=0:y=0:w='min(iw/4,${fPx})':h=ih:color=black:t=fill,` +
+        `drawbox=x='iw-min(iw/4,${fPx})':y=0:w='min(iw/4,${fPx})':h=ih:color=black:t=fill,` +
+        `gblur=sigma=${sigma}:steps=2[xf_fa];[xf_fc][xf_fa]alphamerge`;
+      if (postChain) fGraph += `,${postChain}`;
+      fgSegments.push(fGraph);
+    } else {
+      const linearChain = [preChain, postChain].filter(Boolean).join(",");
+      fgSegments.push(linearChain ? `[xf_fg]${linearChain}` : "[xf_fg]null");
+    }
+    const fgBuilt = fgSegments.join(";");
+    if (hasShadow) {
+      const shAlpha = (norm.shadow_opacity_pct / 100.0).toFixed(4);
+      const shBlur = norm.shadow_blur_px;
+      let shPad = Math.max(2, Math.ceil(shBlur * 2.0));
+      if (shPad % 2 !== 0) shPad += 1;
+      const sr = Number.parseInt(norm.shadow_color.slice(1, 3), 16);
+      const sg = Number.parseInt(norm.shadow_color.slice(3, 5), 16);
+      const sb = Number.parseInt(norm.shadow_color.slice(5, 7), 16);
+      const dxSh = Math.round(norm.shadow_offset_x_px);
+      const dySh = Math.round(norm.shadow_offset_y_px);
+      const rawXInner = xExpr.replace(/^'+|'+$/g, "");
+      const rawYInner = yExpr.replace(/^'+|'+$/g, "");
+      const fmtSigned = (n) => (n >= 0 ? `+${n}` : `${n}`);
+      const shXExpr = dxSh !== 0 ? `'${rawXInner}${fmtSigned(dxSh)}'` : xExpr;
+      const shYExpr = dySh !== 0 ? `'${rawYInner}${fmtSigned(dySh)}'` : yExpr;
+      const shBlurPart = shBlur >= 0.5 ? `,gblur=sigma=${shBlur.toFixed(2)}:steps=2` : "";
+      graph =
+        "split[xf_bg][xf_fg];" +
+        "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];" +
+        `${fgBuilt},split[xf_fgm][xf_shsrc];` +
+        `[xf_shsrc]format=rgba,lutrgb=r=${sr}:g=${sg}:b=${sb},` +
+        `colorchannelmixer=aa=${shAlpha},` +
+        `pad=w=iw+${2 * shPad}:h=ih+${2 * shPad}:x=${shPad}:y=${shPad}:color=black@0` +
+        `${shBlurPart}[xf_sh];` +
+        `[xf_blk][xf_sh]overlay=x=${shXExpr}:y=${shYExpr}:shortest=1[xf_wsh];` +
+        `[xf_wsh][xf_fgm]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+    } else {
+      const linearOnly = [preChain, postChain].filter(Boolean).join(",");
+      if (hasFeather) {
+        graph =
+          "split[xf_bg][xf_fg];" +
+          "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];" +
+          `${fgBuilt}[xf_ov];` +
+          `[xf_blk][xf_ov]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+      } else if (linearOnly) {
+        graph =
+          "split[xf_bg][xf_fg];" +
+          "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];" +
+          `[xf_fg]${linearOnly}[xf_ov];` +
+          `[xf_blk][xf_ov]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+      } else {
+        graph =
+          "split[xf_bg][xf_fg];" +
+          "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];" +
+          `[xf_blk][xf_fg]overlay=x=${xExpr}:y=${yExpr}:shortest=1,setsar=1`;
+      }
+    }
   }
   if (kfOpacity) {
     const opExpr = _buildTransformKeyframeFfmpegExprClient(
@@ -2598,15 +3111,47 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
     pos_y_pct: p.pos_y_pct !== undefined ? Number(p.pos_y_pct) : origNorm.pos_y_pct,
     rotation_deg: p.rotation_deg !== undefined ? Number(p.rotation_deg) : origNorm.rotation_deg,
     opacity_pct: p.opacity_pct !== undefined ? Number(p.opacity_pct) : origNorm.opacity_pct,
+    crop_left_pct: p.crop_left_pct !== undefined ? Number(p.crop_left_pct) : origNorm.crop_left_pct,
+    crop_right_pct: p.crop_right_pct !== undefined ? Number(p.crop_right_pct) : origNorm.crop_right_pct,
+    crop_top_pct: p.crop_top_pct !== undefined ? Number(p.crop_top_pct) : origNorm.crop_top_pct,
+    crop_bottom_pct: p.crop_bottom_pct !== undefined ? Number(p.crop_bottom_pct) : origNorm.crop_bottom_pct,
+    border_width_px: p.border_width_px !== undefined ? Number(p.border_width_px) : origNorm.border_width_px,
+    border_color: p.border_color !== undefined ? p.border_color : origNorm.border_color,
+    border_feather_px:
+      p.border_feather_px !== undefined ? Number(p.border_feather_px) : origNorm.border_feather_px,
+    shadow_opacity_pct:
+      p.shadow_opacity_pct !== undefined ? Number(p.shadow_opacity_pct) : origNorm.shadow_opacity_pct,
+    shadow_blur_px: p.shadow_blur_px !== undefined ? Number(p.shadow_blur_px) : origNorm.shadow_blur_px,
+    shadow_offset_x_px:
+      p.shadow_offset_x_px !== undefined ? Number(p.shadow_offset_x_px) : origNorm.shadow_offset_x_px,
+    shadow_offset_y_px:
+      p.shadow_offset_y_px !== undefined ? Number(p.shadow_offset_y_px) : origNorm.shadow_offset_y_px,
+    shadow_color: p.shadow_color !== undefined ? p.shadow_color : origNorm.shadow_color,
     dynamic_zoom: p.dynamic_zoom !== undefined ? p.dynamic_zoom : origNorm.dynamic_zoom,
     keyframes: p.keyframes !== undefined ? p.keyframes : origNorm.keyframes
   };
+  for (const numField of [
+    "zoom_pct",
+    "pos_x_pct",
+    "pos_y_pct",
+    "rotation_deg",
+    "opacity_pct",
+    "crop_left_pct",
+    "crop_right_pct",
+    "crop_top_pct",
+    "crop_bottom_pct",
+    "border_width_px",
+    "border_feather_px",
+    "shadow_opacity_pct",
+    "shadow_blur_px",
+    "shadow_offset_x_px",
+    "shadow_offset_y_px"
+  ]) {
+    if (!Number.isFinite(nextRaw[numField])) {
+      return { doc, clip: null, changed: false };
+    }
+  }
   if (
-    !Number.isFinite(nextRaw.zoom_pct) ||
-    !Number.isFinite(nextRaw.pos_x_pct) ||
-    !Number.isFinite(nextRaw.pos_y_pct) ||
-    !Number.isFinite(nextRaw.rotation_deg) ||
-    !Number.isFinite(nextRaw.opacity_pct) ||
     typeof nextRaw.dynamic_zoom !== "string" ||
     !ALLOWED_DYNAMIC_ZOOM_PRESETS.includes(nextRaw.dynamic_zoom.trim().toLowerCase())
   ) {
@@ -2619,6 +3164,18 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
     Math.abs(nextNorm.pos_y_pct - origNorm.pos_y_pct) < 1e-4 &&
     Math.abs(nextNorm.rotation_deg - origNorm.rotation_deg) < 1e-4 &&
     Math.abs(nextNorm.opacity_pct - origNorm.opacity_pct) < 1e-4 &&
+    Math.abs(nextNorm.crop_left_pct - origNorm.crop_left_pct) < 1e-4 &&
+    Math.abs(nextNorm.crop_right_pct - origNorm.crop_right_pct) < 1e-4 &&
+    Math.abs(nextNorm.crop_top_pct - origNorm.crop_top_pct) < 1e-4 &&
+    Math.abs(nextNorm.crop_bottom_pct - origNorm.crop_bottom_pct) < 1e-4 &&
+    Math.abs(nextNorm.border_width_px - origNorm.border_width_px) < 1e-4 &&
+    nextNorm.border_color === origNorm.border_color &&
+    Math.abs(nextNorm.border_feather_px - origNorm.border_feather_px) < 1e-4 &&
+    Math.abs(nextNorm.shadow_opacity_pct - origNorm.shadow_opacity_pct) < 1e-4 &&
+    Math.abs(nextNorm.shadow_blur_px - origNorm.shadow_blur_px) < 1e-4 &&
+    Math.abs(nextNorm.shadow_offset_x_px - origNorm.shadow_offset_x_px) < 1e-4 &&
+    Math.abs(nextNorm.shadow_offset_y_px - origNorm.shadow_offset_y_px) < 1e-4 &&
+    nextNorm.shadow_color === origNorm.shadow_color &&
     nextNorm.dynamic_zoom === origNorm.dynamic_zoom &&
     JSON.stringify(nextNorm.keyframes) === JSON.stringify(origNorm.keyframes);
   if (unchanged) {

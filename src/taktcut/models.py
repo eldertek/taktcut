@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Sequence
 from enum import Enum
 from fractions import Fraction
@@ -382,10 +383,36 @@ TRANSFORM_ROT_MIN: float = -180.0
 TRANSFORM_ROT_MAX: float = 180.0
 TRANSFORM_OPACITY_MIN: float = 0.0
 TRANSFORM_OPACITY_MAX: float = 100.0
+TRANSFORM_CROP_MIN: float = 0.0
+TRANSFORM_CROP_MAX: float = 45.0
+TRANSFORM_CROP_SUM_MAX: float = 85.0
+TRANSFORM_BORDER_WIDTH_MIN: float = 0.0
+TRANSFORM_BORDER_WIDTH_MAX: float = 32.0
+TRANSFORM_BORDER_FEATHER_MIN: float = 0.0
+TRANSFORM_BORDER_FEATHER_MAX: float = 40.0
+TRANSFORM_SHADOW_OPACITY_MIN: float = 0.0
+TRANSFORM_SHADOW_OPACITY_MAX: float = 100.0
+TRANSFORM_SHADOW_BLUR_MIN: float = 0.0
+TRANSFORM_SHADOW_BLUR_MAX: float = 40.0
+TRANSFORM_SHADOW_OFFSET_MIN: float = -48.0
+TRANSFORM_SHADOW_OFFSET_MAX: float = 48.0
+TRANSFORM_SHADOW_BLUR_DEFAULT: float = 12.0
+TRANSFORM_SHADOW_OFFSET_X_DEFAULT: float = 10.0
+TRANSFORM_SHADOW_OFFSET_Y_DEFAULT: float = 12.0
 MAX_TRANSFORM_KEYFRAMES_PER_PARAM: int = 64
 MAX_TRANSFORM_KEYFRAME_TIME_S: float = 3600.0
 TRANSFORM_BEZIER_Y_MIN: float = -1.5
 TRANSFORM_BEZIER_Y_MAX: float = 2.5
+_TRANSFORM_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _validate_transform_hex_color(raw: Any, field_name: str) -> str:
+    if not isinstance(raw, str):
+        raise ValueError(f"{field_name} must be a hex color string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if not _TRANSFORM_HEX_COLOR_RE.fullmatch(cleaned):
+        raise ValueError(f"Invalid hex color for {field_name}: {raw!r} (expected #rrggbb)")
+    return cleaned
 
 TransformParamName = Literal[
     "zoom_pct",
@@ -664,13 +691,43 @@ ALLOWED_DYNAMIC_ZOOM_PRESETS: tuple[DynamicZoomPresetId, ...] = (
 
 
 class ClipTransformParams(BaseModel):
-    """Per-clip 2D motion transform (zoom, position, rotation, opacity, dynamic zoom, keyframes)."""
+    """Per-clip 2D/DVE motion transform, crop, feather border, drop shadow, and keyframes."""
 
     zoom_pct: float = Field(default=100.0, ge=TRANSFORM_ZOOM_MIN, le=TRANSFORM_ZOOM_MAX)
     pos_x_pct: float = Field(default=0.0, ge=TRANSFORM_POS_MIN, le=TRANSFORM_POS_MAX)
     pos_y_pct: float = Field(default=0.0, ge=TRANSFORM_POS_MIN, le=TRANSFORM_POS_MAX)
     rotation_deg: float = Field(default=0.0, ge=TRANSFORM_ROT_MIN, le=TRANSFORM_ROT_MAX)
     opacity_pct: float = Field(default=100.0, ge=TRANSFORM_OPACITY_MIN, le=TRANSFORM_OPACITY_MAX)
+    crop_left_pct: float = Field(default=0.0, ge=TRANSFORM_CROP_MIN, le=TRANSFORM_CROP_MAX)
+    crop_right_pct: float = Field(default=0.0, ge=TRANSFORM_CROP_MIN, le=TRANSFORM_CROP_MAX)
+    crop_top_pct: float = Field(default=0.0, ge=TRANSFORM_CROP_MIN, le=TRANSFORM_CROP_MAX)
+    crop_bottom_pct: float = Field(default=0.0, ge=TRANSFORM_CROP_MIN, le=TRANSFORM_CROP_MAX)
+    border_width_px: float = Field(
+        default=0.0, ge=TRANSFORM_BORDER_WIDTH_MIN, le=TRANSFORM_BORDER_WIDTH_MAX
+    )
+    border_color: str = Field(default="#ffffff")
+    border_feather_px: float = Field(
+        default=0.0, ge=TRANSFORM_BORDER_FEATHER_MIN, le=TRANSFORM_BORDER_FEATHER_MAX
+    )
+    shadow_opacity_pct: float = Field(
+        default=0.0, ge=TRANSFORM_SHADOW_OPACITY_MIN, le=TRANSFORM_SHADOW_OPACITY_MAX
+    )
+    shadow_blur_px: float = Field(
+        default=TRANSFORM_SHADOW_BLUR_DEFAULT,
+        ge=TRANSFORM_SHADOW_BLUR_MIN,
+        le=TRANSFORM_SHADOW_BLUR_MAX,
+    )
+    shadow_offset_x_px: float = Field(
+        default=TRANSFORM_SHADOW_OFFSET_X_DEFAULT,
+        ge=TRANSFORM_SHADOW_OFFSET_MIN,
+        le=TRANSFORM_SHADOW_OFFSET_MAX,
+    )
+    shadow_offset_y_px: float = Field(
+        default=TRANSFORM_SHADOW_OFFSET_Y_DEFAULT,
+        ge=TRANSFORM_SHADOW_OFFSET_MIN,
+        le=TRANSFORM_SHADOW_OFFSET_MAX,
+    )
+    shadow_color: str = Field(default="#000000")
     dynamic_zoom: DynamicZoomPresetId = "off"
     keyframes: TransformKeyframeTracks = Field(default_factory=TransformKeyframeTracks)
 
@@ -680,11 +737,26 @@ class ClipTransformParams(BaseModel):
         "pos_y_pct",
         "rotation_deg",
         "opacity_pct",
+        "crop_left_pct",
+        "crop_right_pct",
+        "crop_top_pct",
+        "crop_bottom_pct",
+        "border_width_px",
+        "border_feather_px",
+        "shadow_opacity_pct",
+        "shadow_blur_px",
+        "shadow_offset_x_px",
+        "shadow_offset_y_px",
         mode="before",
     )
     @classmethod
     def _validate_finite_transform_float(cls, raw: Any, info: Any) -> float:
         return _check_finite_number(raw, str(info.field_name))
+
+    @field_validator("border_color", "shadow_color", mode="before")
+    @classmethod
+    def _validate_dve_colors(cls, raw: Any, info: Any) -> str:
+        return _validate_transform_hex_color(raw, str(info.field_name))
 
     @field_validator("dynamic_zoom", mode="before")
     @classmethod
@@ -696,6 +768,41 @@ class ClipTransformParams(BaseModel):
             allowed = ", ".join(ALLOWED_DYNAMIC_ZOOM_PRESETS)
             raise ValueError(f"Unsupported dynamic_zoom preset {raw!r}; expected one of: {allowed}")
         return cleaned
+
+    @model_validator(mode="after")
+    def _validate_crop_sums(self) -> ClipTransformParams:
+        if self.crop_left_pct + self.crop_right_pct > TRANSFORM_CROP_SUM_MAX:
+            raise ValueError(
+                f"crop_left_pct + crop_right_pct must be <= {TRANSFORM_CROP_SUM_MAX}, "
+                f"got {self.crop_left_pct + self.crop_right_pct}"
+            )
+        if self.crop_top_pct + self.crop_bottom_pct > TRANSFORM_CROP_SUM_MAX:
+            raise ValueError(
+                f"crop_top_pct + crop_bottom_pct must be <= {TRANSFORM_CROP_SUM_MAX}, "
+                f"got {self.crop_top_pct + self.crop_bottom_pct}"
+            )
+        return self
+
+    def has_crop(self) -> bool:
+        """Return True when any DVE edge crop exceeds zero."""
+        return (
+            self.crop_left_pct > 1e-4
+            or self.crop_right_pct > 1e-4
+            or self.crop_top_pct > 1e-4
+            or self.crop_bottom_pct > 1e-4
+        )
+
+    def has_border_or_feather(self) -> bool:
+        """Return True when DVE border width or edge feather is active."""
+        return self.border_width_px >= 0.5 or self.border_feather_px >= 1.0
+
+    def has_drop_shadow(self) -> bool:
+        """Return True when DVE drop shadow opacity is active."""
+        return self.shadow_opacity_pct > 1e-4
+
+    def has_dve_styling(self) -> bool:
+        """Return True when any DVE crop, border, feather, or drop shadow is active."""
+        return self.has_crop() or self.has_border_or_feather() or self.has_drop_shadow()
 
     def has_static_transform(self) -> bool:
         """Return True when static zoom/position/rotation/opacity differ from identity."""
@@ -777,12 +884,220 @@ class ClipTransformParams(BaseModel):
         }
 
     def is_identity(self) -> bool:
-        """Return True when static transform, dynamic_zoom, and keyframes are all neutral."""
+        """Return True when transform, DVE styling, dynamic_zoom, and keyframes are neutral."""
         return (
             not self.has_static_transform()
+            and not self.has_dve_styling()
             and self.dynamic_zoom == "off"
             and not self.has_keyframes()
         )
+
+
+class DveLayoutPreset(BaseModel):
+    """Curated DaVinci/Premiere DVE PiP & Split-Screen layout preset."""
+
+    id: str
+    label: str
+    label_fr: str
+    category: Literal["motion", "pip", "split"]
+    params: ClipTransformParams
+
+
+DVE_LAYOUT_PRESETS: tuple[DveLayoutPreset, ...] = (
+    DveLayoutPreset(
+        id="full_frame",
+        label="Full Frame",
+        label_fr="Plein Cadre",
+        category="motion",
+        params=ClipTransformParams(),
+    ),
+    DveLayoutPreset(
+        id="pip_bottom_right",
+        label="PiP Bottom-Right",
+        label_fr="PiP Bas-Droite",
+        category="pip",
+        params=ClipTransformParams(
+            zoom_pct=28.0,
+            pos_x_pct=32.0,
+            pos_y_pct=32.0,
+            border_width_px=3.0,
+            border_color="#e68442",
+            shadow_opacity_pct=55.0,
+            shadow_blur_px=14.0,
+            shadow_offset_x_px=8.0,
+            shadow_offset_y_px=10.0,
+        ),
+    ),
+    DveLayoutPreset(
+        id="pip_top_left",
+        label="PiP Top-Left",
+        label_fr="PiP Haut-Gauche",
+        category="pip",
+        params=ClipTransformParams(
+            zoom_pct=28.0,
+            pos_x_pct=-32.0,
+            pos_y_pct=-32.0,
+            border_width_px=3.0,
+            border_color="#689cff",
+            shadow_opacity_pct=55.0,
+            shadow_blur_px=14.0,
+            shadow_offset_x_px=8.0,
+            shadow_offset_y_px=10.0,
+        ),
+    ),
+    DveLayoutPreset(
+        id="pip_soft_callout",
+        label="Soft Feather PiP",
+        label_fr="PiP Contour Doux",
+        category="pip",
+        params=ClipTransformParams(
+            zoom_pct=30.0,
+            pos_x_pct=30.0,
+            pos_y_pct=-28.0,
+            border_feather_px=18.0,
+            shadow_opacity_pct=45.0,
+            shadow_blur_px=16.0,
+            shadow_offset_x_px=6.0,
+            shadow_offset_y_px=8.0,
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_2x1_left",
+        label="Split 2x1 Left",
+        label_fr="Split 2x1 Gauche",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=100.0,
+            pos_x_pct=-25.0,
+            crop_left_pct=25.0,
+            crop_right_pct=25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_2x1_right",
+        label="Split 2x1 Right",
+        label_fr="Split 2x1 Droite",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=100.0,
+            pos_x_pct=25.0,
+            crop_left_pct=25.0,
+            crop_right_pct=25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_1x2_top",
+        label="Split 1x2 Top",
+        label_fr="Split 1x2 Haut",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=100.0,
+            pos_y_pct=-25.0,
+            crop_top_pct=25.0,
+            crop_bottom_pct=25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_1x2_bottom",
+        label="Split 1x2 Bottom",
+        label_fr="Split 1x2 Bas",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=100.0,
+            pos_y_pct=25.0,
+            crop_top_pct=25.0,
+            crop_bottom_pct=25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_2x2_tl",
+        label="Quad 2x2 TL",
+        label_fr="Quad 2x2 HG",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=50.0,
+            pos_x_pct=-25.0,
+            pos_y_pct=-25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_2x2_tr",
+        label="Quad 2x2 TR",
+        label_fr="Quad 2x2 HD",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=50.0,
+            pos_x_pct=25.0,
+            pos_y_pct=-25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_2x2_bl",
+        label="Quad 2x2 BL",
+        label_fr="Quad 2x2 BG",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=50.0,
+            pos_x_pct=-25.0,
+            pos_y_pct=25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="split_2x2_br",
+        label="Quad 2x2 BR",
+        label_fr="Quad 2x2 BD",
+        category="split",
+        params=ClipTransformParams(
+            zoom_pct=50.0,
+            pos_x_pct=25.0,
+            pos_y_pct=25.0,
+            border_width_px=2.0,
+            border_color="#141416",
+        ),
+    ),
+    DveLayoutPreset(
+        id="zoom_punch_115",
+        label="Zoom Punch 115%",
+        label_fr="Zoom Punch 115%",
+        category="motion",
+        params=ClipTransformParams(zoom_pct=115.0),
+    ),
+)
+
+
+def list_dve_layout_presets() -> list[DveLayoutPreset]:
+    """Return all built-in DVE PiP & Split-Screen layout presets."""
+    return [preset.model_copy(deep=True) for preset in DVE_LAYOUT_PRESETS]
+
+
+def get_dve_layout_preset(preset_id: str) -> DveLayoutPreset:
+    """Lookup a built-in DVE layout preset by id or case-insensitive label."""
+    if not isinstance(preset_id, str):
+        raise ValueError(f"preset_id must be a string, got {preset_id!r}")
+    target = preset_id.strip().lower()
+    for preset in DVE_LAYOUT_PRESETS:
+        if preset.id == target or preset.label.lower() == target:
+            return preset.model_copy(deep=True)
+    raise ValueError(f"Unknown DVE layout preset: {preset_id!r}")
+
+
+def apply_dve_layout_preset(preset_id: str) -> ClipTransformParams:
+    """Return validated ClipTransformParams initialized from a DVE layout preset."""
+    return get_dve_layout_preset(preset_id).params.model_copy(deep=True)
 
 
 class RetimeSpeedPoint(BaseModel):

@@ -76,6 +76,19 @@ from taktcut.fx import (
 )
 from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
+    TRANSFORM_BORDER_FEATHER_MAX,
+    TRANSFORM_BORDER_FEATHER_MIN,
+    TRANSFORM_BORDER_WIDTH_MAX,
+    TRANSFORM_BORDER_WIDTH_MIN,
+    TRANSFORM_CROP_MAX,
+    TRANSFORM_CROP_MIN,
+    TRANSFORM_CROP_SUM_MAX,
+    TRANSFORM_SHADOW_BLUR_MAX,
+    TRANSFORM_SHADOW_BLUR_MIN,
+    TRANSFORM_SHADOW_OFFSET_MAX,
+    TRANSFORM_SHADOW_OFFSET_MIN,
+    TRANSFORM_SHADOW_OPACITY_MAX,
+    TRANSFORM_SHADOW_OPACITY_MIN,
     AscCdlParams,
     AudioOnlyFormatId,
     ClipTransformParams,
@@ -87,6 +100,7 @@ from taktcut.models import (
     RenderProfile,
     TimecodeBurnInPosition,
     TimelineDocument,
+    list_dve_layout_presets,
 )
 from taktcut.project import (
     PROJECT_FILE_SUFFIX,
@@ -736,6 +750,39 @@ def _build_retime_params_from_payload(
     return None
 
 
+_TRANSFORM_OPTIONAL_DVE_FIELDS: tuple[str, ...] = (
+    "crop_left_pct",
+    "crop_right_pct",
+    "crop_top_pct",
+    "crop_bottom_pct",
+    "border_width_px",
+    "border_color",
+    "border_feather_px",
+    "shadow_opacity_pct",
+    "shadow_blur_px",
+    "shadow_offset_x_px",
+    "shadow_offset_y_px",
+    "shadow_color",
+)
+
+
+def _extract_transform_dict(src: dict[str, Any]) -> dict[str, Any]:
+    xf_payload: dict[str, Any] = {
+        "zoom_pct": src.get("zoom_pct", 100.0),
+        "pos_x_pct": src.get("pos_x_pct", 0.0),
+        "pos_y_pct": src.get("pos_y_pct", 0.0),
+        "rotation_deg": src.get("rotation_deg", 0.0),
+        "opacity_pct": src.get("opacity_pct", 100.0),
+        "dynamic_zoom": src.get("dynamic_zoom", "off"),
+    }
+    for field_name in _TRANSFORM_OPTIONAL_DVE_FIELDS:
+        if src.get(field_name) is not None:
+            xf_payload[field_name] = src[field_name]
+    if src.get("keyframes") is not None:
+        xf_payload["keyframes"] = src["keyframes"]
+    return xf_payload
+
+
 def _build_transform_params_from_payload(
     payload: dict[str, Any],
     *,
@@ -747,30 +794,10 @@ def _build_transform_params_from_payload(
     if raw_transform is not None:
         if not isinstance(raw_transform, dict):
             raise ValueError("'transform_params' must be a JSON object")
-        xf_payload: dict[str, Any] = {
-            "zoom_pct": raw_transform.get("zoom_pct", 100.0),
-            "pos_x_pct": raw_transform.get("pos_x_pct", 0.0),
-            "pos_y_pct": raw_transform.get("pos_y_pct", 0.0),
-            "rotation_deg": raw_transform.get("rotation_deg", 0.0),
-            "opacity_pct": raw_transform.get("opacity_pct", 100.0),
-            "dynamic_zoom": raw_transform.get("dynamic_zoom", "off"),
-        }
-        if raw_transform.get("keyframes") is not None:
-            xf_payload["keyframes"] = raw_transform["keyframes"]
-        return ClipTransformParams.model_validate(xf_payload)
+        return ClipTransformParams.model_validate(_extract_transform_dict(raw_transform))
 
     if allow_top_level:
-        top_payload: dict[str, Any] = {
-            "zoom_pct": payload.get("zoom_pct", 100.0),
-            "pos_x_pct": payload.get("pos_x_pct", 0.0),
-            "pos_y_pct": payload.get("pos_y_pct", 0.0),
-            "rotation_deg": payload.get("rotation_deg", 0.0),
-            "opacity_pct": payload.get("opacity_pct", 100.0),
-            "dynamic_zoom": payload.get("dynamic_zoom", "off"),
-        }
-        if payload.get("keyframes") is not None:
-            top_payload["keyframes"] = payload["keyframes"]
-        return ClipTransformParams.model_validate(top_payload)
+        return ClipTransformParams.model_validate(_extract_transform_dict(payload))
     return None
 
 
@@ -1368,6 +1395,42 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                             "min": TEMPERATURE_MIN,
                             "max": TEMPERATURE_MAX,
                             "default": 0.0,
+                        },
+                    },
+                },
+            )
+            return
+
+        if route == "/api/transform/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_dve_layout_presets()],
+                    "bounds": {
+                        "crop_pct": {
+                            "min": TRANSFORM_CROP_MIN,
+                            "max": TRANSFORM_CROP_MAX,
+                            "sum_max": TRANSFORM_CROP_SUM_MAX,
+                        },
+                        "border_width_px": {
+                            "min": TRANSFORM_BORDER_WIDTH_MIN,
+                            "max": TRANSFORM_BORDER_WIDTH_MAX,
+                        },
+                        "border_feather_px": {
+                            "min": TRANSFORM_BORDER_FEATHER_MIN,
+                            "max": TRANSFORM_BORDER_FEATHER_MAX,
+                        },
+                        "shadow_opacity_pct": {
+                            "min": TRANSFORM_SHADOW_OPACITY_MIN,
+                            "max": TRANSFORM_SHADOW_OPACITY_MAX,
+                        },
+                        "shadow_blur_px": {
+                            "min": TRANSFORM_SHADOW_BLUR_MIN,
+                            "max": TRANSFORM_SHADOW_BLUR_MAX,
+                        },
+                        "shadow_offset_px": {
+                            "min": TRANSFORM_SHADOW_OFFSET_MIN,
+                            "max": TRANSFORM_SHADOW_OFFSET_MAX,
                         },
                     },
                 },

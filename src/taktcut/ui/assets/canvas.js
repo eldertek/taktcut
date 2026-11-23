@@ -30,6 +30,8 @@ import {
   getDynamicZoomShortTag,
   getTransitionPresetName,
   getTransitionShortTag,
+  hasClipDveCrop,
+  hasClipDveStyling,
   hasTransformKeyframes,
   isClipTransformIdentity,
   isCurveChannelIdentity,
@@ -673,6 +675,8 @@ let _fxScratchCanvas = null;
 let _halScratchCanvas = null;
 let _transScratchA = null;
 let _transScratchB = null;
+let _dveLayerScratch = null;
+let _dveTileScratch = null;
 function ensureScratchCanvas(existing, w, h) {
   let canvas = existing;
   if (!canvas && typeof document !== "undefined") {
@@ -1853,33 +1857,177 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
       continue;
     }
 
+    const hasDve = hasClipDveStyling(tf);
+    const hasActiveTf =
+      !isClipTransformIdentity(layer && layer.clip ? layer.clip : null) ||
+      Math.abs(tf.zoom_pct - 100.0) > 1e-4 ||
+      Math.abs(tf.pos_x_pct) > 1e-4 ||
+      Math.abs(tf.pos_y_pct) > 1e-4 ||
+      Math.abs(tf.rotation_deg) > 1e-4 ||
+      hasDve;
+
+    if (!hasDve) {
+      targetCtx.save();
+      targetCtx.beginPath();
+      targetCtx.rect(0, 0, bufW, bufH);
+      targetCtx.clip();
+      targetCtx.globalAlpha *= alpha;
+
+      if (hasActiveTf) {
+        const cx = bufW * 0.5 + (tf.pos_x_pct / 100.0) * bufW;
+        const cy = bufH * 0.5 + (tf.pos_y_pct / 100.0) * bufH;
+        targetCtx.translate(cx, cy);
+        if (Math.abs(tf.rotation_deg) > 1e-4) {
+          targetCtx.rotate((tf.rotation_deg * Math.PI) / 180.0);
+        }
+        const scale = tf.zoom_pct / 100.0;
+        if (Math.abs(scale - 1.0) > 1e-4) {
+          targetCtx.scale(scale, scale);
+        }
+        targetCtx.translate(-bufW * 0.5, -bufH * 0.5);
+      }
+
+      renderSceneLayer(clips.slice(0, idx + 1), isTop);
+      targetCtx.restore();
+      continue;
+    }
+
+    _dveLayerScratch = ensureScratchCanvas(_dveLayerScratch, bufW, bufH);
+    if (!_dveLayerScratch) {
+      targetCtx.save();
+      targetCtx.globalAlpha *= alpha;
+      renderSceneLayer(clips.slice(0, idx + 1), isTop);
+      targetCtx.restore();
+      continue;
+    }
+    const lctx = _dveLayerScratch.getContext("2d");
+    lctx.setTransform(1, 0, 0, 1, 0, 0);
+    lctx.clearRect(0, 0, bufW, bufH);
+    if (isTop && ckState && ckState.enabled) {
+      drawStudioKeyerPlate(lctx, bufW, bufH, doc, playheadFrame, cdl, clips.slice(0, idx + 1), ckState);
+    } else if (framingMode === "fit" && Math.abs(targetAspect - srcAspect) > 0.015) {
+      lctx.fillStyle = "#000000";
+      lctx.fillRect(0, 0, bufW, bufH);
+      let innerW = bufW;
+      let innerH = innerW / srcAspect;
+      if (innerH > bufH) {
+        innerH = bufH;
+        innerW = innerH * srcAspect;
+      }
+      const ix = Math.floor((bufW - innerW) / 2);
+      const iy = Math.floor((bufH - innerH) / 2);
+      lctx.save();
+      lctx.beginPath();
+      lctx.rect(ix, iy, innerW, innerH);
+      lctx.clip();
+      lctx.translate(ix, iy);
+      drawBaseProgramScene(lctx, innerW, innerH, doc, playheadFrame, cdl, clips.slice(0, idx + 1));
+      lctx.restore();
+    } else {
+      drawBaseProgramScene(lctx, bufW, bufH, doc, playheadFrame, cdl, clips.slice(0, idx + 1));
+    }
+
+    const cl = (tf.crop_left_pct || 0) / 100.0;
+    const cr = (tf.crop_right_pct || 0) / 100.0;
+    const ct = (tf.crop_top_pct || 0) / 100.0;
+    const cb = (tf.crop_bottom_pct || 0) / 100.0;
+    const sx = bufW * cl;
+    const sy = bufH * ct;
+    const sw = Math.max(2, bufW * Math.max(0.15, 1.0 - cl - cr));
+    const sh = Math.max(2, bufH * Math.max(0.15, 1.0 - ct - cb));
+    const scale = tf.zoom_pct / 100.0;
+    const dstW = sw * scale;
+    const dstH = sh * scale;
+    const resScale = bufW / 1280.0;
+
+    let drawSource = _dveLayerScratch;
+    let drawSx = sx;
+    let drawSy = sy;
+    let drawSw = sw;
+    let drawSh = sh;
+
+    if (tf.border_feather_px >= 1.0) {
+      const tileW = Math.max(4, Math.round(dstW));
+      const tileH = Math.max(4, Math.round(dstH));
+      _dveTileScratch = ensureScratchCanvas(_dveTileScratch, tileW, tileH);
+      if (_dveTileScratch) {
+        const tctx = _dveTileScratch.getContext("2d");
+        tctx.setTransform(1, 0, 0, 1, 0, 0);
+        tctx.clearRect(0, 0, tileW, tileH);
+        tctx.drawImage(_dveLayerScratch, sx, sy, sw, sh, 0, 0, tileW, tileH);
+        const fPx = Math.max(2, Math.min(tileW * 0.25, tileH * 0.25, tf.border_feather_px * resScale));
+        tctx.save();
+        tctx.globalCompositeOperation = "destination-in";
+        const gTop = tctx.createLinearGradient(0, 0, 0, fPx);
+        gTop.addColorStop(0, "rgba(0,0,0,0)");
+        gTop.addColorStop(1, "rgba(0,0,0,1)");
+        tctx.fillStyle = gTop;
+        tctx.fillRect(0, 0, tileW, fPx);
+
+        const gBot = tctx.createLinearGradient(0, tileH - fPx, 0, tileH);
+        gBot.addColorStop(0, "rgba(0,0,0,1)");
+        gBot.addColorStop(1, "rgba(0,0,0,0)");
+        tctx.fillStyle = gBot;
+        tctx.fillRect(0, tileH - fPx, tileW, fPx);
+
+        const gLeft = tctx.createLinearGradient(0, 0, fPx, 0);
+        gLeft.addColorStop(0, "rgba(0,0,0,0)");
+        gLeft.addColorStop(1, "rgba(0,0,0,1)");
+        tctx.fillStyle = gLeft;
+        tctx.fillRect(0, 0, fPx, tileH);
+
+        const gRight = tctx.createLinearGradient(tileW - fPx, 0, tileW, 0);
+        gRight.addColorStop(0, "rgba(0,0,0,1)");
+        gRight.addColorStop(1, "rgba(0,0,0,0)");
+        tctx.fillStyle = gRight;
+        tctx.fillRect(tileW - fPx, 0, fPx, tileH);
+        tctx.restore();
+
+        drawSource = _dveTileScratch;
+        drawSx = 0;
+        drawSy = 0;
+        drawSw = tileW;
+        drawSh = tileH;
+      }
+    }
+
     targetCtx.save();
     targetCtx.beginPath();
     targetCtx.rect(0, 0, bufW, bufH);
     targetCtx.clip();
     targetCtx.globalAlpha *= alpha;
 
-    const hasActiveTf =
-      !isClipTransformIdentity(layer && layer.clip ? layer.clip : null) ||
-      Math.abs(tf.zoom_pct - 100.0) > 1e-4 ||
-      Math.abs(tf.pos_x_pct) > 1e-4 ||
-      Math.abs(tf.pos_y_pct) > 1e-4 ||
-      Math.abs(tf.rotation_deg) > 1e-4;
-    if (hasActiveTf) {
-      const cx = bufW * 0.5 + (tf.pos_x_pct / 100.0) * bufW;
-      const cy = bufH * 0.5 + (tf.pos_y_pct / 100.0) * bufH;
-      targetCtx.translate(cx, cy);
-      if (Math.abs(tf.rotation_deg) > 1e-4) {
-        targetCtx.rotate((tf.rotation_deg * Math.PI) / 180.0);
-      }
-      const scale = tf.zoom_pct / 100.0;
-      if (Math.abs(scale - 1.0) > 1e-4) {
-        targetCtx.scale(scale, scale);
-      }
-      targetCtx.translate(-bufW * 0.5, -bufH * 0.5);
+    const cx = bufW * 0.5 + (tf.pos_x_pct / 100.0) * bufW;
+    const cy = bufH * 0.5 + (tf.pos_y_pct / 100.0) * bufH;
+    targetCtx.translate(cx, cy);
+    if (Math.abs(tf.rotation_deg) > 1e-4) {
+      targetCtx.rotate((tf.rotation_deg * Math.PI) / 180.0);
     }
 
-    renderSceneLayer(clips.slice(0, idx + 1), isTop);
+    if (tf.shadow_opacity_pct > 1e-4) {
+      const [sr, sg, sb] = hexToRgbTuple(tf.shadow_color || "#000000");
+      targetCtx.save();
+      targetCtx.shadowColor = `rgba(${sr}, ${sg}, ${sb}, ${(tf.shadow_opacity_pct / 100.0).toFixed(3)})`;
+      targetCtx.shadowBlur = Math.max(0, (tf.shadow_blur_px || 0) * resScale);
+      targetCtx.shadowOffsetX = (tf.shadow_offset_x_px || 0) * resScale;
+      targetCtx.shadowOffsetY = (tf.shadow_offset_y_px || 0) * resScale;
+      targetCtx.drawImage(drawSource, drawSx, drawSy, drawSw, drawSh, -dstW * 0.5, -dstH * 0.5, dstW, dstH);
+      targetCtx.restore();
+    } else {
+      targetCtx.drawImage(drawSource, drawSx, drawSy, drawSw, drawSh, -dstW * 0.5, -dstH * 0.5, dstW, dstH);
+    }
+
+    if (tf.border_width_px >= 0.5) {
+      const bw = Math.max(1, tf.border_width_px * resScale);
+      targetCtx.strokeStyle = tf.border_color || "#ffffff";
+      targetCtx.lineWidth = bw;
+      if (!hasClipDveCrop(tf) && tf.zoom_pct >= 99.9) {
+        targetCtx.strokeRect(-dstW * 0.5 + bw * 0.5, -dstH * 0.5 + bw * 0.5, dstW - bw, dstH - bw);
+      } else {
+        targetCtx.strokeRect(-dstW * 0.5 - bw * 0.5, -dstH * 0.5 - bw * 0.5, dstW + bw, dstH + bw);
+      }
+    }
+
     targetCtx.restore();
   }
 }
@@ -3439,6 +3587,36 @@ export function drawProgramMonitorCanvas(
   // Broadcast & Social Safe-Area Guides (Action 90%, Title 80%, Reels/TikTok HUD)
   drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState);
 
+  if (renderOpts && renderOpts.dveSplitGrid) {
+    drawSplitScreenGridGuide(ctx, fx, fy, frameW, frameH);
+  }
+
+  const showDveOverlay = Boolean(
+    renderOpts &&
+      renderOpts.dveOverlay &&
+      renderOpts.selectedDveClip &&
+      !(ckActive && ckMatteView === "alpha_matte")
+  );
+  if (showDveOverlay) {
+    const dveGeom = drawDveTransformOverlay(
+      ctx,
+      fx,
+      fy,
+      frameW,
+      frameH,
+      renderOpts.selectedDveClip,
+      playheadFrame,
+      fps
+    );
+    canvas._dveTransformGeom = {
+      ...dveGeom,
+      canvasWidth: width,
+      canvasHeight: height
+    };
+  } else {
+    canvas._dveTransformGeom = null;
+  }
+
   if (wipeActive && wipeGeom) {
     drawSplitWipeOverlay(ctx, fx, fy, frameW, frameH, wipeGeom, splitWipeState);
   }
@@ -3449,6 +3627,171 @@ export function drawProgramMonitorCanvas(
   ctx.strokeStyle = "#2c2c31";
   ctx.lineWidth = 1;
   ctx.strokeRect(fx, fy, frameW, frameH);
+}
+
+function drawSplitScreenGridGuide(ctx, fx, fy, frameW, frameH) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(104, 156, 255, 0.55)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 4]);
+
+  // 50% vertical & horizontal split center axes
+  const midX = fx + frameW * 0.5;
+  const midY = fy + frameH * 0.5;
+  ctx.beginPath();
+  ctx.moveTo(midX, fy);
+  ctx.lineTo(midX, fy + frameH);
+  ctx.moveTo(fx, midY);
+  ctx.lineTo(fx + frameW, midY);
+  ctx.stroke();
+
+  // Quadrant center crosshairs (25% / 75%)
+  ctx.strokeStyle = "rgba(104, 156, 255, 0.35)";
+  ctx.setLineDash([2, 4]);
+  for (const qx of [0.25, 0.75]) {
+    for (const qy of [0.25, 0.75]) {
+      const px = fx + frameW * qx;
+      const py = fy + frameH * qy;
+      ctx.beginPath();
+      ctx.moveTo(px - 8, py);
+      ctx.lineTo(px + 8, py);
+      ctx.moveTo(px, py - 8);
+      ctx.lineTo(px, py + 8);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawDveTransformOverlay(ctx, fx, fy, frameW, frameH, clip, playheadFrame, fpsRate) {
+  const clipLocalTimeS = clip ? Math.max(0, (playheadFrame - (clip.start_frame || 0)) / Math.max(1, fpsRate)) : 0;
+  const tf = evaluateClipTransformAtTime(clip, clipLocalTimeS);
+  const cl = (tf.crop_left_pct || 0) / 100.0;
+  const cr = (tf.crop_right_pct || 0) / 100.0;
+  const ct = (tf.crop_top_pct || 0) / 100.0;
+  const cb = (tf.crop_bottom_pct || 0) / 100.0;
+  const cropW = frameW * Math.max(0.15, 1.0 - cl - cr);
+  const cropH = frameH * Math.max(0.15, 1.0 - ct - cb);
+  const scale = tf.zoom_pct / 100.0;
+  const boxW = cropW * scale;
+  const boxH = cropH * scale;
+  const cx = fx + frameW * 0.5 + (tf.pos_x_pct / 100.0) * frameW;
+  const cy = fy + frameH * 0.5 + (tf.pos_y_pct / 100.0) * frameH;
+  const rad = (tf.rotation_deg * Math.PI) / 180.0;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+
+  const toWorld = (lx, ly) => ({
+    x: cx + lx * cosR - ly * sinR,
+    y: cy + lx * sinR + ly * cosR
+  });
+
+  const hw = boxW * 0.5;
+  const hh = boxH * 0.5;
+  const tl = toWorld(-hw, -hh);
+  const tr = toWorld(hw, -hh);
+  const br = toWorld(hw, hh);
+  const bl = toWorld(-hw, hh);
+  const topMid = toWorld(0, -hh);
+  const rightMid = toWorld(hw, 0);
+  const botMid = toWorld(0, hh);
+  const leftMid = toWorld(-hw, 0);
+  const rotStem = toWorld(0, -hh - 20);
+
+  ctx.save();
+  // Bounding box
+  ctx.strokeStyle = "#e68442";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(tl.x, tl.y);
+  ctx.lineTo(tr.x, tr.y);
+  ctx.lineTo(br.x, br.y);
+  ctx.lineTo(bl.x, bl.y);
+  ctx.closePath();
+  ctx.stroke();
+
+  // Rotation stem
+  ctx.strokeStyle = "rgba(230, 132, 66, 0.85)";
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(topMid.x, topMid.y);
+  ctx.lineTo(rotStem.x, rotStem.y);
+  ctx.stroke();
+
+  // Center crosshair
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(cx - 6, cy);
+  ctx.lineTo(cx + 6, cy);
+  ctx.moveTo(cx, cy - 6);
+  ctx.lineTo(cx, cy + 6);
+  ctx.stroke();
+
+  // Corner scale handles
+  for (const pt of [tl, tr, br, bl]) {
+    ctx.fillStyle = "#141416";
+    ctx.strokeStyle = "#e68442";
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(pt.x - 4, pt.y - 4, 8, 8);
+    ctx.strokeRect(pt.x - 4, pt.y - 4, 8, 8);
+  }
+
+  // Edge crop handles
+  for (const pt of [topMid, rightMid, botMid, leftMid]) {
+    ctx.fillStyle = "#689cff";
+    ctx.strokeStyle = "#141416";
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Rotation handle
+  ctx.fillStyle = "#e68442";
+  ctx.strokeStyle = "#141416";
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.arc(rotStem.x, rotStem.y, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Live compact HUD readout
+  const hudText = `DVE ${Math.round(tf.zoom_pct)}% | ${tf.pos_x_pct >= 0 ? "+" : ""}${Math.round(tf.pos_x_pct)},${tf.pos_y_pct >= 0 ? "+" : ""}${Math.round(tf.pos_y_pct)}`;
+  ctx.font = "700 10px ui-monospace, monospace";
+  const tw = Math.min(frameW - 16, ctx.measureText(hudText).width + 10);
+  const hx = Math.max(fx + 6, Math.min(fx + frameW - tw - 6, cx - tw * 0.5));
+  const hy = Math.max(fy + 6, Math.min(fy + frameH - 22, bl.y + 8));
+  ctx.fillStyle = "rgba(20, 20, 22, 0.88)";
+  ctx.fillRect(hx, hy, tw, 16);
+  ctx.fillStyle = "#e68442";
+  ctx.fillText(hudText, hx + 5, hy + 11.5);
+  ctx.restore();
+
+  return {
+    fx,
+    fy,
+    frameW,
+    frameH,
+    center: { x: cx, y: cy },
+    boxW,
+    boxH,
+    rad,
+    tf,
+    handles: {
+      tl,
+      tr,
+      br,
+      bl,
+      t: topMid,
+      r: rightMid,
+      b: botMid,
+      l: leftMid,
+      rot: rotStem,
+      move: { x: cx, y: cy }
+    }
+  };
 }
 
 export function drawTimelineCanvas(canvas, doc, validation, opts) {

@@ -2491,14 +2491,15 @@ def compile_transform_filter(
         return None
 
     has_kfs = params.has_keyframes()
-    if not has_kfs and params.opacity_pct <= 1e-6:
+    has_dve = params.has_dve_styling()
+    if not has_kfs and not has_dve and params.opacity_pct <= 1e-6:
         parts = ["drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill", "setsar=1"]
         if pix_fmt is not None:
             parts.append(f"format={pix_fmt}")
         return ",".join(parts)
 
     dz_graph = compile_dynamic_zoom_filter(params.dynamic_zoom, clip_duration_s=clip_duration_s)
-    if not has_kfs and not params.has_static_transform():
+    if not has_kfs and not params.has_static_transform() and not has_dve:
         assert dz_graph is not None
         return f"{dz_graph},format={pix_fmt}" if pix_fmt is not None else dz_graph
 
@@ -2508,7 +2509,21 @@ def compile_transform_filter(
     kf_rot = bool(params.keyframes.rotation_deg)
     kf_opacity = bool(params.keyframes.opacity_pct)
 
-    fg_steps: list[str] = []
+    pre_feather_steps: list[str] = []
+    if params.has_crop():
+        cl = params.crop_left_pct / 100.0
+        cr = params.crop_right_pct / 100.0
+        ct = params.crop_top_pct / 100.0
+        cb = params.crop_bottom_pct / 100.0
+        cw = max(0.15, 1.0 - cl - cr)
+        ch = max(0.15, 1.0 - ct - cb)
+        pre_feather_steps.append(
+            f"crop=w='max(2,trunc(iw*{cw:.6f}/2)*2)':"
+            f"h='max(2,trunc(ih*{ch:.6f}/2)*2)':"
+            f"x='trunc(iw*{cl:.6f}/2)*2':"
+            f"y='trunc(ih*{ct:.6f}/2)*2'"
+        )
+
     if kf_zoom:
         z_expr = _build_transform_keyframe_ffmpeg_expr(
             params.keyframes.zoom_pct,
@@ -2518,21 +2533,33 @@ def compile_transform_filter(
             hi=3.0,
             time_var="t",
         )
-        fg_steps.append(
+        pre_feather_steps.append(
             f"scale=w='trunc(iw*({z_expr})/2)*2':h='trunc(ih*({z_expr})/2)*2':eval=frame:flags=lanczos"
         )
     elif not math.isclose(params.zoom_pct, 100.0, abs_tol=1e-4):
         zoom_scale = params.zoom_pct / 100.0
-        fg_steps.append(
+        pre_feather_steps.append(
             f"scale=w=ceil(iw*{zoom_scale:.6f}/2)*2:h=ceil(ih*{zoom_scale:.6f}/2)*2:flags=lanczos"
         )
 
+    if params.border_width_px >= 0.5:
+        bw = max(1, round(params.border_width_px))
+        ff_border = f"0x{params.border_color[1:].lower()}"
+        if not params.has_crop() and not kf_zoom and params.zoom_pct >= 99.9:
+            pre_feather_steps.append(f"drawbox=x=0:y=0:w=iw:h=ih:color={ff_border}:t={bw}")
+        else:
+            pre_feather_steps.append(
+                f"pad=w=iw+{2 * bw}:h=ih+{2 * bw}:x={bw}:y={bw}:color={ff_border}"
+            )
+
+    has_feather = params.border_feather_px >= 1.0
+    post_feather_steps: list[str] = []
     has_static_rot = not kf_rot and not math.isclose(params.rotation_deg, 0.0, abs_tol=1e-4)
     has_static_opacity = not kf_opacity and not math.isclose(
         params.opacity_pct, 100.0, abs_tol=1e-4
     )
-    if kf_rot or has_static_rot or has_static_opacity:
-        fg_steps.append("format=yuva420p")
+    if (kf_rot or has_static_rot or has_static_opacity) and not has_feather:
+        post_feather_steps.append("format=yuva420p")
     if kf_rot:
         rad_expr = _build_transform_keyframe_ffmpeg_expr(
             params.keyframes.rotation_deg,
@@ -2540,13 +2567,15 @@ def compile_transform_filter(
             scale=math.pi / 180.0,
             time_var="t",
         )
-        fg_steps.append(f"rotate='{rad_expr}':ow=iw:oh=ih:c=black@0")
+        post_feather_steps.append(f"rotate='{rad_expr}':ow=iw:oh=ih:c=black@0")
     elif has_static_rot:
         rad = params.rotation_deg * math.pi / 180.0
-        fg_steps.append(f"rotate={rad:.6f}:ow=rotw({rad:.6f}):oh=roth({rad:.6f}):c=black@0")
+        post_feather_steps.append(
+            f"rotate={rad:.6f}:ow=rotw({rad:.6f}):oh=roth({rad:.6f}):c=black@0"
+        )
     if has_static_opacity:
         alpha = params.opacity_pct / 100.0
-        fg_steps.append(f"colorchannelmixer=aa={alpha:.4f}")
+        post_feather_steps.append(f"colorchannelmixer=aa={alpha:.4f}")
 
     if kf_pos_x:
         dx_expr = _build_transform_keyframe_ffmpeg_expr(
@@ -2576,22 +2605,96 @@ def compile_transform_filter(
         dy = params.pos_y_pct / 100.0
         y_expr = "(H-h)/2" if math.isclose(dy, 0.0, abs_tol=1e-6) else f"(H-h)/2+H*({dy:.4f})"
 
-    fg_chain = ",".join(fg_steps)
-    needs_overlay = bool(fg_chain) or kf_pos_x or kf_pos_y or params.has_static_transform()
+    pre_chain = ",".join(pre_feather_steps)
+    post_chain = ",".join(post_feather_steps)
+    has_shadow = params.has_drop_shadow()
+    needs_overlay = (
+        bool(pre_chain)
+        or bool(post_chain)
+        or has_feather
+        or has_shadow
+        or kf_pos_x
+        or kf_pos_y
+        or params.has_static_transform()
+    )
+
     if needs_overlay:
-        if fg_chain:
+        fg_segments: list[str] = []
+        if has_feather:
+            f_px = max(2, round(params.border_feather_px))
+            sigma = round(max(1.0, f_px * 0.45), 2)
+            lead = f"{pre_chain}," if pre_chain else ""
+            feather_graph = (
+                f"[xf_fg]{lead}format=yuva420p,split[xf_fc][xf_fm];"
+                f"[xf_fm]format=gray,"
+                f"drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill,"
+                f"drawbox=x=0:y=0:w=iw:h='min(ih/4,{f_px})':color=black:t=fill,"
+                f"drawbox=x=0:y='ih-min(ih/4,{f_px})':w=iw:h='min(ih/4,{f_px})':color=black:t=fill,"
+                f"drawbox=x=0:y=0:w='min(iw/4,{f_px})':h=ih:color=black:t=fill,"
+                f"drawbox=x='iw-min(iw/4,{f_px})':y=0:w='min(iw/4,{f_px})':h=ih:color=black:t=fill,"
+                f"gblur=sigma={sigma:.2f}:steps=2[xf_fa];"
+                f"[xf_fc][xf_fa]alphamerge"
+            )
+            if post_chain:
+                feather_graph += f",{post_chain}"
+            fg_segments.append(feather_graph)
+        else:
+            linear_chain = ",".join([s for s in (pre_chain, post_chain) if s])
+            if linear_chain:
+                fg_segments.append(f"[xf_fg]{linear_chain}")
+            else:
+                fg_segments.append("[xf_fg]null")
+
+        fg_built = ";".join(fg_segments)
+        if has_shadow:
+            sh_alpha = round(params.shadow_opacity_pct / 100.0, 4)
+            sh_blur = round(params.shadow_blur_px, 2)
+            sh_pad = max(2, math.ceil(sh_blur * 2.0))
+            if sh_pad % 2 != 0:
+                sh_pad += 1
+            sr = int(params.shadow_color[1:3], 16)
+            sg = int(params.shadow_color[3:5], 16)
+            sb = int(params.shadow_color[5:7], 16)
+            dx_sh = round(params.shadow_offset_x_px)
+            dy_sh = round(params.shadow_offset_y_px)
+            raw_x_inner = x_expr.strip("'")
+            raw_y_inner = y_expr.strip("'")
+            sh_x_expr = f"'{raw_x_inner}{dx_sh:+d}'" if dx_sh != 0 else x_expr
+            sh_y_expr = f"'{raw_y_inner}{dy_sh:+d}'" if dy_sh != 0 else y_expr
+            sh_blur_part = f",gblur=sigma={sh_blur:.2f}:steps=2" if sh_blur >= 0.5 else ""
             graph = (
                 "split[xf_bg][xf_fg];"
                 "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
-                f"[xf_fg]{fg_chain}[xf_ov];"
-                f"[xf_blk][xf_ov]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+                f"{fg_built},split[xf_fgm][xf_shsrc];"
+                f"[xf_shsrc]format=rgba,lutrgb=r={sr}:g={sg}:b={sb},"
+                f"colorchannelmixer=aa={sh_alpha:.4f},"
+                f"pad=w=iw+{2 * sh_pad}:h=ih+{2 * sh_pad}:x={sh_pad}:y={sh_pad}:color=black@0"
+                f"{sh_blur_part}[xf_sh];"
+                f"[xf_blk][xf_sh]overlay=x={sh_x_expr}:y={sh_y_expr}:shortest=1[xf_wsh];"
+                f"[xf_wsh][xf_fgm]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
             )
         else:
-            graph = (
-                "split[xf_bg][xf_fg];"
-                "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
-                f"[xf_blk][xf_fg]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
-            )
+            linear_only = ",".join([s for s in (pre_chain, post_chain) if s])
+            if has_feather:
+                graph = (
+                    "split[xf_bg][xf_fg];"
+                    "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
+                    f"{fg_built}[xf_ov];"
+                    f"[xf_blk][xf_ov]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+                )
+            elif linear_only:
+                graph = (
+                    "split[xf_bg][xf_fg];"
+                    "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
+                    f"[xf_fg]{linear_only}[xf_ov];"
+                    f"[xf_blk][xf_ov]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+                )
+            else:
+                graph = (
+                    "split[xf_bg][xf_fg];"
+                    "[xf_bg]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[xf_blk];"
+                    f"[xf_blk][xf_fg]overlay=x={x_expr}:y={y_expr}:shortest=1,setsar=1"
+                )
     else:
         graph = ""
 

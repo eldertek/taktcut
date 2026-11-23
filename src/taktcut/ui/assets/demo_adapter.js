@@ -6,6 +6,20 @@ import {
   LOUDNESS_PRESET_LUFS,
   PLANAR_TRACKER_PRESETS_CLIENT,
   STABILIZER_PRESETS_CLIENT,
+  TRANSFORM_BORDER_FEATHER_MAX,
+  TRANSFORM_BORDER_FEATHER_MIN,
+  TRANSFORM_BORDER_WIDTH_MAX,
+  TRANSFORM_BORDER_WIDTH_MIN,
+  TRANSFORM_CROP_MAX,
+  TRANSFORM_CROP_MIN,
+  TRANSFORM_CROP_SUM_MAX,
+  TRANSFORM_PRESETS,
+  TRANSFORM_SHADOW_BLUR_MAX,
+  TRANSFORM_SHADOW_BLUR_MIN,
+  TRANSFORM_SHADOW_OFFSET_MAX,
+  TRANSFORM_SHADOW_OFFSET_MIN,
+  TRANSFORM_SHADOW_OPACITY_MAX,
+  TRANSFORM_SHADOW_OPACITY_MIN,
   TRANSITION_PRESETS,
   bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
@@ -2376,6 +2390,22 @@ export function createApiClient() {
         return compileRetimeFilterClient(payload.retime_params || payload);
       }
       return requestJson("/api/retime/compile", { method: "POST", body: payload });
+    },
+    async getTransformPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: TRANSFORM_PRESETS,
+          bounds: {
+            crop_pct: { min: TRANSFORM_CROP_MIN, max: TRANSFORM_CROP_MAX, sum_max: TRANSFORM_CROP_SUM_MAX },
+            border_width_px: { min: TRANSFORM_BORDER_WIDTH_MIN, max: TRANSFORM_BORDER_WIDTH_MAX },
+            border_feather_px: { min: TRANSFORM_BORDER_FEATHER_MIN, max: TRANSFORM_BORDER_FEATHER_MAX },
+            shadow_opacity_pct: { min: TRANSFORM_SHADOW_OPACITY_MIN, max: TRANSFORM_SHADOW_OPACITY_MAX },
+            shadow_blur_px: { min: TRANSFORM_SHADOW_BLUR_MIN, max: TRANSFORM_SHADOW_BLUR_MAX },
+            shadow_offset_px: { min: TRANSFORM_SHADOW_OFFSET_MIN, max: TRANSFORM_SHADOW_OFFSET_MAX }
+          }
+        };
+      }
+      return requestJson("/api/transform/presets");
     },
     async compileTransformFilter(payload) {
       if (resolvedMode === "static-demo") {

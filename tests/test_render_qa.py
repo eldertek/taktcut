@@ -2309,3 +2309,88 @@ def test_stabilizer_and_planar_tracker_render_plan_and_real_ffmpeg(tmp_path: Pat
     probe = probe_media(out)
     assert probe.width == 640
     assert probe.height == 360
+
+
+def test_dve_pip_crop_feather_border_shadow_and_real_ffmpeg(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    from taktcut.models import (
+        DVE_LAYOUT_PRESETS,
+        ClipTransformParams,
+        apply_dve_layout_preset,
+        get_dve_layout_preset,
+        list_dve_layout_presets,
+    )
+    from taktcut.render import compile_transform_filter, compile_transform_filter_result
+
+    presets = list_dve_layout_presets()
+    assert len(presets) == len(DVE_LAYOUT_PRESETS) == 13
+    pip_preset = get_dve_layout_preset("pip_bottom_right")
+    assert pip_preset.params.zoom_pct == 28.0
+    assert pip_preset.params.border_width_px == 3.0
+    assert pip_preset.params.shadow_opacity_pct == 55.0
+
+    identity_tf = ClipTransformParams()
+    assert identity_tf.is_identity() is True
+    assert identity_tf.has_dve_styling() is False
+    assert compile_transform_filter(identity_tf) is None
+
+    # Validation checks: crop sum > 85, bad hex color, non-finite float
+    with pytest.raises(ValidationError):
+        ClipTransformParams(crop_left_pct=45.0, crop_right_pct=45.0)
+    with pytest.raises(ValidationError):
+        ClipTransformParams(crop_top_pct=45.0, crop_bottom_pct=45.0)
+    with pytest.raises(ValidationError):
+        ClipTransformParams(border_color="red; rm -rf /")
+    with pytest.raises(ValidationError):
+        ClipTransformParams(shadow_color="#12345z")
+    with pytest.raises(ValidationError):
+        ClipTransformParams(border_feather_px=float("nan"))
+
+    # Compile split_2x1_left -> crop + pad border + overlay
+    split_tf = apply_dve_layout_preset("split_2x1_left")
+    split_res = compile_transform_filter_result(split_tf, pix_fmt="yuv420p")
+    assert split_res.is_identity is False
+    assert "crop=w=" in split_res.filtergraph
+    assert "pad=w=iw+4:h=ih+4:x=2:y=2:color=0x141416" in split_res.filtergraph
+    assert "overlay=x=(W-w)/2+W*(-0.2500)" in split_res.filtergraph
+
+    # Full-frame border uses inset drawbox rather than pad
+    full_border_tf = ClipTransformParams(border_width_px=4.0, border_color="#00e5ff")
+    full_border_fg = compile_transform_filter(full_border_tf, pix_fmt="yuv420p")
+    assert full_border_fg is not None
+    assert "drawbox=x=0:y=0:w=iw:h=ih:color=0x00e5ff:t=4" in full_border_fg
+
+    # Soft feather PiP + drop shadow uses alphamerge + lutrgb + gblur shadow
+    soft_pip = apply_dve_layout_preset("pip_soft_callout")
+    soft_fg = compile_transform_filter(soft_pip, pix_fmt="yuv420p")
+    assert soft_fg is not None
+    assert "alphamerge" in soft_fg
+    assert "lutrgb=r=0:g=0:b=0" in soft_fg
+    assert "gblur=sigma=16.00:steps=2" in soft_fg
+
+    # Real FFmpeg render execution with DVE PiP + border + feather + shadow
+    src = tmp_path / "dve_pip_src.mp4"
+    _generate_synthetic_clip(src)
+
+    for pid, fname in (
+        ("pip_bottom_right", "dve_pip_br.mp4"),
+        ("pip_soft_callout", "dve_pip_soft.mp4"),
+        ("split_2x1_left", "dve_split_left.mp4"),
+    ):
+        out = tmp_path / fname
+        plan = build_render_plan(
+            input_path=src,
+            output_path=out,
+            profile=RenderProfile.WEB_H264,
+            fps=RationalFrameRate(num=25, den=1),
+            transform_params=apply_dve_layout_preset(pid),
+            prefer_hw=False,
+        )
+        assert plan.video_filter is not None
+        exec_res = execute_render_plan(plan)
+        assert exec_res.success is True, f"{pid} failed: {exec_res.stderr_tail}"
+        assert exec_res.bytes_written > 0
+        probe = probe_media(out)
+        assert probe.width == 640
+        assert probe.height == 360

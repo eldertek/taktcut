@@ -64,6 +64,17 @@ import {
   TRACK_VOLUME_DB_MAX,
   TRACK_VOLUME_DB_MIN,
   TRANSFORM_BEZIER_PRESETS,
+  TRANSFORM_BORDER_COLOR_DEFAULT,
+  TRANSFORM_BORDER_FEATHER_DEFAULT,
+  TRANSFORM_BORDER_FEATHER_MAX,
+  TRANSFORM_BORDER_FEATHER_MIN,
+  TRANSFORM_BORDER_WIDTH_DEFAULT,
+  TRANSFORM_BORDER_WIDTH_MAX,
+  TRANSFORM_BORDER_WIDTH_MIN,
+  TRANSFORM_CROP_DEFAULT,
+  TRANSFORM_CROP_MAX,
+  TRANSFORM_CROP_MIN,
+  TRANSFORM_CROP_SUM_MAX,
   TRANSFORM_KEYFRAME_PARAMS,
   TRANSFORM_OPACITY_DEFAULT,
   TRANSFORM_OPACITY_MAX,
@@ -75,6 +86,17 @@ import {
   TRANSFORM_ROT_DEFAULT,
   TRANSFORM_ROT_MAX,
   TRANSFORM_ROT_MIN,
+  TRANSFORM_SHADOW_BLUR_DEFAULT,
+  TRANSFORM_SHADOW_BLUR_MAX,
+  TRANSFORM_SHADOW_BLUR_MIN,
+  TRANSFORM_SHADOW_COLOR_DEFAULT,
+  TRANSFORM_SHADOW_OFFSET_MAX,
+  TRANSFORM_SHADOW_OFFSET_MIN,
+  TRANSFORM_SHADOW_OFFSET_X_DEFAULT,
+  TRANSFORM_SHADOW_OFFSET_Y_DEFAULT,
+  TRANSFORM_SHADOW_OPACITY_DEFAULT,
+  TRANSFORM_SHADOW_OPACITY_MAX,
+  TRANSFORM_SHADOW_OPACITY_MIN,
   TRANSFORM_ZOOM_DEFAULT,
   TRANSFORM_ZOOM_MAX,
   TRANSFORM_ZOOM_MIN,
@@ -141,6 +163,9 @@ import {
   getTransformKeyframeCount,
   getTransformPresetClient,
   getTransitionPresetName,
+  hasClipDveBorderOrFeather,
+  hasClipDveCrop,
+  hasClipDveDropShadow,
   hasSplittableClipAtFrame,
   hasTransformKeyframes,
   insertClipAtFrameInDocument,
@@ -169,6 +194,7 @@ import {
   normalizeMarkerColor,
   normalizeMasterBusState,
   normalizePowerWindow,
+  normalizeTransformHexColor,
   normalizeRetimeProcess,
   normalizeRetimeRampPoints,
   normalizeRetimeRampPreset,
@@ -479,6 +505,9 @@ const state = {
   planarTrackerTab: "planar",
   planarTrackerOverlay: true,
   planarTrackerDrag: null,
+  dveOverlay: true,
+  dveSplitGrid: false,
+  dveDrag: null,
   planarTracker: {
     enabled: false,
     preset: "screen_insert",
@@ -1018,6 +1047,7 @@ function updatePlayheadReadout() {
 function redrawActiveCanvases() {
   const activeColorChain = getActiveColorChainState();
   if (state.activeTab === "timeline") {
+    const selVideoCtx = getSelectedClipLocalContext();
     drawProgramMonitorCanvas(
       byId("timeline-program-canvas"),
       state.timelineDoc,
@@ -1034,7 +1064,10 @@ function redrawActiveCanvases() {
         reframe: { ...state.reframe },
         filmGrain: { ...state.filmGrain },
         vignette: { ...state.vignette },
-        showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay)
+        showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay),
+        dveOverlay: Boolean(state.dveOverlay),
+        dveSplitGrid: Boolean(state.dveSplitGrid),
+        selectedDveClip: selVideoCtx ? selVideoCtx.clip : null
       }
     );
     const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
@@ -2551,6 +2584,32 @@ function renderTimelineTransformInspector() {
   const opNum = byId("clip-transform-opacity-num");
   const opRst = byId("btn-clip-transform-opacity-reset");
   const dzSel = byId("clip-transform-dynamic-zoom");
+  const dveCropBadge = byId("clip-dve-crop-badge");
+  const dveCropRstBtn = byId("btn-clip-dve-crop-reset");
+  const cropLeftRange = byId("clip-dve-crop-left-range");
+  const cropLeftNum = byId("clip-dve-crop-left-num");
+  const cropRightRange = byId("clip-dve-crop-right-range");
+  const cropRightNum = byId("clip-dve-crop-right-num");
+  const cropTopRange = byId("clip-dve-crop-top-range");
+  const cropTopNum = byId("clip-dve-crop-top-num");
+  const cropBottomRange = byId("clip-dve-crop-bottom-range");
+  const cropBottomNum = byId("clip-dve-crop-bottom-num");
+  const borderWidthRange = byId("clip-dve-border-width-range");
+  const borderWidthNum = byId("clip-dve-border-width-num");
+  const borderColorInput = byId("clip-dve-border-color");
+  const borderFeatherRange = byId("clip-dve-border-feather-range");
+  const borderFeatherNum = byId("clip-dve-border-feather-num");
+  const dveShadowBadge = byId("clip-dve-shadow-badge");
+  const dveShadowRstBtn = byId("btn-clip-dve-shadow-reset");
+  const shadowOpacityRange = byId("clip-dve-shadow-opacity-range");
+  const shadowOpacityNum = byId("clip-dve-shadow-opacity-num");
+  const shadowColorInput = byId("clip-dve-shadow-color");
+  const shadowBlurRange = byId("clip-dve-shadow-blur-range");
+  const shadowBlurNum = byId("clip-dve-shadow-blur-num");
+  const shadowOffXRange = byId("clip-dve-shadow-offx-range");
+  const shadowOffXNum = byId("clip-dve-shadow-offx-num");
+  const shadowOffYRange = byId("clip-dve-shadow-offy-range");
+  const shadowOffYNum = byId("clip-dve-shadow-offy-num");
   const presetBtns = document.querySelectorAll(".transform-preset-btn");
   const kfDiamondBtns = document.querySelectorAll(".kf-diamond-btn");
   const graphParamBtns = document.querySelectorAll(".transform-graph-param-btn");
@@ -2592,6 +2651,30 @@ function renderTimelineTransformInspector() {
     opNum,
     opRst,
     dzSel,
+    dveCropRstBtn,
+    cropLeftRange,
+    cropLeftNum,
+    cropRightRange,
+    cropRightNum,
+    cropTopRange,
+    cropTopNum,
+    cropBottomRange,
+    cropBottomNum,
+    borderWidthRange,
+    borderWidthNum,
+    borderColorInput,
+    borderFeatherRange,
+    borderFeatherNum,
+    dveShadowRstBtn,
+    shadowOpacityRange,
+    shadowOpacityNum,
+    shadowColorInput,
+    shadowBlurRange,
+    shadowBlurNum,
+    shadowOffXRange,
+    shadowOffXNum,
+    shadowOffYRange,
+    shadowOffYNum,
     kfPrevBtn,
     kfToggleBtn,
     kfNextBtn,
@@ -2627,6 +2710,31 @@ function renderTimelineTransformInspector() {
     if (opRange) opRange.value = String(TRANSFORM_OPACITY_DEFAULT);
     if (opNum && document.activeElement !== opNum) opNum.value = TRANSFORM_OPACITY_DEFAULT.toFixed(1);
     if (dzSel) dzSel.value = DYNAMIC_ZOOM_DEFAULT;
+    for (const [rEl, nEl, defVal] of [
+      [cropLeftRange, cropLeftNum, TRANSFORM_CROP_DEFAULT],
+      [cropRightRange, cropRightNum, TRANSFORM_CROP_DEFAULT],
+      [cropTopRange, cropTopNum, TRANSFORM_CROP_DEFAULT],
+      [cropBottomRange, cropBottomNum, TRANSFORM_CROP_DEFAULT],
+      [borderWidthRange, borderWidthNum, TRANSFORM_BORDER_WIDTH_DEFAULT],
+      [borderFeatherRange, borderFeatherNum, TRANSFORM_BORDER_FEATHER_DEFAULT],
+      [shadowOpacityRange, shadowOpacityNum, TRANSFORM_SHADOW_OPACITY_DEFAULT],
+      [shadowBlurRange, shadowBlurNum, TRANSFORM_SHADOW_BLUR_DEFAULT],
+      [shadowOffXRange, shadowOffXNum, TRANSFORM_SHADOW_OFFSET_X_DEFAULT],
+      [shadowOffYRange, shadowOffYNum, TRANSFORM_SHADOW_OFFSET_Y_DEFAULT]
+    ]) {
+      if (rEl) rEl.value = String(defVal);
+      if (nEl && document.activeElement !== nEl) nEl.value = defVal.toFixed(1);
+    }
+    if (borderColorInput) borderColorInput.value = TRANSFORM_BORDER_COLOR_DEFAULT;
+    if (shadowColorInput) shadowColorInput.value = TRANSFORM_SHADOW_COLOR_DEFAULT;
+    if (dveCropBadge) {
+      dveCropBadge.textContent = "OFF";
+      dveCropBadge.className = "nle-tag mono";
+    }
+    if (dveShadowBadge) {
+      dveShadowBadge.textContent = "OFF";
+      dveShadowBadge.className = "nle-tag mono";
+    }
     for (const btn of presetBtns) {
       btn.classList.remove("is-active");
       btn.setAttribute("aria-pressed", "false");
@@ -2672,6 +2780,46 @@ function renderTimelineTransformInspector() {
   if (opRange) opRange.value = String(evalTf.opacity_pct);
   if (opNum && document.activeElement !== opNum) opNum.value = evalTf.opacity_pct.toFixed(1);
   if (dzSel) dzSel.value = norm.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT;
+  for (const [rEl, nEl, curVal] of [
+    [cropLeftRange, cropLeftNum, norm.crop_left_pct],
+    [cropRightRange, cropRightNum, norm.crop_right_pct],
+    [cropTopRange, cropTopNum, norm.crop_top_pct],
+    [cropBottomRange, cropBottomNum, norm.crop_bottom_pct],
+    [borderWidthRange, borderWidthNum, norm.border_width_px],
+    [borderFeatherRange, borderFeatherNum, norm.border_feather_px],
+    [shadowOpacityRange, shadowOpacityNum, norm.shadow_opacity_pct],
+    [shadowBlurRange, shadowBlurNum, norm.shadow_blur_px],
+    [shadowOffXRange, shadowOffXNum, norm.shadow_offset_x_px],
+    [shadowOffYRange, shadowOffYNum, norm.shadow_offset_y_px]
+  ]) {
+    if (rEl) rEl.value = String(curVal);
+    if (nEl && document.activeElement !== nEl) nEl.value = Number(curVal).toFixed(1);
+  }
+  if (borderColorInput && document.activeElement !== borderColorInput) {
+    borderColorInput.value = norm.border_color || TRANSFORM_BORDER_COLOR_DEFAULT;
+  }
+  if (shadowColorInput && document.activeElement !== shadowColorInput) {
+    shadowColorInput.value = norm.shadow_color || TRANSFORM_SHADOW_COLOR_DEFAULT;
+  }
+  const hasCrop = hasClipDveCrop(norm);
+  const hasBdrFth = hasClipDveBorderOrFeather(norm);
+  if (dveCropBadge) {
+    const cParts = [];
+    if (hasCrop) cParts.push("CROP");
+    if (norm.border_width_px >= 0.5) cParts.push(`${Math.round(norm.border_width_px)}px`);
+    if (norm.border_feather_px >= 1.0) cParts.push(`F${Math.round(norm.border_feather_px)}`);
+    dveCropBadge.textContent = cParts.length > 0 ? cParts.join(" | ") : "OFF";
+    dveCropBadge.className = hasCrop || hasBdrFth ? "nle-tag mono is-active" : "nle-tag mono";
+  }
+  if (dveCropRstBtn) dveCropRstBtn.disabled = !(hasCrop || hasBdrFth);
+  const hasShadow = hasClipDveDropShadow(norm);
+  if (dveShadowBadge) {
+    dveShadowBadge.textContent = hasShadow
+      ? `${Math.round(norm.shadow_opacity_pct)}% | ${Math.round(norm.shadow_blur_px)}px`
+      : "OFF";
+    dveShadowBadge.className = hasShadow ? "nle-tag mono is-active" : "nle-tag mono";
+  }
+  if (dveShadowRstBtn) dveShadowRstBtn.disabled = !hasShadow;
 
   for (const dBtn of kfDiamondBtns) {
     const param = dBtn.getAttribute("data-kf-param") || "";
@@ -2787,6 +2935,13 @@ function renderTimelineTransformInspector() {
         Math.abs(preset.pos_y_pct - norm.pos_y_pct) < 0.1 &&
         Math.abs(preset.rotation_deg - norm.rotation_deg) < 0.1 &&
         Math.abs(preset.opacity_pct - norm.opacity_pct) < 0.1 &&
+        Math.abs((preset.crop_left_pct || 0) - norm.crop_left_pct) < 0.1 &&
+        Math.abs((preset.crop_right_pct || 0) - norm.crop_right_pct) < 0.1 &&
+        Math.abs((preset.crop_top_pct || 0) - norm.crop_top_pct) < 0.1 &&
+        Math.abs((preset.crop_bottom_pct || 0) - norm.crop_bottom_pct) < 0.1 &&
+        Math.abs((preset.border_width_px || 0) - norm.border_width_px) < 0.1 &&
+        Math.abs((preset.border_feather_px || 0) - norm.border_feather_px) < 0.1 &&
+        Math.abs((preset.shadow_opacity_pct || 0) - norm.shadow_opacity_pct) < 0.1 &&
         (preset.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT) === (norm.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT)
     );
     btn.classList.toggle("is-active", isMatch);
@@ -11726,6 +11881,18 @@ function wireClipTransformInspector() {
           pos_y_pct: preset.pos_y_pct,
           rotation_deg: preset.rotation_deg,
           opacity_pct: preset.opacity_pct,
+          crop_left_pct: preset.crop_left_pct ?? TRANSFORM_CROP_DEFAULT,
+          crop_right_pct: preset.crop_right_pct ?? TRANSFORM_CROP_DEFAULT,
+          crop_top_pct: preset.crop_top_pct ?? TRANSFORM_CROP_DEFAULT,
+          crop_bottom_pct: preset.crop_bottom_pct ?? TRANSFORM_CROP_DEFAULT,
+          border_width_px: preset.border_width_px ?? TRANSFORM_BORDER_WIDTH_DEFAULT,
+          border_color: preset.border_color ?? TRANSFORM_BORDER_COLOR_DEFAULT,
+          border_feather_px: preset.border_feather_px ?? TRANSFORM_BORDER_FEATHER_DEFAULT,
+          shadow_opacity_pct: preset.shadow_opacity_pct ?? TRANSFORM_SHADOW_OPACITY_DEFAULT,
+          shadow_blur_px: preset.shadow_blur_px ?? TRANSFORM_SHADOW_BLUR_DEFAULT,
+          shadow_offset_x_px: preset.shadow_offset_x_px ?? TRANSFORM_SHADOW_OFFSET_X_DEFAULT,
+          shadow_offset_y_px: preset.shadow_offset_y_px ?? TRANSFORM_SHADOW_OFFSET_Y_DEFAULT,
+          shadow_color: preset.shadow_color ?? TRANSFORM_SHADOW_COLOR_DEFAULT,
           dynamic_zoom: preset.dynamic_zoom || DYNAMIC_ZOOM_DEFAULT,
           keyframes: createEmptyTransformKeyframes()
         }
@@ -12192,6 +12359,18 @@ function wireClipTransformInspector() {
           pos_y_pct: TRANSFORM_POS_DEFAULT,
           rotation_deg: TRANSFORM_ROT_DEFAULT,
           opacity_pct: TRANSFORM_OPACITY_DEFAULT,
+          crop_left_pct: TRANSFORM_CROP_DEFAULT,
+          crop_right_pct: TRANSFORM_CROP_DEFAULT,
+          crop_top_pct: TRANSFORM_CROP_DEFAULT,
+          crop_bottom_pct: TRANSFORM_CROP_DEFAULT,
+          border_width_px: TRANSFORM_BORDER_WIDTH_DEFAULT,
+          border_color: TRANSFORM_BORDER_COLOR_DEFAULT,
+          border_feather_px: TRANSFORM_BORDER_FEATHER_DEFAULT,
+          shadow_opacity_pct: TRANSFORM_SHADOW_OPACITY_DEFAULT,
+          shadow_blur_px: TRANSFORM_SHADOW_BLUR_DEFAULT,
+          shadow_offset_x_px: TRANSFORM_SHADOW_OFFSET_X_DEFAULT,
+          shadow_offset_y_px: TRANSFORM_SHADOW_OFFSET_Y_DEFAULT,
+          shadow_color: TRANSFORM_SHADOW_COLOR_DEFAULT,
           dynamic_zoom: DYNAMIC_ZOOM_DEFAULT,
           keyframes: createEmptyTransformKeyframes()
         }
@@ -12201,6 +12380,360 @@ function wireClipTransformInspector() {
         commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
       }
     });
+  }
+
+  // DVE Crop, Feather Border & Drop Shadow controls
+  const dveFields = [
+    { field: "crop_left_pct", rangeId: "clip-dve-crop-left-range", numId: "clip-dve-crop-left-num", min: TRANSFORM_CROP_MIN, max: TRANSFORM_CROP_MAX },
+    { field: "crop_right_pct", rangeId: "clip-dve-crop-right-range", numId: "clip-dve-crop-right-num", min: TRANSFORM_CROP_MIN, max: TRANSFORM_CROP_MAX },
+    { field: "crop_top_pct", rangeId: "clip-dve-crop-top-range", numId: "clip-dve-crop-top-num", min: TRANSFORM_CROP_MIN, max: TRANSFORM_CROP_MAX },
+    { field: "crop_bottom_pct", rangeId: "clip-dve-crop-bottom-range", numId: "clip-dve-crop-bottom-num", min: TRANSFORM_CROP_MIN, max: TRANSFORM_CROP_MAX },
+    { field: "border_width_px", rangeId: "clip-dve-border-width-range", numId: "clip-dve-border-width-num", min: TRANSFORM_BORDER_WIDTH_MIN, max: TRANSFORM_BORDER_WIDTH_MAX },
+    { field: "border_feather_px", rangeId: "clip-dve-border-feather-range", numId: "clip-dve-border-feather-num", min: TRANSFORM_BORDER_FEATHER_MIN, max: TRANSFORM_BORDER_FEATHER_MAX },
+    { field: "shadow_opacity_pct", rangeId: "clip-dve-shadow-opacity-range", numId: "clip-dve-shadow-opacity-num", min: TRANSFORM_SHADOW_OPACITY_MIN, max: TRANSFORM_SHADOW_OPACITY_MAX },
+    { field: "shadow_blur_px", rangeId: "clip-dve-shadow-blur-range", numId: "clip-dve-shadow-blur-num", min: TRANSFORM_SHADOW_BLUR_MIN, max: TRANSFORM_SHADOW_BLUR_MAX },
+    { field: "shadow_offset_x_px", rangeId: "clip-dve-shadow-offx-range", numId: "clip-dve-shadow-offx-num", min: TRANSFORM_SHADOW_OFFSET_MIN, max: TRANSFORM_SHADOW_OFFSET_MAX },
+    { field: "shadow_offset_y_px", rangeId: "clip-dve-shadow-offy-range", numId: "clip-dve-shadow-offy-num", min: TRANSFORM_SHADOW_OFFSET_MIN, max: TRANSFORM_SHADOW_OFFSET_MAX }
+  ];
+
+  const livePatchDve = (patch, baseDocOverride = null, baseRefOverride = null) => {
+    const info = getSelectedClipTrack();
+    if (!info || info.clip.media_type === "audio") return { changed: false };
+    const docSrc = baseDocOverride || state.timelineDoc;
+    const ref = baseRefOverride || info.ref;
+    const res = updateClipTransformInDocument(docSrc, ref.trackKind, ref.trackIndex, ref.clipIndex, patch);
+    if (!res.changed) return res;
+    state.timelineDoc = res.doc;
+    state.timelineSelected = { kind: "clip", data: res.clip };
+    renderTimelineSelection();
+    if (state.activeTab === "timeline") redrawActiveCanvases();
+    return res;
+  };
+
+  for (const spec of dveFields) {
+    const rangeEl = byId(spec.rangeId);
+    const numEl = byId(spec.numId);
+    let dragSnap = null;
+    if (rangeEl) {
+      rangeEl.addEventListener("pointerdown", () => {
+        dragSnap = captureTimelineSnapshot();
+      });
+      rangeEl.addEventListener("input", () => {
+        const val = Number.parseFloat(rangeEl.value);
+        if (!Number.isFinite(val)) return;
+        if (!dragSnap) dragSnap = captureTimelineSnapshot();
+        livePatchDve({ [spec.field]: val });
+      });
+      rangeEl.addEventListener("change", () => {
+        const val = Number.parseFloat(rangeEl.value);
+        if (Number.isFinite(val) && dragSnap) {
+          pushUndoSnapshot(dragSnap);
+          updateTimelineToolbarUI();
+        }
+        dragSnap = null;
+      });
+    }
+    if (numEl) {
+      numEl.addEventListener("focus", () => {
+        dragSnap = captureTimelineSnapshot();
+      });
+      numEl.addEventListener("input", () => {
+        const val = Number.parseFloat(numEl.value);
+        if (Number.isFinite(val) && val >= spec.min && val <= spec.max) {
+          if (!dragSnap) dragSnap = captureTimelineSnapshot();
+          livePatchDve({ [spec.field]: val });
+        }
+      });
+      numEl.addEventListener("change", () => {
+        const raw = Number.parseFloat(numEl.value);
+        const info = getSelectedClipTrack();
+        if (!info || info.clip.media_type === "audio") return;
+        if (!Number.isFinite(raw)) {
+          renderTimelineTransformInspector();
+          dragSnap = null;
+          return;
+        }
+        const clamped = Math.min(spec.max, Math.max(spec.min, raw));
+        const baseDoc = dragSnap && dragSnap.doc ? dragSnap.doc : state.timelineDoc;
+        const baseRef =
+          dragSnap && dragSnap.selected && dragSnap.selected.kind === "clip"
+            ? findClipIndex(baseDoc, dragSnap.selected.data)
+            : info.ref;
+        if (baseRef) {
+          const res = livePatchDve({ [spec.field]: clamped }, baseDoc, baseRef);
+          if (res.changed) {
+            commitTimelineMutation(res.doc, { kind: "clip", data: res.clip }, dragSnap);
+          } else {
+            renderTimelineSelection();
+          }
+        }
+        numEl.value = clamped.toFixed(1);
+        dragSnap = null;
+      });
+    }
+  }
+
+  for (const [elId, field, defHex] of [
+    ["clip-dve-border-color", "border_color", TRANSFORM_BORDER_COLOR_DEFAULT],
+    ["clip-dve-shadow-color", "shadow_color", TRANSFORM_SHADOW_COLOR_DEFAULT]
+  ]) {
+    const colorEl = byId(elId);
+    let colorSnap = null;
+    if (colorEl) {
+      colorEl.addEventListener("pointerdown", () => {
+        colorSnap = captureTimelineSnapshot();
+      });
+      colorEl.addEventListener("input", () => {
+        if (!colorSnap) colorSnap = captureTimelineSnapshot();
+        livePatchDve({ [field]: normalizeTransformHexColor(colorEl.value, defHex) });
+      });
+      colorEl.addEventListener("change", () => {
+        const hex = normalizeTransformHexColor(colorEl.value, defHex);
+        const info = getSelectedClipTrack();
+        if (!info || info.clip.media_type === "audio") {
+          colorSnap = null;
+          return;
+        }
+        if (colorSnap) {
+          pushUndoSnapshot(colorSnap);
+          updateTimelineToolbarUI();
+        } else {
+          const res = livePatchDve({ [field]: hex });
+          if (res.changed) {
+            commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+          }
+        }
+        colorSnap = null;
+      });
+    }
+  }
+
+  const dveCropRstBtn = byId("btn-clip-dve-crop-reset");
+  if (dveCropRstBtn) {
+    dveCropRstBtn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info || info.clip.media_type === "audio") return;
+      const res = updateClipTransformInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        {
+          crop_left_pct: TRANSFORM_CROP_DEFAULT,
+          crop_right_pct: TRANSFORM_CROP_DEFAULT,
+          crop_top_pct: TRANSFORM_CROP_DEFAULT,
+          crop_bottom_pct: TRANSFORM_CROP_DEFAULT,
+          border_width_px: TRANSFORM_BORDER_WIDTH_DEFAULT,
+          border_color: TRANSFORM_BORDER_COLOR_DEFAULT,
+          border_feather_px: TRANSFORM_BORDER_FEATHER_DEFAULT
+        }
+      );
+      if (res.changed) commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+    });
+  }
+
+  const dveShadowRstBtn = byId("btn-clip-dve-shadow-reset");
+  if (dveShadowRstBtn) {
+    dveShadowRstBtn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info || info.clip.media_type === "audio") return;
+      const res = updateClipTransformInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        {
+          shadow_opacity_pct: TRANSFORM_SHADOW_OPACITY_DEFAULT,
+          shadow_blur_px: TRANSFORM_SHADOW_BLUR_DEFAULT,
+          shadow_offset_x_px: TRANSFORM_SHADOW_OFFSET_X_DEFAULT,
+          shadow_offset_y_px: TRANSFORM_SHADOW_OFFSET_Y_DEFAULT,
+          shadow_color: TRANSFORM_SHADOW_COLOR_DEFAULT
+        }
+      );
+      if (res.changed) commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+    });
+  }
+
+  const dveOverlayBtn = byId("btn-dve-overlay");
+  if (dveOverlayBtn) {
+    dveOverlayBtn.addEventListener("click", () => {
+      state.dveOverlay = !state.dveOverlay;
+      dveOverlayBtn.classList.toggle("is-active", state.dveOverlay);
+      dveOverlayBtn.setAttribute("aria-pressed", state.dveOverlay ? "true" : "false");
+      if (state.activeTab === "timeline") redrawActiveCanvases();
+    });
+  }
+
+  const dveSplitGridBtn = byId("btn-dve-split-grid");
+  if (dveSplitGridBtn) {
+    dveSplitGridBtn.addEventListener("click", () => {
+      state.dveSplitGrid = !state.dveSplitGrid;
+      dveSplitGridBtn.classList.toggle("is-active", state.dveSplitGrid);
+      dveSplitGridBtn.setAttribute("aria-pressed", state.dveSplitGrid ? "true" : "false");
+      if (state.activeTab === "timeline") redrawActiveCanvases();
+    });
+  }
+
+  // Interactive Program Monitor DVE Transform / PiP / Crop Handles
+  const programCanvas = byId("timeline-program-canvas");
+  if (programCanvas) {
+    const toProgramPoint = (ev) => {
+      const geom = programCanvas._dveTransformGeom;
+      if (!geom) return null;
+      const rect = programCanvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const logicalW = geom.canvasWidth || rect.width;
+      const logicalH = geom.canvasHeight || rect.height;
+      const containScale = Math.min(rect.width / logicalW, rect.height / logicalH);
+      const drawnW = logicalW * containScale;
+      const drawnH = logicalH * containScale;
+      const offsetX = (rect.width - drawnW) * 0.5;
+      const offsetY = (rect.height - drawnH) * 0.5;
+      return {
+        geom,
+        x: (ev.clientX - rect.left - offsetX) / containScale,
+        y: (ev.clientY - rect.top - offsetY) / containScale
+      };
+    };
+
+    const isInsideRotatedBox = (px, py, geom) => {
+      const dx = px - geom.center.x;
+      const dy = py - geom.center.y;
+      const cosR = Math.cos(-geom.rad);
+      const sinR = Math.sin(-geom.rad);
+      const lx = dx * cosR - dy * sinR;
+      const ly = dx * sinR + dy * cosR;
+      return Math.abs(lx) <= geom.boxW * 0.5 && Math.abs(ly) <= geom.boxH * 0.5;
+    };
+
+    programCanvas.addEventListener("pointerdown", (ev) => {
+      if (!state.dveOverlay) return;
+      const ctx = getSelectedClipLocalContext();
+      if (!ctx) return;
+      const pt = toProgramPoint(ev);
+      if (!pt || !pt.geom || !pt.geom.handles) return;
+      const hitPriority = ["rot", "tl", "tr", "br", "bl", "t", "r", "b", "l", "move"];
+      let hitKey = null;
+      let bestDist = 14;
+      for (const key of hitPriority) {
+        const h = pt.geom.handles[key];
+        if (!h) continue;
+        const d = Math.hypot(pt.x - h.x, pt.y - h.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          hitKey = key;
+        }
+      }
+      if (!hitKey && isInsideRotatedBox(pt.x, pt.y, pt.geom)) {
+        hitKey = "move";
+      }
+      if (!hitKey) return;
+      ev.preventDefault();
+      if (document.activeElement && document.activeElement !== programCanvas && typeof document.activeElement.blur === "function") {
+        document.activeElement.blur();
+      }
+      const norm = normalizeClipTransform(ctx.clip);
+      state.dveDrag = {
+        key: hitKey,
+        startX: pt.x,
+        startY: pt.y,
+        startGeom: pt.geom,
+        startNorm: norm,
+        startDist: Math.max(8, Math.hypot(pt.x - pt.geom.center.x, pt.y - pt.geom.center.y)),
+        snap: captureTimelineSnapshot()
+      };
+      if (typeof programCanvas.setPointerCapture === "function") {
+        try {
+          programCanvas.setPointerCapture(ev.pointerId);
+        } catch {
+          // Ignore synthetic pointer capture error
+        }
+      }
+    });
+
+    programCanvas.addEventListener("pointermove", (ev) => {
+      if (!state.dveDrag) return;
+      const pt = toProgramPoint(ev);
+      if (!pt || !pt.geom) return;
+      ev.preventDefault();
+      const { key, startX, startY, startGeom, startNorm, startDist } = state.dveDrag;
+      const fw = Math.max(1, startGeom.frameW);
+      const fh = Math.max(1, startGeom.frameH);
+      const patch = {};
+      if (key === "move") {
+        let nextX = startNorm.pos_x_pct + ((pt.x - startX) / fw) * 100.0;
+        let nextY = startNorm.pos_y_pct + ((pt.y - startY) / fh) * 100.0;
+        if (state.dveSplitGrid) {
+          for (const target of [-25, 0, 25]) {
+            if (Math.abs(nextX - target) < 2.2) nextX = target;
+            if (Math.abs(nextY - target) < 2.2) nextY = target;
+          }
+        }
+        patch.pos_x_pct = Number(Math.max(TRANSFORM_POS_MIN, Math.min(TRANSFORM_POS_MAX, nextX)).toFixed(1));
+        patch.pos_y_pct = Number(Math.max(TRANSFORM_POS_MIN, Math.min(TRANSFORM_POS_MAX, nextY)).toFixed(1));
+      } else if (key === "tl" || key === "tr" || key === "br" || key === "bl") {
+        const curDist = Math.max(4, Math.hypot(pt.x - startGeom.center.x, pt.y - startGeom.center.y));
+        const nextZoom = startNorm.zoom_pct * (curDist / startDist);
+        patch.zoom_pct = Number(Math.max(TRANSFORM_ZOOM_MIN, Math.min(TRANSFORM_ZOOM_MAX, nextZoom)).toFixed(1));
+      } else if (key === "rot") {
+        const angRad = Math.atan2(pt.x - startGeom.center.x, -(pt.y - startGeom.center.y));
+        const deg = (angRad * 180.0) / Math.PI;
+        patch.rotation_deg = Number(Math.max(TRANSFORM_ROT_MIN, Math.min(TRANSFORM_ROT_MAX, deg)).toFixed(1));
+      } else if (key === "l" || key === "r" || key === "t" || key === "b") {
+        const dx = pt.x - startX;
+        const dy = pt.y - startY;
+        const cosR = Math.cos(-startGeom.rad);
+        const sinR = Math.sin(-startGeom.rad);
+        const ldx = dx * cosR - dy * sinR;
+        const ldy = dx * sinR + dy * cosR;
+        const zoomScale = Math.max(0.1, startNorm.zoom_pct / 100.0);
+        if (key === "l") {
+          const nextL = startNorm.crop_left_pct + (ldx / (fw * zoomScale)) * 100.0;
+          patch.crop_left_pct = Number(
+            Math.max(TRANSFORM_CROP_MIN, Math.min(TRANSFORM_CROP_MAX, TRANSFORM_CROP_SUM_MAX - startNorm.crop_right_pct, nextL)).toFixed(1)
+          );
+        } else if (key === "r") {
+          const nextR = startNorm.crop_right_pct - (ldx / (fw * zoomScale)) * 100.0;
+          patch.crop_right_pct = Number(
+            Math.max(TRANSFORM_CROP_MIN, Math.min(TRANSFORM_CROP_MAX, TRANSFORM_CROP_SUM_MAX - startNorm.crop_left_pct, nextR)).toFixed(1)
+          );
+        } else if (key === "t") {
+          const nextT = startNorm.crop_top_pct + (ldy / (fh * zoomScale)) * 100.0;
+          patch.crop_top_pct = Number(
+            Math.max(TRANSFORM_CROP_MIN, Math.min(TRANSFORM_CROP_MAX, TRANSFORM_CROP_SUM_MAX - startNorm.crop_bottom_pct, nextT)).toFixed(1)
+          );
+        } else if (key === "b") {
+          const nextB = startNorm.crop_bottom_pct - (ldy / (fh * zoomScale)) * 100.0;
+          patch.crop_bottom_pct = Number(
+            Math.max(TRANSFORM_CROP_MIN, Math.min(TRANSFORM_CROP_MAX, TRANSFORM_CROP_SUM_MAX - startNorm.crop_top_pct, nextB)).toFixed(1)
+          );
+        }
+      }
+      if (Object.keys(patch).length > 0) {
+        livePatchDve(patch);
+      }
+    });
+
+    const endDveDrag = (ev) => {
+      if (!state.dveDrag) return;
+      const dragSnap = state.dveDrag.snap;
+      state.dveDrag = null;
+      if (ev && typeof programCanvas.releasePointerCapture === "function") {
+        try {
+          if (programCanvas.hasPointerCapture && programCanvas.hasPointerCapture(ev.pointerId)) {
+            programCanvas.releasePointerCapture(ev.pointerId);
+          }
+        } catch {
+          // Ignore release error
+        }
+      }
+      if (dragSnap) {
+        pushUndoSnapshot(dragSnap);
+        updateTimelineToolbarUI();
+      }
+    };
+    programCanvas.addEventListener("pointerup", endDveDrag);
+    programCanvas.addEventListener("pointercancel", endDveDrag);
   }
 
   if (sendBtn) {
