@@ -1173,6 +1173,16 @@ body {
   -webkit-user-select: none;
 }
 
+.studio-canvas.is-wipe-enabled {
+  touch-action: pan-y;
+}
+
+.studio-canvas.is-wipe-hover,
+.studio-canvas.is-wipe-dragging {
+  cursor: ew-resize !important;
+  touch-action: none;
+}
+
 #timeline-canvas {
   touch-action: none;
 }
@@ -1647,6 +1657,43 @@ input[type="file"]::file-selector-button:hover {
   gap: 6px;
   flex-wrap: wrap;
   min-width: 0;
+  max-width: 100%;
+}
+
+.split-wipe-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 2px 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.btn-split-wipe.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #ffd8a8;
+}
+
+.wipe-range-slider {
+  width: 88px;
+  max-width: 100%;
+  min-width: 56px;
+  accent-color: var(--accent-amber);
+}
+
+.split-wipe-group:not(.is-enabled) .wipe-range-slider,
+.split-wipe-group:not(.is-enabled) .wipe-pct-tag {
+  opacity: 0.62;
+}
+
+.wipe-pct-tag {
+  min-width: 40px;
+  text-align: center;
 }
 
 .timeline-pane-header {
@@ -2881,12 +2928,20 @@ input[type="range"] {
   .shortcuts-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .audio-ctrl-row input[type="range"] {
+  .audio-ctrl-row input[type="range"],
+  .wipe-range-slider {
     min-height: 44px;
   }
 }
 
 @media (max-width: 480px) {
+  .split-wipe-group {
+    width: 100%;
+  }
+  .wipe-range-slider {
+    flex: 1 1 80px;
+    width: auto;
+  }
   .nle-pagedock {
     display: flex;
     flex-wrap: wrap;

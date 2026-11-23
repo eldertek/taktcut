@@ -40,6 +40,8 @@ import {
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
+  SPLIT_WIPE_HIT_RADIUS_PX,
+  SPLIT_WIPE_POS_DEFAULT,
   TRANSFORM_OPACITY_DEFAULT,
   TRANSFORM_OPACITY_MAX,
   TRANSFORM_OPACITY_MIN,
@@ -58,11 +60,13 @@ import {
   addMarkerInDocument,
   cloneTimelineDoc,
   collectSnapTargets,
+  clampSplitWipePercent,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   computeInOutRangeMetrics,
+  computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
   deleteMarkerInDocument,
   evaluateTimelineAudioLevels,
@@ -79,6 +83,7 @@ import {
   getTransitionPresetName,
   hasSplittableClipAtFrame,
   isClipTransformIdentity,
+  isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
   normalizeAutoDuckParams,
   normalizeClipAudio,
@@ -302,6 +307,18 @@ const state = {
   colorLastCompile: null,
   colorCompileTimer: null,
   wipeRatio: 0.5,
+  colorSplitWipe: {
+    enabled: true,
+    positionPct: SPLIT_WIPE_POS_DEFAULT,
+    isHovered: false,
+    isDragging: false
+  },
+  fxSplitWipe: {
+    enabled: false,
+    positionPct: SPLIT_WIPE_POS_DEFAULT,
+    isHovered: false,
+    isDragging: false
+  },
   lastBakedCubePath: "",
   lastRenderCommand: "",
   lastRenderOutputPath: "",
@@ -456,6 +473,7 @@ function setLanguage(lang) {
   if (state.titleLastCompile) renderTitleCompileResult(state.titleLastCompile);
   if (state.subtitleLastCompile) renderSubtitleCompileResult(state.subtitleLastCompile);
   if (state.lastQaReport) renderQaReport(state.lastQaReport);
+  redrawActiveCanvases();
 }
 
 function renderUpdateButton() {
@@ -686,7 +704,15 @@ function redrawActiveCanvases() {
       getEffectiveTitleState(false),
       getEffectiveFramingState(),
       getEffectiveSubtitleState(false),
-      getEffectiveChromaKeyState()
+      getEffectiveChromaKeyState(),
+      {
+        enabled: Boolean(state.fxSplitWipe.enabled),
+        positionPct: state.fxSplitWipe.positionPct,
+        isHovered: Boolean(state.fxSplitWipe.isHovered),
+        isDragging: Boolean(state.fxSplitWipe.isDragging),
+        beforeLabel: t("wipe.pill.before"),
+        afterLabel: t("wipe.pill.after")
+      }
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -702,7 +728,14 @@ function redrawActiveCanvases() {
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
-    drawColorPreviewCanvas(previewCanvas, state.colorGrade, state.wipeRatio);
+    drawColorPreviewCanvas(previewCanvas, state.colorGrade, state.wipeRatio, {
+      enabled: Boolean(state.colorSplitWipe.enabled),
+      positionPct: state.colorSplitWipe.positionPct,
+      isHovered: Boolean(state.colorSplitWipe.isHovered),
+      isDragging: Boolean(state.colorSplitWipe.isDragging),
+      beforeLabel: t("wipe.pill.before"),
+      afterLabel: t("wipe.pill.after")
+    });
     drawColorScopeCanvas(
       byId("color-scope-canvas"),
       state.colorGrade,
@@ -1909,14 +1942,12 @@ function applyFullProjectState(project, validation) {
     };
   }
   state.colorActivePresetId = String(col.active_preset_id || "");
-  state.wipeRatio = Number(col.wipe_ratio ?? 0.5);
+  state.colorSplitWipe.positionPct = clampSplitWipePercent(Number(col.wipe_ratio ?? 0.5) * 100);
+  state.wipeRatio = state.colorSplitWipe.positionPct / 100;
   state.colorScopeMode = ["parade", "waveform", "vectorscope"].includes(col.scope_mode)
     ? col.scope_mode
     : "parade";
-  const wipeSlider = byId("cdl-wipe-slider");
-  const wipeLabel = byId("cdl-wipe-label");
-  if (wipeSlider) wipeSlider.value = String(state.wipeRatio);
-  if (wipeLabel) wipeLabel.textContent = `${Math.round(state.wipeRatio * 100)}%`;
+  syncSplitWipeControls("color");
   for (const btn of document.querySelectorAll("[data-scope-mode]")) {
     const active = btn.getAttribute("data-scope-mode") === state.colorScopeMode;
     btn.classList.toggle("is-active", active);
@@ -3403,6 +3434,64 @@ function applyColorPresetUI(presetId) {
   compileColorNow();
 }
 
+function syncSplitWipeControls(target) {
+  const isColor = target === "color";
+  const wipe = isColor ? state.colorSplitWipe : state.fxSplitWipe;
+  const clampedPct = clampSplitWipePercent(wipe.positionPct, SPLIT_WIPE_POS_DEFAULT);
+  wipe.positionPct = clampedPct;
+  if (isColor) {
+    state.wipeRatio = clampedPct / 100;
+  }
+
+  const btn = byId(isColor ? "btn-color-split-wipe" : "btn-fx-split-wipe");
+  const group = byId(isColor ? "color-split-wipe-group" : "fx-split-wipe-group");
+  const slider = byId(isColor ? "cdl-wipe-slider" : "fx-wipe-slider");
+  const label = byId(isColor ? "cdl-wipe-label" : "fx-wipe-label");
+  const canvas = byId(isColor ? "color-preview-canvas" : "fx-program-canvas");
+  const active = Boolean(wipe.enabled);
+
+  if (btn) {
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  if (group) {
+    group.classList.toggle("is-enabled", active);
+  }
+  if (slider) {
+    slider.value = String(Math.round(clampedPct));
+  }
+  if (label) {
+    label.textContent = `${Math.round(clampedPct)}%`;
+  }
+  if (canvas) {
+    canvas.classList.toggle("is-wipe-enabled", active);
+    if (!active) {
+      wipe.isHovered = false;
+      wipe.isDragging = false;
+      canvas.classList.remove("is-wipe-hover", "is-wipe-dragging");
+    }
+  }
+}
+
+function toggleSplitWipe(target) {
+  const wipe = target === "color" ? state.colorSplitWipe : state.fxSplitWipe;
+  wipe.enabled = !wipe.enabled;
+  syncSplitWipeControls(target);
+  redrawActiveCanvases();
+}
+
+function toggleActiveSplitWipe() {
+  if (state.activeTab === "color") {
+    toggleSplitWipe("color");
+    return true;
+  }
+  if (state.activeTab === "fx") {
+    toggleSplitWipe("fx");
+    return true;
+  }
+  return false;
+}
+
 function wireColorInputs() {
   for (const b of COLOR_WHEEL_BINDINGS) {
     const rangeEl = byId(b.range);
@@ -3490,12 +3579,154 @@ function wireColorInputs() {
     });
   }
 
-  const wipeSlider = byId("cdl-wipe-slider");
-  wipeSlider.addEventListener("input", () => {
-    state.wipeRatio = Number.parseFloat(wipeSlider.value);
-    byId("cdl-wipe-label").textContent = `${Math.round(state.wipeRatio * 100)}%`;
-    redrawActiveCanvases();
-  });
+  const splitWipeDescriptors = {
+    color: {
+      stateObj: () => state.colorSplitWipe,
+      btnId: "btn-color-split-wipe",
+      groupId: "color-split-wipe-group",
+      sliderId: "cdl-wipe-slider",
+      labelId: "cdl-wipe-label",
+      canvasId: "color-preview-canvas"
+    },
+    fx: {
+      stateObj: () => state.fxSplitWipe,
+      btnId: "btn-fx-split-wipe",
+      groupId: "fx-split-wipe-group",
+      sliderId: "fx-wipe-slider",
+      labelId: "fx-wipe-label",
+      canvasId: "fx-program-canvas"
+    }
+  };
+
+  for (const target of ["color", "fx"]) {
+    const desc = splitWipeDescriptors[target];
+    const btn = byId(desc.btnId);
+    const slider = byId(desc.sliderId);
+    const canvas = byId(desc.canvasId);
+
+    if (btn) {
+      btn.addEventListener("click", () => toggleSplitWipe(target));
+    }
+    if (slider) {
+      slider.addEventListener("input", () => {
+        const wipe = desc.stateObj();
+        wipe.positionPct = clampSplitWipePercent(slider.value, wipe.positionPct);
+        if (!wipe.enabled) wipe.enabled = true;
+        syncSplitWipeControls(target);
+        redrawActiveCanvases();
+      });
+    }
+    if (canvas) {
+      const toCanvasPoint = (ev) => {
+        const geom = canvas._splitWipeGeom;
+        if (!geom) return null;
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return null;
+        const scaleX = (geom.canvasWidth || rect.width) / rect.width;
+        const scaleY = (geom.canvasHeight || rect.height) / rect.height;
+        return {
+          geom,
+          x: (ev.clientX - rect.left) * scaleX,
+          y: (ev.clientY - rect.top) * scaleY
+        };
+      };
+
+      canvas.addEventListener("pointerdown", (ev) => {
+        const wipe = desc.stateObj();
+        if (!wipe.enabled) return;
+        const pt = toCanvasPoint(ev);
+        if (!pt || !isPointerOnSplitWipeDivider(pt.x, pt.y, pt.geom, SPLIT_WIPE_HIT_RADIUS_PX)) {
+          return;
+        }
+        ev.preventDefault();
+        wipe.isDragging = true;
+        wipe.isHovered = true;
+        wipe.positionPct = Math.round(
+          computeSplitWipePercentFromPointer(
+            pt.x,
+            pt.geom.frameRect.x,
+            pt.geom.frameRect.width
+          )
+        );
+        canvas.classList.add("is-wipe-dragging");
+        if (typeof canvas.setPointerCapture === "function") {
+          try {
+            canvas.setPointerCapture(ev.pointerId);
+          } catch {
+            // Ignore synthetic event pointer capture errors
+          }
+        }
+        syncSplitWipeControls(target);
+        redrawActiveCanvases();
+      });
+
+      canvas.addEventListener("pointermove", (ev) => {
+        const wipe = desc.stateObj();
+        if (!wipe.enabled) {
+          if (wipe.isHovered || wipe.isDragging) {
+            wipe.isHovered = false;
+            wipe.isDragging = false;
+            canvas.classList.remove("is-wipe-hover", "is-wipe-dragging");
+          }
+          return;
+        }
+        const pt = toCanvasPoint(ev);
+        if (!pt) return;
+
+        if (wipe.isDragging) {
+          ev.preventDefault();
+          const nextPct = Math.round(
+            computeSplitWipePercentFromPointer(
+              pt.x,
+              pt.geom.frameRect.x,
+              pt.geom.frameRect.width
+            )
+          );
+          if (nextPct !== Math.round(wipe.positionPct)) {
+            wipe.positionPct = nextPct;
+            syncSplitWipeControls(target);
+          }
+          redrawActiveCanvases();
+          return;
+        }
+
+        const hit = isPointerOnSplitWipeDivider(pt.x, pt.y, pt.geom, SPLIT_WIPE_HIT_RADIUS_PX);
+        if (hit !== wipe.isHovered) {
+          wipe.isHovered = hit;
+          canvas.classList.toggle("is-wipe-hover", hit);
+          redrawActiveCanvases();
+        }
+      });
+
+      const endWipeDrag = (ev) => {
+        const wipe = desc.stateObj();
+        if (!wipe.isDragging) return;
+        wipe.isDragging = false;
+        canvas.classList.remove("is-wipe-dragging");
+        if (ev && typeof canvas.releasePointerCapture === "function") {
+          try {
+            if (canvas.hasPointerCapture && canvas.hasPointerCapture(ev.pointerId)) {
+              canvas.releasePointerCapture(ev.pointerId);
+            }
+          } catch {
+            // Ignore pointer release failures
+          }
+        }
+        redrawActiveCanvases();
+      };
+
+      canvas.addEventListener("pointerup", endWipeDrag);
+      canvas.addEventListener("pointercancel", endWipeDrag);
+      canvas.addEventListener("pointerleave", () => {
+        const wipe = desc.stateObj();
+        if (!wipe.isDragging && wipe.isHovered) {
+          wipe.isHovered = false;
+          canvas.classList.remove("is-wipe-hover");
+          redrawActiveCanvases();
+        }
+      });
+    }
+  }
 
   for (const btn of document.querySelectorAll("[data-grade-preset]")) {
     btn.addEventListener("click", () => {
@@ -4804,6 +5035,7 @@ const NLE_SHORTCUT_GROUPS = [
   {
     titleKey: "shortcuts.group.studio",
     items: [
+      { kbd: "W / Ctrl+W", descKey: "shortcuts.key.splitWipe" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -4907,6 +5139,11 @@ function handleTransportKeydown(ev) {
   }
 
   if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
+    if (!ev.shiftKey && lower === "w" && (state.activeTab === "color" || state.activeTab === "fx")) {
+      ev.preventDefault();
+      toggleActiveSplitWipe();
+      return;
+    }
     if (state.activeTab === "timeline") {
       if (lower === "z" && !ev.shiftKey) {
         ev.preventDefault();
@@ -4919,6 +5156,19 @@ function handleTransportKeydown(ev) {
         return;
       }
     }
+    return;
+  }
+
+  if (
+    !ev.ctrlKey &&
+    !ev.metaKey &&
+    !ev.altKey &&
+    !ev.shiftKey &&
+    lower === "w" &&
+    (state.activeTab === "color" || state.activeTab === "fx")
+  ) {
+    ev.preventDefault();
+    toggleActiveSplitWipe();
     return;
   }
 
@@ -7695,6 +7945,8 @@ async function bootstrap() {
   syncDeliverProfileControlsState();
   renderDeliveryPresetStrip();
   syncColorInputsFromState();
+  syncSplitWipeControls("color");
+  syncSplitWipeControls("fx");
   compileColorNow();
   syncTitleInputsFromState();
   compileTitleNow();

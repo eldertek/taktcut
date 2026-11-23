@@ -634,6 +634,12 @@
                   <button type="button" id="btn-fx-matte-final" class="btn btn-mini is-active" data-fx-matte="final" aria-pressed="true" data-i18n="fx.keyer.matteFinal">Final</button>
                   <button type="button" id="btn-fx-matte-alpha" class="btn btn-mini" data-fx-matte="alpha_matte" aria-pressed="false" data-i18n="fx.keyer.matteAlpha">Alpha Matte</button>
                 </div>
+                <div id="fx-split-wipe-group" class="split-wipe-group" role="group" aria-label="FX Split-Screen Wipe">
+                  <button type="button" id="btn-fx-split-wipe" class="btn btn-secondary btn-split-wipe" aria-pressed="false" data-i18n="wipe.btn.toggle" title="Split Wipe (W / Ctrl+W)">Split Wipe</button>
+                  <label class="inline-label" for="fx-wipe-slider" data-i18n="color.preview.wipe">Wipe</label>
+                  <input type="range" id="fx-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="FX split wipe position">
+                  <span id="fx-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
+                </div>
                 <button type="button" id="btn-fx-bypass-all" class="btn btn-secondary" aria-pressed="false" data-i18n="fx.btn.bypassAll">Bypass FX (A/B)</button>
                 <button type="button" id="btn-fx-reset-all" class="btn btn-secondary" data-i18n="fx.btn.resetAll">Clear FX</button>
               </div>
@@ -1000,9 +1006,12 @@
             <div class="pane-header">
               <h2 data-i18n="color.preview.title">Color Viewer (Rec.709 Before / After)</h2>
               <div class="viewer-controls">
-                <label class="inline-label" for="cdl-wipe-slider" data-i18n="color.preview.wipe">Wipe</label>
-                <input type="range" id="cdl-wipe-slider" min="0" max="1" step="0.01" value="0.5">
-                <span id="cdl-wipe-label" class="mono nle-tag">50%</span>
+                <div id="color-split-wipe-group" class="split-wipe-group is-enabled" role="group" aria-label="Color Split-Screen Wipe">
+                  <button type="button" id="btn-color-split-wipe" class="btn btn-secondary btn-split-wipe is-active" aria-pressed="true" data-i18n="wipe.btn.toggle" title="Split Wipe (W / Ctrl+W)">Split Wipe</button>
+                  <label class="inline-label" for="cdl-wipe-slider" data-i18n="color.preview.wipe">Wipe</label>
+                  <input type="range" id="cdl-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="Color split wipe position">
+                  <span id="cdl-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
+                </div>
                 <button type="button" id="btn-cdl-reset" class="btn btn-secondary" data-i18n="color.btn.reset">Reset All</button>
               </div>
             </div>

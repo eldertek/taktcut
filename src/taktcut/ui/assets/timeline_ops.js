@@ -38,6 +38,10 @@ export const BPM_DEFAULT = 128;
 export const BPM_OFFSET_MIN_S = -10.0;
 export const BPM_OFFSET_MAX_S = 10.0;
 export const BPM_OFFSET_DEFAULT_S = 0.0;
+export const SPLIT_WIPE_POS_MIN = 0;
+export const SPLIT_WIPE_POS_MAX = 100;
+export const SPLIT_WIPE_POS_DEFAULT = 50;
+export const SPLIT_WIPE_HIT_RADIUS_PX = 22;
 
 export const MARKER_COLORS = ["Cyan", "Gold", "Red", "Green"];
 export const MARKER_COLOR_HEX = {
@@ -1868,4 +1872,87 @@ export function stepPlayheadInRange(
   if (next >= boundHi) return { frame: boundHi, stop: true };
   if (next <= boundLo) return { frame: boundLo, stop: true };
   return { frame: next, stop: false };
+}
+
+export function clampSplitWipePercent(value, fallback = SPLIT_WIPE_POS_DEFAULT) {
+  const fbNum = Number(fallback);
+  const safeFallback = Number.isFinite(fbNum)
+    ? Math.min(SPLIT_WIPE_POS_MAX, Math.max(SPLIT_WIPE_POS_MIN, fbNum))
+    : SPLIT_WIPE_POS_DEFAULT;
+  if (value === null || value === undefined || value === "") {
+    return safeFallback;
+  }
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return safeFallback;
+  }
+  return Math.min(SPLIT_WIPE_POS_MAX, Math.max(SPLIT_WIPE_POS_MIN, num));
+}
+
+export function normalizeSplitWipeState(raw = null, defaultEnabled = false) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const enabled =
+    typeof src.enabled === "boolean" ? src.enabled : Boolean(defaultEnabled);
+  let rawPct = src.positionPct;
+  if (rawPct === undefined && src.wipe_ratio !== undefined) {
+    rawPct = Number(src.wipe_ratio) * 100;
+  }
+  const positionPct = clampSplitWipePercent(rawPct, SPLIT_WIPE_POS_DEFAULT);
+  return {
+    enabled,
+    positionPct,
+    ratio: positionPct / 100
+  };
+}
+
+export function computeSplitWipeGeometry(frameX, frameY, frameW, frameH, positionPct) {
+  const fx = Number.isFinite(Number(frameX)) ? Number(frameX) : 0;
+  const fy = Number.isFinite(Number(frameY)) ? Number(frameY) : 0;
+  const safeW = Math.max(0, Number.isFinite(Number(frameW)) ? Number(frameW) : 0);
+  const safeH = Math.max(0, Number.isFinite(Number(frameH)) ? Number(frameH) : 0);
+  const clampedPct = clampSplitWipePercent(positionPct, SPLIT_WIPE_POS_DEFAULT);
+  const ratio = clampedPct / 100;
+  const dividerX = Math.min(fx + safeW, Math.max(fx, fx + Math.round(safeW * ratio)));
+  const leftW = Math.max(0, dividerX - fx);
+  const rightW = Math.max(0, fx + safeW - dividerX);
+  return {
+    positionPct: clampedPct,
+    ratio,
+    dividerX,
+    handleX: dividerX,
+    handleY: fy + safeH * 0.5,
+    frameRect: { x: fx, y: fy, width: safeW, height: safeH },
+    leftRect: { x: fx, y: fy, width: leftW, height: safeH },
+    rightRect: { x: dividerX, y: fy, width: rightW, height: safeH }
+  };
+}
+
+export function computeSplitWipePercentFromPointer(pointerX, frameX, frameW) {
+  const px = Number(pointerX);
+  const fx = Number.isFinite(Number(frameX)) ? Number(frameX) : 0;
+  const fw = Number(frameW);
+  if (!Number.isFinite(px) || !Number.isFinite(fw) || fw <= 0) {
+    return SPLIT_WIPE_POS_DEFAULT;
+  }
+  return clampSplitWipePercent(((px - fx) / fw) * 100, SPLIT_WIPE_POS_DEFAULT);
+}
+
+export function isPointerOnSplitWipeDivider(
+  pointerX,
+  pointerY,
+  geometry,
+  hitRadiusPx = SPLIT_WIPE_HIT_RADIUS_PX
+) {
+  if (!geometry || !geometry.frameRect) return false;
+  const px = Number(pointerX);
+  const py = Number(pointerY);
+  const r = Number(hitRadiusPx);
+  if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(r) || r < 0) {
+    return false;
+  }
+  const { x, y, width, height } = geometry.frameRect;
+  if (width <= 0 || height <= 0) return false;
+  const inVertical = py >= y && py <= y + height;
+  const inBoundsX = px >= x - r && px <= x + width + r;
+  return inVertical && inBoundsX && Math.abs(px - geometry.dividerX) <= r;
 }

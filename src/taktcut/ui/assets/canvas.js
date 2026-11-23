@@ -1,7 +1,9 @@
 import {
   MARKER_COLOR_HEX,
+  clampSplitWipePercent,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
+  computeSplitWipeGeometry,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
   formatTransformBadgeText,
@@ -282,6 +284,92 @@ function roundRectPath(ctx, x, y, w, h, r) {
 
 function toCssRgb(r, g, b) {
   return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+}
+
+function drawSplitWipeOverlay(ctx, fx, fy, frameW, frameH, geom, opts = {}) {
+  if (!geom || frameW <= 0 || frameH <= 0) return;
+  const isDragging = Boolean(opts && opts.isDragging);
+  const isHovered = Boolean(opts && opts.isHovered);
+  const beforeLabel = String((opts && opts.beforeLabel) || "BEFORE");
+  const afterLabel = String((opts && opts.afterLabel) || "AFTER");
+  const divX = geom.dividerX;
+  const handleY = geom.handleY;
+
+  ctx.save();
+  // Dark outer halo for contrast over bright SMPTE bars or optical flares
+  ctx.strokeStyle = "rgba(17, 17, 20, 0.72)";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(divX, fy);
+  ctx.lineTo(divX, fy + frameH);
+  ctx.stroke();
+
+  // Crisp vertical divider line
+  ctx.strokeStyle = isDragging || isHovered ? "#ffb366" : "#e68442";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(divX, fy);
+  ctx.lineTo(divX, fy + frameH);
+  ctx.stroke();
+
+  // Center DaVinci-style vertical grab handle bar
+  const handleW = 14;
+  const handleH = Math.min(34, Math.max(18, Math.round(frameH * 0.16)));
+  const hx = Math.max(fx + 1, Math.min(fx + frameW - handleW - 1, divX - handleW / 2));
+  const hy = handleY - handleH / 2;
+  roundRectPath(ctx, hx, hy, handleW, handleH, 4);
+  ctx.fillStyle = isDragging
+    ? "#e68442"
+    : isHovered
+      ? "#2a2b32"
+      : "rgba(17, 17, 20, 0.92)";
+  ctx.fill();
+  ctx.strokeStyle = isDragging ? "#ffd8a8" : "#e68442";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Grip chevrons and center tick inside handle bar
+  const gripCx = hx + handleW / 2;
+  const gripColor = isDragging ? "#111114" : "#f0f0f4";
+  ctx.strokeStyle = gripColor;
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.moveTo(gripCx, handleY - 7);
+  ctx.lineTo(gripCx, handleY + 7);
+  ctx.moveTo(gripCx - 2.5, handleY - 3);
+  ctx.lineTo(gripCx - 4.5, handleY);
+  ctx.lineTo(gripCx - 2.5, handleY + 3);
+  ctx.moveTo(gripCx + 2.5, handleY - 3);
+  ctx.lineTo(gripCx + 4.5, handleY);
+  ctx.lineTo(gripCx + 2.5, handleY + 3);
+  ctx.stroke();
+
+  // Corner BEFORE / AFTER pills
+  ctx.font = "700 10px ui-monospace, monospace";
+  const pillH = 18;
+  const pillY = fy + 8;
+  const beforeW = Math.min(Math.max(44, Math.ceil(ctx.measureText(beforeLabel).width) + 14), Math.max(44, frameW * 0.44));
+  const afterW = Math.min(Math.max(44, Math.ceil(ctx.measureText(afterLabel).width) + 14), Math.max(44, frameW * 0.44));
+
+  roundRectPath(ctx, fx + 8, pillY, beforeW, pillH, 3);
+  ctx.fillStyle = "rgba(17, 17, 20, 0.88)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(164, 164, 174, 0.52)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#e8e8ee";
+  ctx.fillText(beforeLabel, fx + 15, pillY + 12.5);
+
+  const afterX = fx + frameW - afterW - 8;
+  roundRectPath(ctx, afterX, pillY, afterW, pillH, 3);
+  ctx.fillStyle = "#e68442";
+  ctx.fill();
+  ctx.strokeStyle = "#ffb366";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#111114";
+  ctx.fillText(afterLabel, afterX + 7, pillY + 12.5);
+  ctx.restore();
 }
 
 function hexToRgbTuple(hex) {
@@ -1087,7 +1175,8 @@ export function drawProgramMonitorCanvas(
   titleState = null,
   framingState = null,
   subtitleState = null,
-  chromaKeyState = null
+  chromaKeyState = null,
+  splitWipeState = null
 ) {
   const { ctx, width, height } = setupCanvas(canvas, 244);
   ctx.fillStyle = "#141416";
@@ -1122,6 +1211,7 @@ export function drawProgramMonitorCanvas(
 
   const fps = doc && doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
   const tSec = playheadFrame / fps;
+  const activeTrans = findActiveTransitionAtFrame(doc, playheadFrame);
 
   const rawNodes = fxState && Array.isArray(fxState.nodes) ? fxState.nodes : [];
   const bypassAll = Boolean(fxState && fxState.bypassAll);
@@ -1129,450 +1219,501 @@ export function drawProgramMonitorCanvas(
   const ckRaw = chromaKeyState || (fxState && fxState.chromaKey) || null;
   const ckActive = !bypassAll && Boolean(ckRaw && ckRaw.enabled);
   const ckMatteView = ckRaw && ckRaw.matteView === "alpha_matte" ? "alpha_matte" : "final";
+  const wipeActive = Boolean(splitWipeState && splitWipeState.enabled);
 
-  // Compute spatial shake + gate-weave displacement
-  let shiftX = 0;
-  let shiftY = 0;
-  let motionBlurAmt = 0;
-  for (const node of activeFx) {
-    const p = node.params || {};
-    const kfMul = evaluateNodeIntensity(node, tSec);
-    if (kfMul <= 0.0001) continue;
-    if (node.effect === "shake") {
-      const amp = Number(p.amplitude ?? 14) * kfMul * (frameW / 640);
-      const freq = Number(p.frequency ?? 6);
-      const seed = Number(p.seed ?? 42);
-      const p1 = ((seed % 360) * Math.PI) / 180 + 0.65;
-      const p2 = (((seed * 7 + 53) % 360) * Math.PI) / 180 + 1.15;
-      shiftX += amp * Math.sin(tSec * freq * Math.PI * 2 + p1);
-      shiftY += amp * Math.cos(tSec * freq * 1.37 * Math.PI * 2 + p2);
-      motionBlurAmt = Math.max(motionBlurAmt, Number(p.motion_blur ?? 0) * Math.min(1, kfMul));
-    } else if (node.effect === "film_damage") {
-      const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
-      const weave = Number(p.gate_weave ?? 0.25) * mix;
-      shiftX += weave * 4.5 * Math.sin(tSec * 7.1 + 0.4);
-      shiftY += weave * 4.5 * Math.cos(tSec * 5.3 + 0.9);
+  const renderScenePass = (passCdl, passFxState, passTitleState, passSubState, passCkState) => {
+    const pRawNodes = passFxState && Array.isArray(passFxState.nodes) ? passFxState.nodes : [];
+    const pBypassAll = Boolean(passFxState && passFxState.bypassAll);
+    const pActiveFx = pBypassAll ? [] : pRawNodes.filter((n) => n && n.enabled !== false);
+    const pCkRaw = passCkState || (passFxState && passFxState.chromaKey) || null;
+    const pCkActive = !pBypassAll && Boolean(pCkRaw && pCkRaw.enabled);
+    const pCkMatteView = pCkRaw && pCkRaw.matteView === "alpha_matte" ? "alpha_matte" : "final";
+
+    // Compute spatial shake + gate-weave displacement
+    let shiftX = 0;
+    let shiftY = 0;
+    let motionBlurAmt = 0;
+    for (const node of pActiveFx) {
+      const p = node.params || {};
+      const kfMul = evaluateNodeIntensity(node, tSec);
+      if (kfMul <= 0.0001) continue;
+      if (node.effect === "shake") {
+        const amp = Number(p.amplitude ?? 14) * kfMul * (frameW / 640);
+        const freq = Number(p.frequency ?? 6);
+        const seed = Number(p.seed ?? 42);
+        const p1 = ((seed % 360) * Math.PI) / 180 + 0.65;
+        const p2 = (((seed * 7 + 53) % 360) * Math.PI) / 180 + 1.15;
+        shiftX += amp * Math.sin(tSec * freq * Math.PI * 2 + p1);
+        shiftY += amp * Math.cos(tSec * freq * 1.37 * Math.PI * 2 + p2);
+        motionBlurAmt = Math.max(motionBlurAmt, Number(p.motion_blur ?? 0) * Math.min(1, kfMul));
+      } else if (node.effect === "film_damage") {
+        const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
+        const weave = Number(p.gate_weave ?? 0.25) * mix;
+        shiftX += weave * 4.5 * Math.sin(tSec * 7.1 + 0.4);
+        shiftY += weave * 4.5 * Math.cos(tSec * 5.3 + 0.9);
+      }
     }
-  }
 
-  // Draw base 16:9 editorial frame into offscreen scratch buffer
-  const bw = Math.max(1, Math.round(frameW));
-  const bh = Math.max(1, Math.round(frameH));
-  const buf = getFxScratchCanvas(bw, bh);
-  const activeTrans = findActiveTransitionAtFrame(doc, playheadFrame);
+    // Draw base 16:9 editorial frame into offscreen scratch buffer
+    const bw = Math.max(1, Math.round(frameW));
+    const bh = Math.max(1, Math.round(frameH));
+    const buf = getFxScratchCanvas(bw, bh);
+
+    if (buf) {
+      const bctx = buf.getContext("2d");
+      bctx.setTransform(1, 0, 0, 1, 0, 0);
+      bctx.clearRect(0, 0, bw, bh);
+
+      _transScratchA = activeTrans ? ensureScratchCanvas(_transScratchA, bw, bh) : _transScratchA;
+      _transScratchB = activeTrans ? ensureScratchCanvas(_transScratchB, bw, bh) : _transScratchB;
+
+      if (activeTrans && _transScratchA && _transScratchB && !pCkRaw?.enabled) {
+        const ctxA = _transScratchA.getContext("2d");
+        const ctxB = _transScratchB.getContext("2d");
+        ctxA.setTransform(1, 0, 0, 1, 0, 0);
+        ctxB.setTransform(1, 0, 0, 1, 0, 0);
+        ctxA.clearRect(0, 0, bw, bh);
+        ctxB.clearRect(0, 0, bw, bh);
+
+        const trkTag = `V${activeTrans.trackIndex}`;
+        drawFramedBaseScene(
+          ctxA,
+          bw,
+          bh,
+          doc,
+          playheadFrame,
+          passCdl,
+          [{ track: trkTag, clip: activeTrans.clipA }],
+          framingMode,
+          srcAspect,
+          targetAspect
+        );
+        drawFramedBaseScene(
+          ctxB,
+          bw,
+          bh,
+          doc,
+          playheadFrame,
+          passCdl,
+          [{ track: trkTag, clip: activeTrans.clipB }],
+          framingMode,
+          srcAspect,
+          targetAspect
+        );
+
+        const u = clamp01(activeTrans.progress);
+        const preset = activeTrans.transition.preset;
+        bctx.fillStyle = "#000000";
+        bctx.fillRect(0, 0, bw, bh);
+
+        if (preset === "fadeblack") {
+          if (u < 0.5) {
+            bctx.save();
+            bctx.globalAlpha = clamp01(1 - u * 2);
+            bctx.drawImage(_transScratchA, 0, 0, bw, bh);
+            bctx.restore();
+          } else {
+            bctx.save();
+            bctx.globalAlpha = clamp01((u - 0.5) * 2);
+            bctx.drawImage(_transScratchB, 0, 0, bw, bh);
+            bctx.restore();
+          }
+        } else if (preset === "wipeleft") {
+          const seamX = bw * (1 - u);
+          bctx.drawImage(_transScratchA, 0, 0, bw, bh);
+          bctx.save();
+          bctx.beginPath();
+          bctx.rect(seamX, 0, bw - seamX, bh);
+          bctx.clip();
+          bctx.drawImage(_transScratchB, 0, 0, bw, bh);
+          bctx.restore();
+          bctx.strokeStyle = "#e68442";
+          bctx.lineWidth = 2;
+          bctx.beginPath();
+          bctx.moveTo(seamX, 0);
+          bctx.lineTo(seamX, bh);
+          bctx.stroke();
+        } else if (preset === "slideright") {
+          const slideX = bw * u;
+          bctx.drawImage(_transScratchA, slideX, 0, bw, bh);
+          bctx.drawImage(_transScratchB, slideX - bw, 0, bw, bh);
+          bctx.strokeStyle = "#e68442";
+          bctx.lineWidth = 2;
+          bctx.beginPath();
+          bctx.moveTo(slideX, 0);
+          bctx.lineTo(slideX, bh);
+          bctx.stroke();
+        } else if (preset === "zoomin") {
+          const eased = u * u * (3 - 2 * u);
+          const scaleA = 1 + eased * 0.34;
+          const wA = bw * scaleA;
+          const hA = bh * scaleA;
+          bctx.save();
+          bctx.globalAlpha = clamp01(1 - eased);
+          bctx.drawImage(_transScratchA, (bw - wA) / 2, (bh - hA) / 2, wA, hA);
+          bctx.restore();
+
+          const scaleB = 0.84 + eased * 0.16;
+          const wB = bw * scaleB;
+          const hB = bh * scaleB;
+          bctx.save();
+          bctx.globalAlpha = clamp01(eased);
+          bctx.drawImage(_transScratchB, (bw - wB) / 2, (bh - hB) / 2, wB, hB);
+          bctx.restore();
+        } else {
+          // Cross Dissolve (fade)
+          bctx.drawImage(_transScratchA, 0, 0, bw, bh);
+          bctx.save();
+          bctx.globalAlpha = u;
+          bctx.drawImage(_transScratchB, 0, 0, bw, bh);
+          bctx.restore();
+        }
+      } else {
+        drawFramedBaseScene(
+          bctx,
+          bw,
+          bh,
+          doc,
+          playheadFrame,
+          passCdl,
+          activeClips,
+          framingMode,
+          srcAspect,
+          targetAspect,
+          pCkRaw
+        );
+      }
+
+      if (pCkActive && pCkRaw) {
+        applyChromaKeyOnBuffer(bctx, bw, bh, pCkRaw, pCkMatteView);
+      }
+
+      // Apply Chroma Aberration RGB channel split directly on frame buffer
+      const chromaNode = pActiveFx.find((n) => n.effect === "chroma_aberration");
+      if (chromaNode && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        const chromaMul = evaluateNodeIntensity(chromaNode, tSec);
+        const p = chromaNode.params || {};
+        const spread = Number(p.spread ?? 8) * chromaMul;
+        const angleRad = (Number(p.angle ?? 15) * Math.PI) / 180;
+        const dx = Math.round(Math.cos(angleRad) * spread * (bw / 640));
+        const dy = Math.round(Math.sin(angleRad) * spread * (bw / 640));
+        if (dx !== 0 || dy !== 0) {
+          const srcImg = bctx.getImageData(0, 0, bw, bh);
+          const outImg = bctx.createImageData(bw, bh);
+          const s = srcImg.data;
+          const d = outImg.data;
+          for (let y = 0; y < bh; y++) {
+            const ry = Math.min(bh - 1, Math.max(0, y - dy));
+            const by = Math.min(bh - 1, Math.max(0, y + dy));
+            const rowOff = y * bw;
+            const rRowOff = ry * bw;
+            const bRowOff = by * bw;
+            for (let x = 0; x < bw; x++) {
+              const rx = Math.min(bw - 1, Math.max(0, x - dx));
+              const bx = Math.min(bw - 1, Math.max(0, x + dx));
+              const oi = (rowOff + x) * 4;
+              d[oi] = s[(rRowOff + rx) * 4];
+              d[oi + 1] = s[oi + 1];
+              d[oi + 2] = s[(bRowOff + bx) * 4 + 2];
+              d[oi + 3] = s[oi + 3];
+            }
+          }
+          bctx.putImageData(outImg, 0, 0);
+        }
+      }
+
+      if (pCkActive && pCkMatteView === "final") {
+        drawTransparencyCheckerboard(ctx, fx, fy, frameW, frameH);
+      }
+
+      ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
+      if (motionBlurAmt >= 0.05 && (Math.abs(shiftX) > 0.2 || Math.abs(shiftY) > 0.2)) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(0.42, motionBlurAmt * 0.42);
+        ctx.drawImage(buf, fx - shiftX * 0.55, fy - shiftY * 0.55, frameW, frameH);
+        ctx.restore();
+      }
+    } else {
+      ctx.save();
+      ctx.translate(fx + shiftX, fy + shiftY);
+      drawFramedBaseScene(
+        ctx,
+        frameW,
+        frameH,
+        doc,
+        playheadFrame,
+        passCdl,
+        activeClips,
+        framingMode,
+        srcAspect,
+        targetAspect,
+        pCkRaw
+      );
+      ctx.restore();
+    }
+
+    // Apply optical/lighting FX passes over the 16:9 frame
+    if (!(pCkActive && pCkMatteView === "alpha_matte")) for (const node of pActiveFx) {
+      const p = node.params || {};
+      const kfMul = evaluateNodeIntensity(node, tSec);
+      if (kfMul <= 0.0001) continue;
+      if (node.effect === "glow") {
+        const brightness = Number(p.brightness ?? 0.85) * kfMul;
+        const widthPx = Number(p.width ?? 18);
+        const threshold = Number(p.threshold ?? 0.45);
+        const [tr, tg, tb] = hexToRgbTuple(p.tint || "#ffd8a8");
+        const alpha = clamp01((brightness / 2.2) * (1.15 - threshold * 0.45));
+
+        if (buf && typeof ctx.filter === "string") {
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.globalAlpha = Math.min(0.85, alpha * 0.8);
+          ctx.filter = `blur(${Math.max(2, Math.round(widthPx * 0.45))}px)`;
+          ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
+          ctx.restore();
+        }
+
+        const gx = fx + frameW * 0.72 + shiftX;
+        const gy = fy + frameH * 0.32 + shiftY;
+        const gr = Math.max(24, widthPx * 2.4);
+        const gGrad = ctx.createRadialGradient(gx, gy, 2, gx, gy, gr);
+        gGrad.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, ${Math.min(0.75, alpha * 0.85).toFixed(3)})`);
+        gGrad.addColorStop(0.45, `rgba(${tr}, ${tg}, ${tb}, ${Math.min(0.4, alpha * 0.45).toFixed(3)})`);
+        gGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        ctx.fillStyle = gGrad;
+        ctx.fillRect(fx, fy, frameW, frameH);
+        ctx.restore();
+      } else if (node.effect === "lens_flare") {
+        const cx = fx + Number(p.center_x ?? 0.72) * frameW;
+        const cy = fy + Number(p.center_y ?? 0.28) * frameH;
+        const brightness = Number(p.brightness ?? 0.95) * kfMul;
+        const scale = Number(p.scale ?? 1.0);
+        const [tr, tg, tb] = hexToRgbTuple(p.tint || "#7cc4ff");
+        const alpha = clamp01(brightness * 0.75);
+
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+
+        const haloR = Math.max(22, frameH * 0.36 * scale);
+        const halo = ctx.createRadialGradient(cx, cy, 1, cx, cy, haloR);
+        halo.addColorStop(0, `rgba(255, 255, 255, ${Math.min(0.95, alpha).toFixed(3)})`);
+        halo.addColorStop(0.22, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.75).toFixed(3)})`);
+        halo.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
+        ctx.fill();
+
+        const streakHalfW = frameW * 0.45 * scale;
+        const streakH = Math.max(3, 8 * scale);
+        const sGrad = ctx.createLinearGradient(cx - streakHalfW, cy, cx + streakHalfW, cy);
+        sGrad.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+        sGrad.addColorStop(0.42, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.65).toFixed(3)})`);
+        sGrad.addColorStop(0.5, `rgba(255, 255, 255, ${Math.min(0.95, alpha).toFixed(3)})`);
+        sGrad.addColorStop(0.58, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.65).toFixed(3)})`);
+        sGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+        ctx.fillStyle = sGrad;
+        ctx.fillRect(cx - streakHalfW, cy - streakH / 2, streakHalfW * 2, streakH);
+
+        const midX = fx + frameW * 0.5;
+        const midY = fy + frameH * 0.5;
+        const ghostX = midX - (cx - midX) * 0.55;
+        const ghostY = midY - (cy - midY) * 0.55;
+        ctx.strokeStyle = `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.35).toFixed(3)})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(ghostX, ghostY, 14 * scale, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.restore();
+      } else if (node.effect === "flicker") {
+        const amp = Number(p.amplitude ?? 0.18) * kfMul;
+        const freq = Number(p.frequency ?? 8);
+        const rand = Number(p.randomness ?? 0.35);
+        const delta =
+          (amp *
+            (Math.sin(tSec * freq * Math.PI * 2 + 0.45) +
+              rand * Math.sin(tSec * freq * 1.73 * Math.PI * 2 + 1.7))) /
+          (1 + rand);
+        if (Math.abs(delta) > 0.005) {
+          ctx.save();
+          ctx.fillStyle =
+            delta >= 0
+              ? `rgba(255, 255, 255, ${Math.min(0.55, delta * 1.35).toFixed(3)})`
+              : `rgba(0, 0, 0, ${Math.min(0.65, Math.abs(delta) * 1.45).toFixed(3)})`;
+          ctx.fillRect(fx, fy, frameW, frameH);
+          ctx.restore();
+        }
+      } else if (node.effect === "film_damage") {
+        const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
+        if (mix > 0.01) {
+          const grain = Number(p.grain ?? 28) * mix;
+          const scratches = Number(p.scratches ?? 0.45) * mix;
+          const vignette = Number(p.vignette ?? 0.55) * mix;
+
+          let rng = ((playheadFrame + 1) * 1664525 + 1013904223) >>> 0;
+          const nextRand = () => {
+            rng = (rng * 1664525 + 1013904223) >>> 0;
+            return rng / 4294967296;
+          };
+          const speckCount = Math.round(grain * 6.5);
+          for (let i = 0; i < speckCount; i++) {
+            const sx = fx + nextRand() * frameW;
+            const sy = fy + nextRand() * frameH;
+            const bright = nextRand() > 0.5;
+            ctx.fillStyle = bright ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.28)";
+            ctx.fillRect(sx, sy, 1.5, 1.5);
+          }
+
+          if (scratches > 0.03) {
+            const lineCount = Math.max(1, Math.round(scratches * 4));
+            for (let i = 0; i < lineCount; i++) {
+              const xFrac = ((0.21 + i * 0.27 + ((playheadFrame * (i + 3)) % 17) * 0.008) % 0.92) + 0.04;
+              const lx = fx + frameW * xFrac;
+              ctx.strokeStyle =
+                i % 2 === 0
+                  ? `rgba(255,255,255,${Math.min(0.45, scratches * 0.42).toFixed(3)})`
+                  : `rgba(10,10,12,${Math.min(0.55, scratches * 0.48).toFixed(3)})`;
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(lx, fy);
+              ctx.lineTo(lx + (nextRand() - 0.5) * 1.5, fy + frameH);
+              ctx.stroke();
+            }
+          }
+
+          if (vignette > 0.02) {
+            const midX = fx + frameW / 2;
+            const midY = fy + frameH / 2;
+            const vig = ctx.createRadialGradient(
+              midX,
+              midY,
+              frameH * 0.25,
+              midX,
+              midY,
+              frameW * 0.65
+            );
+            vig.addColorStop(0, "rgba(0,0,0,0)");
+            vig.addColorStop(1, `rgba(0,0,0,${Math.min(0.82, vignette * 0.78).toFixed(3)})`);
+            ctx.fillStyle = vig;
+            ctx.fillRect(fx, fy, frameW, frameH);
+          }
+        }
+      } else if (node.effect === "vignette") {
+        const rawAngle = Math.min(1.2, Math.max(0.1, Number(p.angle_rad ?? 0.52)));
+        const intensity = Math.min(1, kfMul);
+        if (intensity > 0.005) {
+          const effAngle = rawAngle * intensity;
+          const midX = fx + frameW * 0.5;
+          const midY = fy + frameH * 0.5;
+          const innerR = Math.max(8, frameH * (0.44 - Math.min(0.28, effAngle * 0.22)));
+          const outerR = Math.hypot(frameW * 0.5, frameH * 0.5) * 1.05;
+          const edgeAlpha = Math.min(0.92, (0.22 + effAngle * 0.62) * intensity);
+          const midAlpha = Math.min(0.45, edgeAlpha * 0.38);
+          const vig = ctx.createRadialGradient(midX, midY, innerR, midX, midY, outerR);
+          vig.addColorStop(0, "rgba(0, 0, 0, 0)");
+          vig.addColorStop(0.55, `rgba(0, 0, 0, ${midAlpha.toFixed(3)})`);
+          vig.addColorStop(1, `rgba(0, 0, 0, ${edgeAlpha.toFixed(3)})`);
+          ctx.save();
+          ctx.fillStyle = vig;
+          ctx.fillRect(fx, fy, frameW, frameH);
+          ctx.restore();
+        }
+      } else if (node.effect === "film_grain") {
+        const strength = Math.min(40, Math.max(0, Number(p.strength ?? 14))) * kfMul;
+        if (strength > 0.2) {
+          let rng = (((playheadFrame + 17) * 1664525 + 1013904223) >>> 0);
+          const nextRand = () => {
+            rng = (rng * 1664525 + 1013904223) >>> 0;
+            return rng / 4294967296;
+          };
+          const norm = Math.min(1, strength / 40);
+          const speckCount = Math.round(strength * 14);
+          const brightAlpha = (0.08 + norm * 0.22).toFixed(3);
+          const darkAlpha = (0.10 + norm * 0.26).toFixed(3);
+          ctx.save();
+          for (let i = 0; i < speckCount; i++) {
+            const sx = fx + nextRand() * frameW;
+            const sy = fy + nextRand() * frameH;
+            const sz = nextRand() > 0.72 ? 1.8 : 1.2;
+            ctx.fillStyle = nextRand() > 0.5
+              ? `rgba(245, 242, 236, ${brightAlpha})`
+              : `rgba(12, 12, 15, ${darkAlpha})`;
+            ctx.fillRect(sx, sy, sz, sz);
+          }
+          ctx.restore();
+        }
+      }
+    }
+
+    // Composite Title & Lower-Third / Subtitle overlays (suppressed in Keyer Studio mode so matte & checkerboard stay clean)
+    const suppressForKeyer = Boolean(pCkRaw && pCkRaw.enabled);
+    const titleOnAir = suppressForKeyer
+      ? false
+      : drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, passTitleState, tSec);
+
+    const activeSubCue = suppressForKeyer
+      ? null
+      : drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, passSubState, tSec);
+
+    return { titleOnAir, activeSubCue };
+  };
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(fx, fy, frameW, frameH);
   ctx.clip();
 
-  if (buf) {
-    const bctx = buf.getContext("2d");
-    bctx.setTransform(1, 0, 0, 1, 0, 0);
-    bctx.clearRect(0, 0, bw, bh);
+  let titleOnAir = false;
+  let activeSubCue = null;
+  let wipeGeom = null;
 
-    _transScratchA = activeTrans ? ensureScratchCanvas(_transScratchA, bw, bh) : _transScratchA;
-    _transScratchB = activeTrans ? ensureScratchCanvas(_transScratchB, bw, bh) : _transScratchB;
-
-    if (activeTrans && _transScratchA && _transScratchB && !ckRaw?.enabled) {
-      const ctxA = _transScratchA.getContext("2d");
-      const ctxB = _transScratchB.getContext("2d");
-      ctxA.setTransform(1, 0, 0, 1, 0, 0);
-      ctxB.setTransform(1, 0, 0, 1, 0, 0);
-      ctxA.clearRect(0, 0, bw, bh);
-      ctxB.clearRect(0, 0, bw, bh);
-
-      const trkTag = `V${activeTrans.trackIndex}`;
-      drawFramedBaseScene(
-        ctxA,
-        bw,
-        bh,
-        doc,
-        playheadFrame,
-        cdl,
-        [{ track: trkTag, clip: activeTrans.clipA }],
-        framingMode,
-        srcAspect,
-        targetAspect
-      );
-      drawFramedBaseScene(
-        ctxB,
-        bw,
-        bh,
-        doc,
-        playheadFrame,
-        cdl,
-        [{ track: trkTag, clip: activeTrans.clipB }],
-        framingMode,
-        srcAspect,
-        targetAspect
-      );
-
-      const u = clamp01(activeTrans.progress);
-      const preset = activeTrans.transition.preset;
-      bctx.fillStyle = "#000000";
-      bctx.fillRect(0, 0, bw, bh);
-
-      if (preset === "fadeblack") {
-        if (u < 0.5) {
-          bctx.save();
-          bctx.globalAlpha = clamp01(1 - u * 2);
-          bctx.drawImage(_transScratchA, 0, 0, bw, bh);
-          bctx.restore();
-        } else {
-          bctx.save();
-          bctx.globalAlpha = clamp01((u - 0.5) * 2);
-          bctx.drawImage(_transScratchB, 0, 0, bw, bh);
-          bctx.restore();
-        }
-      } else if (preset === "wipeleft") {
-        const seamX = bw * (1 - u);
-        bctx.drawImage(_transScratchA, 0, 0, bw, bh);
-        bctx.save();
-        bctx.beginPath();
-        bctx.rect(seamX, 0, bw - seamX, bh);
-        bctx.clip();
-        bctx.drawImage(_transScratchB, 0, 0, bw, bh);
-        bctx.restore();
-        bctx.strokeStyle = "#e68442";
-        bctx.lineWidth = 2;
-        bctx.beginPath();
-        bctx.moveTo(seamX, 0);
-        bctx.lineTo(seamX, bh);
-        bctx.stroke();
-      } else if (preset === "slideright") {
-        const slideX = bw * u;
-        bctx.drawImage(_transScratchA, slideX, 0, bw, bh);
-        bctx.drawImage(_transScratchB, slideX - bw, 0, bw, bh);
-        bctx.strokeStyle = "#e68442";
-        bctx.lineWidth = 2;
-        bctx.beginPath();
-        bctx.moveTo(slideX, 0);
-        bctx.lineTo(slideX, bh);
-        bctx.stroke();
-      } else if (preset === "zoomin") {
-        const eased = u * u * (3 - 2 * u);
-        const scaleA = 1 + eased * 0.34;
-        const wA = bw * scaleA;
-        const hA = bh * scaleA;
-        bctx.save();
-        bctx.globalAlpha = clamp01(1 - eased);
-        bctx.drawImage(_transScratchA, (bw - wA) / 2, (bh - hA) / 2, wA, hA);
-        bctx.restore();
-
-        const scaleB = 0.84 + eased * 0.16;
-        const wB = bw * scaleB;
-        const hB = bh * scaleB;
-        bctx.save();
-        bctx.globalAlpha = clamp01(eased);
-        bctx.drawImage(_transScratchB, (bw - wB) / 2, (bh - hB) / 2, wB, hB);
-        bctx.restore();
-      } else {
-        // Cross Dissolve (fade)
-        bctx.drawImage(_transScratchA, 0, 0, bw, bh);
-        bctx.save();
-        bctx.globalAlpha = u;
-        bctx.drawImage(_transScratchB, 0, 0, bw, bh);
-        bctx.restore();
-      }
-    } else {
-      drawFramedBaseScene(
-        bctx,
-        bw,
-        bh,
-        doc,
-        playheadFrame,
-        cdl,
-        activeClips,
-        framingMode,
-        srcAspect,
-        targetAspect,
-        ckRaw
-      );
-    }
-
-    if (ckActive && ckRaw) {
-      applyChromaKeyOnBuffer(bctx, bw, bh, ckRaw, ckMatteView);
-    }
-
-    // Apply Chroma Aberration RGB channel split directly on frame buffer
-    const chromaNode = activeFx.find((n) => n.effect === "chroma_aberration");
-    if (chromaNode && !(ckActive && ckMatteView === "alpha_matte")) {
-      const chromaMul = evaluateNodeIntensity(chromaNode, tSec);
-      const p = chromaNode.params || {};
-      const spread = Number(p.spread ?? 8) * chromaMul;
-      const angleRad = (Number(p.angle ?? 15) * Math.PI) / 180;
-      const dx = Math.round(Math.cos(angleRad) * spread * (bw / 640));
-      const dy = Math.round(Math.sin(angleRad) * spread * (bw / 640));
-      if (dx !== 0 || dy !== 0) {
-        const srcImg = bctx.getImageData(0, 0, bw, bh);
-        const outImg = bctx.createImageData(bw, bh);
-        const s = srcImg.data;
-        const d = outImg.data;
-        for (let y = 0; y < bh; y++) {
-          const ry = Math.min(bh - 1, Math.max(0, y - dy));
-          const by = Math.min(bh - 1, Math.max(0, y + dy));
-          const rowOff = y * bw;
-          const rRowOff = ry * bw;
-          const bRowOff = by * bw;
-          for (let x = 0; x < bw; x++) {
-            const rx = Math.min(bw - 1, Math.max(0, x - dx));
-            const bx = Math.min(bw - 1, Math.max(0, x + dx));
-            const oi = (rowOff + x) * 4;
-            d[oi] = s[(rRowOff + rx) * 4];
-            d[oi + 1] = s[oi + 1];
-            d[oi + 2] = s[(bRowOff + bx) * 4 + 2];
-            d[oi + 3] = s[oi + 3];
-          }
-        }
-        bctx.putImageData(outImg, 0, 0);
-      }
-    }
-
-    if (ckActive && ckMatteView === "final") {
-      drawTransparencyCheckerboard(ctx, fx, fy, frameW, frameH);
-    }
-
-    ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
-    if (motionBlurAmt >= 0.05 && (Math.abs(shiftX) > 0.2 || Math.abs(shiftY) > 0.2)) {
+  if (wipeActive) {
+    wipeGeom = computeSplitWipeGeometry(fx, fy, frameW, frameH, splitWipeState.positionPct);
+    if (wipeGeom.leftRect.width > 0) {
       ctx.save();
-      ctx.globalAlpha = Math.min(0.42, motionBlurAmt * 0.42);
-      ctx.drawImage(buf, fx - shiftX * 0.55, fy - shiftY * 0.55, frameW, frameH);
+      ctx.beginPath();
+      ctx.rect(
+        wipeGeom.leftRect.x,
+        wipeGeom.leftRect.y,
+        wipeGeom.leftRect.width,
+        wipeGeom.leftRect.height
+      );
+      ctx.clip();
+      renderScenePass(null, { nodes: [], bypassAll: true }, null, null, ckRaw);
       ctx.restore();
     }
+    if (wipeGeom.rightRect.width > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(
+        wipeGeom.rightRect.x,
+        wipeGeom.rightRect.y,
+        wipeGeom.rightRect.width,
+        wipeGeom.rightRect.height
+      );
+      ctx.clip();
+      const afterMeta = renderScenePass(cdl, fxState, titleState, subtitleState, chromaKeyState);
+      titleOnAir = afterMeta.titleOnAir;
+      activeSubCue = afterMeta.activeSubCue;
+      ctx.restore();
+    }
+    canvas._splitWipeGeom = {
+      ...wipeGeom,
+      canvasWidth: width,
+      canvasHeight: height
+    };
   } else {
-    ctx.save();
-    ctx.translate(fx + shiftX, fy + shiftY);
-    drawFramedBaseScene(
-      ctx,
-      frameW,
-      frameH,
-      doc,
-      playheadFrame,
-      cdl,
-      activeClips,
-      framingMode,
-      srcAspect,
-      targetAspect,
-      ckRaw
-    );
-    ctx.restore();
+    const passMeta = renderScenePass(cdl, fxState, titleState, subtitleState, chromaKeyState);
+    titleOnAir = passMeta.titleOnAir;
+    activeSubCue = passMeta.activeSubCue;
+    canvas._splitWipeGeom = null;
   }
 
-  // Apply optical/lighting FX passes over the 16:9 frame
-  if (!(ckActive && ckMatteView === "alpha_matte")) for (const node of activeFx) {
-    const p = node.params || {};
-    const kfMul = evaluateNodeIntensity(node, tSec);
-    if (kfMul <= 0.0001) continue;
-    if (node.effect === "glow") {
-      const brightness = Number(p.brightness ?? 0.85) * kfMul;
-      const widthPx = Number(p.width ?? 18);
-      const threshold = Number(p.threshold ?? 0.45);
-      const [tr, tg, tb] = hexToRgbTuple(p.tint || "#ffd8a8");
-      const alpha = clamp01((brightness / 2.2) * (1.15 - threshold * 0.45));
-
-      if (buf && typeof ctx.filter === "string") {
-        ctx.save();
-        ctx.globalCompositeOperation = "screen";
-        ctx.globalAlpha = Math.min(0.85, alpha * 0.8);
-        ctx.filter = `blur(${Math.max(2, Math.round(widthPx * 0.45))}px)`;
-        ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
-        ctx.restore();
-      }
-
-      const gx = fx + frameW * 0.72 + shiftX;
-      const gy = fy + frameH * 0.32 + shiftY;
-      const gr = Math.max(24, widthPx * 2.4);
-      const gGrad = ctx.createRadialGradient(gx, gy, 2, gx, gy, gr);
-      gGrad.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, ${Math.min(0.75, alpha * 0.85).toFixed(3)})`);
-      gGrad.addColorStop(0.45, `rgba(${tr}, ${tg}, ${tb}, ${Math.min(0.4, alpha * 0.45).toFixed(3)})`);
-      gGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-      ctx.save();
-      ctx.globalCompositeOperation = "screen";
-      ctx.fillStyle = gGrad;
-      ctx.fillRect(fx, fy, frameW, frameH);
-      ctx.restore();
-    } else if (node.effect === "lens_flare") {
-      const cx = fx + Number(p.center_x ?? 0.72) * frameW;
-      const cy = fy + Number(p.center_y ?? 0.28) * frameH;
-      const brightness = Number(p.brightness ?? 0.95) * kfMul;
-      const scale = Number(p.scale ?? 1.0);
-      const [tr, tg, tb] = hexToRgbTuple(p.tint || "#7cc4ff");
-      const alpha = clamp01(brightness * 0.75);
-
-      ctx.save();
-      ctx.globalCompositeOperation = "screen";
-
-      // Radial optical halo
-      const haloR = Math.max(22, frameH * 0.36 * scale);
-      const halo = ctx.createRadialGradient(cx, cy, 1, cx, cy, haloR);
-      halo.addColorStop(0, `rgba(255, 255, 255, ${Math.min(0.95, alpha).toFixed(3)})`);
-      halo.addColorStop(0.22, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.75).toFixed(3)})`);
-      halo.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-      ctx.fillStyle = halo;
-      ctx.beginPath();
-      ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Anamorphic horizontal streak
-      const streakHalfW = frameW * 0.45 * scale;
-      const streakH = Math.max(3, 8 * scale);
-      const sGrad = ctx.createLinearGradient(cx - streakHalfW, cy, cx + streakHalfW, cy);
-      sGrad.addColorStop(0, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-      sGrad.addColorStop(0.42, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.65).toFixed(3)})`);
-      sGrad.addColorStop(0.5, `rgba(255, 255, 255, ${Math.min(0.95, alpha).toFixed(3)})`);
-      sGrad.addColorStop(0.58, `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.65).toFixed(3)})`);
-      sGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
-      ctx.fillStyle = sGrad;
-      ctx.fillRect(cx - streakHalfW, cy - streakH / 2, streakHalfW * 2, streakH);
-
-      // Secondary opposite lens ghost ring
-      const midX = fx + frameW * 0.5;
-      const midY = fy + frameH * 0.5;
-      const ghostX = midX - (cx - midX) * 0.55;
-      const ghostY = midY - (cy - midY) * 0.55;
-      ctx.strokeStyle = `rgba(${tr}, ${tg}, ${tb}, ${(alpha * 0.35).toFixed(3)})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(ghostX, ghostY, 14 * scale, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.restore();
-    } else if (node.effect === "flicker") {
-      const amp = Number(p.amplitude ?? 0.18) * kfMul;
-      const freq = Number(p.frequency ?? 8);
-      const rand = Number(p.randomness ?? 0.35);
-      const delta =
-        (amp *
-          (Math.sin(tSec * freq * Math.PI * 2 + 0.45) +
-            rand * Math.sin(tSec * freq * 1.73 * Math.PI * 2 + 1.7))) /
-        (1 + rand);
-      if (Math.abs(delta) > 0.005) {
-        ctx.save();
-        ctx.fillStyle =
-          delta >= 0
-            ? `rgba(255, 255, 255, ${Math.min(0.55, delta * 1.35).toFixed(3)})`
-            : `rgba(0, 0, 0, ${Math.min(0.65, Math.abs(delta) * 1.45).toFixed(3)})`;
-        ctx.fillRect(fx, fy, frameW, frameH);
-        ctx.restore();
-      }
-    } else if (node.effect === "film_damage") {
-      const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
-      if (mix > 0.01) {
-        const grain = Number(p.grain ?? 28) * mix;
-        const scratches = Number(p.scratches ?? 0.45) * mix;
-        const vignette = Number(p.vignette ?? 0.55) * mix;
-
-        // Deterministic grain specks seeded by playheadFrame
-        let rng = ((playheadFrame + 1) * 1664525 + 1013904223) >>> 0;
-        const nextRand = () => {
-          rng = (rng * 1664525 + 1013904223) >>> 0;
-          return rng / 4294967296;
-        };
-        const speckCount = Math.round(grain * 6.5);
-        for (let i = 0; i < speckCount; i++) {
-          const sx = fx + nextRand() * frameW;
-          const sy = fy + nextRand() * frameH;
-          const bright = nextRand() > 0.5;
-          ctx.fillStyle = bright ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.28)";
-          ctx.fillRect(sx, sy, 1.5, 1.5);
-        }
-
-        // Vertical film gate scratches
-        if (scratches > 0.03) {
-          const lineCount = Math.max(1, Math.round(scratches * 4));
-          for (let i = 0; i < lineCount; i++) {
-            const xFrac = ((0.21 + i * 0.27 + ((playheadFrame * (i + 3)) % 17) * 0.008) % 0.92) + 0.04;
-            const lx = fx + frameW * xFrac;
-            ctx.strokeStyle =
-              i % 2 === 0
-                ? `rgba(255,255,255,${Math.min(0.45, scratches * 0.42).toFixed(3)})`
-                : `rgba(10,10,12,${Math.min(0.55, scratches * 0.48).toFixed(3)})`;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(lx, fy);
-            ctx.lineTo(lx + (nextRand() - 0.5) * 1.5, fy + frameH);
-            ctx.stroke();
-          }
-        }
-
-        // Optical edge vignette
-        if (vignette > 0.02) {
-          const midX = fx + frameW / 2;
-          const midY = fy + frameH / 2;
-          const vig = ctx.createRadialGradient(
-            midX,
-            midY,
-            frameH * 0.25,
-            midX,
-            midY,
-            frameW * 0.65
-          );
-          vig.addColorStop(0, "rgba(0,0,0,0)");
-          vig.addColorStop(1, `rgba(0,0,0,${Math.min(0.82, vignette * 0.78).toFixed(3)})`);
-          ctx.fillStyle = vig;
-          ctx.fillRect(fx, fy, frameW, frameH);
-        }
-      }
-    } else if (node.effect === "vignette") {
-      const rawAngle = Math.min(1.2, Math.max(0.1, Number(p.angle_rad ?? 0.52)));
-      const intensity = Math.min(1, kfMul);
-      if (intensity > 0.005) {
-        const effAngle = rawAngle * intensity;
-        const midX = fx + frameW * 0.5;
-        const midY = fy + frameH * 0.5;
-        const innerR = Math.max(8, frameH * (0.44 - Math.min(0.28, effAngle * 0.22)));
-        const outerR = Math.hypot(frameW * 0.5, frameH * 0.5) * 1.05;
-        const edgeAlpha = Math.min(0.92, (0.22 + effAngle * 0.62) * intensity);
-        const midAlpha = Math.min(0.45, edgeAlpha * 0.38);
-        const vig = ctx.createRadialGradient(midX, midY, innerR, midX, midY, outerR);
-        vig.addColorStop(0, "rgba(0, 0, 0, 0)");
-        vig.addColorStop(0.55, `rgba(0, 0, 0, ${midAlpha.toFixed(3)})`);
-        vig.addColorStop(1, `rgba(0, 0, 0, ${edgeAlpha.toFixed(3)})`);
-        ctx.save();
-        ctx.fillStyle = vig;
-        ctx.fillRect(fx, fy, frameW, frameH);
-        ctx.restore();
-      }
-    } else if (node.effect === "film_grain") {
-      const strength = Math.min(40, Math.max(0, Number(p.strength ?? 14))) * kfMul;
-      if (strength > 0.2) {
-        let rng = (((playheadFrame + 17) * 1664525 + 1013904223) >>> 0);
-        const nextRand = () => {
-          rng = (rng * 1664525 + 1013904223) >>> 0;
-          return rng / 4294967296;
-        };
-        const norm = Math.min(1, strength / 40);
-        const speckCount = Math.round(strength * 14);
-        const brightAlpha = (0.08 + norm * 0.22).toFixed(3);
-        const darkAlpha = (0.10 + norm * 0.26).toFixed(3);
-        ctx.save();
-        for (let i = 0; i < speckCount; i++) {
-          const sx = fx + nextRand() * frameW;
-          const sy = fy + nextRand() * frameH;
-          const sz = nextRand() > 0.72 ? 1.8 : 1.2;
-          ctx.fillStyle = nextRand() > 0.5
-            ? `rgba(245, 242, 236, ${brightAlpha})`
-            : `rgba(12, 12, 15, ${darkAlpha})`;
-          ctx.fillRect(sx, sy, sz, sz);
-        }
-        ctx.restore();
-      }
-    }
-  }
-
-  // Composite Title & Lower-Third / Subtitle overlays (suppressed in Keyer Studio mode so matte & checkerboard stay clean)
-  const suppressForKeyer = Boolean(ckRaw && ckRaw.enabled);
-  const titleOnAir = suppressForKeyer
-    ? false
-    : drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState, tSec);
-
-  // Composite Active Subtitle / Caption Cue over video
-  const activeSubCue = suppressForKeyer
-    ? null
-    : drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitleState, tSec);
-
-  let leftPillY = fy + 16;
+  const topPillOffset = wipeActive ? 32 : 16;
+  let leftPillY = fy + topPillOffset;
   if (titleState && titleState.showBadge) {
     const label = titleState.enabled === false
       ? "TITLE: BYPASSED"
@@ -1636,18 +1777,23 @@ export function drawProgramMonitorCanvas(
         : "FX: ALL OFF";
     ctx.font = "700 10px ui-monospace, monospace";
     const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
+    const fxPillY = fy + topPillOffset;
     ctx.fillStyle = bypassAll || parts.length === 0
       ? "rgba(20, 20, 22, 0.84)"
       : ckActive
         ? "rgba(63, 185, 80, 0.92)"
         : "rgba(230, 132, 66, 0.92)";
-    ctx.fillRect(fx + frameW - tw - 8, fy + 16, tw, 17);
+    ctx.fillRect(fx + frameW - tw - 8, fxPillY, tw, 17);
     ctx.fillStyle = bypassAll || parts.length === 0 ? "#a4a4ae" : "#111114";
-    ctx.fillText(label, fx + frameW - tw - 2, fy + 28);
+    ctx.fillText(label, fx + frameW - tw - 2, fxPillY + 12);
   }
 
   // Broadcast & Social Safe-Area Guides (Action 90%, Title 80%, Reels/TikTok HUD)
   drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState);
+
+  if (wipeActive && wipeGeom) {
+    drawSplitWipeOverlay(ctx, fx, fy, frameW, frameH, wipeGeom, splitWipeState);
+  }
 
   ctx.restore();
 
@@ -2660,9 +2806,14 @@ function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
   }
 }
 
-export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
+export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null) {
   const { ctx, width, height } = setupCanvas(canvas, 224);
-  const wipeX = Math.round(width * clamp01(wipeRatio));
+  const wipeEnabled =
+    splitOpts && typeof splitOpts.enabled === "boolean" ? splitOpts.enabled : true;
+  const wipePct =
+    splitOpts && splitOpts.positionPct !== undefined
+      ? clampSplitWipePercent(splitOpts.positionPct)
+      : clampSplitWipePercent((wipeRatio ?? 0.5) * 100);
 
   const drawHalf = (xStart, xEnd, graded) => {
     if (xEnd <= xStart) return;
@@ -2674,8 +2825,20 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
     ctx.restore();
   };
 
-  drawHalf(0, wipeX, false);
-  drawHalf(wipeX, width, true);
+  if (wipeEnabled) {
+    const geom = computeSplitWipeGeometry(0, 0, width, height, wipePct);
+    drawHalf(0, geom.dividerX, false);
+    drawHalf(geom.dividerX, width, true);
+    drawSplitWipeOverlay(ctx, 0, 0, width, height, geom, splitOpts || {});
+    canvas._splitWipeGeom = {
+      ...geom,
+      canvasWidth: width,
+      canvasHeight: height
+    };
+  } else {
+    drawHalf(0, width, true);
+    canvas._splitWipeGeom = null;
+  }
 
   // Maintain a clean full-frame graded buffer of #color-preview-canvas for real ImageData scopes
   const scopeW = Math.max(260, Math.min(400, width));
@@ -2692,24 +2855,6 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio) {
   if (gradedCtx) {
     renderColorPreviewScene(gradedCtx, scopeW, scopeH, cdl, true, false);
   }
-
-  ctx.strokeStyle = "#e07b39";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(wipeX, 0);
-  ctx.lineTo(wipeX, height);
-  ctx.stroke();
-
-  ctx.fillStyle = "rgba(17, 17, 20, 0.85)";
-  ctx.fillRect(8, 8, 72, 18);
-  ctx.fillStyle = "#d8d8de";
-  ctx.font = "700 10px ui-monospace, monospace";
-  ctx.fillText("ORIGINAL", 14, 20);
-
-  ctx.fillStyle = "#e07b39";
-  ctx.fillRect(width - 96, 8, 88, 18);
-  ctx.fillStyle = "#111114";
-  ctx.fillText("COLOR GRADE", width - 90, 20);
 }
 
 let _scopeTraceCanvas = null;

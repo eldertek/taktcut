@@ -852,6 +852,10 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "clip-transform-rot-range",
         "clip-transform-opacity-range",
         "render-use-clip-transform",
+        "btn-color-split-wipe",
+        "btn-fx-split-wipe",
+        "fx-wipe-slider",
+        "fx-wipe-label",
     ):
         assert elem_id in html_text
     assert "v0.1.8" in html_text
@@ -886,6 +890,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Ouvrir Projet"' in i18n_text
     assert '"NLE Keyboard Shortcuts"' in i18n_text
     assert '"Raccourcis Clavier NLE"' in i18n_text
+    assert '"Volet Avant/Après"' in i18n_text
+    assert '"AVANT"' in i18n_text
+    assert '"APRÈS"' in i18n_text
     assert "innerHTML" not in i18n_text
     for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
         asset_text = _http_call(f"{base_url}{asset_path}")[2].decode("utf-8")
@@ -919,8 +926,13 @@ import {{
   MARKER_COLORS,
   SHUTTLE_MAX_SPEED,
   SHUTTLE_SPEEDS,
+  SPLIT_WIPE_HIT_RADIUS_PX,
+  SPLIT_WIPE_POS_DEFAULT,
+  SPLIT_WIPE_POS_MAX,
+  SPLIT_WIPE_POS_MIN,
   addMarkerInDocument,
   buildAtempoStagesClient,
+  clampSplitWipePercent,
   collectSnapTargets,
   compileAudioFilterClient,
   compileFramingFilterClient,
@@ -928,6 +940,8 @@ import {{
   compileTransitionFilterClient,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
+  computeSplitWipeGeometry,
+  computeSplitWipePercentFromPointer,
   deleteMarkerInDocument,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
@@ -936,6 +950,7 @@ import {{
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
   getDeliveryPresetClient,
+  isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
   normalizeBpmConfig,
   normalizeClipAudio,
@@ -943,6 +958,7 @@ import {{
   normalizeClipTransition,
   normalizeInOutRange,
   normalizeMarkerColor,
+  normalizeSplitWipeState,
   rippleDeleteClipInDocument,
   setInOutRange,
   splitClipInDocument,
@@ -1386,6 +1402,55 @@ assert.equal(rippleLast.focusClip.name, "V_A");
 const rippleBad = rippleDeleteClipInDocument(rippleMultiTrack, "video", 9, 0);
 assert.equal(rippleBad.changed, false);
 assert.equal(rippleBad.doc, rippleMultiTrack);
+
+// Split-Screen Before/After Wipe state clamping [0, 100] & geometry
+assert.equal(SPLIT_WIPE_POS_MIN, 0);
+assert.equal(SPLIT_WIPE_POS_MAX, 100);
+assert.equal(SPLIT_WIPE_POS_DEFAULT, 50);
+assert.equal(clampSplitWipePercent(-25), 0);
+assert.equal(clampSplitWipePercent(0), 0);
+assert.equal(clampSplitWipePercent(42.5), 42.5);
+assert.equal(clampSplitWipePercent(145), 100);
+assert.equal(clampSplitWipePercent(Number.NaN), 50);
+assert.equal(clampSplitWipePercent(null, 75), 75);
+assert.equal(clampSplitWipePercent(undefined, 150), 100);
+
+const wipeNormFromRatio = normalizeSplitWipeState({{ enabled: true, wipe_ratio: 0.65 }}, false);
+assert.equal(wipeNormFromRatio.enabled, true);
+assert.equal(wipeNormFromRatio.positionPct, 65);
+assert.equal(wipeNormFromRatio.ratio, 0.65);
+
+const wipeNormClamped = normalizeSplitWipeState({{ positionPct: 180 }}, true);
+assert.equal(wipeNormClamped.enabled, true);
+assert.equal(wipeNormClamped.positionPct, 100);
+assert.equal(wipeNormClamped.ratio, 1);
+
+const wipeGeom = computeSplitWipeGeometry(20, 10, 400, 200, 50);
+assert.equal(wipeGeom.dividerX, 220);
+assert.equal(wipeGeom.handleX, 220);
+assert.equal(wipeGeom.handleY, 110);
+assert.deepEqual(wipeGeom.leftRect, {{ x: 20, y: 10, width: 200, height: 200 }});
+assert.deepEqual(wipeGeom.rightRect, {{ x: 220, y: 10, width: 200, height: 200 }});
+
+const wipeGeomZero = computeSplitWipeGeometry(10, 0, 300, 180, -10);
+assert.equal(wipeGeomZero.dividerX, 10);
+assert.equal(wipeGeomZero.leftRect.width, 0);
+assert.equal(wipeGeomZero.rightRect.width, 300);
+
+const wipeGeomFull = computeSplitWipeGeometry(10, 0, 300, 180, 120);
+assert.equal(wipeGeomFull.dividerX, 310);
+assert.equal(wipeGeomFull.leftRect.width, 300);
+assert.equal(wipeGeomFull.rightRect.width, 0);
+
+assert.equal(computeSplitWipePercentFromPointer(220, 20, 400), 50);
+assert.equal(computeSplitWipePercentFromPointer(-50, 20, 400), 0);
+assert.equal(computeSplitWipePercentFromPointer(600, 20, 400), 100);
+assert.equal(computeSplitWipePercentFromPointer(100, 20, 0), 50);
+
+assert.equal(isPointerOnSplitWipeDivider(220, 110, wipeGeom, SPLIT_WIPE_HIT_RADIUS_PX), true);
+assert.equal(isPointerOnSplitWipeDivider(235, 50, wipeGeom, SPLIT_WIPE_HIT_RADIUS_PX), true);
+assert.equal(isPointerOnSplitWipeDivider(260, 110, wipeGeom, SPLIT_WIPE_HIT_RADIUS_PX), false);
+assert.equal(isPointerOnSplitWipeDivider(220, 250, wipeGeom, SPLIT_WIPE_HIT_RADIUS_PX), false);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -1943,6 +2008,62 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                         page.locator(f'[data-grade-preset="{preset_id}"]').click()
                         assert page.locator("#color-preset-badge").text_content() == preset_label
                         assert page.locator("#grade-saturation-num").input_value() == expected_sat
+
+                    # Verify Color Split-Screen Wipe toggle (W), slider (0..100%),
+                    # divider drag, and Before/After pixels
+                    assert (
+                        page.locator("#btn-color-split-wipe").get_attribute("aria-pressed")
+                        == "true"
+                    )
+                    assert page.locator("#cdl-wipe-label").text_content() == "50%"
+                    page.locator('[data-grade-preset="noir_bw"]').click()
+                    color_split_pixels = page.evaluate(
+                        """() => {
+                            const c = document.getElementById('color-preview-canvas');
+                            const ctx = c.getContext('2d');
+                            const y = Math.floor(c.height * 0.22);
+                            const lp = ctx.getImageData(Math.floor(c.width * 0.25), y, 1, 1).data;
+                            const rp = ctx.getImageData(Math.floor(c.width * 0.75), y, 1, 1).data;
+                            const maxDiffL = Math.max(
+                                Math.abs(lp[0] - lp[1]),
+                                Math.abs(lp[1] - lp[2])
+                            );
+                            const grayR = Math.abs(rp[0] - rp[1]) <= 2
+                                && Math.abs(rp[1] - rp[2]) <= 2;
+                            return {
+                                leftColored: maxDiffL > 20,
+                                rightGray: grayR
+                            };
+                        }"""
+                    )
+                    assert color_split_pixels["leftColored"] is True
+                    assert color_split_pixels["rightGray"] is True
+
+                    # Pointer drag directly on #color-preview-canvas divider line (50% -> ~75%)
+                    color_box = page.locator("#color-preview-canvas").bounding_box()
+                    assert color_box is not None
+                    div_x = color_box["x"] + color_box["width"] * 0.5
+                    div_y = color_box["y"] + color_box["height"] * 0.5
+                    page.mouse.move(div_x, div_y)
+                    page.mouse.down()
+                    page.mouse.move(color_box["x"] + color_box["width"] * 0.75, div_y, steps=4)
+                    page.mouse.up()
+                    wipe_txt = page.locator("#cdl-wipe-label").text_content() or "0%"
+                    dragged_pct = int(wipe_txt.rstrip("%"))
+                    assert 70 <= dragged_pct <= 80
+
+                    # W shortcut toggles Color Split Wipe OFF and back ON
+                    page.keyboard.press("w")
+                    assert (
+                        page.locator("#btn-color-split-wipe").get_attribute("aria-pressed")
+                        == "false"
+                    )
+                    page.keyboard.press("w")
+                    assert (
+                        page.locator("#btn-color-split-wipe").get_attribute("aria-pressed")
+                        == "true"
+                    )
+
                     page.locator('[data-grade-preset="teal_orange"]').click()
                     page.wait_for_function(
                         "() => document.getElementById('color-compile-badge').textContent"
@@ -1989,6 +2110,41 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     f"FX Chroma Key horizontal overflow at {width}x{height}: {fx_overflow}px"
                 )
                 if width == 1440:
+                    # Verify FX Split-Screen Wipe toggle (W), divider drag, and toggle OFF
+                    assert (
+                        page.locator("#btn-fx-split-wipe").get_attribute("aria-pressed") == "false"
+                    )
+                    page.keyboard.press("w")
+                    assert (
+                        page.locator("#btn-fx-split-wipe").get_attribute("aria-pressed") == "true"
+                    )
+                    assert page.locator("#fx-wipe-label").text_content() == "50%"
+                    fx_geom = page.evaluate(
+                        """() => {
+                            const c = document.getElementById('fx-program-canvas');
+                            const r = c.getBoundingClientRect();
+                            const g = c._splitWipeGeom;
+                            const sx = r.width / (g.canvasWidth || r.width);
+                            const sy = r.height / (g.canvasHeight || r.height);
+                            return {
+                                divX: r.left + g.dividerX * sx,
+                                divY: r.top + g.handleY * sy,
+                                targetX: r.left + (g.frameRect.x + g.frameRect.width * 0.30) * sx
+                            };
+                        }"""
+                    )
+                    page.mouse.move(fx_geom["divX"], fx_geom["divY"])
+                    page.mouse.down()
+                    page.mouse.move(fx_geom["targetX"], fx_geom["divY"], steps=4)
+                    page.mouse.up()
+                    fx_wipe_txt = page.locator("#fx-wipe-label").text_content() or "0%"
+                    fx_dragged_pct = int(fx_wipe_txt.rstrip("%"))
+                    assert 20 <= fx_dragged_pct <= 36
+                    page.locator("#btn-fx-split-wipe").click()
+                    assert (
+                        page.locator("#btn-fx-split-wipe").get_attribute("aria-pressed") == "false"
+                    )
+
                     page.locator('[data-keyer-preset="chroma_blue"]').click()
                     page.wait_for_function(
                         "() => (document.getElementById('fx-filtergraph-output').textContent || '')"
