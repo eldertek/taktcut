@@ -389,6 +389,13 @@ const state = {
   },
   lowerThirdCompileSeq: 0,
   lowerThirdCompileTimer: null,
+  deliverRetime: {
+    enabled: false,
+    speed: 1.0,
+    reverse: false
+  },
+  deliverRetimeCompileSeq: 0,
+  deliverRetimeCompileTimer: null,
   subtitleTrack: {
     enabled: true,
     style: "clean_white",
@@ -2339,6 +2346,7 @@ function serializeFullProjectState() {
       review_watermark_text: txt("render-watermark-text", ""),
       review_watermark_opacity: Number(byId("render-watermark-opacity")?.value ?? 0.35),
       lower_third: { ...state.lowerThird },
+      retime: { ...state.deliverRetime },
       export_fps: txt("render-export-fps", "source") || "source",
       deinterlace: chk("render-deinterlace", false),
       audio_only_format: txt("render-audio-only-format", "off") || "off",
@@ -2550,6 +2558,17 @@ function applyFullProjectState(project, validation) {
     };
   }
   syncLowerThirdControlsUI({ syncInputs: true });
+  if (del.retime && typeof del.retime === "object") {
+    const rawSpd = Number(del.retime.speed);
+    state.deliverRetime = {
+      enabled: Boolean(del.retime.enabled),
+      speed: Number.isFinite(rawSpd) ? Math.min(4.0, Math.max(0.25, rawSpd)) : 1.0,
+      reverse: Boolean(del.retime.reverse)
+    };
+  } else {
+    state.deliverRetime = { enabled: false, speed: 1.0, reverse: false };
+  }
+  syncDeliverRetimeControlsUI({ syncInputs: true });
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -4861,11 +4880,7 @@ function markDeliverPresetCustom() {
   }
 }
 
-function updateDeliverSizeEstimate() {
-  const badgeEl = byId("deliver-size-estimate");
-  const detailEl = byId("deliver-size-detail");
-  if (!badgeEl) return;
-
+function computeDeliverBaseDurationInfo() {
   const doc = state.timelineDoc;
   const fpsObj = doc && doc.fps ? doc.fps : { num: 25, den: 1 };
   const timelineFps = Math.max(1, Number(fpsObj.num || 25) / Math.max(1, Number(fpsObj.den || 1)));
@@ -4887,6 +4902,41 @@ function updateDeliverSizeEstimate() {
       scope = "timeline";
     }
   }
+  return { durationS, scope, timelineFps };
+}
+
+function updateDeliverRetimeDurationEstimate() {
+  const durEl = byId("render-retime-duration-estimate");
+  if (!durEl) return;
+  const { durationS } = computeDeliverBaseDurationInfo();
+  if (durationS <= 0) {
+    durEl.textContent = "--";
+    return;
+  }
+  const rt = getNormalizedDeliverRetimePayload();
+  const effectiveSpeed = rt.enabled ? rt.speed : 1.0;
+  const effectiveDur = durationS / effectiveSpeed;
+  if (!rt.enabled) {
+    durEl.textContent = `${durationS.toFixed(2)}s (1.00x)`;
+    return;
+  }
+  const revTag = rt.reverse ? " REV" : "";
+  durEl.textContent = `${durationS.toFixed(2)}s -> ${effectiveDur.toFixed(2)}s (${rt.speed.toFixed(2)}x${revTag})`;
+}
+
+function updateDeliverSizeEstimate() {
+  const badgeEl = byId("deliver-size-estimate");
+  const detailEl = byId("deliver-size-detail");
+  if (!badgeEl) return;
+
+  const doc = state.timelineDoc;
+  const { durationS: baseDurationS, scope, timelineFps } = computeDeliverBaseDurationInfo();
+  const rt = state.deliverRetime;
+  const durationS =
+    rt && rt.enabled && Number.isFinite(rt.speed) && rt.speed > 0
+      ? baseDurationS / rt.speed
+      : baseDurationS;
+  updateDeliverRetimeDurationEstimate();
 
   const profileEl = byId("render-profile");
   const profile = profileEl ? profileEl.value : "web_h264";
@@ -5143,6 +5193,95 @@ function scheduleLowerThirdCompile() {
       }
     } catch (err) {
       if (seq !== state.lowerThirdCompileSeq) return;
+      if (previewEl) previewEl.textContent = `Error: ${err.message}`;
+    }
+  }, 80);
+}
+
+function getNormalizedDeliverRetimePayload() {
+  const rt = state.deliverRetime;
+  const rawSpeed = Number(rt.speed);
+  return {
+    enabled: Boolean(rt.enabled),
+    speed: Number.isFinite(rawSpeed)
+      ? Math.min(RETIME_SPEED_MAX, Math.max(RETIME_SPEED_MIN, Number(rawSpeed.toFixed(2))))
+      : 1.0,
+    reverse: Boolean(rt.reverse)
+  };
+}
+
+function syncDeliverRetimePresetButtons() {
+  const rt = getNormalizedDeliverRetimePayload();
+  for (const btn of document.querySelectorAll(".retime-deliver-preset-btn[data-deliver-retime-speed]")) {
+    const presetVal = Number.parseFloat(btn.getAttribute("data-deliver-retime-speed") || "1");
+    const isMatch = Math.abs(presetVal - rt.speed) < 0.005;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function syncDeliverRetimeControlsUI(opts = {}) {
+  const rt = getNormalizedDeliverRetimePayload();
+  const syncInputs = Boolean(opts.syncInputs);
+  const enabledEl = byId("render-retime-enabled");
+  if (enabledEl && enabledEl.checked !== rt.enabled) {
+    enabledEl.checked = rt.enabled;
+  }
+  const speedEl = byId("render-retime-speed");
+  if (syncInputs && speedEl) {
+    speedEl.value = rt.speed.toFixed(2);
+  }
+  const speedValEl = byId("render-retime-speed-value");
+  if (speedValEl) {
+    speedValEl.textContent = `${rt.speed.toFixed(2)}x`;
+  }
+  const revBtn = byId("render-retime-reverse");
+  if (revBtn) {
+    revBtn.classList.toggle("is-active", rt.reverse);
+    revBtn.setAttribute("aria-pressed", rt.reverse ? "true" : "false");
+  }
+  const badgeEl = byId("render-retime-badge");
+  if (badgeEl) {
+    const isActive = rt.enabled && (rt.reverse || Math.abs(rt.speed - 1.0) > 1e-6);
+    if (!rt.enabled) {
+      badgeEl.textContent = "OFF";
+      badgeEl.className = "nle-tag mono";
+    } else if (isActive) {
+      badgeEl.textContent = `${rt.speed.toFixed(2)}x${rt.reverse ? " REV" : ""}`;
+      badgeEl.className = rt.reverse ? "nle-tag is-warn mono" : "nle-tag is-active mono";
+    } else {
+      badgeEl.textContent = "1.00x";
+      badgeEl.className = "nle-tag mono";
+    }
+  }
+  syncDeliverRetimePresetButtons();
+  updateDeliverRetimeDurationEstimate();
+  scheduleDeliverRetimeCompile();
+}
+
+function scheduleDeliverRetimeCompile() {
+  if (state.deliverRetimeCompileTimer) {
+    window.clearTimeout(state.deliverRetimeCompileTimer);
+  }
+  const seq = ++state.deliverRetimeCompileSeq;
+  state.deliverRetimeCompileTimer = window.setTimeout(async () => {
+    const previewEl = byId("render-retime-preview");
+    const payload = getNormalizedDeliverRetimePayload();
+    if (!payload.enabled || (!payload.reverse && Math.abs(payload.speed - 1.0) <= 1e-6)) {
+      if (previewEl) previewEl.textContent = "(off)";
+      return;
+    }
+    try {
+      const compiled = await api.compileRetimeFilter(payload);
+      if (seq !== state.deliverRetimeCompileSeq) return;
+      if (previewEl) {
+        const parts = [];
+        if (compiled.video_filtergraph) parts.push(`-vf ${compiled.video_filtergraph}`);
+        if (compiled.audio_filtergraph) parts.push(`-af ${compiled.audio_filtergraph}`);
+        previewEl.textContent = parts.length > 0 ? parts.join(" | ") : "(off)";
+      }
+    } catch (err) {
+      if (seq !== state.deliverRetimeCompileSeq) return;
       if (previewEl) previewEl.textContent = `Error: ${err.message}`;
     }
   }, 80);
@@ -5424,6 +5563,8 @@ async function buildOrExecuteRender(execute) {
     const wmOpacityEl = byId("render-watermark-opacity");
     const reviewWatermarkOpacity = wmOpacityEl ? Number(wmOpacityEl.value) : 0.35;
     const lowerThirdPayload = getNormalizedLowerThirdPayload();
+    const deliverRetimePayload = getNormalizedDeliverRetimePayload();
+    const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
     const exportFpsEl = byId("render-export-fps");
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
     const deinterlaceEl = byId("render-deinterlace");
@@ -5450,7 +5591,8 @@ async function buildOrExecuteRender(execute) {
         subtitle_track: subtitlePayload,
         audio_params: audioParamsPayload,
         video_fade: videoFadePayload,
-        retime_params: retimeParamsPayload,
+        retime: deliverRetimePayload.enabled ? deliverRetimePayload : null,
+        retime_params: effectiveRetimeParamsPayload,
         transform_params: transformParamsPayload,
         framing: framingPayload,
         clip_duration_s: clipDurationPayload,
@@ -5512,7 +5654,8 @@ async function buildOrExecuteRender(execute) {
       subtitle_track: subtitlePayload,
       audio_params: audioParamsPayload,
       video_fade: videoFadePayload,
-      retime_params: retimeParamsPayload,
+      retime: deliverRetimePayload.enabled ? deliverRetimePayload : null,
+      retime_params: effectiveRetimeParamsPayload,
       transform_params: transformParamsPayload,
       framing: framingPayload,
       clip_duration_s: clipDurationPayload,
@@ -5595,6 +5738,12 @@ async function buildOrExecuteRender(execute) {
         t("render.plan.lowerThird"),
         plan.lower_third_enabled
           ? `${plan.lower_third_title || plan.lower_third_subtitle} (${plan.lower_third_position})`
+          : "off"
+      ],
+      [
+        t("render.plan.retime"),
+        plan.retime_enabled
+          ? `${Number(plan.retime_speed ?? 1).toFixed(2)}x${plan.retime_reverse ? " REV" : ""}`
           : "off"
       ],
       ["Video Filter", plan.video_filter || t("common.none")],
@@ -9524,6 +9673,51 @@ function wireEvents() {
     });
   }
   syncLowerThirdControlsUI({ syncInputs: true });
+  const rtEnabledEl = byId("render-retime-enabled");
+  if (rtEnabledEl) {
+    rtEnabledEl.addEventListener("change", () => {
+      state.deliverRetime.enabled = Boolean(rtEnabledEl.checked);
+      syncDeliverRetimeControlsUI();
+      updateDeliverSizeEstimate();
+    });
+  }
+  for (const btn of document.querySelectorAll(".retime-deliver-preset-btn[data-deliver-retime-speed]")) {
+    btn.addEventListener("click", () => {
+      const val = Number.parseFloat(btn.getAttribute("data-deliver-retime-speed") || "1");
+      if (!Number.isFinite(val)) return;
+      state.deliverRetime.speed = Math.min(RETIME_SPEED_MAX, Math.max(RETIME_SPEED_MIN, val));
+      if (Math.abs(state.deliverRetime.speed - 1.0) > 1e-6) {
+        state.deliverRetime.enabled = true;
+      }
+      syncDeliverRetimeControlsUI({ syncInputs: true });
+      updateDeliverSizeEstimate();
+    });
+  }
+  const rtSpeedEl = byId("render-retime-speed");
+  if (rtSpeedEl) {
+    const onRtSpeedChange = () => {
+      const val = Number.parseFloat(rtSpeedEl.value);
+      if (Number.isFinite(val) && val >= RETIME_SPEED_MIN && val <= RETIME_SPEED_MAX) {
+        state.deliverRetime.speed = Number(val.toFixed(2));
+        syncDeliverRetimeControlsUI();
+        updateDeliverSizeEstimate();
+      }
+    };
+    rtSpeedEl.addEventListener("input", onRtSpeedChange);
+    rtSpeedEl.addEventListener("change", onRtSpeedChange);
+  }
+  const rtRevBtn = byId("render-retime-reverse");
+  if (rtRevBtn) {
+    rtRevBtn.addEventListener("click", () => {
+      state.deliverRetime.reverse = !state.deliverRetime.reverse;
+      if (state.deliverRetime.reverse) {
+        state.deliverRetime.enabled = true;
+      }
+      syncDeliverRetimeControlsUI();
+      updateDeliverSizeEstimate();
+    });
+  }
+  syncDeliverRetimeControlsUI({ syncInputs: true });
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {

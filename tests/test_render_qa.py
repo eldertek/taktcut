@@ -28,6 +28,7 @@ from taktcut.render import (
     FairlightAudioParams,
     FramingParams,
     LowerThirdParams,
+    RetimeParams,
     build_atempo_stages,
     build_render_plan,
     compile_audio_filter,
@@ -1632,6 +1633,97 @@ def test_lower_third_escaping_and_real_ffmpeg_render(tmp_path: Path) -> None:
     assert plan.lower_third_position == "bottom_left"
     assert plan.video_filter is not None
     assert "between(t,0.40,1.40)" in plan.video_filter
+
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0
+
+
+def test_retime_params_validation_and_filter_compile(tmp_path: Path) -> None:
+    default_rt = RetimeParams()
+    assert default_rt.enabled is False
+    assert default_rt.speed == 1.0
+    assert default_rt.reverse is False
+    assert default_rt.is_active() is False
+    assert default_rt.is_identity() is True
+    assert compile_retime_filter(default_rt) == (None, None)
+
+    disabled_rt = RetimeParams(enabled=False, speed=2.0, reverse=True)
+    assert disabled_rt.is_active() is False
+    assert compile_retime_filter(disabled_rt) == (None, None)
+
+    identity_enabled = RetimeParams(enabled=True, speed=1.0, reverse=False)
+    assert identity_enabled.is_active() is False
+    assert compile_retime_filter(identity_enabled) == (None, None)
+
+    assert compile_retime_filter(RetimeParams(enabled=True, speed=0.25, reverse=False)) == (
+        "setpts=PTS/0.2500",
+        "atempo=0.5000,atempo=0.5000",
+    )
+    assert compile_retime_filter(RetimeParams(enabled=True, speed=0.5, reverse=False)) == (
+        "setpts=PTS/0.5000",
+        "atempo=0.5000",
+    )
+    assert compile_retime_filter(RetimeParams(enabled=True, speed=1.5, reverse=False)) == (
+        "setpts=PTS/1.5000",
+        "atempo=1.5000",
+    )
+    assert compile_retime_filter(RetimeParams(enabled=True, speed=2.0, reverse=False)) == (
+        "setpts=PTS/2.0000",
+        "atempo=2.0000",
+    )
+    assert compile_retime_filter(RetimeParams(enabled=True, speed=4.0, reverse=False)) == (
+        "setpts=PTS/4.0000",
+        "atempo=2.0000,atempo=2.0000",
+    )
+    assert compile_retime_filter(RetimeParams(enabled=True, speed=1.0, reverse=True)) == (
+        "reverse",
+        "areverse",
+    )
+    assert compile_retime_filter(RetimeParams(enabled=True, speed=2.0, reverse=True)) == (
+        "setpts=PTS/2.0000,reverse",
+        "atempo=2.0000,areverse",
+    )
+
+    compiled_quarter_rev = compile_retime_filter_result(
+        RetimeParams(enabled=True, speed=0.25, reverse=True)
+    )
+    assert compiled_quarter_rev.is_active is True
+    assert compiled_quarter_rev.is_identity is False
+    assert compiled_quarter_rev.video_filtergraph == "setpts=PTS/0.2500,reverse"
+    assert compiled_quarter_rev.audio_filtergraph == "atempo=0.5000,atempo=0.5000,areverse"
+    assert compiled_quarter_rev.ffmpeg_vf_args == ["-vf", "setpts=PTS/0.2500,reverse"]
+    assert compiled_quarter_rev.ffmpeg_af_args == ["-af", "atempo=0.5000,atempo=0.5000,areverse"]
+
+    for bad_kwargs in (
+        {"enabled": "yes"},
+        {"reverse": "no"},
+        {"enabled": True, "speed": 0.24},
+        {"enabled": True, "speed": 4.01},
+        {"enabled": True, "speed": True},
+        {"enabled": True, "speed": math.nan},
+        {"enabled": True, "speed": math.inf},
+        {"unknown_field": 1},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            RetimeParams(**bad_kwargs)  # type: ignore[arg-type]
+
+    src = tmp_path / "retime_params_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "retime_params_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        retime=RetimeParams(enabled=True, speed=2.0, reverse=True),
+        prefer_hw=False,
+    )
+    assert plan.retime_enabled is True
+    assert plan.retime_speed == pytest.approx(2.0)
+    assert plan.retime_reverse is True
+    assert plan.video_filter == "setpts=PTS/2.0000,reverse"
+    assert plan.audio_filter == "atempo=2.0000,areverse"
 
     result = execute_render_plan(plan)
     assert result.success is True, result.stderr_tail

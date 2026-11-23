@@ -4,6 +4,7 @@ import {
   DELIVERY_PRESETS,
   LOUDNESS_PRESET_LUFS,
   TRANSITION_PRESETS,
+  buildAtempoStagesClient,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileFairlightAudioFilterClient,
@@ -614,6 +615,58 @@ function compileLowerThirdClient(payload) {
   };
 }
 
+function compileDeliverRetimeClient(payload) {
+  const src = payload && payload.retime ? payload.retime : payload || {};
+  const enabled = src.enabled !== undefined ? Boolean(src.enabled) : false;
+  if (src.enabled !== undefined && typeof src.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const reverse = src.reverse !== undefined ? Boolean(src.reverse) : false;
+  if (src.reverse !== undefined && typeof src.reverse !== "boolean") {
+    throw new Error("reverse must be a boolean");
+  }
+  const rawSpeed = src.speed !== undefined && src.speed !== null ? Number(src.speed) : 1.0;
+  if (
+    typeof src.speed === "boolean" ||
+    !Number.isFinite(rawSpeed) ||
+    rawSpeed < 0.25 ||
+    rawSpeed > 4.0
+  ) {
+    throw new Error("speed must be within [0.25, 4.0]");
+  }
+  const isActive = Boolean(enabled && (reverse || Math.abs(rawSpeed - 1.0) > 1e-6));
+  const isIdentity = !isActive;
+  const vfParts = [];
+  const afParts = [];
+  if (isActive) {
+    if (Math.abs(rawSpeed - 1.0) > 1e-6) {
+      vfParts.push(`setpts=PTS/${rawSpeed.toFixed(4)}`);
+      for (const stage of buildAtempoStagesClient(rawSpeed)) {
+        afParts.push(`atempo=${stage.toFixed(4)}`);
+      }
+    }
+    if (reverse) {
+      vfParts.push("reverse");
+      afParts.push("areverse");
+    }
+  }
+  const vf = vfParts.join(",");
+  const af = afParts.join(",");
+  return {
+    video_filtergraph: vf,
+    audio_filtergraph: af,
+    ffmpeg_vf_args: vf ? ["-vf", vf] : [],
+    ffmpeg_af_args: af ? ["-af", af] : [],
+    is_identity: isIdentity,
+    is_active: isActive,
+    params: {
+      enabled,
+      speed: rawSpeed,
+      reverse
+    }
+  };
+}
+
 const CAPTION_STYLE_SPECS = [
   {
     id: "clean_white",
@@ -1134,11 +1187,26 @@ export function createApiClient() {
         if (deinterlace) {
           vfParts.push("yadif=mode=0:parity=-1:deint=0");
         }
-        if (body.retime_params) {
+        let retimeEnabled = false;
+        let retimeSpeed = 1.0;
+        let retimeReverse = false;
+        if (body.retime) {
+          const compiledRetime = compileDeliverRetimeClient(body.retime);
+          if (!compiledRetime.is_identity) {
+            if (compiledRetime.video_filtergraph) vfParts.push(compiledRetime.video_filtergraph);
+            if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
+            retimeEnabled = true;
+            retimeSpeed = compiledRetime.params.speed;
+            retimeReverse = compiledRetime.params.reverse;
+          }
+        } else if (body.retime_params) {
           const compiledRetime = compileRetimeFilterClient(body.retime_params);
           if (!compiledRetime.is_identity) {
             if (compiledRetime.video_filtergraph) vfParts.push(compiledRetime.video_filtergraph);
             if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
+            retimeEnabled = true;
+            retimeSpeed = compiledRetime.params.speed_rate;
+            retimeReverse = compiledRetime.params.reverse;
           }
         }
         if (rawExportFps !== "source") {
@@ -1353,6 +1421,9 @@ export function createApiClient() {
               lower_third_title: "",
               lower_third_subtitle: "",
               lower_third_position: "bottom_left",
+              retime_enabled: retimeEnabled,
+              retime_speed: retimeSpeed,
+              retime_reverse: retimeReverse,
               export_fps: rawExportFps,
               deinterlace,
               audio_only_format: rawAudioOnly,
@@ -1421,6 +1492,9 @@ export function createApiClient() {
             lower_third_title: compiledLowerThird ? compiledLowerThird.params.title.trim() : "",
             lower_third_subtitle: compiledLowerThird ? compiledLowerThird.params.subtitle.trim() : "",
             lower_third_position: compiledLowerThird ? compiledLowerThird.params.position : "bottom_left",
+            retime_enabled: retimeEnabled,
+            retime_speed: retimeSpeed,
+            retime_reverse: retimeReverse,
             export_fps: rawExportFps,
             deinterlace,
             audio_only_format: "off",
@@ -1551,6 +1625,14 @@ export function createApiClient() {
     },
     async compileRetimeFilter(payload) {
       if (resolvedMode === "static-demo") {
+        if (
+          payload &&
+          (payload.retime ||
+            Object.prototype.hasOwnProperty.call(payload, "enabled") ||
+            Object.prototype.hasOwnProperty.call(payload, "speed"))
+        ) {
+          return compileDeliverRetimeClient(payload.retime || payload);
+        }
         return compileRetimeFilterClient(payload.retime_params || payload);
       }
       return requestJson("/api/retime/compile", { method: "POST", body: payload });

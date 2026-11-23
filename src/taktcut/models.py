@@ -535,6 +535,9 @@ class RenderPlan(BaseModel):
     lower_third_title: str = ""
     lower_third_subtitle: str = ""
     lower_third_position: LowerThirdPosition = "bottom_left"
+    retime_enabled: bool = False
+    retime_speed: float = 1.0
+    retime_reverse: bool = False
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

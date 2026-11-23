@@ -1006,6 +1006,39 @@ class ClipRetimeParams(BaseModel):
         return not self.reverse and math.isclose(self.speed_rate, 1.0, abs_tol=1e-6)
 
 
+class RetimeParams(BaseModel):
+    """Delivery and clip Speed & Reverse Retime parameters with strict bounds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    speed: float = 1.0
+    reverse: bool = False
+
+    @field_validator("enabled", "reverse", mode="before")
+    @classmethod
+    def _validate_bool_fields(cls, raw: Any, info: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"{info.field_name} must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("speed", mode="before")
+    @classmethod
+    def _validate_speed(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "speed", RETIME_SPEED_MIN, RETIME_SPEED_MAX)
+
+    def is_active(self) -> bool:
+        """Return True when enabled and speed != 1.0 or reverse is True."""
+        return bool(
+            self.enabled
+            and (self.reverse or not math.isclose(self.speed, 1.0, abs_tol=1e-6))
+        )
+
+    def is_identity(self) -> bool:
+        """Return True when disabled or effectively 1.0x forward."""
+        return not self.is_active()
+
+
 class RetimeCompileResult(BaseModel):
     """Compiled FFmpeg video and audio filtergraphs for clip retime."""
 
@@ -1014,7 +1047,8 @@ class RetimeCompileResult(BaseModel):
     ffmpeg_vf_args: list[str]
     ffmpeg_af_args: list[str]
     is_identity: bool
-    params: ClipRetimeParams
+    is_active: bool = False
+    params: ClipRetimeParams | RetimeParams
 
 
 def build_atempo_stages(speed_rate: float) -> list[float]:
@@ -1039,19 +1073,27 @@ def build_atempo_stages(speed_rate: float) -> list[float]:
     return stages
 
 
-def compile_retime_filter(params: ClipRetimeParams) -> tuple[str | None, str | None]:
-    """Compile validated clip speed_rate and reverse into FFmpeg (vf, af) filter strings."""
+def compile_retime_filter(
+    params: ClipRetimeParams | RetimeParams,
+) -> tuple[str | None, str | None]:
+    """Compile validated retime parameters into FFmpeg (vf, af) filter strings."""
     if params.is_identity():
         return (None, None)
 
     vf_parts: list[str] = []
     af_parts: list[str] = []
 
-    if not math.isclose(params.speed_rate, 1.0, abs_tol=1e-6):
-        pts_scale = 1.0 / params.speed_rate
-        vf_parts.append(f"setpts={pts_scale:.6f}*PTS")
-        for stage in build_atempo_stages(params.speed_rate):
-            af_parts.append(f"atempo={stage:.4f}")
+    if isinstance(params, RetimeParams):
+        if not math.isclose(params.speed, 1.0, abs_tol=1e-6):
+            vf_parts.append(f"setpts=PTS/{params.speed:.4f}")
+            for stage in build_atempo_stages(params.speed):
+                af_parts.append(f"atempo={stage:.4f}")
+    else:
+        if not math.isclose(params.speed_rate, 1.0, abs_tol=1e-6):
+            pts_scale = 1.0 / params.speed_rate
+            vf_parts.append(f"setpts={pts_scale:.6f}*PTS")
+            for stage in build_atempo_stages(params.speed_rate):
+                af_parts.append(f"atempo={stage:.4f}")
 
     if params.reverse:
         vf_parts.append("reverse")
@@ -1063,17 +1105,21 @@ def compile_retime_filter(params: ClipRetimeParams) -> tuple[str | None, str | N
     )
 
 
-def compile_retime_filter_result(params: ClipRetimeParams) -> RetimeCompileResult:
+def compile_retime_filter_result(
+    params: ClipRetimeParams | RetimeParams,
+) -> RetimeCompileResult:
     """Compile clip retime parameters into structured video/audio filtergraphs and argv slices."""
     vf, af = compile_retime_filter(params)
     vf_str = vf or ""
     af_str = af or ""
+    is_id = params.is_identity()
     return RetimeCompileResult(
         video_filtergraph=vf_str,
         audio_filtergraph=af_str,
         ffmpeg_vf_args=["-vf", vf_str] if vf_str else [],
         ffmpeg_af_args=["-af", af_str] if af_str else [],
-        is_identity=params.is_identity(),
+        is_identity=is_id,
+        is_active=not is_id,
         params=params,
     )
 
@@ -1755,6 +1801,7 @@ def build_render_plan(
     audio_only_format: AudioOnlyFormatId | None = None,
     video_fade: ClipVideoFadeParams | None = None,
     lower_third: LowerThirdParams | None = None,
+    retime: RetimeParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1885,8 +1932,19 @@ def build_render_plan(
 
     retime_vf: str | None = None
     retime_af: str | None = None
-    if retime_params is not None and not retime_params.is_identity():
+    retime_enabled = False
+    retime_speed = 1.0
+    retime_reverse = False
+    if retime is not None and retime.is_active():
+        retime_vf, retime_af = compile_retime_filter(retime)
+        retime_enabled = True
+        retime_speed = retime.speed
+        retime_reverse = retime.reverse
+    elif retime_params is not None and not retime_params.is_identity():
         retime_vf, retime_af = compile_retime_filter(retime_params)
+        retime_enabled = True
+        retime_speed = retime_params.speed_rate
+        retime_reverse = retime_params.reverse
 
     framing_vf: str | None = None
     target_width: int | None = None
@@ -1931,8 +1989,7 @@ def build_render_plan(
     if needs_duration_probe:
         probed_dur = _probe_media_duration_s(input_path)
         if probed_dur is not None:
-            rate = retime_params.speed_rate if retime_params is not None else 1.0
-            resolved_clip_dur = probed_dur / rate
+            resolved_clip_dur = probed_dur / retime_speed
 
     vf_parts: list[str] = []
     deint_vf = compile_deinterlace_filter(resolved_deinterlace)
@@ -2056,6 +2113,9 @@ def build_render_plan(
             lower_third_title="",
             lower_third_subtitle="",
             lower_third_position="bottom_left",
+            retime_enabled=retime_enabled,
+            retime_speed=retime_speed,
+            retime_reverse=retime_reverse,
             export_fps=resolved_export_fps,
             deinterlace=resolved_deinterlace,
             audio_only_format=resolved_audio_only,
@@ -2156,6 +2216,9 @@ def build_render_plan(
             sanitize_title_text(lower_third.subtitle) if lower_third is not None else ""
         ),
         lower_third_position=lower_third.position if lower_third is not None else "bottom_left",
+        retime_enabled=retime_enabled,
+        retime_speed=retime_speed,
+        retime_reverse=retime_reverse,
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
         audio_only_format=resolved_audio_only,

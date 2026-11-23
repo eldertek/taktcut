@@ -3542,6 +3542,56 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert prog_with_lt != prog_without_lt
                 page.locator("#tab-render").click()
 
+                # Verify Deliver Retime (Speed & Reverse) controls & dry-run plan
+                rt_card = page.locator("#deliver-retime-card")
+                rt_chk = page.locator("#render-retime-enabled")
+                rt_speed = page.locator("#render-retime-speed")
+                rt_rev = page.locator("#render-retime-reverse")
+                rt_qtr = page.locator(
+                    '.retime-deliver-preset-btn[data-deliver-retime-speed="0.25"]'
+                )
+                rt_4x = page.locator('.retime-deliver-preset-btn[data-deliver-retime-speed="4"]')
+                assert rt_card.is_visible() is True
+                assert rt_chk.is_checked() is False
+                if width <= 820:
+                    for rt_loc in (rt_speed, rt_rev, rt_qtr, rt_4x):
+                        rt_box = rt_loc.bounding_box()
+                        assert rt_box is not None and rt_box["height"] >= 44
+                rt_qtr.click()
+                assert rt_chk.is_checked() is True
+                assert rt_qtr.get_attribute("aria-pressed") == "true"
+                page.wait_for_function(
+                    "() => (document.getElementById('render-retime-preview')"
+                    ".textContent || '').includes('setpts=PTS/0.2500')"
+                )
+                rt_preview_qtr = page.locator("#render-retime-preview").text_content() or ""
+                assert "atempo=0.5000,atempo=0.5000" in rt_preview_qtr
+                rt_dur_text = page.locator("#render-retime-duration-estimate").text_content() or ""
+                assert "0.25x" in rt_dur_text
+                rt_rev.click()
+                assert rt_rev.get_attribute("aria-pressed") == "true"
+                page.wait_for_function(
+                    "() => (document.getElementById('render-retime-preview')"
+                    ".textContent || '').includes('areverse')"
+                )
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('setpts=PTS/0.2500,reverse')"
+                )
+                rt_argv = page.locator("#render-argv-output").text_content() or ""
+                rt_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "atempo=0.5000,atempo=0.5000,areverse" in rt_argv
+                assert "0.25x REV" in rt_kv
+                rt_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert rt_overflow <= 0, (
+                    f"Deliver retime overflow at {width}x{height}: {rt_overflow}px"
+                )
+                rt_rev.click()
+                rt_chk.uncheck()
+
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
@@ -5111,3 +5161,123 @@ def test_ui_lower_third_compile_and_render_plan_endpoints(
             assert "\u2013" not in content and "\u2014" not in content, (
                 f"En/em dash found in {asset_file.name}"
             )
+
+
+def test_ui_retime_params_compile_and_render_plan_endpoints(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/retime/compile",
+        method="POST",
+        payload={"enabled": True, "speed": 0.25, "reverse": True},
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["is_active"] is True
+    assert compiled["is_identity"] is False
+    assert compiled["video_filtergraph"] == "setpts=PTS/0.2500,reverse"
+    assert compiled["audio_filtergraph"] == "atempo=0.5000,atempo=0.5000,areverse"
+    assert compiled["ffmpeg_vf_args"] == ["-vf", "setpts=PTS/0.2500,reverse"]
+    assert compiled["ffmpeg_af_args"] == ["-af", "atempo=0.5000,atempo=0.5000,areverse"]
+
+    fast_status, _, fast_raw = _http_call(
+        f"{base_url}/api/retime/compile",
+        method="POST",
+        payload={"enabled": True, "speed": 4.0, "reverse": False},
+    )
+    assert fast_status == 200
+    fast_compiled = json.loads(fast_raw.decode("utf-8"))
+    assert fast_compiled["video_filtergraph"] == "setpts=PTS/4.0000"
+    assert fast_compiled["audio_filtergraph"] == "atempo=2.0000,atempo=2.0000"
+
+    off_status, _, off_raw = _http_call(
+        f"{base_url}/api/retime/compile",
+        method="POST",
+        payload={"enabled": False, "speed": 2.0, "reverse": True},
+    )
+    assert off_status == 200
+    off_compiled = json.loads(off_raw.decode("utf-8"))
+    assert off_compiled["is_active"] is False
+    assert off_compiled["is_identity"] is True
+    assert off_compiled["video_filtergraph"] == ""
+    assert off_compiled["audio_filtergraph"] == ""
+
+    for bad_rt in (
+        {"enabled": True, "speed": 0.1},
+        {"enabled": True, "speed": 4.5},
+        {"enabled": True, "speed": True},
+        {"enabled": "yes", "speed": 2.0},
+        {"enabled": True, "reverse": "yes"},
+    ):
+        bad_c_status, _, _ = _http_call(
+            f"{base_url}/api/retime/compile",
+            method="POST",
+            payload=bad_rt,
+        )
+        assert bad_c_status == 400
+
+    rp_status, _, rp_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/retime_dryrun.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "retime": {"enabled": True, "speed": 2.0, "reverse": True},
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert rp_status == 200
+    plan = json.loads(rp_raw.decode("utf-8"))["plan"]
+    assert plan["retime_enabled"] is True
+    assert plan["retime_speed"] == pytest.approx(2.0)
+    assert plan["retime_reverse"] is True
+    assert "setpts=PTS/2.0000,reverse" in plan["video_filter"]
+    assert "atempo=2.0000,areverse" in plan["audio_filter"]
+
+    bad_rp_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/retime_bad.mp4",
+            "retime": {"enabled": True, "speed": 9.0},
+            "execute": False,
+        },
+    )
+    assert bad_rp_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "deliver-retime-card",
+        "render-retime-enabled",
+        "render-retime-speed",
+        "render-retime-speed-value",
+        "render-retime-reverse",
+        "render-retime-duration-estimate",
+        "render-retime-preview",
+    ):
+        assert f'id="{elem_id}"' in html_text
+    for spd_attr in ("0.25", "0.5", "1", "1.5", "2", "4"):
+        assert f'data-deliver-retime-speed="{spd_attr}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.retime.title",
+        "render.retime.toggle",
+        "render.retime.label.speed",
+        "render.retime.label.direction",
+        "render.retime.reverse",
+        "render.retime.label.duration",
+        "render.plan.retime",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    demo_text = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    assert "compileDeliverRetimeClient" in demo_text
+    assert "retime_enabled" in demo_text

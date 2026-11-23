@@ -106,6 +106,7 @@ from taktcut.render import (
     FairlightAudioParams,
     FramingParams,
     LowerThirdParams,
+    RetimeParams,
     build_render_plan,
     compile_audio_filter_result,
     compile_auto_duck_filter_result,
@@ -511,6 +512,31 @@ def _extract_review_watermark(payload: dict[str, Any]) -> tuple[str, float]:
         else REVIEW_WATERMARK_OPACITY_DEFAULT
     )
     return text, opacity
+
+
+def _build_retime_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> RetimeParams | None:
+    if "retime" in payload:
+        raw_rt = payload.get("retime")
+        if raw_rt is None:
+            return None
+        if not isinstance(raw_rt, dict):
+            raise ValueError("'retime' must be a JSON object")
+        if "speed_rate" in raw_rt and "speed" not in raw_rt and "enabled" not in raw_rt:
+            return None
+        return RetimeParams.model_validate(raw_rt)
+    if allow_top_level and (
+        "enabled" in payload
+        or "speed" in payload
+        or ("speed_rate" not in payload and "retime_params" not in payload)
+    ):
+        allowed_keys = ("enabled", "speed", "reverse")
+        subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
+        return RetimeParams.model_validate(subset)
+    return None
 
 
 def _build_retime_params_from_payload(
@@ -1630,7 +1656,10 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             deinterlace = _extract_deinterlace(payload)
             audio_only_format = _extract_audio_only_format(payload)
             out_file = resolve_audio_only_output_path(out_file, audio_only_format)
-            retime_params = _build_retime_params_from_payload(payload)
+            retime_obj = _build_retime_from_payload(payload)
+            retime_params = (
+                _build_retime_params_from_payload(payload) if retime_obj is None else None
+            )
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
 
@@ -1668,6 +1697,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 subtitle_track=subtitle_track_obj,
                 audio_params=audio_params,
                 video_fade=video_fade,
+                retime=retime_obj,
                 retime_params=retime_params,
                 transform_params=transform_params,
                 framing=framing_params,
@@ -1862,9 +1892,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/retime/compile":
-            retime_params = _build_retime_params_from_payload(payload, allow_top_level=True)
-            assert retime_params is not None
-            compiled_retime = compile_retime_filter_result(retime_params)
+            retime_obj = _build_retime_from_payload(payload, allow_top_level=True)
+            if retime_obj is not None:
+                compiled_retime = compile_retime_filter_result(retime_obj)
+            else:
+                retime_params = _build_retime_params_from_payload(payload, allow_top_level=True)
+                assert retime_params is not None
+                compiled_retime = compile_retime_filter_result(retime_params)
             self._send_json(HTTPStatus.OK, compiled_retime.model_dump(mode="json"))
             return
 
@@ -2113,7 +2147,10 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             deinterlace = _extract_deinterlace(payload)
             audio_only_format = _extract_audio_only_format(payload)
             out_file = resolve_audio_only_output_path(out_file, audio_only_format)
-            retime_params = _build_retime_params_from_payload(payload)
+            retime_obj = _build_retime_from_payload(payload)
+            retime_params = (
+                _build_retime_params_from_payload(payload) if retime_obj is None else None
+            )
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
             title_overlay_remote: TitleOverlayParams | None = None
@@ -2146,6 +2183,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 subtitle_track=subtitle_track_remote,
                 audio_params=audio_params,
                 video_fade=video_fade,
+                retime=retime_obj,
                 retime_params=retime_params,
                 transform_params=transform_params,
                 framing=framing_params,

@@ -385,3 +385,22 @@ def test_remote_render_request_accepts_dynamic_zoom() -> None:
             input_base64="AAAA",
             transform_params={"dynamic_zoom": "invalid_dz"},  # type: ignore[arg-type]
         )
+
+
+def test_remote_render_request_accepts_retime() -> None:
+    from taktcut.remote_render import RemoteRenderJobRequest
+
+    req = RemoteRenderJobRequest(
+        input_base64="AAAA",
+        retime={"enabled": True, "speed": 0.25, "reverse": True},  # type: ignore[arg-type]
+    )
+    assert req.retime is not None
+    assert req.retime.enabled is True
+    assert req.retime.speed == pytest.approx(0.25)
+    assert req.retime.reverse is True
+
+    with pytest.raises((ValueError, Exception)):
+        RemoteRenderJobRequest(
+            input_base64="AAAA",
+            retime={"enabled": True, "speed": 6.0},  # type: ignore[arg-type]
+        )

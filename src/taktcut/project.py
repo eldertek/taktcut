@@ -45,6 +45,7 @@ from taktcut.render import (
     EncoderPresetId,
     FramingParams,
     LowerThirdParams,
+    RetimeParams,
     validate_audio_only_format,
     validate_dialogue_eq,
     validate_export_fps,
@@ -172,6 +173,7 @@ class ProjectDeliveryState(BaseModel):
     review_watermark_text: str = ""
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     lower_third: LowerThirdParams = Field(default_factory=LowerThirdParams)
+    retime: RetimeParams = Field(default_factory=RetimeParams)
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

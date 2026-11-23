@@ -985,3 +985,32 @@ def test_project_delivery_lower_third_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["lower_third"]["position"] = bad_pos
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_retime_roundtrip(tmp_path: Path) -> None:
+    from taktcut.render import RetimeParams
+
+    proj = _build_full_test_project()
+    assert proj.delivery.retime.enabled is False
+    assert proj.delivery.retime.speed == pytest.approx(1.0)
+    assert proj.delivery.retime.reverse is False
+
+    proj.delivery.retime = RetimeParams(enabled=True, speed=0.25, reverse=True)
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.retime.enabled is True
+    assert loaded.delivery.retime.speed == pytest.approx(0.25)
+    assert loaded.delivery.retime.reverse is True
+
+    proj_path = tmp_path / "retime_proj.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.retime.enabled is True
+    assert disk_loaded.delivery.retime.speed == pytest.approx(0.25)
+    assert disk_loaded.delivery.retime.reverse is True
+
+    for bad_speed in (0.1, 4.5, True, "fast"):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["retime"]["speed"] = bad_speed
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
