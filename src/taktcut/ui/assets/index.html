@@ -1417,6 +1417,40 @@
               </div>
             </div>
             <div class="pane-body">
+              <div id="color-node-tree-dock" class="color-node-tree-dock" role="region" aria-label="Serial Color Node Tree">
+                <div class="color-node-toolbar">
+                  <div class="color-node-title-group">
+                    <span class="pane-subheader-label" data-i18n="color.nodes.title">Serial Node Tree</span>
+                    <span id="color-node-count" class="nle-tag mono">1 / 8 NODES</span>
+                  </div>
+                  <div class="color-node-actions">
+                    <button type="button" id="btn-color-node-add" class="btn btn-mini" data-i18n="color.nodes.add">+ Serial Node</button>
+                    <button type="button" id="btn-color-node-bypass" class="btn btn-mini" aria-pressed="false" data-i18n="color.nodes.bypass">Bypass Node</button>
+                    <button type="button" id="btn-color-node-left" class="btn btn-mini" aria-label="Move node earlier" title="Move node earlier">&lt;</button>
+                    <button type="button" id="btn-color-node-right" class="btn btn-mini" aria-label="Move node later" title="Move node later">&gt;</button>
+                    <button type="button" id="btn-color-node-reset" class="btn btn-mini" data-i18n="color.nodes.reset">Reset Node</button>
+                    <button type="button" id="btn-color-node-delete" class="btn btn-mini btn-danger-mini" disabled data-i18n="color.nodes.delete">Delete Node</button>
+                  </div>
+                </div>
+                <div id="color-node-graph" class="color-node-graph" role="group" aria-label="Serial color grading nodes"></div>
+                <div class="color-node-lut-bar">
+                  <div class="color-node-meta-field">
+                    <label class="inline-label" for="color-node-label-input" data-i18n="color.nodes.label">Node Name</label>
+                    <input type="text" id="color-node-label-input" class="input-control mono color-node-label-input" maxlength="48" value="Primary" aria-label="Selected color node label">
+                  </div>
+                  <div class="color-node-lut-field">
+                    <label class="inline-label" for="cube-file-input" data-i18n="color.label.importCube">Import .cube</label>
+                    <input type="file" id="cube-file-input" class="input-control file-input-compact" accept=".cube">
+                    <span id="color-node-lut-badge" class="nle-tag mono" data-i18n="color.nodes.noLut">NO LUT</span>
+                  </div>
+                  <div class="color-node-mix-field">
+                    <label class="inline-label" for="cube-lut-mix-range" data-i18n="color.nodes.lutMix">LUT Mix (%)</label>
+                    <input type="range" id="cube-lut-mix-range" min="0" max="100" step="1" value="100" disabled>
+                    <input type="number" id="cube-lut-mix-num" class="input-num mono" min="0" max="100" step="1" value="100" aria-label="Node LUT mix percentage" disabled>
+                    <button type="button" id="btn-color-node-clear-lut" class="btn btn-mini" disabled data-i18n="color.nodes.clearLut">Clear LUT</button>
+                  </div>
+                </div>
+              </div>
               <div class="wheels-grid">
                 <!-- LIFT (SHADOWS) WHEEL -->
                 <div class="wheel-dock">

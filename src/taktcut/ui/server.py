@@ -29,18 +29,23 @@ from taktcut.color import (
     COLOR_BALANCE_MIN,
     CONTRAST_MAX,
     CONTRAST_MIN,
+    MAX_COLOR_NODES,
     SATURATION_MAX,
     SATURATION_MIN,
     TEMPERATURE_MAX,
     TEMPERATURE_MIN,
     ColorGradeParams,
+    ColorNodeParams,
     apply_color_preset,
     bake_cdl_to_cube,
     bake_color_grade_to_cube,
+    bake_color_node_chain_to_cube,
     compile_color_grade,
+    compile_color_node_chain,
     list_color_presets,
     parse_cdl_xml,
     parse_cube_lut,
+    parse_cube_lut_text,
 )
 from taktcut.drp import export_otio, load_timeline, validate_timeline
 from taktcut.fx import (
@@ -329,6 +334,14 @@ def _has_color_grade_fields(payload: dict[str, Any]) -> bool:
     return any(
         key in payload for key in ("grade", "lift", "gamma", "gain", "contrast", "temperature")
     )
+
+
+def _build_color_nodes_from_payload(raw_nodes: Any) -> list[ColorNodeParams]:
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        raise ValueError("'nodes' must be a non-empty array")
+    if len(raw_nodes) > MAX_COLOR_NODES:
+        raise ValueError(f"Color node tree cannot exceed {MAX_COLOR_NODES} nodes")
+    return [ColorNodeParams.model_validate(item) for item in raw_nodes]
 
 
 def _build_color_grade_from_payload(payload: dict[str, Any]) -> ColorGradeParams:
@@ -1506,9 +1519,30 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/color/parse-cube":
+            cube_content = payload.get("cube_content")
+            if isinstance(cube_content, str) and cube_content.strip():
+                raw_fname = str(payload.get("filename") or "uploaded.cube").strip()
+                source_name = raw_fname or "uploaded.cube"
+                info, table = parse_cube_lut_text(cube_content, source_name=source_name)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "info": info.model_dump(mode="json"),
+                        "lut": {
+                            "title": info.title,
+                            "dimension": info.dimension,
+                            "size": info.size,
+                            "domain_min": list(info.domain_min),
+                            "domain_max": list(info.domain_max),
+                            "entry_count": info.entry_count,
+                            "table": [list(row) for row in table],
+                        },
+                    },
+                )
+                return
             raw_path = payload.get("path")
             if not isinstance(raw_path, str) or not raw_path.strip():
-                raise ValueError("Provide workspace 'path' to a .cube file")
+                raise ValueError("Provide workspace 'path' or 'cube_content' for a .cube file")
             confined = confine_workspace_path(
                 self.app_state.workspace_root,
                 raw_path,
@@ -1520,20 +1554,29 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/color/compile":
-            grade = _build_color_grade_from_payload(payload)
             raw_pix_fmt = payload.get("pix_fmt")
             pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
+            if isinstance(payload.get("nodes"), list) and len(payload["nodes"]) > 0:
+                color_nodes = _build_color_nodes_from_payload(payload["nodes"])
+                compiled_chain = compile_color_node_chain(color_nodes, pix_fmt=pix_fmt)
+                self._send_json(HTTPStatus.OK, compiled_chain.model_dump(mode="json"))
+                return
+            grade = _build_color_grade_from_payload(payload)
             compiled_color = compile_color_grade(grade, pix_fmt=pix_fmt)
             self._send_json(HTTPStatus.OK, compiled_color.model_dump(mode="json"))
             return
 
         if route == "/api/color/bake":
-            use_grade = _has_color_grade_fields(payload)
+            has_nodes = isinstance(payload.get("nodes"), list) and len(payload["nodes"]) > 0
+            nodes_obj: list[ColorNodeParams] | None = (
+                _build_color_nodes_from_payload(payload["nodes"]) if has_nodes else None
+            )
+            use_grade = not has_nodes and _has_color_grade_fields(payload)
             grade_obj: ColorGradeParams | None = None
             cdl_obj: AscCdlParams | None = None
             if use_grade:
                 grade_obj = _build_color_grade_from_payload(payload)
-            else:
+            elif not has_nodes:
                 cdl_obj = _build_cdl_from_payload(payload)
             size = int(payload.get("size", 33))
             title = str(payload.get("title", "taktcut_cdl")).strip() or "taktcut_cdl"
@@ -1546,7 +1589,11 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     must_exist=False,
                     allowed_suffixes=LUT_SUFFIXES,
                 )
-                if grade_obj is not None:
+                if nodes_obj is not None:
+                    info = bake_color_node_chain_to_cube(
+                        nodes_obj, out_file, size=size, title=title
+                    )
+                elif grade_obj is not None:
                     info = bake_color_grade_to_cube(grade_obj, out_file, size=size, title=title)
                 else:
                     assert cdl_obj is not None
@@ -1558,7 +1605,11 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             else:
                 with tempfile.TemporaryDirectory(prefix="taktcut_ui_cube_") as tmp_dir:
                     tmp_cube = Path(tmp_dir) / "baked.cube"
-                    if grade_obj is not None:
+                    if nodes_obj is not None:
+                        info = bake_color_node_chain_to_cube(
+                            nodes_obj, tmp_cube, size=size, title=title
+                        )
+                    elif grade_obj is not None:
                         info = bake_color_grade_to_cube(grade_obj, tmp_cube, size=size, title=title)
                     else:
                         assert cdl_obj is not None
@@ -1579,9 +1630,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/color/download-cube":
-            use_grade = _has_color_grade_fields(payload)
+            has_nodes = isinstance(payload.get("nodes"), list) and len(payload["nodes"]) > 0
+            nodes_dl: list[ColorNodeParams] | None = (
+                _build_color_nodes_from_payload(payload["nodes"]) if has_nodes else None
+            )
+            use_grade = not has_nodes and _has_color_grade_fields(payload)
             grade_dl = _build_color_grade_from_payload(payload) if use_grade else None
-            cdl_dl = None if use_grade else _build_cdl_from_payload(payload)
+            cdl_dl = None if (has_nodes or use_grade) else _build_cdl_from_payload(payload)
             size = int(payload.get("size", 33))
             title = str(payload.get("title", "taktcut_cdl")).strip() or "taktcut_cdl"
             filename = sanitize_download_filename(
@@ -1591,7 +1646,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             with tempfile.TemporaryDirectory(prefix="taktcut_ui_cubedl_") as tmp_dir:
                 tmp_cube = Path(tmp_dir) / filename
-                if grade_dl is not None:
+                if nodes_dl is not None:
+                    bake_color_node_chain_to_cube(nodes_dl, tmp_cube, size=size, title=title)
+                elif grade_dl is not None:
                     bake_color_grade_to_cube(grade_dl, tmp_cube, size=size, title=title)
                 else:
                     assert cdl_dl is not None
@@ -1670,6 +1727,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             lut_file: Path | None = None
             color_grade_obj: ColorGradeParams | None = None
+            color_nodes_obj: list[ColorNodeParams] | None = None
             raw_lut = payload.get("lut_path")
             if isinstance(raw_lut, str) and raw_lut.strip():
                 lut_file = confine_workspace_path(
@@ -1678,6 +1736,23 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     must_exist=True,
                     allowed_suffixes=LUT_SUFFIXES,
                 )
+            elif isinstance(payload.get("color_nodes"), list) and len(payload["color_nodes"]) > 0:
+                parsed_nodes = _build_color_nodes_from_payload(payload["color_nodes"])
+                if any(
+                    n.enabled and n.lut_table is not None and n.lut_mix > 1e-6
+                    for n in parsed_nodes
+                ):
+                    lut_file = confine_workspace_path(
+                        self.app_state.workspace_root,
+                        ".taktcut-samples/studio_node_tree.cube",
+                        must_exist=False,
+                        allowed_suffixes=LUT_SUFFIXES,
+                    )
+                    bake_color_node_chain_to_cube(
+                        parsed_nodes, lut_file, size=33, title="taktcut_studio_node_tree"
+                    )
+                else:
+                    color_nodes_obj = parsed_nodes
             elif isinstance(payload.get("color_grade"), dict):
                 color_grade_obj = _build_color_grade_from_payload({"grade": payload["color_grade"]})
             elif isinstance(payload.get("cdl"), dict):
@@ -1778,6 +1853,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 fps=fps,
                 lut_path=lut_file,
                 color_grade=color_grade_obj,
+                color_nodes=color_nodes_obj,
                 chroma_key=chroma_key_obj,
                 fx_filtergraph=fx_filtergraph,
                 title_overlay=title_overlay_obj,

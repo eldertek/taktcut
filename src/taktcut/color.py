@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
+import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
 import defusedxml.ElementTree as DefusedET
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from taktcut.models import AscCdlParams, CubeLutInfo
 
@@ -30,6 +32,13 @@ SATURATION_MIN: float = 0.0
 SATURATION_MAX: float = 3.0
 TEMPERATURE_MIN: float = -1.0
 TEMPERATURE_MAX: float = 1.0
+MAX_COLOR_NODES: int = 8
+COLOR_NODE_LABEL_MAX_LEN: int = 48
+LUT_MIX_MIN: float = 0.0
+LUT_MIX_MAX: float = 1.0
+LUT_MIX_DEFAULT: float = 1.0
+MAX_CUBE_TEXT_BYTES: int = 8 * 1024 * 1024
+_NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 ALLOWED_COLOR_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "rgb24", "yuv444p"}
@@ -392,16 +401,25 @@ def parse_cdl_xml(path: Path) -> AscCdlParams:
     return AscCdlParams(slope=slope, offset=offset, power=power, saturation=sat)
 
 
-def parse_cube_lut(path: Path) -> CubeLutInfo:
-    """Validate and inspect an Adobe/Iridas 1D or 3D .cube LUT file."""
+def parse_cube_lut_text(
+    raw_text: str,
+    *,
+    source_name: str = "uploaded.cube",
+) -> tuple[CubeLutInfo, list[tuple[float, float, float]]]:
+    """Parse and validate an Adobe/Iridas 1D or 3D .cube LUT string into info and RGB table."""
+    if not isinstance(raw_text, str):
+        raise ValueError("LUT content must be a UTF-8 string")
+    if len(raw_text.encode("utf-8")) > MAX_CUBE_TEXT_BYTES:
+        raise ValueError(f"LUT content exceeds maximum allowed size ({MAX_CUBE_TEXT_BYTES} bytes)")
+
     title = ""
     size_1d: int | None = None
     size_3d: int | None = None
     domain_min: tuple[float, float, float] = (0.0, 0.0, 0.0)
     domain_max: tuple[float, float, float] = (1.0, 1.0, 1.0)
-    entries = 0
+    table: list[tuple[float, float, float]] = []
 
-    for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_no, raw_line in enumerate(raw_text.splitlines(), start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -414,12 +432,12 @@ def parse_cube_lut(path: Path) -> CubeLutInfo:
             size_3d = int(line.split()[1])
         elif upper.startswith("DOMAIN_MIN"):
             vals = [float(v) for v in line.split()[1:4]]
-            if len(vals) != 3:
+            if len(vals) != 3 or not all(math.isfinite(v) for v in vals):
                 raise ValueError(f"Invalid DOMAIN_MIN at line {line_no}")
             domain_min = (vals[0], vals[1], vals[2])
         elif upper.startswith("DOMAIN_MAX"):
             vals = [float(v) for v in line.split()[1:4]]
-            if len(vals) != 3:
+            if len(vals) != 3 or not all(math.isfinite(v) for v in vals):
                 raise ValueError(f"Invalid DOMAIN_MAX at line {line_no}")
             domain_max = (vals[0], vals[1], vals[2])
         elif upper.startswith("LUT_1D_INPUT_RANGE") or upper.startswith("LUT_3D_INPUT_RANGE"):
@@ -428,25 +446,31 @@ def parse_cube_lut(path: Path) -> CubeLutInfo:
             parts = line.split()
             if len(parts) != 3:
                 raise ValueError(f"Expected RGB triplet at line {line_no}, got: {line!r}")
-            for token in parts:
-                val = float(token)
-                if not math.isfinite(val):
-                    raise ValueError(f"Non-finite LUT value at line {line_no}: {token}")
-            entries += 1
+            r_val = float(parts[0])
+            g_val = float(parts[1])
+            b_val = float(parts[2])
+            if not (math.isfinite(r_val) and math.isfinite(g_val) and math.isfinite(b_val)):
+                raise ValueError(f"Non-finite LUT value at line {line_no}: {line!r}")
+            table.append((r_val, g_val, b_val))
 
     if (size_1d is None) == (size_3d is None):
         raise ValueError("LUT must declare exactly one of LUT_1D_SIZE or LUT_3D_SIZE")
 
     if size_3d is not None:
+        if size_3d < 2 or size_3d > 65:
+            raise ValueError(f"LUT_3D_SIZE must be within [2, 65], got {size_3d}")
         dimension: Literal["1D", "3D"] = "3D"
         size = size_3d
         expected = size_3d**3
     else:
         assert size_1d is not None
+        if size_1d < 2 or size_1d > 4096:
+            raise ValueError(f"LUT_1D_SIZE must be within [2, 4096], got {size_1d}")
         dimension = "1D"
         size = size_1d
         expected = size_1d
 
+    entries = len(table)
     if entries != expected:
         raise ValueError(
             f"Expected {expected} entries for {dimension} size {size}, found {entries}"
@@ -456,14 +480,102 @@ def parse_cube_lut(path: Path) -> CubeLutInfo:
         if domain_min[idx] >= domain_max[idx]:
             raise ValueError(f"Invalid LUT domain bounds: {domain_min} >= {domain_max}")
 
-    return CubeLutInfo(
-        path=str(path),
+    info = CubeLutInfo(
+        path=source_name,
         title=title,
         dimension=dimension,
         size=size,
         domain_min=domain_min,
         domain_max=domain_max,
         entry_count=entries,
+    )
+    return info, table
+
+
+def parse_cube_lut(path: Path) -> CubeLutInfo:
+    """Validate and inspect an Adobe/Iridas 1D or 3D .cube LUT file."""
+    info, _ = parse_cube_lut_text(path.read_text(encoding="utf-8"), source_name=str(path))
+    return info
+
+
+def apply_cube_lut_rgb(
+    r: float,
+    g: float,
+    b: float,
+    *,
+    dimension: Literal["1D", "3D"],
+    size: int,
+    table: Sequence[tuple[float, float, float]],
+    domain_min: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    domain_max: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    mix: float = 1.0,
+) -> tuple[float, float, float]:
+    """Evaluate a 1D or 3D .cube LUT using linear/trilinear interpolation and mix blending."""
+    mix_clamped = _clamp_unit(mix)
+    in_r = _clamp_unit(r)
+    in_g = _clamp_unit(g)
+    in_b = _clamp_unit(b)
+    if mix_clamped <= 1e-6 or size < 2:
+        return (in_r, in_g, in_b)
+
+    nr = _clamp_unit((in_r - domain_min[0]) / max(1e-8, domain_max[0] - domain_min[0]))
+    ng = _clamp_unit((in_g - domain_min[1]) / max(1e-8, domain_max[1] - domain_min[1]))
+    nb = _clamp_unit((in_b - domain_min[2]) / max(1e-8, domain_max[2] - domain_min[2]))
+
+    if dimension == "1D":
+        max_idx = size - 1
+        out_ch: list[float] = []
+        for ch_idx, norm_v in enumerate((nr, ng, nb)):
+            pos = norm_v * max_idx
+            i0 = min(max_idx, max(0, int(math.floor(pos))))
+            i1 = min(max_idx, i0 + 1)
+            frac = pos - i0
+            v0 = table[i0][ch_idx]
+            v1 = table[i1][ch_idx]
+            out_ch.append(v0 + (v1 - v0) * frac)
+        lr, lg, lb = out_ch[0], out_ch[1], out_ch[2]
+    else:
+        max_idx = size - 1
+        fr = nr * max_idx
+        fg = ng * max_idx
+        fb = nb * max_idx
+        r0 = min(max_idx, max(0, int(math.floor(fr))))
+        g0 = min(max_idx, max(0, int(math.floor(fg))))
+        b0 = min(max_idx, max(0, int(math.floor(fb))))
+        r1 = min(max_idx, r0 + 1)
+        g1 = min(max_idx, g0 + 1)
+        b1 = min(max_idx, b0 + 1)
+        dr = fr - r0
+        dg = fg - g0
+        db = fb - b0
+
+        def _at(ri: int, gi: int, bi: int) -> tuple[float, float, float]:
+            return table[ri + size * (gi + size * bi)]
+
+        c000 = _at(r0, g0, b0)
+        c100 = _at(r1, g0, b0)
+        c010 = _at(r0, g1, b0)
+        c110 = _at(r1, g1, b0)
+        c001 = _at(r0, g0, b1)
+        c101 = _at(r1, g0, b1)
+        c011 = _at(r0, g1, b1)
+        c111 = _at(r1, g1, b1)
+
+        out_3d: list[float] = []
+        for ch in range(3):
+            c00 = c000[ch] * (1.0 - dr) + c100[ch] * dr
+            c10 = c010[ch] * (1.0 - dr) + c110[ch] * dr
+            c01 = c001[ch] * (1.0 - dr) + c101[ch] * dr
+            c11 = c011[ch] * (1.0 - dr) + c111[ch] * dr
+            c0 = c00 * (1.0 - dg) + c10 * dg
+            c1 = c01 * (1.0 - dg) + c11 * dg
+            out_3d.append(c0 * (1.0 - db) + c1 * db)
+        lr, lg, lb = out_3d[0], out_3d[1], out_3d[2]
+
+    return (
+        _clamp_unit(in_r + (lr - in_r) * mix_clamped),
+        _clamp_unit(in_g + (lg - in_g) * mix_clamped),
+        _clamp_unit(in_b + (lb - in_b) * mix_clamped),
     )
 
 
@@ -515,3 +627,250 @@ def build_rec709_lut_filter(
     parse_cube_lut(lut_path)
     escaped = escape_ffmpeg_filter_path(lut_path)
     return f"lut3d=file='{escaped}':interp={interp},format={target_pix_fmt}"
+
+
+class ColorNodeParams(BaseModel):
+    """A single serial color grading node combining Lift/Gamma/Gain/Tone and optional .cube LUT."""
+
+    id: str = "node-1"
+    label: str = "Primary"
+    enabled: bool = True
+    grade: ColorGradeParams = Field(default_factory=ColorGradeParams)
+    lut_title: str = ""
+    lut_dimension: Literal["1D", "3D"] | None = None
+    lut_size: int | None = None
+    lut_mix: float = LUT_MIX_DEFAULT
+    lut_domain_min: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    lut_domain_max: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    lut_table: list[tuple[float, float, float]] | None = None
+    lut_path: str = ""
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _validate_id(cls, raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text or not _NODE_ID_RE.match(text):
+            raise ValueError(f"Invalid ColorNodeParams.id {raw!r}")
+        return text
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _validate_label(cls, raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return "Node"
+        if len(text) > COLOR_NODE_LABEL_MAX_LEN:
+            return text[:COLOR_NODE_LABEL_MAX_LEN]
+        return text
+
+    @field_validator("lut_title", "lut_path", mode="before")
+    @classmethod
+    def _validate_lut_text(cls, raw: Any) -> str:
+        if raw is None:
+            return ""
+        text = str(raw).strip()
+        return text[:256]
+
+    @field_validator("lut_mix", mode="before")
+    @classmethod
+    def _validate_lut_mix(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "lut_mix", LUT_MIX_MIN, LUT_MIX_MAX)
+
+    @field_validator("lut_size", mode="before")
+    @classmethod
+    def _validate_lut_size(cls, raw: Any) -> int | None:
+        if raw is None:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise ValueError(f"lut_size must be an int or None, got {raw!r}")
+        if raw < 2 or raw > 4096:
+            raise ValueError(f"lut_size must be within [2, 4096], got {raw}")
+        return raw
+
+    @field_validator("lut_domain_min", "lut_domain_max", mode="before")
+    @classmethod
+    def _validate_domain(cls, raw: Any, info: Any) -> tuple[float, float, float]:
+        if not isinstance(raw, (tuple, list)) or len(raw) != 3:
+            raise ValueError(f"{info.field_name} must be a 3-float sequence")
+        vals: list[float] = []
+        for idx, item in enumerate(raw):
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise ValueError(f"{info.field_name}[{idx}] must be a number")
+            val = float(item)
+            if not math.isfinite(val):
+                raise ValueError(f"{info.field_name}[{idx}] must be finite")
+            vals.append(val)
+        return (vals[0], vals[1], vals[2])
+
+    @field_validator("lut_table", mode="before")
+    @classmethod
+    def _validate_lut_table(cls, raw: Any) -> list[tuple[float, float, float]] | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, (tuple, list)):
+            raise ValueError("lut_table must be a list of RGB triplets")
+        out: list[tuple[float, float, float]] = []
+        for idx, row in enumerate(raw):
+            if not isinstance(row, (tuple, list)) or len(row) != 3:
+                raise ValueError(f"lut_table[{idx}] must be an RGB triplet")
+            r = float(row[0])
+            g = float(row[1])
+            b = float(row[2])
+            if not (math.isfinite(r) and math.isfinite(g) and math.isfinite(b)):
+                raise ValueError(f"Non-finite value in lut_table[{idx}]")
+            out.append((r, g, b))
+        return out
+
+    @model_validator(mode="after")
+    def _validate_lut_consistency(self) -> ColorNodeParams:
+        for idx in range(3):
+            if self.lut_domain_min[idx] >= self.lut_domain_max[idx]:
+                raise ValueError("lut_domain_min must be strictly less than lut_domain_max")
+        if self.lut_table is not None:
+            if self.lut_dimension is None or self.lut_size is None:
+                raise ValueError("lut_dimension and lut_size are required when lut_table is set")
+            expected = self.lut_size**3 if self.lut_dimension == "3D" else self.lut_size
+            if len(self.lut_table) != expected:
+                raise ValueError(
+                    f"lut_table length {len(self.lut_table)} does not match "
+                    f"{self.lut_dimension} size {self.lut_size} ({expected})"
+                )
+        return self
+
+    def has_lut(self) -> bool:
+        """Return True when this node carries an imported .cube LUT or workspace LUT path."""
+        return bool((self.lut_table is not None and self.lut_size is not None) or self.lut_path)
+
+    def is_identity(self) -> bool:
+        """Return True when disabled or both primary grade and LUT mix are neutral."""
+        if not self.enabled:
+            return True
+        if not self.grade.is_identity():
+            return False
+        return not (self.has_lut() and self.lut_mix > 1e-6)
+
+    def apply_rgb(self, r: float, g: float, b: float) -> tuple[float, float, float]:
+        """Apply this node's grade and optional .cube LUT to an RGB triplet in [0, 1]."""
+        in_rgb = (_clamp_unit(r), _clamp_unit(g), _clamp_unit(b))
+        if not self.enabled:
+            return in_rgb
+        out_r, out_g, out_b = self.grade.apply_rgb(in_rgb[0], in_rgb[1], in_rgb[2])
+        if (
+            self.lut_table is not None
+            and self.lut_size is not None
+            and self.lut_dimension is not None
+            and self.lut_mix > 1e-6
+        ):
+            out_r, out_g, out_b = apply_cube_lut_rgb(
+                out_r,
+                out_g,
+                out_b,
+                dimension=self.lut_dimension,
+                size=self.lut_size,
+                table=self.lut_table,
+                domain_min=self.lut_domain_min,
+                domain_max=self.lut_domain_max,
+                mix=self.lut_mix,
+            )
+        return (out_r, out_g, out_b)
+
+
+class ColorNodeChainCompileResult(BaseModel):
+    """Compiled FFmpeg pipeline and metadata for a serial color node tree."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_identity: bool
+    active_node_count: int
+    total_node_count: int
+    has_lut_nodes: bool
+
+
+def _coerce_color_nodes(
+    nodes: Sequence[ColorNodeParams | dict[str, Any]],
+) -> list[ColorNodeParams]:
+    if not nodes:
+        raise ValueError("Color node tree must contain at least 1 node")
+    if len(nodes) > MAX_COLOR_NODES:
+        raise ValueError(f"Color node tree cannot exceed {MAX_COLOR_NODES} nodes")
+    return [
+        n if isinstance(n, ColorNodeParams) else ColorNodeParams.model_validate(n)
+        for n in nodes
+    ]
+
+
+def compile_color_node_chain_filter(
+    nodes: Sequence[ColorNodeParams | dict[str, Any]],
+    *,
+    pix_fmt: str | None = None,
+) -> str:
+    """Compile an ordered serial node chain into deterministic FFmpeg colorbalance+eq stages."""
+    if pix_fmt is not None and pix_fmt not in ALLOWED_COLOR_PIX_FMTS:
+        raise ValueError(f"Unsupported pixel format {pix_fmt!r}")
+    validated = _coerce_color_nodes(nodes)
+    parts: list[str] = []
+    for node in validated:
+        if not node.enabled:
+            continue
+        if not node.grade.is_identity():
+            parts.append(compile_color_grade_filter(node.grade, pix_fmt=None))
+    if not parts:
+        parts.append(compile_color_grade_filter(ColorGradeParams(), pix_fmt=None))
+    if pix_fmt is not None:
+        parts.append(f"format={pix_fmt}")
+    return ",".join(parts)
+
+
+def compile_color_node_chain(
+    nodes: Sequence[ColorNodeParams | dict[str, Any]],
+    *,
+    pix_fmt: str | None = None,
+) -> ColorNodeChainCompileResult:
+    """Compile a serial color node tree into structured FFmpeg filtergraph metadata."""
+    validated = _coerce_color_nodes(nodes)
+    fg = compile_color_node_chain_filter(validated, pix_fmt=pix_fmt)
+    active_nodes = [n for n in validated if n.enabled and not n.is_identity()]
+    has_lut_nodes = any(n.enabled and n.has_lut() and n.lut_mix > 1e-6 for n in validated)
+    return ColorNodeChainCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg],
+        is_identity=len(active_nodes) == 0,
+        active_node_count=len(active_nodes),
+        total_node_count=len(validated),
+        has_lut_nodes=has_lut_nodes,
+    )
+
+
+def bake_color_node_chain_to_cube(
+    nodes: Sequence[ColorNodeParams | dict[str, Any]],
+    out_path: Path,
+    size: int = 33,
+    title: str = "taktcut_node_tree",
+) -> CubeLutInfo:
+    """Bake an entire serial color node tree (grades + LUTs) into a composite 3D .cube LUT."""
+    if size < 2 or size > 65:
+        raise ValueError("3D LUT size must be between 2 and 65")
+    validated = _coerce_color_nodes(nodes)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = [
+        f'TITLE "{title}"',
+        f"LUT_3D_SIZE {size}",
+        "DOMAIN_MIN 0.0 0.0 0.0",
+        "DOMAIN_MAX 1.0 1.0 1.0",
+        "",
+    ]
+
+    denom = float(size - 1)
+    for b_idx in range(size):
+        b_in = b_idx / denom
+        for g_idx in range(size):
+            g_in = g_idx / denom
+            for r_idx in range(size):
+                r_cur, g_cur, b_cur = r_idx / denom, g_in, b_in
+                for node in validated:
+                    r_cur, g_cur, b_cur = node.apply_rgb(r_cur, g_cur, b_cur)
+                lines.append(f"{r_cur:.6f} {g_cur:.6f} {b_cur:.6f}")
+
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return parse_cube_lut(out_path)

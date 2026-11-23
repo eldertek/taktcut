@@ -1,6 +1,7 @@
 import {
   CLIP_LABEL_COLORS,
   MARKER_COLOR_HEX,
+  applyColorNodeChainRgbClient,
   clampSplitWipePercent,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
@@ -238,6 +239,9 @@ export function applyAscCdlRgb(r, g, b, cdl) {
 
 export function applyGradeOrCdlRgb(r, g, b, colorState) {
   if (!colorState) return [clamp01(r), clamp01(g), clamp01(b)];
+  if (Array.isArray(colorState.nodes)) {
+    return applyColorNodeChainRgbClient(r, g, b, colorState.nodes);
+  }
   if (Array.isArray(colorState.lift) || Array.isArray(colorState.gamma) || Array.isArray(colorState.gain)) {
     return applyColorGradeRgb(r, g, b, colorState);
   }

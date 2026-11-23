@@ -4,17 +4,21 @@ import {
   DELIVERY_PRESETS,
   LOUDNESS_PRESET_LUFS,
   TRANSITION_PRESETS,
+  bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
+  compileColorNodeChainClient,
   compileFairlightAudioFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransformFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
+  deserializeColorNodeFromApi,
   getDeliveryPresetClient,
   normalizeFairlightAudioParams,
+  parseCubeLutTextClient,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -147,6 +151,10 @@ function buildOtioJsonString(doc) {
 }
 
 function compileColorClient(payload, opts = {}) {
+  if (payload && Array.isArray(payload.nodes) && payload.nodes.length > 0) {
+    const clientNodes = payload.nodes.map((n, idx) => deserializeColorNodeFromApi(n, idx));
+    return compileColorNodeChainClient(clientNodes, opts.pix_fmt || null);
+  }
   const g = payload && payload.grade ? payload.grade : payload || {};
   const lift = Array.isArray(g.lift) && g.lift.length === 3 ? g.lift.map(Number) : [0, 0, 0];
   const gamma = Array.isArray(g.gamma) && g.gamma.length === 3 ? g.gamma.map(Number) : [0, 0, 0];
@@ -182,6 +190,10 @@ function compileColorClient(payload, opts = {}) {
 
 function bakeCubeTextClient(payload, size, title) {
   if (size < 2 || size > 65) throw new Error("3D LUT size must be between 2 and 65");
+  if (payload && Array.isArray(payload.nodes) && payload.nodes.length > 0) {
+    const clientNodes = payload.nodes.map((n, idx) => deserializeColorNodeFromApi(n, idx));
+    return bakeColorNodeChainToCubeTextClient(clientNodes, size, title);
+  }
   const isGrade = Boolean(payload.grade || Array.isArray(payload.lift) || Array.isArray(payload.gamma) || Array.isArray(payload.gain));
   const grade = payload.grade || payload;
   if (!isGrade) {
@@ -1241,6 +1253,27 @@ export function createApiClient() {
       }
       return requestJson("/api/color/parse-cdl", { method: "POST", body: { xml_content: xmlContent } });
     },
+    async parseCubeLut(cubeContent, filename = "uploaded.cube") {
+      if (resolvedMode === "static-demo") {
+        const parsed = parseCubeLutTextClient(cubeContent, filename.replace(/\.cube$/i, ""));
+        return {
+          info: {
+            path: filename,
+            title: parsed.title,
+            dimension: parsed.dimension,
+            size: parsed.size,
+            domain_min: parsed.domainMin,
+            domain_max: parsed.domainMax,
+            entry_count: parsed.entryCount
+          },
+          lut: parsed
+        };
+      }
+      return requestJson("/api/color/parse-cube", {
+        method: "POST",
+        body: { cube_content: cubeContent, filename }
+      });
+    },
     async bakeCube(payload) {
       if (resolvedMode === "static-demo") {
         const size = Number(payload.size || 33);
@@ -1465,7 +1498,17 @@ export function createApiClient() {
           const compiledFx = compileFxClient(body.fx_stack, { pix_fmt: pixFmt, use_gpu: Boolean(body.prefer_hw) });
           if (compiledFx.filtergraph) vfParts.push(compiledFx.filtergraph);
         }
-        if (body.color_grade) {
+        if (Array.isArray(body.color_nodes) && body.color_nodes.length > 0) {
+          const clientNodes = body.color_nodes.map((n, idx) => deserializeColorNodeFromApi(n, idx));
+          const compiledChain = compileColorNodeChainClient(clientNodes, pixFmt);
+          if (!compiledChain.is_identity) {
+            if (compiledChain.has_lut_nodes) {
+              vfParts.push(`lut3d=file='studio_node_tree.cube':interp=tetrahedral,format=${pixFmt}`);
+            } else {
+              vfParts.push(compiledChain.filtergraph);
+            }
+          }
+        } else if (body.color_grade) {
           const compiledColor = compileColorClient(body.color_grade, { pix_fmt: pixFmt });
           if (!compiledColor.is_identity) vfParts.push(compiledColor.filtergraph);
         }

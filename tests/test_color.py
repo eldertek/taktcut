@@ -12,16 +12,21 @@ from pydantic import ValidationError
 from taktcut.color import (
     COLOR_GRADE_PRESETS,
     ColorGradeParams,
+    ColorNodeParams,
     apply_color_preset,
+    apply_cube_lut_rgb,
     bake_cdl_to_cube,
     bake_color_grade_to_cube,
+    bake_color_node_chain_to_cube,
     build_rec709_lut_filter,
     compile_color_grade,
     compile_color_grade_filter,
+    compile_color_node_chain,
     get_color_preset,
     list_color_presets,
     parse_cdl_xml,
     parse_cube_lut,
+    parse_cube_lut_text,
 )
 from taktcut.models import AscCdlParams, HardwareCapabilities, RenderProfile
 from taktcut.render import build_render_plan
@@ -243,3 +248,108 @@ def test_compiled_color_presets_execute_in_real_ffmpeg() -> None:
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
         assert proc.returncode == 0, f"FFmpeg rejected {preset.id}: {proc.stderr}"
+
+
+def test_serial_color_node_chain_lut_import_and_composite_bake(tmp_path: Path) -> None:
+    cube_text = (
+        'TITLE "Warm_Split_2x2x2"\n'
+        "LUT_3D_SIZE 2\n"
+        "DOMAIN_MIN 0.0 0.0 0.0\n"
+        "DOMAIN_MAX 1.0 1.0 1.0\n"
+        "0.0 0.0 0.0\n"
+        "1.0 0.0 0.0\n"
+        "0.0 1.0 0.0\n"
+        "1.0 1.0 0.0\n"
+        "0.0 0.0 0.8\n"
+        "1.0 0.0 0.8\n"
+        "0.0 1.0 0.8\n"
+        "1.0 0.9 0.8\n"
+    )
+    info, table = parse_cube_lut_text(cube_text, source_name="warm.cube")
+    assert info.dimension == "3D"
+    assert info.size == 2
+    assert info.entry_count == 8
+    assert info.title == "Warm_Split_2x2x2"
+
+    # Trilinear interpolation + mix blending
+    r_full, g_full, b_full = apply_cube_lut_rgb(
+        1.0,
+        1.0,
+        1.0,
+        dimension="3D",
+        size=2,
+        table=table,
+        mix=1.0,
+    )
+    assert (r_full, g_full, b_full) == pytest.approx((1.0, 0.9, 0.8))
+    r_half, g_half, b_half = apply_cube_lut_rgb(
+        1.0,
+        1.0,
+        1.0,
+        dimension="3D",
+        size=2,
+        table=table,
+        mix=0.5,
+    )
+    assert (r_half, g_half, b_half) == pytest.approx((1.0, 0.95, 0.9))
+
+    node_balance = ColorNodeParams(
+        id="node-1",
+        label="Balance",
+        enabled=True,
+        grade=ColorGradeParams(contrast=1.1, saturation=1.05, temperature=0.1),
+    )
+    node_bypassed = ColorNodeParams(
+        id="node-2",
+        label="Bypassed Look",
+        enabled=False,
+        grade=apply_color_preset("noir_bw"),
+    )
+    node_lut = ColorNodeParams(
+        id="node-3",
+        label="Film LUT",
+        enabled=True,
+        grade=ColorGradeParams(),
+        lut_title=info.title,
+        lut_dimension=info.dimension,
+        lut_size=info.size,
+        lut_mix=0.75,
+        lut_domain_min=info.domain_min,
+        lut_domain_max=info.domain_max,
+        lut_table=table,
+    )
+
+    compiled = compile_color_node_chain(
+        [node_balance, node_bypassed, node_lut],
+        pix_fmt="yuv420p",
+    )
+    assert compiled.is_identity is False
+    assert compiled.active_node_count == 2
+    assert compiled.total_node_count == 3
+    assert compiled.has_lut_nodes is True
+    assert "eq=contrast=1.1000:saturation=1.0500" in compiled.filtergraph
+    assert "saturation=0.0000" not in compiled.filtergraph
+    assert compiled.filtergraph.endswith(",format=yuv420p")
+
+    # Composite 3D .cube bake includes node_balance + node_lut (skips node_bypassed)
+    composite_path = tmp_path / "composite_tree.cube"
+    baked_info = bake_color_node_chain_to_cube(
+        [node_balance, node_bypassed, node_lut],
+        composite_path,
+        size=5,
+        title="composite_tree",
+    )
+    assert baked_info.size == 5
+    assert baked_info.entry_count == 125
+
+    caps = HardwareCapabilities(ffmpeg_path="ffmpeg", libx264=True)
+    plan = build_render_plan(
+        input_path=tmp_path / "in.mp4",
+        output_path=tmp_path / "out_nodes.mp4",
+        profile=RenderProfile.WEB_H264,
+        color_nodes=[node_balance, node_bypassed],
+        prefer_hw=False,
+        caps=caps,
+    )
+    assert plan.video_filter is not None
+    assert "eq=contrast=1.1000:saturation=1.0500" in plan.video_filter

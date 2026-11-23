@@ -3595,3 +3595,619 @@ export function formatFcpxmlTimeline(timelineDoc, projectName = "TaktCut_Timelin
 
   return `${lines.join("\n")}\n`;
 }
+
+// ---------------------------------------------------------------------------
+// DaVinci Resolve Serial Color Node Tree & 3D .cube LUT Pipeline
+// ---------------------------------------------------------------------------
+
+export const MAX_COLOR_NODES = 8;
+
+function clampUnitColor(val) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return 0;
+  return n < 0 ? 0 : n > 1 ? 1 : n;
+}
+
+function clampBalanceColor(val) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return 0;
+  return n < -1 ? -1 : n > 1 ? 1 : n;
+}
+
+export function createNeutralColorGrade() {
+  return {
+    lift: [0.0, 0.0, 0.0],
+    gamma: [0.0, 0.0, 0.0],
+    gain: [0.0, 0.0, 0.0],
+    contrast: 1.0,
+    saturation: 1.0,
+    temperature: 0.0,
+    preserve_lightness: false
+  };
+}
+
+export function normalizeColorGrade(raw) {
+  const g = raw && typeof raw === "object" ? raw : {};
+  const normTriplet = (arr) =>
+    Array.isArray(arr) && arr.length === 3
+      ? [clampBalanceColor(arr[0]), clampBalanceColor(arr[1]), clampBalanceColor(arr[2])]
+      : [0.0, 0.0, 0.0];
+  const rawContrast = Number(g.contrast);
+  const rawSat = Number(g.saturation);
+  const rawTemp = Number(g.temperature);
+  return {
+    lift: normTriplet(g.lift),
+    gamma: normTriplet(g.gamma),
+    gain: normTriplet(g.gain),
+    contrast: Number.isFinite(rawContrast) ? clampNum(rawContrast, 0.0, 2.0) : 1.0,
+    saturation: Number.isFinite(rawSat) ? clampNum(rawSat, 0.0, 3.0) : 1.0,
+    temperature: Number.isFinite(rawTemp) ? clampNum(rawTemp, -1.0, 1.0) : 0.0,
+    preserve_lightness: Boolean(g.preserve_lightness)
+  };
+}
+
+export function isColorGradeIdentity(grade) {
+  const g = normalizeColorGrade(grade);
+  return (
+    g.lift.every((v) => Math.abs(v) < 1e-6) &&
+    g.gamma.every((v) => Math.abs(v) < 1e-6) &&
+    g.gain.every((v) => Math.abs(v) < 1e-6) &&
+    Math.abs(g.contrast - 1.0) < 1e-6 &&
+    Math.abs(g.saturation - 1.0) < 1e-6 &&
+    Math.abs(g.temperature) < 1e-6
+  );
+}
+
+export function applyColorGradeRgbPure(r, g, b, grade) {
+  const norm = normalizeColorGrade(grade);
+  const tempR = norm.temperature * 0.25;
+  const tempG = norm.temperature * 0.03;
+  const tempB = -norm.temperature * 0.28;
+
+  const shadows = [
+    clampBalanceColor(norm.lift[0]),
+    clampBalanceColor(norm.lift[1]),
+    clampBalanceColor(norm.lift[2])
+  ];
+  const midtones = [
+    clampBalanceColor(norm.gamma[0] + tempR),
+    clampBalanceColor(norm.gamma[1] + tempG),
+    clampBalanceColor(norm.gamma[2] + tempB)
+  ];
+  const highlights = [
+    clampBalanceColor(norm.gain[0] + tempR * 0.8),
+    clampBalanceColor(norm.gain[1] + tempG * 0.8),
+    clampBalanceColor(norm.gain[2] + tempB * 0.8)
+  ];
+
+  const chs = [r, g, b];
+  const out = [0, 0, 0];
+  for (let idx = 0; idx < 3; idx++) {
+    const v = clampUnitColor(chs[idx]);
+    const wS = clampUnitColor(1.0 - v / 0.55);
+    const wM = clampUnitColor(1.0 - Math.abs(v - 0.5) / 0.5);
+    const wH = clampUnitColor((v - 0.45) / 0.55);
+    const balanced =
+      v +
+      (shadows[idx] * wS * 0.45 +
+        midtones[idx] * wM * 0.40 +
+        highlights[idx] * wH * 0.45);
+    out[idx] = clampUnitColor((balanced - 0.5) * norm.contrast + 0.5);
+  }
+
+  let sr = out[0];
+  let sg = out[1];
+  let sb = out[2];
+  if (Math.abs(norm.saturation - 1.0) > 1e-6) {
+    const luma = 0.2126 * sr + 0.7152 * sg + 0.0722 * sb;
+    sr = luma + norm.saturation * (sr - luma);
+    sg = luma + norm.saturation * (sg - luma);
+    sb = luma + norm.saturation * (sb - luma);
+  }
+  return [clampUnitColor(sr), clampUnitColor(sg), clampUnitColor(sb)];
+}
+
+export function parseCubeLutTextClient(rawText, fallbackTitle = "Imported LUT") {
+  if (typeof rawText !== "string" || !rawText.trim()) {
+    throw new Error("Empty .cube LUT content");
+  }
+  let title = "";
+  let size1d = null;
+  let size3d = null;
+  let domainMin = [0.0, 0.0, 0.0];
+  let domainMax = [1.0, 1.0, 1.0];
+  const table = [];
+
+  const lines = rawText.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith("#")) continue;
+    const upper = line.toUpperCase();
+    if (upper.startsWith("TITLE")) {
+      title = line.slice(5).trim().replace(/^"+|"+$/g, "");
+    } else if (upper.startsWith("LUT_1D_SIZE")) {
+      size1d = Number.parseInt(line.split(/\s+/)[1], 10);
+    } else if (upper.startsWith("LUT_3D_SIZE")) {
+      size3d = Number.parseInt(line.split(/\s+/)[1], 10);
+    } else if (upper.startsWith("DOMAIN_MIN")) {
+      const parts = line.split(/\s+/).slice(1, 4).map(Number);
+      if (parts.length !== 3 || parts.some((v) => !Number.isFinite(v))) {
+        throw new Error(`Invalid DOMAIN_MIN at line ${i + 1}`);
+      }
+      domainMin = parts;
+    } else if (upper.startsWith("DOMAIN_MAX")) {
+      const parts = line.split(/\s+/).slice(1, 4).map(Number);
+      if (parts.length !== 3 || parts.some((v) => !Number.isFinite(v))) {
+        throw new Error(`Invalid DOMAIN_MAX at line ${i + 1}`);
+      }
+      domainMax = parts;
+    } else if (upper.startsWith("LUT_1D_INPUT_RANGE") || upper.startsWith("LUT_3D_INPUT_RANGE")) {
+      continue;
+    } else {
+      const parts = line.split(/\s+/);
+      if (parts.length !== 3) {
+        throw new Error(`Expected RGB triplet at line ${i + 1}`);
+      }
+      const r = Number(parts[0]);
+      const g = Number(parts[1]);
+      const b = Number(parts[2]);
+      if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) {
+        throw new Error(`Non-finite LUT value at line ${i + 1}`);
+      }
+      table.push([r, g, b]);
+    }
+  }
+
+  if ((size1d === null) === (size3d === null)) {
+    throw new Error("LUT must declare exactly one of LUT_1D_SIZE or LUT_3D_SIZE");
+  }
+  const dimension = size3d !== null ? "3D" : "1D";
+  const size = size3d !== null ? size3d : size1d;
+  if (!Number.isInteger(size) || size < 2 || (dimension === "3D" ? size > 65 : size > 4096)) {
+    throw new Error(`Unsupported ${dimension} LUT size: ${size}`);
+  }
+  const expected = dimension === "3D" ? size * size * size : size;
+  if (table.length !== expected) {
+    throw new Error(`Expected ${expected} entries for ${dimension} size ${size}, found ${table.length}`);
+  }
+  for (let ch = 0; ch < 3; ch++) {
+    if (domainMin[ch] >= domainMax[ch]) {
+      throw new Error("Invalid LUT domain bounds");
+    }
+  }
+  return {
+    title: title || fallbackTitle,
+    dimension,
+    size,
+    domainMin,
+    domainMax,
+    entryCount: table.length,
+    mix: 1.0,
+    table
+  };
+}
+
+export function applyCubeLutRgbClient(r, g, b, lut, mixOverride = null) {
+  const inR = clampUnitColor(r);
+  const inG = clampUnitColor(g);
+  const inB = clampUnitColor(b);
+  if (!lut || !Array.isArray(lut.table) || lut.table.length === 0 || !lut.size) {
+    return [inR, inG, inB];
+  }
+  const mixRaw = mixOverride !== null && mixOverride !== undefined ? mixOverride : lut.mix;
+  const mix = clampUnitColor(mixRaw !== undefined ? mixRaw : 1.0);
+  if (mix <= 1e-6 || lut.size < 2) {
+    return [inR, inG, inB];
+  }
+
+  const dMin = Array.isArray(lut.domainMin) && lut.domainMin.length === 3 ? lut.domainMin : [0, 0, 0];
+  const dMax = Array.isArray(lut.domainMax) && lut.domainMax.length === 3 ? lut.domainMax : [1, 1, 1];
+  const nr = clampUnitColor((inR - dMin[0]) / Math.max(1e-8, dMax[0] - dMin[0]));
+  const ng = clampUnitColor((inG - dMin[1]) / Math.max(1e-8, dMax[1] - dMin[1]));
+  const nb = clampUnitColor((inB - dMin[2]) / Math.max(1e-8, dMax[2] - dMin[2]));
+
+  let lr;
+  let lg;
+  let lb;
+  const size = lut.size;
+  const maxIdx = size - 1;
+  const table = lut.table;
+
+  if (lut.dimension === "1D") {
+    const interp1d = (normV, chIdx) => {
+      const pos = normV * maxIdx;
+      const i0 = Math.min(maxIdx, Math.max(0, Math.floor(pos)));
+      const i1 = Math.min(maxIdx, i0 + 1);
+      const f = pos - i0;
+      const v0 = table[i0][chIdx];
+      const v1 = table[i1][chIdx];
+      return v0 + (v1 - v0) * f;
+    };
+    lr = interp1d(nr, 0);
+    lg = interp1d(ng, 1);
+    lb = interp1d(nb, 2);
+  } else {
+    const fr = nr * maxIdx;
+    const fg = ng * maxIdx;
+    const fb = nb * maxIdx;
+    const r0 = Math.min(maxIdx, Math.max(0, Math.floor(fr)));
+    const g0 = Math.min(maxIdx, Math.max(0, Math.floor(fg)));
+    const b0 = Math.min(maxIdx, Math.max(0, Math.floor(fb)));
+    const r1 = Math.min(maxIdx, r0 + 1);
+    const g1 = Math.min(maxIdx, g0 + 1);
+    const b1 = Math.min(maxIdx, b0 + 1);
+    const dr = fr - r0;
+    const dg = fg - g0;
+    const db = fb - b0;
+
+    const c000 = table[r0 + size * (g0 + size * b0)];
+    const c100 = table[r1 + size * (g0 + size * b0)];
+    const c010 = table[r0 + size * (g1 + size * b0)];
+    const c110 = table[r1 + size * (g1 + size * b0)];
+    const c001 = table[r0 + size * (g0 + size * b1)];
+    const c101 = table[r1 + size * (g0 + size * b1)];
+    const c011 = table[r0 + size * (g1 + size * b1)];
+    const c111 = table[r1 + size * (g1 + size * b1)];
+
+    const mixCh = (ch) => {
+      const c00 = c000[ch] * (1 - dr) + c100[ch] * dr;
+      const c10 = c010[ch] * (1 - dr) + c110[ch] * dr;
+      const c01 = c001[ch] * (1 - dr) + c101[ch] * dr;
+      const c11 = c011[ch] * (1 - dr) + c111[ch] * dr;
+      const c0 = c00 * (1 - dg) + c10 * dg;
+      const c1 = c01 * (1 - dg) + c11 * dg;
+      return c0 * (1 - db) + c1 * db;
+    };
+    lr = mixCh(0);
+    lg = mixCh(1);
+    lb = mixCh(2);
+  }
+
+  return [
+    clampUnitColor(inR + (lr - inR) * mix),
+    clampUnitColor(inG + (lg - inG) * mix),
+    clampUnitColor(inB + (lb - inB) * mix)
+  ];
+}
+
+function normalizeNodeLut(rawLut) {
+  if (!rawLut || typeof rawLut !== "object") return null;
+  if (!Array.isArray(rawLut.table) || rawLut.table.length === 0 || !rawLut.size) return null;
+  const dimension = rawLut.dimension === "1D" ? "1D" : "3D";
+  const size = Number(rawLut.size);
+  const expected = dimension === "3D" ? size * size * size : size;
+  if (!Number.isInteger(size) || rawLut.table.length !== expected) return null;
+  return {
+    title: String(rawLut.title || "Imported LUT").slice(0, 64),
+    dimension,
+    size,
+    domainMin:
+      Array.isArray(rawLut.domainMin) && rawLut.domainMin.length === 3
+        ? rawLut.domainMin.map(Number)
+        : [0.0, 0.0, 0.0],
+    domainMax:
+      Array.isArray(rawLut.domainMax) && rawLut.domainMax.length === 3
+        ? rawLut.domainMax.map(Number)
+        : [1.0, 1.0, 1.0],
+    entryCount: rawLut.table.length,
+    mix: clampUnitColor(rawLut.mix !== undefined ? rawLut.mix : 1.0),
+    table: rawLut.table
+  };
+}
+
+export function createColorNode(index = 1, overrides = {}) {
+  const safeIdx = Math.max(1, Math.round(Number(index) || 1));
+  return {
+    id:
+      typeof overrides.id === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(overrides.id)
+        ? overrides.id
+        : `node-${safeIdx}`,
+    label:
+      typeof overrides.label === "string" && overrides.label.trim()
+        ? overrides.label.trim().slice(0, 48)
+        : safeIdx === 1
+          ? "Primary"
+          : `Serial ${safeIdx}`,
+    enabled: overrides.enabled !== false,
+    grade: normalizeColorGrade(overrides.grade),
+    lut: normalizeNodeLut(overrides.lut)
+  };
+}
+
+export function normalizeColorNode(raw, index = 0) {
+  const n = raw && typeof raw === "object" ? raw : {};
+  return createColorNode(index + 1, {
+    id: n.id,
+    label: n.label,
+    enabled: n.enabled,
+    grade: n.grade,
+    lut: n.lut
+  });
+}
+
+export function createDefaultColorNodeTree() {
+  const first = createColorNode(1, { id: "node-1", label: "Primary" });
+  return {
+    nodes: [first],
+    selectedNodeId: first.id
+  };
+}
+
+export function normalizeColorNodeTree(raw) {
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.nodes) || raw.nodes.length === 0) {
+    return createDefaultColorNodeTree();
+  }
+  const usedIds = new Set();
+  const nodes = raw.nodes.slice(0, MAX_COLOR_NODES).map((n, idx) => {
+    const norm = normalizeColorNode(n, idx);
+    if (usedIds.has(norm.id)) {
+      let suffix = idx + 1;
+      while (usedIds.has(`node-${suffix}`)) suffix += 1;
+      norm.id = `node-${suffix}`;
+    }
+    usedIds.add(norm.id);
+    return norm;
+  });
+  const selectedExists = nodes.some((n) => n.id === raw.selectedNodeId);
+  return {
+    nodes,
+    selectedNodeId: selectedExists ? raw.selectedNodeId : nodes[0].id
+  };
+}
+
+export function getSelectedColorNode(tree) {
+  const norm = normalizeColorNodeTree(tree);
+  return norm.nodes.find((n) => n.id === norm.selectedNodeId) || norm.nodes[0];
+}
+
+export function isColorNodeIdentity(node) {
+  if (!node || node.enabled === false) return true;
+  if (!isColorGradeIdentity(node.grade)) return false;
+  if (node.lut && Number(node.lut.mix ?? 1.0) > 1e-6) return false;
+  return true;
+}
+
+export function addColorNodeToTree(tree, opts = {}) {
+  const norm = normalizeColorNodeTree(tree);
+  if (norm.nodes.length >= MAX_COLOR_NODES) {
+    return norm;
+  }
+  const usedIds = new Set(norm.nodes.map((n) => n.id));
+  let seq = norm.nodes.length + 1;
+  while (usedIds.has(`node-${seq}`)) seq += 1;
+  const defaultLabel =
+    typeof opts.label === "string" && opts.label.trim()
+      ? opts.label.trim()
+      : norm.nodes.length === 1
+        ? "Look"
+        : `Serial ${seq}`;
+  const created = createColorNode(seq, {
+    id: `node-${seq}`,
+    label: defaultLabel,
+    grade: opts.grade,
+    lut: opts.lut
+  });
+  const selIdx = norm.nodes.findIndex((n) => n.id === norm.selectedNodeId);
+  const insertAt = selIdx >= 0 ? selIdx + 1 : norm.nodes.length;
+  const nextNodes = [...norm.nodes];
+  nextNodes.splice(insertAt, 0, created);
+  return {
+    nodes: nextNodes,
+    selectedNodeId: created.id
+  };
+}
+
+export function removeColorNodeFromTree(tree, nodeId) {
+  const norm = normalizeColorNodeTree(tree);
+  if (norm.nodes.length <= 1) return norm;
+  const idx = norm.nodes.findIndex((n) => n.id === nodeId);
+  if (idx < 0) return norm;
+  const nextNodes = norm.nodes.filter((n) => n.id !== nodeId);
+  const nextSel =
+    norm.selectedNodeId === nodeId
+      ? nextNodes[Math.max(0, Math.min(idx, nextNodes.length - 1))].id
+      : norm.selectedNodeId;
+  return {
+    nodes: nextNodes,
+    selectedNodeId: nextSel
+  };
+}
+
+export function toggleColorNodeBypassInTree(tree, nodeId) {
+  const norm = normalizeColorNodeTree(tree);
+  return {
+    ...norm,
+    nodes: norm.nodes.map((n) => (n.id === nodeId ? { ...n, enabled: !n.enabled } : n))
+  };
+}
+
+export function selectColorNodeInTree(tree, nodeId) {
+  const norm = normalizeColorNodeTree(tree);
+  if (!norm.nodes.some((n) => n.id === nodeId)) return norm;
+  return { ...norm, selectedNodeId: nodeId };
+}
+
+export function moveColorNodeInTree(tree, nodeId, direction) {
+  const norm = normalizeColorNodeTree(tree);
+  const idx = norm.nodes.findIndex((n) => n.id === nodeId);
+  const target = idx + (direction < 0 ? -1 : 1);
+  if (idx < 0 || target < 0 || target >= norm.nodes.length) return norm;
+  const nextNodes = [...norm.nodes];
+  const [moved] = nextNodes.splice(idx, 1);
+  nextNodes.splice(target, 0, moved);
+  return { ...norm, nodes: nextNodes };
+}
+
+export function updateColorNodeInTree(tree, nodeId, patch = {}) {
+  const norm = normalizeColorNodeTree(tree);
+  return {
+    ...norm,
+    nodes: norm.nodes.map((n) => {
+      if (n.id !== nodeId) return n;
+      return {
+        ...n,
+        label:
+          typeof patch.label === "string" && patch.label.trim()
+            ? patch.label.trim().slice(0, 48)
+            : n.label,
+        enabled: patch.enabled !== undefined ? Boolean(patch.enabled) : n.enabled,
+        grade: patch.grade !== undefined ? normalizeColorGrade(patch.grade) : n.grade,
+        lut: patch.lut !== undefined ? normalizeNodeLut(patch.lut) : n.lut
+      };
+    })
+  };
+}
+
+export function applyColorNodeChainRgbClient(r, g, b, treeOrNodes) {
+  const nodes = Array.isArray(treeOrNodes)
+    ? treeOrNodes
+    : treeOrNodes && Array.isArray(treeOrNodes.nodes)
+      ? treeOrNodes.nodes
+      : [];
+  let curR = clampUnitColor(r);
+  let curG = clampUnitColor(g);
+  let curB = clampUnitColor(b);
+  for (const node of nodes) {
+    if (!node || node.enabled === false) continue;
+    [curR, curG, curB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
+      [curR, curG, curB] = applyCubeLutRgbClient(curR, curG, curB, node.lut, node.lut.mix);
+    }
+  }
+  return [curR, curG, curB];
+}
+
+function compileSingleGradeFilterStr(grade) {
+  const g = normalizeColorGrade(grade);
+  const tempR = g.temperature * 0.25;
+  const tempG = g.temperature * 0.03;
+  const tempB = -g.temperature * 0.28;
+  const s = [
+    clampBalanceColor(g.lift[0]),
+    clampBalanceColor(g.lift[1]),
+    clampBalanceColor(g.lift[2])
+  ];
+  const m = [
+    clampBalanceColor(g.gamma[0] + tempR),
+    clampBalanceColor(g.gamma[1] + tempG),
+    clampBalanceColor(g.gamma[2] + tempB)
+  ];
+  const h = [
+    clampBalanceColor(g.gain[0] + tempR * 0.8),
+    clampBalanceColor(g.gain[1] + tempG * 0.8),
+    clampBalanceColor(g.gain[2] + tempB * 0.8)
+  ];
+  const cb = `colorbalance=rs=${s[0].toFixed(4)}:gs=${s[1].toFixed(4)}:bs=${s[2].toFixed(4)}:rm=${m[0].toFixed(4)}:gm=${m[1].toFixed(4)}:bm=${m[2].toFixed(4)}:rh=${h[0].toFixed(4)}:gh=${h[1].toFixed(4)}:bh=${h[2].toFixed(4)}:pl=${g.preserve_lightness ? 1 : 0}`;
+  const eq = `eq=contrast=${g.contrast.toFixed(4)}:saturation=${g.saturation.toFixed(4)}`;
+  return `${cb},${eq}`;
+}
+
+export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
+  const rawNodes = Array.isArray(treeOrNodes)
+    ? treeOrNodes
+    : treeOrNodes && Array.isArray(treeOrNodes.nodes)
+      ? treeOrNodes.nodes
+      : [createColorNode(1)];
+  const nodes = rawNodes.length > 0 ? rawNodes : [createColorNode(1)];
+  const parts = [];
+  let activeCount = 0;
+  let hasLutNodes = false;
+
+  for (const node of nodes) {
+    if (!node || node.enabled === false) continue;
+    const hasLut = Boolean(node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6);
+    if (hasLut) hasLutNodes = true;
+    if (!isColorGradeIdentity(node.grade)) {
+      parts.push(compileSingleGradeFilterStr(node.grade));
+    }
+    if (!isColorNodeIdentity(node)) {
+      activeCount += 1;
+    }
+  }
+
+  if (parts.length === 0) {
+    parts.push(compileSingleGradeFilterStr(createNeutralColorGrade()));
+  }
+  if (pixFmt) {
+    parts.push(`format=${pixFmt}`);
+  }
+  const fg = parts.join(",");
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: ["-vf", fg],
+    is_identity: activeCount === 0,
+    active_node_count: activeCount,
+    total_node_count: nodes.length,
+    has_lut_nodes: hasLutNodes
+  };
+}
+
+export function serializeColorNodeForApi(node) {
+  const norm = normalizeColorNode(node);
+  const lut = norm.lut;
+  return {
+    id: norm.id,
+    label: norm.label,
+    enabled: norm.enabled,
+    grade: norm.grade,
+    lut_title: lut ? lut.title : "",
+    lut_dimension: lut ? lut.dimension : null,
+    lut_size: lut ? lut.size : null,
+    lut_mix: lut ? clampUnitColor(lut.mix) : 1.0,
+    lut_domain_min: lut ? lut.domainMin : [0.0, 0.0, 0.0],
+    lut_domain_max: lut ? lut.domainMax : [1.0, 1.0, 1.0],
+    lut_table: lut ? lut.table : null,
+    lut_path: ""
+  };
+}
+
+export function deserializeColorNodeFromApi(rawNode, index = 0) {
+  const n = rawNode && typeof rawNode === "object" ? rawNode : {};
+  let lut = null;
+  if (Array.isArray(n.lut_table) && n.lut_table.length > 0 && n.lut_size) {
+    lut = normalizeNodeLut({
+      title: n.lut_title || "Imported LUT",
+      dimension: n.lut_dimension || "3D",
+      size: n.lut_size,
+      domainMin: n.lut_domain_min || [0, 0, 0],
+      domainMax: n.lut_domain_max || [1, 1, 1],
+      mix: n.lut_mix !== undefined ? n.lut_mix : 1.0,
+      table: n.lut_table
+    });
+  } else if (n.lut) {
+    lut = normalizeNodeLut(n.lut);
+  }
+  return createColorNode(index + 1, {
+    id: n.id,
+    label: n.label,
+    enabled: n.enabled,
+    grade: n.grade,
+    lut
+  });
+}
+
+export function bakeColorNodeChainToCubeTextClient(treeOrNodes, size = 33, title = "taktcut_node_tree") {
+  if (!Number.isInteger(size) || size < 2 || size > 65) {
+    throw new Error("3D LUT size must be between 2 and 65");
+  }
+  const lines = [
+    `TITLE "${title}"`,
+    `LUT_3D_SIZE ${size}`,
+    "DOMAIN_MIN 0.0 0.0 0.0",
+    "DOMAIN_MAX 1.0 1.0 1.0",
+    ""
+  ];
+  const denom = size - 1;
+  for (let b = 0; b < size; b++) {
+    const bIn = b / denom;
+    for (let g = 0; g < size; g++) {
+      const gIn = g / denom;
+      for (let r = 0; r < size; r++) {
+        const rIn = r / denom;
+        const [ro, go, bo] = applyColorNodeChainRgbClient(rIn, gIn, bIn, treeOrNodes);
+        lines.push(`${ro.toFixed(6)} ${go.toFixed(6)} ${bo.toFixed(6)}`);
+      }
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}

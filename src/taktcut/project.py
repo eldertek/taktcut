@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from taktcut.color import ColorGradeParams
+from taktcut.color import MAX_COLOR_NODES, ColorGradeParams, ColorNodeParams
 from taktcut.fx import (
     FX_PARAM_SPECS,
     MAX_KEYFRAMES_PER_NODE,
@@ -295,14 +295,35 @@ class ProjectDeliveryState(BaseModel):
 
 
 class ProjectColorState(BaseModel):
-    """Color page primary grade, active preset, wipe split, and scope mode."""
+    """Color page primary grade, serial node tree, active preset, wipe split, and scope mode."""
 
     model_config = ConfigDict(extra="forbid")
 
     grade: ColorGradeParams = Field(default_factory=ColorGradeParams)
+    nodes: list[ColorNodeParams] = Field(default_factory=list)
+    selected_node_id: str = "node-1"
     active_preset_id: str = "rec709_clean"
     wipe_ratio: float = 0.5
     scope_mode: Literal["parade", "waveform", "vectorscope"] = "parade"
+
+    @field_validator("nodes", mode="before")
+    @classmethod
+    def _validate_color_nodes(cls, raw: Any) -> list[ColorNodeParams]:
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise ValueError("color.nodes must be a list")
+        if len(raw) > MAX_COLOR_NODES:
+            raise ValueError(f"color.nodes cannot exceed {MAX_COLOR_NODES} nodes")
+        return [
+            item if isinstance(item, ColorNodeParams) else ColorNodeParams.model_validate(item)
+            for item in raw
+        ]
+
+    @field_validator("selected_node_id", mode="before")
+    @classmethod
+    def _validate_selected_node_id(cls, raw: Any) -> str:
+        return _require_safe_text(raw, "selected_node_id", max_len=32, allow_empty=True) or "node-1"
 
     @field_validator("active_preset_id", mode="before")
     @classmethod

@@ -42,6 +42,7 @@ import {
   DYNAMIC_ZOOM_DEFAULT,
   LOUDNESS_PRESET_LUFS,
   MARKER_COLOR_HEX,
+  MAX_COLOR_NODES,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
@@ -63,6 +64,7 @@ import {
   TRANSITION_DURATION_DEFAULT_S,
   TRANSITION_DURATION_MAX_S,
   TRANSITION_DURATION_MIN_S,
+  addColorNodeToTree,
   addMarkerInDocument,
   appendClipToTrackInDocument,
   appendStillBounded,
@@ -81,8 +83,10 @@ import {
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
+  createDefaultColorNodeTree,
   createStillRecord,
   deleteMarkerInDocument,
+  deserializeColorNodeFromApi,
   estimateRenderFileSize,
   evaluateTimelineAudioLevels,
   filterMediaPoolEntries,
@@ -100,26 +104,35 @@ import {
   formatYoutubeChaptersFromMarkers,
   getAspectRatioPreset,
   getClipTrimBounds,
+  getSelectedColorNode,
   getTransformPresetClient,
   getTransitionPresetName,
   hasSplittableClipAtFrame,
   insertClipAtFrameInDocument,
   isClipTransformIdentity,
+  isColorNodeIdentity,
   isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
+  moveColorNodeInTree,
   normalizeAutoDuckParams,
   normalizeClipAudio,
   normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
+  normalizeColorGrade,
+  normalizeColorNodeTree,
   normalizeFairlightAudioParams,
   normalizeInOutRange,
   normalizeMarkerColor,
+  parseCubeLutTextClient,
+  removeColorNodeFromTree,
   removeStillById,
   resolveSourceTapeFrame,
   rippleDeleteClipInDocument,
   sanitizeStillDataUrl,
+  selectColorNodeInTree,
+  serializeColorNodeForApi,
   setClipLabelColor,
   setInOutRange,
   smartInsertClipInDocument,
@@ -128,6 +141,7 @@ import {
   stepPlayheadInRange,
   stepShuttleSpeed,
   timelineDocToChapterInputs,
+  toggleColorNodeBypassInTree,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
   trimClipInDocument,
@@ -135,6 +149,7 @@ import {
   updateClipRetimeInDocument,
   updateClipTransformInDocument,
   updateClipTransitionInDocument,
+  updateColorNodeInTree,
   updateMarkerInDocument,
   validateTimelineClient
 } from "./timeline_ops.js";
@@ -336,6 +351,7 @@ const state = {
     decayRafId: null,
     lastTs: 0
   },
+  colorNodeTree: createDefaultColorNodeTree(),
   colorGrade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
   colorActivePresetId: "rec709_clean",
   colorScopeMode: "parade",
@@ -595,6 +611,7 @@ function setLanguage(lang) {
   renderTimelineUI();
   renderMediaPool();
   renderFairlightAudioUI();
+  renderColorNodeTreeUI();
   renderFxStack();
   renderDeliveryPresetStrip();
   updateDeliverSizeEstimate();
@@ -861,12 +878,13 @@ function updatePlayheadReadout() {
 }
 
 function redrawActiveCanvases() {
+  const activeColorChain = getActiveColorChainState();
   if (state.activeTab === "timeline") {
     drawProgramMonitorCanvas(
       byId("timeline-program-canvas"),
       state.timelineDoc,
       state.playheadFrame,
-      state.colorGrade,
+      activeColorChain,
       getEffectiveFxState(),
       getEffectiveTitleState(false),
       getEffectiveFramingState(),
@@ -939,7 +957,7 @@ function redrawActiveCanvases() {
       byId("fx-program-canvas"),
       state.timelineDoc,
       state.playheadFrame,
-      state.colorGrade,
+      activeColorChain,
       getEffectiveFxState(),
       getEffectiveTitleState(false),
       getEffectiveFramingState(),
@@ -961,7 +979,7 @@ function redrawActiveCanvases() {
       byId("titles-program-canvas"),
       state.timelineDoc,
       state.playheadFrame,
-      state.colorGrade,
+      activeColorChain,
       getEffectiveFxState(),
       getEffectiveTitleState(true),
       getEffectiveFramingState(),
@@ -972,7 +990,7 @@ function redrawActiveCanvases() {
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
-    drawColorPreviewCanvas(previewCanvas, state.colorGrade, state.wipeRatio, {
+    drawColorPreviewCanvas(previewCanvas, activeColorChain, state.wipeRatio, {
       enabled: Boolean(state.colorSplitWipe.enabled),
       positionPct: state.colorSplitWipe.positionPct,
       isHovered: Boolean(state.colorSplitWipe.isHovered),
@@ -982,7 +1000,7 @@ function redrawActiveCanvases() {
     });
     drawColorScopeCanvas(
       byId("color-scope-canvas"),
-      state.colorGrade,
+      activeColorChain,
       state.colorScopeMode,
       previewCanvas
     );
@@ -2923,6 +2941,8 @@ function serializeFullProjectState() {
         ...cloneGradeParams(state.colorGrade),
         preserve_lightness: Boolean(state.colorGrade.preserve_lightness)
       },
+      nodes: getSerializedColorNodes(),
+      selected_node_id: state.colorNodeTree.selectedNodeId || "node-1",
       active_preset_id: String(state.colorActivePresetId || ""),
       wipe_ratio: Math.min(1, Math.max(0, Number(state.wipeRatio ?? 0.5))),
       scope_mode: ["parade", "waveform", "vectorscope"].includes(state.colorScopeMode)
@@ -3023,11 +3043,18 @@ function applyFullProjectState(project, validation) {
 
   // Color state
   const col = project.color || {};
-  if (col.grade) {
-    state.colorGrade = {
-      ...cloneGradeParams(col.grade),
-      preserve_lightness: Boolean(col.grade.preserve_lightness)
-    };
+  if (Array.isArray(col.nodes) && col.nodes.length > 0) {
+    state.colorNodeTree = normalizeColorNodeTree({
+      nodes: col.nodes.map((n, idx) => deserializeColorNodeFromApi(n, idx)),
+      selectedNodeId: col.selected_node_id || "node-1"
+    });
+    syncActiveColorGradeFromTree();
+  } else {
+    state.colorNodeTree = createDefaultColorNodeTree();
+    if (col.grade) {
+      state.colorNodeTree.nodes[0].grade = normalizeColorGrade(col.grade);
+    }
+    syncActiveColorGradeFromTree();
   }
   state.colorActivePresetId = String(col.active_preset_id || "");
   state.colorSplitWipe.positionPct = clampSplitWipePercent(Number(col.wipe_ratio ?? 0.5) * 100);
@@ -4715,12 +4742,219 @@ function renderColorCompileResult(res) {
   badge.textContent = res.is_identity ? "UNITY" : "GRADED";
   badge.className = `nle-tag mono ${res.is_identity ? "" : "is-pass"}`;
   out.textContent = res.filtergraph;
+  renderColorNodeTreeUI();
+}
+
+function getActiveColorChainState() {
+  state.colorNodeTree = normalizeColorNodeTree(state.colorNodeTree);
+  return { nodes: state.colorNodeTree.nodes };
+}
+
+function syncActiveColorGradeFromTree() {
+  state.colorNodeTree = normalizeColorNodeTree(state.colorNodeTree);
+  const activeNode = getSelectedColorNode(state.colorNodeTree);
+  state.colorGrade = activeNode.grade;
+  return activeNode;
+}
+
+function getSerializedColorNodes() {
+  state.colorNodeTree = normalizeColorNodeTree(state.colorNodeTree);
+  return state.colorNodeTree.nodes.map((n) => serializeColorNodeForApi(n));
+}
+
+function renderColorNodeTreeUI() {
+  state.colorNodeTree = normalizeColorNodeTree(state.colorNodeTree);
+  const nodes = state.colorNodeTree.nodes;
+  const activeNode = syncActiveColorGradeFromTree();
+  const activeIdx = nodes.findIndex((n) => n.id === activeNode.id);
+
+  const countBadge = byId("color-node-count");
+  if (countBadge) {
+    countBadge.textContent = `${nodes.length} / ${MAX_COLOR_NODES} NODES`;
+  }
+
+  const addBtn = byId("btn-color-node-add");
+  if (addBtn) addBtn.disabled = nodes.length >= MAX_COLOR_NODES;
+
+  const delBtn = byId("btn-color-node-delete");
+  if (delBtn) delBtn.disabled = nodes.length <= 1;
+
+  const leftBtn = byId("btn-color-node-left");
+  if (leftBtn) leftBtn.disabled = activeIdx <= 0;
+
+  const rightBtn = byId("btn-color-node-right");
+  if (rightBtn) rightBtn.disabled = activeIdx < 0 || activeIdx >= nodes.length - 1;
+
+  const bypassBtn = byId("btn-color-node-bypass");
+  if (bypassBtn) {
+    const isBypassed = activeNode.enabled === false;
+    bypassBtn.classList.toggle("is-active", isBypassed);
+    bypassBtn.setAttribute("aria-pressed", isBypassed ? "true" : "false");
+  }
+
+  const labelInput = byId("color-node-label-input");
+  if (labelInput && document.activeElement !== labelInput) {
+    labelInput.value = activeNode.label;
+  }
+
+  const lutBadge = byId("color-node-lut-badge");
+  const mixRange = byId("cube-lut-mix-range");
+  const mixNum = byId("cube-lut-mix-num");
+  const clearLutBtn = byId("btn-color-node-clear-lut");
+  const hasLut = Boolean(activeNode.lut);
+
+  if (lutBadge) {
+    if (hasLut) {
+      lutBadge.textContent = `${activeNode.lut.dimension} ${activeNode.lut.size}^3 ${activeNode.lut.title}`;
+      lutBadge.className = "nle-tag is-pass mono";
+    } else {
+      lutBadge.textContent = t("color.nodes.noLut");
+      lutBadge.className = "nle-tag mono";
+    }
+  }
+  const mixPct = hasLut ? Math.round(Number(activeNode.lut.mix ?? 1) * 100) : 100;
+  if (mixRange) {
+    mixRange.disabled = !hasLut;
+    mixRange.value = String(mixPct);
+  }
+  if (mixNum) {
+    mixNum.disabled = !hasLut;
+    if (document.activeElement !== mixNum) {
+      mixNum.value = String(mixPct);
+    }
+  }
+  if (clearLutBtn) clearLutBtn.disabled = !hasLut;
+
+  const graph = byId("color-node-graph");
+  if (!graph) return;
+  const flowChildren = [];
+  flowChildren.push(dom("span", "color-node-pin mono", "IN"));
+
+  nodes.forEach((node, idx) => {
+    flowChildren.push(dom("span", "color-node-link mono", "->"));
+    const isSelected = node.id === activeNode.id;
+    const isBypassed = node.enabled === false;
+    const hasNodeLut = Boolean(node.lut);
+    const isNeutral = isColorNodeIdentity(node);
+
+    const card = dom(
+      "div",
+      `color-node-card${isSelected ? " is-selected" : ""}${isBypassed ? " is-bypassed" : ""}`
+    );
+    card.setAttribute("data-color-node-card", node.id);
+
+    const selBtn = dom("button", "color-node-select");
+    selBtn.type = "button";
+    selBtn.setAttribute("data-color-node-id", node.id);
+    selBtn.setAttribute("aria-pressed", isSelected ? "true" : "false");
+    selBtn.setAttribute("aria-label", `Select serial node ${idx + 1}: ${node.label}`);
+
+    const topRow = dom("div", "color-node-head");
+    const idxTag = dom("span", "color-node-idx mono", String(idx + 1).padStart(2, "0"));
+    const nameSpan = dom("span", "color-node-name", node.label);
+    topRow.replaceChildren(idxTag, nameSpan);
+
+    const metaRow = dom("div", "color-node-meta mono");
+    let statusText = "UNITY";
+    let statusClass = "color-node-status";
+    if (isBypassed) {
+      statusText = "BYPASS";
+      statusClass = "color-node-status is-bypass";
+    } else if (hasNodeLut) {
+      statusText = `${node.lut.size}^3 LUT`;
+      statusClass = "color-node-status is-lut";
+    } else if (!isNeutral) {
+      statusText = "GRADE";
+      statusClass = "color-node-status is-graded";
+    }
+    metaRow.appendChild(dom("span", statusClass, statusText));
+    selBtn.replaceChildren(topRow, metaRow);
+    selBtn.addEventListener("click", () => selectColorNodeAction(node.id));
+
+    const bypBtn = dom(
+      "button",
+      `color-node-bypass-btn mono${isBypassed ? " is-bypassed" : ""}`,
+      isBypassed ? "OFF" : "ON"
+    );
+    bypBtn.type = "button";
+    bypBtn.setAttribute("data-color-node-bypass", node.id);
+    bypBtn.setAttribute("aria-pressed", isBypassed ? "true" : "false");
+    bypBtn.setAttribute("aria-label", `Toggle bypass for node ${idx + 1}`);
+    bypBtn.addEventListener("click", () => toggleColorNodeBypassAction(node.id));
+
+    card.replaceChildren(selBtn, bypBtn);
+    flowChildren.push(card);
+  });
+
+  flowChildren.push(dom("span", "color-node-link mono", "->"));
+  flowChildren.push(dom("span", "color-node-pin mono", "OUT"));
+  graph.replaceChildren(...flowChildren);
+}
+
+function selectColorNodeAction(nodeId) {
+  state.colorNodeTree = selectColorNodeInTree(state.colorNodeTree, nodeId);
+  syncActiveColorGradeFromTree();
+  state.colorActivePresetId = "";
+  syncColorInputsFromState();
+}
+
+function addColorNodeAction() {
+  if (state.colorNodeTree.nodes.length >= MAX_COLOR_NODES) return;
+  state.colorNodeTree = addColorNodeToTree(state.colorNodeTree);
+  syncActiveColorGradeFromTree();
+  state.colorActivePresetId = "";
+  syncColorInputsFromState();
+  compileColorNow();
+}
+
+function removeColorNodeAction() {
+  const active = syncActiveColorGradeFromTree();
+  if (state.colorNodeTree.nodes.length <= 1) return;
+  state.colorNodeTree = removeColorNodeFromTree(state.colorNodeTree, active.id);
+  syncActiveColorGradeFromTree();
+  state.colorActivePresetId = "";
+  syncColorInputsFromState();
+  compileColorNow();
+}
+
+function toggleColorNodeBypassAction(nodeId = null) {
+  const active = syncActiveColorGradeFromTree();
+  const targetId = nodeId || active.id;
+  state.colorNodeTree = toggleColorNodeBypassInTree(state.colorNodeTree, targetId);
+  syncActiveColorGradeFromTree();
+  syncColorInputsFromState();
+  compileColorNow();
+}
+
+function moveColorNodeAction(direction) {
+  const active = syncActiveColorGradeFromTree();
+  state.colorNodeTree = moveColorNodeInTree(state.colorNodeTree, active.id, direction);
+  syncActiveColorGradeFromTree();
+  syncColorInputsFromState();
+  compileColorNow();
+}
+
+function resetSelectedColorNodeAction() {
+  const active = syncActiveColorGradeFromTree();
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    grade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
+    lut: null
+  });
+  syncActiveColorGradeFromTree();
+  state.colorActivePresetId = state.colorNodeTree.nodes.length === 1 ? "rec709_clean" : "";
+  syncColorInputsFromState();
+  compileColorNow();
 }
 
 async function compileColorNow() {
   const seq = ++state.colorCompileSeq;
   try {
-    const compiled = await api.compileColorGrade({ grade: state.colorGrade });
+    const serializedNodes = getSerializedColorNodes();
+    const payload =
+      serializedNodes.length === 1 && !serializedNodes[0].lut_table
+        ? { grade: state.colorGrade }
+        : { nodes: serializedNodes };
+    const compiled = await api.compileColorGrade(payload);
     if (seq !== state.colorCompileSeq) return;
     renderColorCompileResult(compiled);
   } catch (err) {
@@ -4740,6 +4974,7 @@ function scheduleColorCompile() {
 }
 
 function syncColorInputsFromState() {
+  syncActiveColorGradeFromTree();
   for (const b of COLOR_WHEEL_BINDINGS) {
     const val = state.colorGrade[b.group][b.idx];
     const rEl = byId(b.range);
@@ -4755,6 +4990,7 @@ function syncColorInputsFromState() {
     if (nEl) nEl.value = val.toFixed(tb.decimals);
   }
   updateColorPresetBadges();
+  renderColorNodeTreeUI();
   if (state.activeTab === "color" || state.activeTab === "timeline" || state.activeTab === "fx") {
     redrawActiveCanvases();
   }
@@ -4770,7 +5006,11 @@ function applyColorPresetUI(presetId) {
     presetParams = COLOR_GRADE_PRESETS[presetId].params;
   }
   if (!presetParams) return;
-  state.colorGrade = cloneGradeParams(presetParams);
+  const active = syncActiveColorGradeFromTree();
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    grade: cloneGradeParams(presetParams)
+  });
+  syncActiveColorGradeFromTree();
   state.colorActivePresetId = presetId;
   syncColorInputsFromState();
   compileColorNow();
@@ -4939,6 +5179,7 @@ function grabMonitorStill(target) {
       : 25;
   const tc = framesToSmpte(state.playheadFrame || 0, fps);
 
+  const activeColorChain = getActiveColorChainState();
   let capture = null;
   let presetLabel = "";
   if (isFx) {
@@ -4947,7 +5188,7 @@ function grabMonitorStill(target) {
       canvas,
       state.timelineDoc,
       state.playheadFrame,
-      state.colorGrade,
+      activeColorChain,
       getEffectiveFxState(),
       getEffectiveTitleState(false),
       getEffectiveFramingState(),
@@ -4959,7 +5200,7 @@ function grabMonitorStill(target) {
       (state.fxStack.length > 0 ? `${state.fxStack.length} FX` : "Program");
   } else {
     const canvas = byId("color-preview-canvas");
-    capture = captureCleanColorStill(canvas, state.colorGrade);
+    capture = captureCleanColorStill(canvas, activeColorChain);
     const presetBadge = byId("color-preset-badge");
     presetLabel =
       (presetBadge && presetBadge.textContent ? presetBadge.textContent.trim() : "") ||
@@ -5263,7 +5504,11 @@ function wireColorInputs() {
   }
 
   byId("btn-cdl-reset").addEventListener("click", () => {
-    applyColorPresetUI("rec709_clean");
+    state.colorNodeTree = createDefaultColorNodeTree();
+    syncActiveColorGradeFromTree();
+    state.colorActivePresetId = "rec709_clean";
+    syncColorInputsFromState();
+    compileColorNow();
   });
 
   byId("cube-size-select").addEventListener("change", () => {
@@ -5277,12 +5522,11 @@ async function bakeCubeLut() {
     const size = Number.parseInt(byId("cube-size-select").value, 10);
     const title = byId("cube-title-input").value.trim() || "taktcut_grade";
     const outPath = byId("cube-out-path").value.trim();
-    const payload = {
-      grade: state.colorGrade,
-      size,
-      title,
-      out_path: outPath || null
-    };
+    const serializedNodes = getSerializedColorNodes();
+    const payload =
+      serializedNodes.length === 1 && !serializedNodes[0].lut_table
+        ? { grade: state.colorGrade, size, title, out_path: outPath || null }
+        : { nodes: serializedNodes, size, title, out_path: outPath || null };
     const data = await api.bakeCube(payload);
     const info = data.info;
     byId("cube-info-badge").textContent = `${info.dimension} ${info.size}^3 (${info.entry_count} pts)`;
@@ -5312,12 +5556,12 @@ async function downloadCubeLut() {
   try {
     const size = Number.parseInt(byId("cube-size-select").value, 10);
     const title = byId("cube-title-input").value.trim() || "taktcut_grade";
-    const blob = await api.downloadCubeBlob({
-      grade: state.colorGrade,
-      size,
-      title,
-      filename: `${title}.cube`
-    });
+    const serializedNodes = getSerializedColorNodes();
+    const dlPayload =
+      serializedNodes.length === 1 && !serializedNodes[0].lut_table
+        ? { grade: state.colorGrade, size, title, filename: `${title}.cube` }
+        : { nodes: serializedNodes, size, title, filename: `${title}.cube` };
+    const blob = await api.downloadCubeBlob(dlPayload);
     const safeStem = title.replace(/[^A-Za-z0-9._-]/g, "_") || "taktcut_grade";
     triggerBlobDownload(blob, `${safeStem}.cube`);
     showBanner(`Downloaded ${safeStem}.cube`, "success");
@@ -6690,6 +6934,7 @@ async function buildOrExecuteRender(execute) {
         fps,
         lut_path: lutPath,
         color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
+        color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
         chroma_key: chromaKeyPayload,
         fx_stack: fxPayload,
         title_overlay: titlePayload,
@@ -6757,6 +7002,7 @@ async function buildOrExecuteRender(execute) {
       fps,
       lut_path: lutPath,
       color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
+      color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
       chroma_key: chromaKeyPayload,
       fx_stack: fxPayload,
       title_overlay: titlePayload,
@@ -10662,7 +10908,7 @@ function wireEvents() {
       const xmlContent = await file.text();
       const data = await api.parseCdlXml(xmlContent);
       const c = data.cdl;
-      state.colorGrade = {
+      const nextGrade = {
         lift: c.offset.map((v) => clampColorNum(v, -1, 1)),
         gamma: c.power.map((v) => clampColorNum(1.0 - v, -1, 1)),
         gain: c.slope.map((v) => clampColorNum(v - 1.0, -1, 1)),
@@ -10670,6 +10916,11 @@ function wireEvents() {
         saturation: clampColorNum(c.saturation, 0, 3),
         temperature: 0.0
       };
+      const active = syncActiveColorGradeFromTree();
+      state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+        grade: nextGrade
+      });
+      syncActiveColorGradeFromTree();
       state.colorActivePresetId = "";
       syncColorInputsFromState();
       compileColorNow();
@@ -10677,6 +10928,95 @@ function wireEvents() {
     } catch (err) {
       showBanner(err.message, "error");
     }
+  });
+
+  byId("btn-color-node-add")?.addEventListener("click", addColorNodeAction);
+  byId("btn-color-node-bypass")?.addEventListener("click", () => toggleColorNodeBypassAction(null));
+  byId("btn-color-node-left")?.addEventListener("click", () => moveColorNodeAction(-1));
+  byId("btn-color-node-right")?.addEventListener("click", () => moveColorNodeAction(1));
+  byId("btn-color-node-reset")?.addEventListener("click", resetSelectedColorNodeAction);
+  byId("btn-color-node-delete")?.addEventListener("click", removeColorNodeAction);
+
+  byId("color-node-label-input")?.addEventListener("change", (ev) => {
+    const active = syncActiveColorGradeFromTree();
+    const nextLabel = ev.target.value.trim() || active.label;
+    state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+      label: nextLabel
+    });
+    renderColorNodeTreeUI();
+  });
+
+  byId("cube-file-input")?.addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    try {
+      const cubeContent = await file.text();
+      let parsedLut = null;
+      try {
+        const res = await api.parseCubeLut(cubeContent, file.name);
+        if (res && res.lut) {
+          parsedLut = {
+            title: res.lut.title || file.name.replace(/\.cube$/i, ""),
+            dimension: res.lut.dimension,
+            size: res.lut.size,
+            domainMin: res.lut.domain_min || res.lut.domainMin || [0, 0, 0],
+            domainMax: res.lut.domain_max || res.lut.domainMax || [1, 1, 1],
+            entryCount: res.lut.entry_count || res.lut.entryCount,
+            mix: 1.0,
+            table: res.lut.table
+          };
+        }
+      } catch (apiErr) {
+        parsedLut = parseCubeLutTextClient(cubeContent, file.name.replace(/\.cube$/i, ""));
+        if (!parsedLut) throw apiErr;
+      }
+      if (!parsedLut) {
+        parsedLut = parseCubeLutTextClient(cubeContent, file.name.replace(/\.cube$/i, ""));
+      }
+      const active = syncActiveColorGradeFromTree();
+      state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+        lut: parsedLut
+      });
+      syncActiveColorGradeFromTree();
+      state.colorActivePresetId = "";
+      syncColorInputsFromState();
+      compileColorNow();
+      showBanner(`Loaded ${parsedLut.dimension} ${parsedLut.size}^3 .cube LUT onto ${active.label}`, "success");
+    } catch (err) {
+      showBanner(err.message, "error");
+    } finally {
+      ev.target.value = "";
+    }
+  });
+
+  const applyLutMixPct = (rawPct) => {
+    const active = syncActiveColorGradeFromTree();
+    if (!active.lut) return;
+    const pct = Math.min(100, Math.max(0, Math.round(Number(rawPct))));
+    if (!Number.isFinite(pct)) return;
+    const nextLut = { ...active.lut, mix: pct / 100 };
+    state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, { lut: nextLut });
+    syncActiveColorGradeFromTree();
+    const rEl = byId("cube-lut-mix-range");
+    const nEl = byId("cube-lut-mix-num");
+    if (rEl) rEl.value = String(pct);
+    if (nEl && document.activeElement !== nEl) nEl.value = String(pct);
+    redrawActiveCanvases();
+  };
+
+  byId("cube-lut-mix-range")?.addEventListener("input", (ev) => {
+    applyLutMixPct(ev.target.value);
+  });
+  byId("cube-lut-mix-num")?.addEventListener("change", (ev) => {
+    applyLutMixPct(ev.target.value);
+    renderColorNodeTreeUI();
+  });
+  byId("btn-color-node-clear-lut")?.addEventListener("click", () => {
+    const active = syncActiveColorGradeFromTree();
+    state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, { lut: null });
+    syncActiveColorGradeFromTree();
+    syncColorInputsFromState();
+    compileColorNow();
   });
 
   byId("btn-send-lut-render").addEventListener("click", () => {

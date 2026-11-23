@@ -966,6 +966,21 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-pool-insert-playhead",
         "btn-pool-append",
         "timeline-overview-canvas",
+        "color-node-tree-dock",
+        "color-node-graph",
+        "color-node-count",
+        "btn-color-node-add",
+        "btn-color-node-bypass",
+        "btn-color-node-left",
+        "btn-color-node-right",
+        "btn-color-node-reset",
+        "btn-color-node-delete",
+        "color-node-label-input",
+        "cube-file-input",
+        "color-node-lut-badge",
+        "cube-lut-mix-range",
+        "cube-lut-mix-num",
+        "btn-color-node-clear-lut",
     ):
         assert elem_id in html_text
     assert "v0.1.27" in html_text
@@ -981,6 +996,8 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert ".media-pool-type-filter" in css_text
     assert ".timeline-overview-canvas" in css_text
     assert ".nle-titles-bottom" in css_text
+    assert ".color-node-tree-dock" in css_text
+    assert ".color-node-card" in css_text
     assert "\u2013" not in css_text and "\u2014" not in css_text
 
     i18n_status, _, i18n_raw = _http_call(f"{base_url}/i18n.js")
@@ -1019,6 +1036,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"Galerie d\'Images"' in i18n_text
     assert '"Télécharger PNG"' in i18n_text
     assert '"Capturer Image Fixe PNG (Couleur & FX)"' in i18n_text
+    assert '"Arbre de Nœuds Série"' in i18n_text
+    assert '"+ Nœud Série"' in i18n_text
+    assert '"Importer .cube"' in i18n_text
     assert "innerHTML" not in i18n_text
     for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
         asset_text = _http_call(f"{base_url}{asset_path}")[2].decode("utf-8")
@@ -1052,6 +1072,7 @@ import {{
   CLIP_LABEL_COLOR_IDS,
   DELIVERY_PRESETS,
   MARKER_COLORS,
+  MAX_COLOR_NODES,
   SHUTTLE_MAX_SPEED,
   SHUTTLE_SPEEDS,
   SPLIT_WIPE_HIT_RADIUS_PX,
@@ -1059,9 +1080,13 @@ import {{
   SPLIT_WIPE_POS_MAX,
   SPLIT_WIPE_POS_MIN,
   STILLS_GALLERY_MAX,
+  addColorNodeToTree,
   addMarkerInDocument,
   appendClipToTrackInDocument,
   appendStillBounded,
+  applyColorNodeChainRgbClient,
+  applyCubeLutRgbClient,
+  bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
   buildSourceTapeSegments,
   buildStillFilename,
@@ -1069,6 +1094,7 @@ import {{
   classifyMediaPoolEntry,
   collectSnapTargets,
   compileAudioFilterClient,
+  compileColorNodeChainClient,
   compileFairlightAudioFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
@@ -1079,6 +1105,7 @@ import {{
   computeSplitWipeGeometry,
   computeSplitWipePercentFromPointer,
   computeTimelineZoomViewport,
+  createDefaultColorNodeTree,
   createStillRecord,
   deleteMarkerInDocument,
   escapeFfmetadataValue,
@@ -1103,6 +1130,7 @@ import {{
   isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
   isValidClipLabelColor,
+  moveColorNodeInTree,
   normalizeBpmConfig,
   normalizeClipAudio,
   normalizeClipLabelColor,
@@ -1111,9 +1139,14 @@ import {{
   normalizeFairlightAudioParams,
   normalizeInOutRange,
   normalizeMarkerColor,
+  parseCubeLutTextClient,
+  removeColorNodeFromTree,
   removeStillById,
   resolveSourceTapeFrame,
   sanitizeStillDataUrl,
+  selectColorNodeInTree,
+  toggleColorNodeBypassInTree,
+  updateColorNodeInTree,
   normalizeSplitWipeState,
   rippleDeleteClipInDocument,
   setClipLabelColor,
@@ -2531,6 +2564,71 @@ const vpZoom = computeTimelineZoomViewport(0, 500, 2, 250, null);
 assert.equal(vpZoom.visibleSpan, 250);
 assert.equal(vpZoom.viewStartFrame, 125);
 assert.equal(vpZoom.viewEndFrame, 375);
+
+// DaVinci Resolve Serial Color Node Tree & 3D .cube LUT client unit checks
+let colorTree = createDefaultColorNodeTree();
+assert.equal(colorTree.nodes.length, 1);
+assert.equal(colorTree.selectedNodeId, "node-1");
+
+const parsedCube = parseCubeLutTextClient(
+  [
+    'TITLE "Test_Warm_2"',
+    "LUT_3D_SIZE 2",
+    "0 0 0",
+    "1 0 0",
+    "0 1 0",
+    "1 1 0",
+    "0 0 0.8",
+    "1 0 0.8",
+    "0 1 0.8",
+    "1 0.85 0.7"
+  ].join("\\n"),
+  "fallback"
+);
+assert.equal(parsedCube.dimension, "3D");
+assert.equal(parsedCube.size, 2);
+assert.equal(parsedCube.entryCount, 8);
+const [lr, lg, lb] = applyCubeLutRgbClient(1, 1, 1, parsedCube, 1.0);
+assert.ok(Math.abs(lr - 1.0) < 1e-6 && Math.abs(lg - 0.85) < 1e-6 && Math.abs(lb - 0.7) < 1e-6);
+
+colorTree = updateColorNodeInTree(colorTree, "node-1", {{
+  label: "Balance",
+  grade: {{
+    lift: [0, 0, 0],
+    gamma: [0, 0, 0],
+    gain: [0, 0, 0],
+    contrast: 1.1,
+    saturation: 1.05,
+    temperature: 0
+  }}
+}});
+colorTree = addColorNodeToTree(colorTree, {{ label: "Look LUT", lut: parsedCube }});
+assert.equal(colorTree.nodes.length, 2);
+assert.equal(colorTree.selectedNodeId, "node-2");
+colorTree = moveColorNodeInTree(colorTree, "node-2", -1);
+assert.equal(colorTree.nodes[0].id, "node-2");
+colorTree = moveColorNodeInTree(colorTree, "node-2", 1);
+assert.equal(colorTree.nodes[1].id, "node-2");
+
+const compiledTree = compileColorNodeChainClient(colorTree, "yuv420p");
+assert.equal(compiledTree.is_identity, false);
+assert.equal(compiledTree.active_node_count, 2);
+assert.equal(compiledTree.has_lut_nodes, true);
+assert.ok(compiledTree.filtergraph.includes("eq=contrast=1.1000:saturation=1.0500"));
+
+colorTree = toggleColorNodeBypassInTree(colorTree, "node-2");
+assert.equal(colorTree.nodes[1].enabled, false);
+const [cr1, cg1, cb1] = applyColorNodeChainRgbClient(0.5, 0.5, 0.5, colorTree);
+colorTree = toggleColorNodeBypassInTree(colorTree, "node-2");
+const [cr2, cg2, cb2] = applyColorNodeChainRgbClient(0.5, 0.5, 0.5, colorTree);
+assert.ok(Math.abs(cb1 - cb2) > 0.02);
+
+const bakedCubeTxt = bakeColorNodeChainToCubeTextClient(colorTree, 3, "tree_bake");
+assert.ok(bakedCubeTxt.includes("LUT_3D_SIZE 3"));
+colorTree = removeColorNodeFromTree(colorTree, "node-2");
+assert.equal(colorTree.nodes.length, 1);
+assert.equal(removeColorNodeFromTree(colorTree, "node-1").nodes.length, 1);
+assert.equal(MAX_COLOR_NODES, 8);
 """
     proc = subprocess.run(
         [node, "--input-type=module"],
@@ -3352,8 +3450,76 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     dlg_text = page.locator("#nle-shortcuts-grid").text_content() or ""
                     assert "Shift+S" in dlg_text
                     page.keyboard.press("Escape")
+
+                    # Verify 04 Color monitors stay locked inside 100dvh viewport (1440x900)
+                    color_monitor_box = page.locator("#color-preview-canvas").bounding_box()
+                    color_scope_box = page.locator("#color-scope-canvas").bounding_box()
+                    assert color_monitor_box is not None
+                    assert color_scope_box is not None
+                    assert color_monitor_box["y"] + color_monitor_box["height"] <= height
+                    assert color_scope_box["y"] + color_scope_box["height"] <= height
+
+                    # Verify DaVinci Serial Node Tree + .cube LUT import + Live Scope update
+                    page.locator("#btn-cdl-reset").click()
+                    assert page.locator("#color-node-count").text_content() == "1 / 8 NODES"
+                    assert page.locator("#color-node-graph .color-node-card").count() == 1
+                    page.locator("#btn-color-node-add").click()
+                    assert page.locator("#color-node-count").text_content() == "2 / 8 NODES"
+                    assert page.locator("#color-node-graph .color-node-card").count() == 2
+                    page.locator('[data-grade-preset="teal_orange"]').click()
+                    page.wait_for_function(
+                        "() => document.getElementById('color-compile-badge').textContent"
+                        " === 'GRADED' && (document.getElementById('color-filtergraph-output')"
+                        ".textContent || '').includes('eq=contrast=1.1400:saturation=1.1800')"
+                    )
+                    scope_before_lut = page.evaluate(
+                        "() => document.getElementById('color-scope-canvas').toDataURL()"
+                    )
+                    cube_payload = (
+                        'TITLE "CI_Cinema_2x2x2"\n'
+                        "LUT_3D_SIZE 2\n"
+                        "0.0 0.0 0.0\n"
+                        "1.0 0.0 0.0\n"
+                        "0.0 0.8 0.0\n"
+                        "1.0 0.8 0.0\n"
+                        "0.0 0.0 0.65\n"
+                        "1.0 0.0 0.65\n"
+                        "0.0 0.8 0.65\n"
+                        "0.95 0.78 0.60\n"
+                    )
+                    page.locator("#cube-file-input").set_input_files(
+                        {
+                            "name": "ci_cinema.cube",
+                            "mimeType": "text/plain",
+                            "buffer": cube_payload.encode("utf-8"),
+                        }
+                    )
+                    page.wait_for_function(
+                        "() => (document.getElementById('color-node-lut-badge')"
+                        ".textContent || '').includes('3D 2^3')"
+                    )
+                    scope_after_lut = page.evaluate(
+                        "() => document.getElementById('color-scope-canvas').toDataURL()"
+                    )
+                    assert scope_after_lut != scope_before_lut
+
+                    # Bypass node 2 restores scope & filtergraph to node 1 only
+                    page.locator("#btn-color-node-bypass").click()
+                    assert (
+                        page.locator("#btn-color-node-bypass").get_attribute("aria-pressed")
+                        == "true"
+                    )
+                    scope_bypassed = page.evaluate(
+                        "() => document.getElementById('color-scope-canvas').toDataURL()"
+                    )
+                    assert scope_bypassed != scope_after_lut
+                    page.locator("#btn-color-node-clear-lut").click()
+                    assert page.locator("#btn-color-node-clear-lut").is_disabled() is True
+                    page.locator("#btn-color-node-delete").click()
+                    assert page.locator("#color-node-count").text_content() == "1 / 8 NODES"
+                    page.locator("#btn-cdl-reset").click()
                 else:
-                    # Mobile 375px check: Grab Still + touch target >= 44px + 0 horizontal overflow
+                    # Mobile check: Grab Still + Serial Node targets >= 44px + 0 overflow
                     page.locator("#btn-color-grab-still").click()
                     assert page.locator("#color-stills-gallery .still-card").count() == 1
                     grab_box = page.locator("#btn-color-grab-still").bounding_box()
@@ -3362,6 +3528,14 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert grab_box is not None and grab_box["height"] >= 44
                     assert del_box is not None
                     assert del_box["width"] >= 44 and del_box["height"] >= 44
+                    if width <= 820:
+                        for node_sel in (
+                            "#btn-color-node-add",
+                            "#btn-color-node-bypass",
+                            "#cube-file-input",
+                        ):
+                            node_box = page.locator(node_sel).bounding_box()
+                            assert node_box is not None and node_box["height"] >= 44
                     color_still_overflow = page.evaluate(
                         "() => document.documentElement.scrollWidth - window.innerWidth"
                     )
@@ -6400,3 +6574,111 @@ def test_ui_voice_cleanup_compile_and_render_plan_endpoints(
         content = (assets_dir / asset_name).read_text(encoding="utf-8")
         assert "\u2014" not in content
         assert "\u2013" not in content
+
+
+def test_ui_color_node_tree_and_cube_import_endpoints(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+    cube_text = (
+        'TITLE "Server_Warm_2"\n'
+        "LUT_3D_SIZE 2\n"
+        "0.0 0.0 0.0\n"
+        "1.0 0.0 0.0\n"
+        "0.0 0.9 0.0\n"
+        "1.0 0.9 0.0\n"
+        "0.0 0.0 0.75\n"
+        "1.0 0.0 0.75\n"
+        "0.0 0.9 0.75\n"
+        "1.0 0.85 0.75\n"
+    )
+    parse_status, _, parsed_raw = _http_call(
+        f"{base_url}/api/color/parse-cube",
+        method="POST",
+        payload={"cube_content": cube_text, "filename": "server_warm.cube"},
+    )
+    assert parse_status == 200
+    parsed = json.loads(parsed_raw.decode("utf-8"))
+    assert parsed["info"]["dimension"] == "3D"
+    assert parsed["info"]["size"] == 2
+    assert parsed["lut"]["title"] == "Server_Warm_2"
+    assert len(parsed["lut"]["table"]) == 8
+
+    nodes_payload = [
+        {
+            "id": "node-1",
+            "label": "Balance",
+            "enabled": True,
+            "grade": {
+                "lift": [0.0, 0.0, 0.0],
+                "gamma": [0.02, 0.0, -0.02],
+                "gain": [0.0, 0.0, 0.0],
+                "contrast": 1.1,
+                "saturation": 1.05,
+                "temperature": 0.05,
+            },
+        },
+        {
+            "id": "node-2",
+            "label": "Warm Print",
+            "enabled": True,
+            "grade": {
+                "lift": [0.0, 0.0, 0.0],
+                "gamma": [0.0, 0.0, 0.0],
+                "gain": [0.0, 0.0, 0.0],
+                "contrast": 1.0,
+                "saturation": 1.0,
+                "temperature": 0.0,
+            },
+            "lut_title": parsed["lut"]["title"],
+            "lut_dimension": "3D",
+            "lut_size": 2,
+            "lut_mix": 0.8,
+            "lut_domain_min": parsed["lut"]["domain_min"],
+            "lut_domain_max": parsed["lut"]["domain_max"],
+            "lut_table": parsed["lut"]["table"],
+        },
+    ]
+
+    comp_status, _, comp_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"nodes": nodes_payload, "pix_fmt": "yuv420p"},
+    )
+    assert comp_status == 200
+    comp = json.loads(comp_raw.decode("utf-8"))
+    assert comp["is_identity"] is False
+    assert comp["active_node_count"] == 2
+    assert comp["has_lut_nodes"] is True
+    assert "eq=contrast=1.1000:saturation=1.0500" in comp["filtergraph"]
+
+    bake_status, _, baked_raw = _http_call(
+        f"{base_url}/api/color/bake",
+        method="POST",
+        payload={"nodes": nodes_payload, "size": 5, "title": "api_composite_tree"},
+    )
+    assert bake_status == 200
+    baked = json.loads(baked_raw.decode("utf-8"))
+    assert baked["info"]["size"] == 5
+    assert baked["info"]["entry_count"] == 125
+    assert "LUT_3D_SIZE 5" in baked["cube_text"]
+
+    dl_status, _, dl_bytes = _http_call(
+        f"{base_url}/api/color/download-cube",
+        method="POST",
+        payload={"nodes": nodes_payload, "size": 5, "title": "api_dl_tree"},
+    )
+    assert dl_status == 200
+    assert b"LUT_3D_SIZE 5" in dl_bytes
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/node_tree_out.mp4",
+            "color_nodes": nodes_payload,
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan = json.loads(plan_raw.decode("utf-8"))
+    assert "lut3d=" in (plan["plan"]["video_filter"] or "")

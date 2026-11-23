@@ -1183,3 +1183,55 @@ def test_project_delivery_voice_cleanup_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["voice_cleanup"][bad_key] = bad_val
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
+    from taktcut.color import ColorNodeParams, parse_cube_lut_text
+
+    cube_text = (
+        'TITLE "Demo_LUT"\n'
+        "LUT_3D_SIZE 2\n"
+        "0.0 0.0 0.0\n"
+        "1.0 0.0 0.0\n"
+        "0.0 1.0 0.0\n"
+        "1.0 1.0 0.0\n"
+        "0.0 0.0 1.0\n"
+        "1.0 0.0 1.0\n"
+        "0.0 1.0 1.0\n"
+        "1.0 0.9 0.8\n"
+    )
+    info, table = parse_cube_lut_text(cube_text, source_name="demo.cube")
+    proj = _build_full_test_project()
+    proj.color.nodes = [
+        ColorNodeParams(
+            id="node-1",
+            label="Balance",
+            enabled=True,
+            grade=ColorGradeParams(contrast=1.12, temperature=0.15),
+        ),
+        ColorNodeParams(
+            id="node-2",
+            label="Film Print",
+            enabled=True,
+            grade=ColorGradeParams(),
+            lut_title=info.title,
+            lut_dimension=info.dimension,
+            lut_size=info.size,
+            lut_mix=0.8,
+            lut_domain_min=info.domain_min,
+            lut_domain_max=info.domain_max,
+            lut_table=table,
+        ),
+    ]
+    proj.color.selected_node_id = "node-2"
+
+    proj_path = tmp_path / "color_nodes.taktcut.json"
+    save_project_file(proj, proj_path)
+    loaded = load_project_file(proj_path)
+    assert loaded.color.selected_node_id == "node-2"
+    assert len(loaded.color.nodes) == 2
+    assert loaded.color.nodes[0].label == "Balance"
+    assert loaded.color.nodes[1].lut_title == "Demo_LUT"
+    assert loaded.color.nodes[1].lut_mix == pytest.approx(0.8)
+    assert loaded.color.nodes[1].lut_size == 2
+    assert len(loaded.color.nodes[1].lut_table or []) == 8

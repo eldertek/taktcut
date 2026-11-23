@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -17,8 +17,10 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from taktcut.color import (
     REC709_FFMPEG_FLAGS,
     ColorGradeParams,
+    ColorNodeParams,
     build_rec709_lut_filter,
     compile_color_grade_filter,
+    compile_color_node_chain_filter,
     escape_ffmpeg_filter_path,
 )
 from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
@@ -2256,6 +2258,7 @@ def build_render_plan(
     film_grain: FilmGrainParams | None = None,
     vignette: VignetteParams | None = None,
     voice_cleanup: VoiceCleanupParams | None = None,
+    color_nodes: Sequence[ColorNodeParams] | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -2520,7 +2523,9 @@ def build_render_plan(
             vf_parts.append(ck_fg)
     if fx_filtergraph:
         vf_parts.append(fx_filtergraph)
-    if color_grade is not None and not color_grade.is_identity():
+    if color_nodes and any(n.enabled and not n.grade.is_identity() for n in color_nodes):
+        vf_parts.append(compile_color_node_chain_filter(color_nodes, pix_fmt=pix_fmt))
+    elif color_grade is not None and not color_grade.is_identity():
         vf_parts.append(compile_color_grade_filter(color_grade, pix_fmt=pix_fmt))
     if lut_path is not None:
         vf_parts.append(build_rec709_lut_filter(lut_path, target_pix_fmt=pix_fmt))
