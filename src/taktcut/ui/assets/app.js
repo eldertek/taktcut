@@ -461,7 +461,9 @@ const state = {
     encoderPreset: "medium"
   },
   renderEngine: "local",
-  remotePollTimer: null
+  remotePollTimer: null,
+  deliverSettingsTab: "video",
+  mediaPoolInfoEntry: null
 };
 
 function byId(id) {
@@ -576,6 +578,7 @@ function setLanguage(lang) {
   renderStillsGallery();
   renderUpdateButton();
   renderTimelineUI();
+  renderMediaPool();
   renderFairlightAudioUI();
   renderFxStack();
   renderDeliveryPresetStrip();
@@ -650,6 +653,91 @@ function switchTab(tabName) {
   }
   redrawActiveCanvases();
   window.requestAnimationFrame(redrawActiveCanvases);
+}
+
+const DELIVER_SETTINGS_TABS = ["video", "audio", "looks", "file"];
+
+function switchDeliverSettingsTab(tabName) {
+  const nextTab = DELIVER_SETTINGS_TABS.includes(tabName) ? tabName : "video";
+  state.deliverSettingsTab = nextTab;
+  const tabList = byId("render-settings-tabs");
+  if (tabList) {
+    for (const btn of tabList.querySelectorAll(".deliver-subtab-btn[data-render-tab]")) {
+      const isMatch = btn.getAttribute("data-render-tab") === nextTab;
+      btn.classList.toggle("is-active", isMatch);
+      btn.setAttribute("aria-selected", isMatch ? "true" : "false");
+      btn.setAttribute("tabindex", isMatch ? "0" : "-1");
+    }
+  }
+  for (const id of DELIVER_SETTINGS_TABS) {
+    const panel = byId(`render-tabpanel-${id}`);
+    if (!panel) continue;
+    const isMatch = id === nextTab;
+    panel.classList.toggle("is-hidden", !isMatch);
+    if (isMatch) {
+      panel.removeAttribute("hidden");
+    } else {
+      panel.setAttribute("hidden", "");
+    }
+  }
+}
+
+function syncDeliverTabIndicators() {
+  const deintEl = byId("render-deinterlace");
+  const framingEl = byId("render-use-framing");
+  const exportFpsEl = byId("render-export-fps");
+  const videoActive = Boolean(
+    (state.deliverRetime && state.deliverRetime.enabled) ||
+      (state.reframe && state.reframe.enabled) ||
+      (deintEl && deintEl.checked) ||
+      (framingEl && framingEl.checked) ||
+      (exportFpsEl && exportFpsEl.value !== "source")
+  );
+
+  const audioOnlyEl = byId("render-audio-only-format");
+  const audioActive = Boolean(
+    (audioOnlyEl && audioOnlyEl.value !== "off") ||
+      (state.voiceCleanup && state.voiceCleanup.enabled) ||
+      (state.fairlight &&
+        ((state.fairlight.loudness_preset && state.fairlight.loudness_preset !== "off") ||
+          (state.fairlight.dialogue_eq && state.fairlight.dialogue_eq !== "off")))
+  );
+
+  const lutEl = byId("render-lut-path");
+  const tcEl = byId("render-timecode-burnin");
+  const wmEl = byId("render-watermark-text");
+  const cdlEl = byId("render-use-studio-cdl");
+  const fxEl = byId("render-use-studio-fx");
+  const titleEl = byId("render-use-studio-title");
+  const subsEl = byId("render-use-studio-subtitles");
+  const looksActive = Boolean(
+    (lutEl && lutEl.value.trim()) ||
+      (tcEl && tcEl.value !== "off") ||
+      (wmEl && wmEl.value.trim()) ||
+      (state.lowerThird && state.lowerThird.enabled) ||
+      (state.filmGrain && state.filmGrain.enabled) ||
+      (state.vignette && state.vignette.enabled) ||
+      (cdlEl && cdlEl.checked) ||
+      (fxEl && fxEl.checked) ||
+      (titleEl && titleEl.checked) ||
+      (subsEl && subsEl.checked)
+  );
+
+  const fileActive = state.renderEngine === "remote";
+
+  const activeMap = {
+    video: videoActive,
+    audio: audioActive,
+    looks: looksActive,
+    file: fileActive
+  };
+  for (const [tabId, isOn] of Object.entries(activeMap)) {
+    const btn = byId(`render-tab-${tabId}`);
+    if (!btn) continue;
+    btn.classList.toggle("has-indicator", isOn);
+    const dot = btn.querySelector(".deliver-subtab-dot");
+    if (dot) dot.classList.toggle("is-hidden", !isOn);
+  }
 }
 
 function getEffectiveFxState() {
@@ -2042,6 +2130,118 @@ function syncTimelineIndexSelection() {
   }
 }
 
+const MEDIA_POOL_PALETTES = {
+  blue: { a: "#1b355e", b: "#10203a", accent: "#4c8dff" },
+  teal: { a: "#14413f", b: "#0d2626", accent: "#2dd4bf" },
+  amber: { a: "#4a2e10", b: "#261708", accent: "#f59e0b" },
+  rose: { a: "#4d1a28", b: "#270d14", accent: "#f43f5e" },
+  emerald: { a: "#153d2e", b: "#0d241b", accent: "#34d399" }
+};
+
+function hashClipSeed(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function computeClipThumbPalette(entry) {
+  const colorId = entry.labelColor && entry.labelColor !== "default" ? entry.labelColor : null;
+  if (colorId && MEDIA_POOL_PALETTES[colorId]) {
+    const pal = MEDIA_POOL_PALETTES[colorId];
+    const seed = hashClipSeed(`${entry.id}:${entry.label}:${entry.trackId}`);
+    return { ...pal, seed, angle: 118 + (seed % 44) };
+  }
+  const seed = hashClipSeed(`${entry.id}:${entry.label}:${entry.trackId}`);
+  const isAudio = entry.trackKind === "audio";
+  const hue = isAudio ? 148 + (seed % 34) : 204 + (seed % 56);
+  return {
+    a: `hsl(${hue} 38% 24%)`,
+    b: `hsl(${(hue + 14) % 360} 34% 13%)`,
+    accent: `hsl(${hue} 62% 58%)`,
+    seed,
+    angle: 118 + (seed % 44)
+  };
+}
+
+function openMediaPoolInfoDialog(entry) {
+  const doc = state.timelineDoc;
+  if (!doc || !entry) return;
+  selectClipFromTimelineIndex(entry);
+  state.mediaPoolInfoEntry = entry;
+
+  const dlg = byId("media-pool-info-dialog");
+  if (!dlg) return;
+
+  const fpsNum = Number(doc.fps && doc.fps.num ? doc.fps.num : 25);
+  const fpsDen = Number(doc.fps && doc.fps.den ? doc.fps.den : 1);
+  const fpsFloat = Math.max(1, fpsNum / Math.max(1, fpsDen));
+  const found = findTrackAndClip(doc, entry.trackKind, entry.trackIndex, entry.clipIndex);
+  const clip = found ? found.clip : null;
+
+  const startFrames = entry.startFrames || 0;
+  const durFrames = entry.durationFrames || 0;
+  const endFrames = startFrames + durFrames;
+  const durSec = (durFrames / fpsFloat).toFixed(2);
+  const endTc = framesToSmpte(endFrames, fpsNum, fpsDen);
+  const labelColorId = entry.labelColor || "default";
+  const kindText = entry.trackKind === "audio" ? "Audio" : "Video";
+
+  const titleEl = byId("media-pool-info-title");
+  if (titleEl) titleEl.textContent = entry.label || entry.id;
+  const subEl = byId("media-pool-info-subtitle");
+  if (subEl) subEl.textContent = `${entry.trackId} (${kindText}) | ${durSec}s (${durFrames}f)`;
+  const badgeEl = byId("media-pool-info-badge");
+  if (badgeEl) badgeEl.textContent = t(`timeline.clipLabel.${labelColorId}`);
+
+  const kvEl = byId("media-pool-info-kv");
+  if (kvEl) {
+    const sourceText =
+      clip && (clip.media_path || clip.source_url)
+        ? String(clip.media_path || clip.source_url)
+        : entry.label;
+    const gainDb = clip && Number.isFinite(Number(clip.audio_gain_db)) ? Number(clip.audio_gain_db) : 0;
+    const speed = clip && Number.isFinite(Number(clip.speed)) ? Number(clip.speed) : 1;
+    const inspectorText = `Gain ${gainDb.toFixed(1)} dB | Speed ${speed.toFixed(2)}x`;
+    const rows = [
+      [t("timeline.mediapool.field.track"), `${entry.trackId} (${kindText})`],
+      [t("timeline.mediapool.field.color"), t(`timeline.clipLabel.${labelColorId}`)],
+      [t("timeline.mediapool.field.start"), `${entry.startTimecode} (${startFrames}f)`],
+      [t("timeline.mediapool.field.duration"), `${durSec}s (${durFrames}f)`],
+      [t("timeline.mediapool.field.end"), `${endTc} (${endFrames}f)`],
+      [t("timeline.mediapool.field.format"), `${doc.width || 1920}x${doc.height || 1080} @ ${fpsFloat.toFixed(2)} fps`],
+      [t("timeline.mediapool.field.source"), sourceText],
+      [t("timeline.mediapool.field.inspector"), inspectorText]
+    ];
+    const children = [];
+    for (const [k, v] of rows) {
+      children.push(dom("span", "kv-key", k));
+      children.push(dom("span", "kv-val", v));
+    }
+    kvEl.replaceChildren(...children);
+  }
+
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") {
+      dlg.showModal();
+    } else {
+      dlg.setAttribute("open", "");
+    }
+  }
+}
+
+function closeMediaPoolInfoDialog() {
+  const dlg = byId("media-pool-info-dialog");
+  if (!dlg || !dlg.open) return;
+  if (typeof dlg.close === "function") {
+    dlg.close();
+  } else {
+    dlg.removeAttribute("open");
+  }
+}
+
 function renderMediaPool() {
   const list = byId("media-pool-list");
   if (!list) return;
@@ -2062,22 +2262,64 @@ function renderMediaPool() {
   }
   const fpsFloat = Math.max(1, doc.fps.num / Math.max(1, doc.fps.den));
   const selectedId = getSelectedTimelineClipId();
+  const infoHint = t("timeline.mediapool.infoHint");
   const cards = entries.map((entry) => {
     const isSel = Boolean(selectedId && entry.id === selectedId);
     const isAudio = entry.trackKind === "audio";
     const durSec = (entry.durationFrames / fpsFloat).toFixed(1);
+    const colorId = entry.labelColor || "default";
+    const pal = computeClipThumbPalette(entry);
+
     const card = dom("button", `media-pool-card${isAudio ? " is-audio" : " is-video"}${isSel ? " is-selected" : ""}`);
     card.type = "button";
     card.setAttribute("role", "listitem");
     card.setAttribute("data-pool-clip-id", entry.id);
-    card.title = `${entry.label} (${entry.trackId} | ${durSec}s)`;
+    card.setAttribute("data-label-color", colorId);
+    card.title = `${entry.label} (${entry.trackId} | ${durSec}s | ${entry.durationFrames}f) - ${infoHint}`;
 
     const thumb = dom("div", "media-pool-thumb");
-    thumb.appendChild(dom("span", "media-pool-track mono", entry.trackId));
-    thumb.appendChild(dom("span", "media-pool-dur mono", `${durSec}s`));
+    thumb.style.setProperty("--pool-grad-a", pal.a);
+    thumb.style.setProperty("--pool-grad-b", pal.b);
+    thumb.style.setProperty("--pool-accent", pal.accent);
+    thumb.style.setProperty("--pool-angle", `${pal.angle}deg`);
+
+    const thumbTop = dom("div", "media-pool-thumb-top");
+    thumbTop.appendChild(dom("span", "media-pool-track mono", entry.trackId));
+    thumbTop.appendChild(dom("span", "media-pool-dur mono", `${durSec}s`));
+
+    const visual = dom("div", `media-pool-visual${isAudio ? " is-wave" : " is-film"}`);
+    visual.setAttribute("aria-hidden", "true");
+    if (isAudio) {
+      for (let i = 0; i < 7; i++) {
+        const bar = dom("span", "media-pool-wave-bar");
+        const pct = 28 + ((pal.seed >> (i * 4)) & 0x3f) % 68;
+        bar.style.height = `${pct}%`;
+        visual.appendChild(bar);
+      }
+    } else {
+      for (let i = 0; i < 3; i++) {
+        visual.appendChild(dom("span", "media-pool-film-tick"));
+      }
+    }
+
+    thumb.replaceChildren(thumbTop, visual);
+
     const nameEl = dom("span", "media-pool-name mono", entry.label);
-    card.replaceChildren(thumb, nameEl);
+    const metaEl = dom("div", "media-pool-meta mono");
+    if (colorId !== "default") {
+      const swatch = dom("span", `clip-label-swatch is-${colorId}`);
+      swatch.setAttribute("aria-hidden", "true");
+      metaEl.appendChild(swatch);
+    }
+    metaEl.appendChild(dom("span", "media-pool-meta-tc", `${entry.startTimecode} | ${entry.durationFrames}f`));
+
+    card.replaceChildren(thumb, nameEl, metaEl);
     card.addEventListener("click", () => selectClipFromTimelineIndex(entry));
+    card.addEventListener("dblclick", () => openMediaPoolInfoDialog(entry));
+    card.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      openMediaPoolInfoDialog(entry);
+    });
     return card;
   });
   list.replaceChildren(...cards);
@@ -9269,6 +9511,65 @@ function wireEvents() {
     });
   }
 
+  const closePoolInfoBtn = byId("btn-close-media-pool-info");
+  const closePoolInfoFooter = byId("btn-media-pool-info-close-footer");
+  const jumpPoolInfoBtn = byId("btn-media-pool-info-jump");
+  const poolInfoDlg = byId("media-pool-info-dialog");
+  if (closePoolInfoBtn) closePoolInfoBtn.addEventListener("click", closeMediaPoolInfoDialog);
+  if (closePoolInfoFooter) closePoolInfoFooter.addEventListener("click", closeMediaPoolInfoDialog);
+  if (jumpPoolInfoBtn) {
+    jumpPoolInfoBtn.addEventListener("click", () => {
+      if (state.mediaPoolInfoEntry) {
+        selectClipFromTimelineIndex(state.mediaPoolInfoEntry);
+      }
+      closeMediaPoolInfoDialog();
+    });
+  }
+  if (poolInfoDlg) {
+    poolInfoDlg.addEventListener("click", (ev) => {
+      if (ev.target === poolInfoDlg) closeMediaPoolInfoDialog();
+    });
+  }
+
+  const renderTabsRoot = byId("render-settings-tabs");
+  if (renderTabsRoot) {
+    const renderTabBtns = Array.from(
+      renderTabsRoot.querySelectorAll(".deliver-subtab-btn[data-render-tab]")
+    );
+    for (const btn of renderTabBtns) {
+      btn.addEventListener("click", () => {
+        const nextTab = btn.getAttribute("data-render-tab");
+        if (nextTab) switchDeliverSettingsTab(nextTab);
+      });
+      btn.addEventListener("keydown", (ev) => {
+        const idx = renderTabBtns.indexOf(btn);
+        if (idx < 0) return;
+        let targetIdx = -1;
+        if (ev.key === "ArrowRight") targetIdx = (idx + 1) % renderTabBtns.length;
+        else if (ev.key === "ArrowLeft") targetIdx = (idx - 1 + renderTabBtns.length) % renderTabBtns.length;
+        else if (ev.key === "Home") targetIdx = 0;
+        else if (ev.key === "End") targetIdx = renderTabBtns.length - 1;
+        if (targetIdx >= 0) {
+          ev.preventDefault();
+          const targetBtn = renderTabBtns[targetIdx];
+          const nextTab = targetBtn.getAttribute("data-render-tab");
+          if (nextTab) switchDeliverSettingsTab(nextTab);
+          targetBtn.focus();
+        }
+      });
+    }
+  }
+  const panelRenderEl = byId("panel-render");
+  if (panelRenderEl) {
+    panelRenderEl.addEventListener("change", syncDeliverTabIndicators);
+    panelRenderEl.addEventListener("input", syncDeliverTabIndicators);
+    panelRenderEl.addEventListener("click", (ev) => {
+      if (ev.target && ev.target.closest("button")) {
+        window.requestAnimationFrame(syncDeliverTabIndicators);
+      }
+    });
+  }
+
   for (const tabBtn of document.querySelectorAll(".page-tab")) {
     tabBtn.addEventListener("click", () => switchTab(tabBtn.getAttribute("data-tab")));
   }
@@ -10634,6 +10935,8 @@ async function bootstrap() {
   wireEvents();
   syncFramingControlsUI();
   syncDeliverProfileControlsState();
+  switchDeliverSettingsTab(state.deliverSettingsTab);
+  syncDeliverTabIndicators();
   renderFairlightAudioUI();
   renderDeliveryPresetStrip();
   updateDeliverSizeEstimate();

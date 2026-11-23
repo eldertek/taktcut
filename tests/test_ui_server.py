@@ -99,7 +99,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.25"
+    assert health["version"] == "0.1.26"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -948,15 +948,29 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-fx-grab-still",
         "color-stills-gallery",
         "fx-stills-gallery",
+        "render-settings-tabs",
+        "render-tab-video",
+        "render-tab-audio",
+        "render-tab-looks",
+        "render-tab-file",
+        "render-tabpanel-video",
+        "render-tabpanel-audio",
+        "render-tabpanel-looks",
+        "render-tabpanel-file",
+        "media-pool-info-dialog",
+        "media-pool-info-kv",
     ):
         assert elem_id in html_text
-    assert "v0.1.25" in html_text
+    assert "v0.1.26" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200
     css_text = css_raw.decode("utf-8")
     assert ":focus-visible" in css_text
     assert "min-height: 44px" in css_text
+    assert "100dvh" in css_text
+    assert ".deliver-subtabs" in css_text
+    assert ".deliver-actions-footer" in css_text
     assert "\u2013" not in css_text and "\u2014" not in css_text
 
     i18n_status, _, i18n_raw = _http_call(f"{base_url}/i18n.js")
@@ -964,6 +978,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     i18n_text = i18n_raw.decode("utf-8")
     assert "\u2013" not in i18n_text and "\u2014" not in i18n_text
     assert '"Étalonnage"' in i18n_text
+    assert '"Burn-Ins & Looks"' in i18n_text
+    assert '"Incrustations & Looks"' in i18n_text
+    assert '"Infos du Plan"' in i18n_text
     assert '"TEMPÉRATURE"' in i18n_text
     assert '"Télécharger OTIO"' in i18n_text
     assert '"Sélection"' in i18n_text
@@ -2808,6 +2825,24 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     "() => document.documentElement.scrollWidth - window.innerWidth"
                 )
                 assert overflow <= 0, f"Horizontal overflow at {width}x{height}: {overflow}px"
+                pool_cards = page.locator("#media-pool-list .media-pool-card")
+                page.wait_for_selector("#media-pool-list .media-pool-card")
+                assert pool_cards.count() >= 1
+                first_pool_card = pool_cards.first
+                assert first_pool_card.locator(".media-pool-visual").is_visible() is True
+                assert first_pool_card.locator(".media-pool-dur").is_visible() is True
+                assert first_pool_card.locator(".media-pool-meta-tc").is_visible() is True
+                if width <= 820:
+                    pool_box = first_pool_card.bounding_box()
+                    assert pool_box is not None and pool_box["height"] >= 44
+                first_pool_card.dblclick()
+                page.wait_for_selector("#media-pool-info-dialog[open]")
+                pool_kv_text = page.locator("#media-pool-info-kv").text_content() or ""
+                assert "V1" in pool_kv_text or "A1" in pool_kv_text
+                page.locator("#btn-close-media-pool-info").click()
+                page.wait_for_function(
+                    "() => !document.getElementById('media-pool-info-dialog').open"
+                )
                 if width == 1440:
                     page.keyboard.press("ArrowRight")
                     assert page.locator("#program-frame-counter").text_content() == "26f / 500f"
@@ -3304,10 +3339,40 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                         == before_fx_stills + 2
                     )
 
-                # Verify Deliver Quick-Export Preset Strip at all viewports (1440px and 375px)
+                # Verify Deliver Quick-Export Preset Strip & DaVinci Compact Sub-Tabs
                 page.locator("#tab-render").click()
                 page.wait_for_selector("#panel-render:not(.is-hidden)")
                 page.wait_for_selector('[data-delivery-preset="youtube_1080p_h264"]')
+                page.wait_for_selector("#render-settings-tabs")
+                assert page.locator("#render-tab-video").get_attribute("aria-selected") == "true"
+                assert page.locator("#render-tabpanel-video").is_visible() is True
+                assert page.locator("#render-tabpanel-audio").is_visible() is False
+                assert page.locator("#render-tabpanel-looks").is_visible() is False
+                assert page.locator("#render-tabpanel-file").is_visible() is False
+                for subtab_id in (
+                    "render-tab-video",
+                    "render-tab-audio",
+                    "render-tab-looks",
+                    "render-tab-file",
+                ):
+                    subtab_loc = page.locator(f"#{subtab_id}")
+                    assert subtab_loc.is_visible() is True
+                    if width <= 820:
+                        st_box = subtab_loc.bounding_box()
+                        assert st_box is not None and st_box["height"] >= 44
+
+                for footer_id in (
+                    "deliver-size-estimate",
+                    "btn-build-render-plan",
+                    "btn-execute-render",
+                    "btn-copy-ffmpeg-cmd",
+                ):
+                    f_loc = page.locator(f"#{footer_id}")
+                    assert f_loc.is_visible() is True
+                    if width == 1440:
+                        f_box = f_loc.bounding_box()
+                        assert f_box is not None and (f_box["y"] + f_box["height"]) <= height
+
                 render_overflow = page.evaluate(
                     "() => document.documentElement.scrollWidth - window.innerWidth"
                 )
@@ -3339,6 +3404,11 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert page.locator("#render-container").input_value() == "mov"
                 assert page.locator("#render-output-path").input_value().endswith(".mov")
                 assert page.locator("#render-crf").is_disabled() is True
+
+                # Switch to Burn-Ins & Looks tab for Timecode Burn-In & Watermark
+                page.locator("#render-tab-looks").click()
+                assert page.locator("#render-tab-looks").get_attribute("aria-selected") == "true"
+                assert page.locator("#render-tabpanel-looks").is_visible() is True
 
                 # Verify Data Burn-In (SMPTE Timecode Overlay) control & touch target
                 tc_sel = page.locator("#render-timecode-burnin")
@@ -3395,6 +3465,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     f"Deliver watermark overflow at {width}x{height}: {wm_render_overflow}px"
                 )
 
+                # Switch back to Video tab for Export Frame Rate & Deinterlace (yadif)
+                page.locator("#render-tab-video").click()
+                assert page.locator("#render-tabpanel-video").is_visible() is True
+
                 # Verify Deliver Export Frame Rate & Deinterlace (yadif) controls & touch targets
                 export_fps_sel = page.locator("#render-export-fps")
                 deint_chk = page.locator("#render-deinterlace")
@@ -3436,6 +3510,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert page.locator("#render-crf").is_disabled() is False
                 assert (page.locator("#render-output-path").input_value() or "").endswith(".mp4")
 
+                # Switch to Audio tab for Audio-Only Master selector
+                page.locator("#render-tab-audio").click()
+                assert page.locator("#render-tabpanel-audio").is_visible() is True
+
                 # Verify Deliver Audio-Only Master selector (#render-audio-only-format)
                 audio_only_sel = page.locator("#render-audio-only-format")
                 assert audio_only_sel.is_visible() is True
@@ -3472,6 +3550,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert page.locator("#render-profile").is_disabled() is False
                 assert page.locator("#render-crf").is_disabled() is False
                 assert (page.locator("#render-output-path").input_value() or "").endswith(".mp4")
+
+                # Switch to Burn-Ins & Looks tab for Lower-Third / Title Overlay
+                page.locator("#render-tab-looks").click()
+                assert page.locator("#render-tabpanel-looks").is_visible() is True
 
                 # Verify Deliver Lower-Third / Title Overlay panel, presets, touch targets & plan
                 lt_chk = page.locator("#render-lower-third-enabled")
@@ -3541,6 +3623,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 )
                 assert prog_with_lt != prog_without_lt
                 page.locator("#tab-render").click()
+
+                # Switch to Video tab for Retime & Auto-Reframe
+                page.locator("#render-tab-video").click()
+                assert page.locator("#render-tabpanel-video").is_visible() is True
 
                 # Verify Deliver Retime (Speed & Reverse) controls & dry-run plan
                 rt_card = page.locator("#deliver-retime-card")
@@ -3655,6 +3741,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 page.locator("#tab-render").click()
                 rf_reset.click()
                 rf_chk.uncheck()
+
+                # Switch to Burn-Ins & Looks tab for Film Grain & Cinematic Vignette
+                page.locator("#render-tab-looks").click()
+                assert page.locator("#render-tabpanel-looks").is_visible() is True
 
                 # Verify Deliver Film Grain (35mm / 16mm / Super 8) + Program Monitor live frame
                 fg_card = page.locator("#deliver-film-grain-card")
@@ -3774,6 +3864,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 vig_mode.select_option("forward")
                 vig_chk.uncheck()
 
+                # Switch to Audio tab for Fairlight Voice Cleanup
+                page.locator("#render-tab-audio").click()
+                assert page.locator("#render-tabpanel-audio").is_visible() is True
+
                 # Verify Deliver Fairlight Voice Cleanup
                 vc_card = page.locator("#deliver-voice-cleanup-card")
                 vc_chk = page.locator("#render-voice-cleanup-enabled")
@@ -3833,6 +3927,18 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     f"Deliver voice cleanup overflow at {width}x{height}: {vc_overflow}px"
                 )
                 vc_chk.uncheck()
+
+                # Switch to File tab and verify engine switch, paths & pinned footer
+                page.locator("#render-tab-file").click()
+                assert page.locator("#render-tabpanel-file").is_visible() is True
+                assert page.locator("#render-input-path").is_visible() is True
+                assert page.locator("#render-output-path").is_visible() is True
+                assert page.locator("#btn-engine-local").is_visible() is True
+                assert page.locator("#btn-engine-remote").is_visible() is True
+                assert page.locator("#deliver-size-estimate").is_visible() is True
+                assert page.locator("#btn-build-render-plan").is_visible() is True
+                page.locator("#render-tab-video").click()
+                assert page.locator("#render-tabpanel-video").is_visible() is True
 
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")

@@ -1462,497 +1462,534 @@
         </div>
 
         <div class="nle-two-col nle-deliver-grid">
-          <section class="nle-pane">
+          <section class="nle-pane deliver-settings-pane">
             <div class="pane-header">
               <h2 data-i18n="render.config.title">Deliver Render Settings</h2>
               <button type="button" id="btn-generate-sample-clip" class="btn btn-secondary" data-i18n="render.btn.genSample">Generate Test Clip</button>
             </div>
-            <div class="pane-body">
-              <div class="render-engine-bar">
-                <span class="pill-label" data-i18n="render.engine.label">Render Engine</span>
-                <div class="engine-switch" role="group" aria-label="Render Engine">
-                  <button type="button" id="btn-engine-local" class="engine-btn is-active" data-render-engine="local" aria-pressed="true" data-i18n="render.engine.local">Local</button>
-                  <button type="button" id="btn-engine-remote" class="engine-btn" data-render-engine="remote" aria-pressed="false" data-i18n="render.engine.remote">Remote Server</button>
+            <div id="render-settings-tabs" class="deliver-subtabs" role="tablist" aria-label="Deliver Render Settings Categories">
+              <button type="button" role="tab" id="render-tab-video" class="deliver-subtab-btn is-active" data-render-tab="video" aria-selected="true" aria-controls="render-tabpanel-video" tabindex="0">
+                <span data-i18n="render.tabs.video">Video</span>
+                <span class="deliver-subtab-dot is-hidden" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="tab" id="render-tab-audio" class="deliver-subtab-btn" data-render-tab="audio" aria-selected="false" aria-controls="render-tabpanel-audio" tabindex="-1">
+                <span data-i18n="render.tabs.audio">Audio</span>
+                <span class="deliver-subtab-dot is-hidden" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="tab" id="render-tab-looks" class="deliver-subtab-btn" data-render-tab="looks" aria-selected="false" aria-controls="render-tabpanel-looks" tabindex="-1">
+                <span data-i18n="render.tabs.looks">Burn-Ins &amp; Looks</span>
+                <span class="deliver-subtab-dot is-hidden" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="tab" id="render-tab-file" class="deliver-subtab-btn" data-render-tab="file" aria-selected="false" aria-controls="render-tabpanel-file" tabindex="-1">
+                <span data-i18n="render.tabs.file">File</span>
+                <span class="deliver-subtab-dot is-hidden" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="pane-body deliver-settings-body">
+              <div class="deliver-tabs-scroll">
+                <div id="render-tabpanel-video" class="deliver-tabpanel" role="tabpanel" aria-labelledby="render-tab-video">
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="render-profile" data-i18n="render.label.profile">Delivery Profile</label>
+                      <select id="render-profile" class="input-control mono">
+                        <option value="web_h264">web_h264 (H.264 + AAC + faststart)</option>
+                        <option value="master_hevc">master_hevc (HEVC + AAC + faststart)</option>
+                        <option value="prores_hq">prores_hq (ProRes 422 HQ + 24-bit PCM)</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-container" data-i18n="render.label.container">Container Format</label>
+                      <select id="render-container" class="input-control mono">
+                        <option value="mp4">MP4 (.mp4 + faststart)</option>
+                        <option value="mov">QuickTime (.mov)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-row-three">
+                    <div class="form-row">
+                      <label for="render-crf" data-i18n="render.label.crf">Video Quality (CRF / CQ)</label>
+                      <input type="number" id="render-crf" class="input-control mono" min="0" max="51" step="1" value="18" placeholder="18">
+                    </div>
+                    <div class="form-row">
+                      <label for="render-fps" data-i18n="render.label.fps">Target Rational FPS</label>
+                      <input type="text" id="render-fps" class="input-control mono" value="25" placeholder="25 or 24000/1001">
+                    </div>
+                    <div class="form-row">
+                      <label for="render-export-fps" data-i18n="render.label.exportFps">Export Frame Rate (CFR)</label>
+                      <select id="render-export-fps" class="input-control mono">
+                        <option value="source" data-i18n="render.exportFps.source" selected>Source (Timeline)</option>
+                        <option value="24">24 fps</option>
+                        <option value="25">25 fps</option>
+                        <option value="30">30 fps</option>
+                        <option value="60">60 fps</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-row-three">
+                    <div class="form-row">
+                      <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>
+                      <select id="render-aspect-preset" class="input-control mono">
+                        <option value="16:9">16:9</option>
+                        <option value="9:16">9:16 Reels/Shorts</option>
+                        <option value="1:1">1:1 Square</option>
+                        <option value="4:5">4:5 Feed</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-resolution" data-i18n="render.label.resolution">Target Resolution</label>
+                      <select id="render-resolution" class="input-control mono">
+                        <option value="1920x1080">1920x1080 (FHD 1080p)</option>
+                        <option value="3840x2160">3840x2160 (4K UHD)</option>
+                        <option value="1280x720">1280x720 (HD 720p)</option>
+                        <option value="1080x1920">1080x1920 (9:16 Vertical)</option>
+                        <option value="1080x1080">1080x1080 (1:1 Square)</option>
+                        <option value="1080x1350">1080x1350 (4:5 Feed)</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-framing-mode" data-i18n="render.label.framingMode">Reframe Mode</label>
+                      <select id="render-framing-mode" class="input-control mono">
+                        <option value="fill" data-i18n="framing.mode.fillFull">Fill (Scale + Center Crop)</option>
+                        <option value="fit" data-i18n="framing.mode.fitFull">Fit (Scale + Black Pad)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div id="deliver-retime-card" class="retime-deliver-card">
+                    <div class="retime-deliver-head">
+                      <span class="retime-deliver-title" data-i18n="render.retime.title">Retime (Speed &amp; Reverse)</span>
+                      <div class="retime-deliver-head-actions">
+                        <span id="render-retime-badge" class="nle-tag mono">OFF</span>
+                        <label class="check-label retime-toggle-label">
+                          <input type="checkbox" id="render-retime-enabled">
+                          <span data-i18n="render.retime.toggle">Enable</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="retime-deliver-preset-row" role="group" aria-label="Retime Speed Presets">
+                      <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="0.25" aria-pressed="false">0.25x</button>
+                      <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="0.5" aria-pressed="false">0.5x</button>
+                      <button type="button" class="retime-deliver-preset-btn is-active" data-deliver-retime-speed="1" aria-pressed="true">1x</button>
+                      <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="1.5" aria-pressed="false">1.5x</button>
+                      <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="2" aria-pressed="false">2x</button>
+                      <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="4" aria-pressed="false">4x</button>
+                    </div>
+                    <div class="retime-deliver-speed-row">
+                      <div class="form-row retime-deliver-slider-col">
+                        <label for="render-retime-speed" data-i18n="render.retime.label.speed">Speed (0.25x - 4.0x)</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-retime-speed" class="watermark-opacity-slider" min="0.25" max="4.0" step="0.05" value="1.00">
+                          <span id="render-retime-speed-value" class="mono watermark-opacity-val">1.00x</span>
+                        </div>
+                      </div>
+                      <div class="form-row retime-deliver-rev-col">
+                        <span class="retime-deliver-rev-caption" data-i18n="render.retime.label.direction">Direction</span>
+                        <button type="button" id="render-retime-reverse" class="btn btn-secondary retime-deliver-reverse-btn" aria-pressed="false" data-i18n="render.retime.reverse">Reverse</button>
+                      </div>
+                    </div>
+                    <div class="retime-deliver-meta-row">
+                      <span class="retime-deliver-dur-label" data-i18n="render.retime.label.duration">Effective Duration</span>
+                      <span id="render-retime-duration-estimate" class="mono retime-deliver-dur-val" aria-live="polite">--</span>
+                    </div>
+                    <div id="render-retime-preview" class="code-box retime-deliver-preview mono" aria-live="polite">(off)</div>
+                  </div>
+                  <div id="deliver-reframe-card" class="reframe-deliver-card">
+                    <div class="reframe-deliver-head">
+                      <span class="reframe-deliver-title" data-i18n="render.reframe.title">Auto-Reframe &amp; Social Crop</span>
+                      <div class="reframe-deliver-head-actions">
+                        <span id="render-reframe-badge" class="nle-tag mono">OFF</span>
+                        <label class="check-label reframe-toggle-label">
+                          <input type="checkbox" id="render-reframe-enabled">
+                          <span data-i18n="render.reframe.toggle">Enable</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="reframe-deliver-preset-row" role="group" aria-label="Auto-Reframe Aspect Ratio">
+                      <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="16:9" aria-pressed="false">16:9</button>
+                      <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="9:16" aria-pressed="false">9:16 Reels</button>
+                      <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="4:5" aria-pressed="false">4:5 IG</button>
+                      <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="1:1" aria-pressed="false">1:1 Square</button>
+                      <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="2.39:1" aria-pressed="false">2.39:1 Scope</button>
+                    </div>
+                    <div class="reframe-deliver-pan-row">
+                      <div class="form-row reframe-deliver-slider-col">
+                        <label for="render-reframe-pan-x" data-i18n="render.reframe.label.panX">Pan X (-1.0 to +1.0)</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-reframe-pan-x" class="watermark-opacity-slider" min="-1.0" max="1.0" step="0.05" value="0.00">
+                          <span id="render-reframe-pan-x-value" class="mono watermark-opacity-val">0.00</span>
+                        </div>
+                      </div>
+                      <div class="form-row reframe-deliver-slider-col">
+                        <label for="render-reframe-pan-y" data-i18n="render.reframe.label.panY">Pan Y (-1.0 to +1.0)</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-reframe-pan-y" class="watermark-opacity-slider" min="-1.0" max="1.0" step="0.05" value="0.00">
+                          <span id="render-reframe-pan-y-value" class="mono watermark-opacity-val">0.00</span>
+                        </div>
+                      </div>
+                      <div class="form-row reframe-deliver-reset-col">
+                        <button type="button" id="render-reframe-reset" class="btn btn-secondary reframe-deliver-reset-btn" data-i18n="render.reframe.reset">Center</button>
+                      </div>
+                    </div>
+                    <div id="render-reframe-preview" class="code-box reframe-deliver-preview mono" aria-live="polite">(off)</div>
+                  </div>
+                  <div class="checkbox-row">
+                    <label class="check-label">
+                      <input type="checkbox" id="render-deinterlace">
+                      <span data-i18n="render.check.deinterlace">Broadcast Deinterlace (yadif field-to-frame)</span>
+                    </label>
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-framing">
+                      <span data-i18n="render.check.framing">Conform output aspect ratio &amp; resolution (scale + crop/pad)</span>
+                    </label>
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-clip-retime" checked>
+                      <span data-i18n="render.check.clipRetime">Apply selected clip speed / retime (setpts + atempo + reverse)</span>
+                    </label>
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-clip-transform" checked>
+                      <span data-i18n="render.check.clipTransform">Apply selected clip motion transform (zoom / pos / rot / opacity / dynamic zoom)</span>
+                    </label>
+                    <label class="check-label">
+                      <input type="checkbox" id="render-prefer-hw" checked>
+                      <span data-i18n="render.check.preferHw">Prefer GPU NVENC encoder (fallback to CPU libx264/libx265)</span>
+                    </label>
+                  </div>
                 </div>
-                <span id="remote-node-status-pill" class="nle-tag mono is-hidden">OFFLINE</span>
+
+                <div id="render-tabpanel-audio" class="deliver-tabpanel is-hidden" role="tabpanel" aria-labelledby="render-tab-audio" hidden>
+                  <div class="form-row-three">
+                    <div class="form-row">
+                      <label for="render-audio-bitrate" data-i18n="render.label.audioBitrate">Audio Bitrate</label>
+                      <select id="render-audio-bitrate" class="input-control mono">
+                        <option value="96">AAC 96 kbps</option>
+                        <option value="128">AAC 128 kbps</option>
+                        <option value="160">AAC 160 kbps</option>
+                        <option value="192" selected>AAC 192 kbps</option>
+                        <option value="256">AAC 256 kbps</option>
+                        <option value="320">AAC 320 kbps</option>
+                        <option value="pcm_s24le">PCM 24-bit 48 kHz</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-audio-only-format" data-i18n="render.label.audioOnly">Audio-Only Master</label>
+                      <select id="render-audio-only-format" class="input-control mono">
+                        <option value="off" data-i18n="render.audioOnly.off" selected>Off (Video + Audio)</option>
+                        <option value="wav24" data-i18n="render.audioOnly.wav24">WAV 24-bit 48 kHz (.wav)</option>
+                        <option value="mp3_320" data-i18n="render.audioOnly.mp3_320">MP3 320 kbps (.mp3)</option>
+                        <option value="aac_256" data-i18n="render.audioOnly.aac_256">AAC 256 kbps (.aac)</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-lufs" data-i18n="render.label.lufs">Target Loudness (LUFS)</label>
+                      <input type="number" id="render-lufs" class="input-control mono" step="0.5" value="-14.0" placeholder="-14.0">
+                    </div>
+                  </div>
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="render-loudness-preset" data-i18n="render.label.loudnessPreset">Loudness Target Normalizer</label>
+                      <select id="render-loudness-preset" class="input-control mono">
+                        <option value="off" data-i18n="fairlight.loudness.off">Off (Bypass)</option>
+                        <option value="youtube_14" data-i18n="fairlight.loudness.youtube_14">YouTube (-14 LUFS / -1.0 dBTP)</option>
+                        <option value="reels_16" data-i18n="fairlight.loudness.reels_16">Reels / TikTok (-16 LUFS / -1.0 dBTP)</option>
+                        <option value="broadcast_23" data-i18n="fairlight.loudness.broadcast_23">Broadcast EBU R128 (-23 LUFS / -1.0 dBTP)</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-dialogue-eq" data-i18n="render.label.dialogueEq">Fairlight Dialogue EQ</label>
+                      <select id="render-dialogue-eq" class="input-control mono">
+                        <option value="off" data-i18n="fairlight.eq.off">Off (Bypass)</option>
+                        <option value="voice_clarity" data-i18n="fairlight.eq.voice_clarity">Voice Clarity (HP 80 Hz +3 dB @ 3 kHz)</option>
+                        <option value="podcast_warm" data-i18n="fairlight.eq.podcast_warm">Podcast Warm (HP 70 Hz +2 dB @ 180 Hz / 4 kHz)</option>
+                        <option value="derumble" data-i18n="fairlight.eq.derumble">De-Rumble (HP 100 Hz)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <label for="render-audio-af-preview" data-i18n="render.label.afChain">Audio Filter Chain (-af)</label>
+                    <div id="render-audio-af-preview" class="code-box af-chain-preview mono" aria-live="polite">(none)</div>
+                  </div>
+                  <div id="deliver-voice-cleanup-card" class="voice-cleanup-deliver-card">
+                    <div class="voice-cleanup-deliver-head">
+                      <span class="voice-cleanup-deliver-title" data-i18n="render.voiceCleanup.title">Fairlight Voice Cleanup</span>
+                      <div class="voice-cleanup-deliver-head-actions">
+                        <span id="render-voice-cleanup-badge" class="nle-tag mono">OFF</span>
+                        <label class="check-label voice-cleanup-toggle-label">
+                          <input type="checkbox" id="render-voice-cleanup-enabled">
+                          <span data-i18n="render.voiceCleanup.toggle">Enable</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="voice-cleanup-deliver-preset-row" role="group" aria-label="Fairlight Voice Cleanup Presets">
+                      <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="youtube_voice" aria-pressed="false" data-i18n="render.voiceCleanup.preset.youtube">YouTube Voice</button>
+                      <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="podcast_warm" aria-pressed="false" data-i18n="render.voiceCleanup.preset.podcast">Podcast Warm</button>
+                      <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="broadcast_crisp" aria-pressed="false" data-i18n="render.voiceCleanup.preset.broadcast">Broadcast Crisp</button>
+                    </div>
+                    <div class="voice-cleanup-deliver-controls-row">
+                      <div class="form-row voice-cleanup-deliver-slider-col">
+                        <label for="render-voice-cleanup-highpass" data-i18n="render.voiceCleanup.label.highpass">High-Pass (Hz)</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-voice-cleanup-highpass" class="watermark-opacity-slider" min="40" max="200" step="1" value="85">
+                          <span id="render-voice-cleanup-highpass-value" class="mono watermark-opacity-val">85 Hz</span>
+                        </div>
+                      </div>
+                      <div class="form-row voice-cleanup-deliver-slider-col">
+                        <label for="render-voice-cleanup-presence" data-i18n="render.voiceCleanup.label.presence">Presence 3.2kHz (dB)</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-voice-cleanup-presence" class="watermark-opacity-slider" min="-6" max="6" step="0.5" value="2.5">
+                          <span id="render-voice-cleanup-presence-value" class="mono watermark-opacity-val">+2.5 dB</span>
+                        </div>
+                      </div>
+                      <div class="form-row voice-cleanup-deliver-slider-col">
+                        <label for="render-voice-cleanup-deess" data-i18n="render.voiceCleanup.label.deess">De-Esser</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-voice-cleanup-deess" class="watermark-opacity-slider" min="0" max="1" step="0.05" value="0.35">
+                          <span id="render-voice-cleanup-deess-value" class="mono watermark-opacity-val">0.35</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div id="render-voice-cleanup-preview" class="code-box voice-cleanup-deliver-preview mono" aria-live="polite">(off)</div>
+                  </div>
+                  <div class="checkbox-row">
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-clip-audio" checked>
+                      <span data-i18n="render.check.clipAudio">Apply selected clip audio gain, fades &amp; track mute/solo</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div id="render-tabpanel-looks" class="deliver-tabpanel is-hidden" role="tabpanel" aria-labelledby="render-tab-looks" hidden>
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
+                      <input type="text" id="render-lut-path" class="input-control mono" placeholder="luts/editorial_look.cube">
+                    </div>
+                    <div class="form-row">
+                      <label for="render-timecode-burnin" data-i18n="render.label.timecodeBurnin">Timecode Burn-In (SMPTE)</label>
+                      <select id="render-timecode-burnin" class="input-control mono">
+                        <option value="off" data-i18n="render.timecode.off">Off (Clean Master)</option>
+                        <option value="top_left" data-i18n="render.timecode.top_left">Top Left (Client Review)</option>
+                        <option value="bottom_center" data-i18n="render.timecode.bottom_center">Bottom Center (Broadcast)</option>
+                        <option value="bottom_right" data-i18n="render.timecode.bottom_right">Bottom Right (Corner Slate)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="render-watermark-text" data-i18n="render.label.reviewWatermark">Review Watermark Overlay</label>
+                      <input type="text" id="render-watermark-text" class="input-control mono" maxlength="40" placeholder="Off (e.g. DRAFT - CLIENT REVIEW)">
+                      <div class="watermark-preset-row" role="group" aria-label="Review Watermark Presets">
+                        <button type="button" class="watermark-preset-btn is-active" data-watermark-preset="" aria-pressed="true" data-i18n="render.watermark.preset.off">Off</button>
+                        <button type="button" class="watermark-preset-btn" data-watermark-preset="DRAFT - CLIENT REVIEW" aria-pressed="false" data-i18n="render.watermark.preset.draft">DRAFT - CLIENT REVIEW</button>
+                        <button type="button" class="watermark-preset-btn" data-watermark-preset="CONFIDENTIAL" aria-pressed="false" data-i18n="render.watermark.preset.confidential">CONFIDENTIAL</button>
+                      </div>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-watermark-opacity" data-i18n="render.label.watermarkOpacity">Watermark Opacity</label>
+                      <div class="watermark-opacity-row">
+                        <input type="range" id="render-watermark-opacity" class="watermark-opacity-slider" min="0.15" max="0.80" step="0.05" value="0.35">
+                        <span id="render-watermark-opacity-value" class="mono watermark-opacity-val">0.35</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="deliver-lower-third-card" class="lower-third-card">
+                    <div class="lower-third-head">
+                      <span class="lower-third-title" data-i18n="render.lowerThird.title">Lower-Third / Title Overlay</span>
+                      <div class="lower-third-head-actions">
+                        <span id="render-lower-third-badge" class="nle-tag mono">OFF</span>
+                        <label class="check-label lower-third-toggle-label">
+                          <input type="checkbox" id="render-lower-third-enabled">
+                          <span data-i18n="render.lowerThird.toggle">Enable</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="lower-third-preset-row" role="group" aria-label="Lower-Third Presets">
+                      <button type="button" class="lower-third-preset-btn" data-lt-preset="interview" aria-pressed="false" data-i18n="render.lowerThird.preset.interview">Interview</button>
+                      <button type="button" class="lower-third-preset-btn" data-lt-preset="youtube_intro" aria-pressed="false" data-i18n="render.lowerThird.preset.youtubeIntro">YouTube Intro</button>
+                      <button type="button" class="lower-third-preset-btn" data-lt-preset="broadcast_tag" aria-pressed="false" data-i18n="render.lowerThird.preset.broadcastTag">Broadcast Tag</button>
+                    </div>
+                    <div class="form-row-two">
+                      <div class="form-row">
+                        <label for="render-lower-third-title" data-i18n="render.lowerThird.label.title">Title</label>
+                        <input type="text" id="render-lower-third-title" class="input-control" maxlength="120" placeholder="Claire Laurent">
+                      </div>
+                      <div class="form-row">
+                        <label for="render-lower-third-subtitle" data-i18n="render.lowerThird.label.subtitle">Subtitle</label>
+                        <input type="text" id="render-lower-third-subtitle" class="input-control" maxlength="120" placeholder="Lead Cinematographer | Studio Paris">
+                      </div>
+                    </div>
+                    <div class="form-row-three">
+                      <div class="form-row">
+                        <label for="render-lower-third-position" data-i18n="render.lowerThird.label.position">Position</label>
+                        <select id="render-lower-third-position" class="input-control mono">
+                          <option value="bottom_left" data-i18n="render.lowerThird.pos.bottomLeft" selected>Bottom Left</option>
+                          <option value="bottom_center" data-i18n="render.lowerThird.pos.bottomCenter">Bottom Center</option>
+                          <option value="top_left" data-i18n="render.lowerThird.pos.topLeft">Top Left</option>
+                        </select>
+                      </div>
+                      <div class="form-row">
+                        <label for="render-lower-third-font-size" data-i18n="render.lowerThird.label.fontSize">Font Size (px)</label>
+                        <input type="number" id="render-lower-third-font-size" class="input-control mono" min="16" max="96" step="1" value="36">
+                      </div>
+                      <div class="form-row">
+                        <label for="render-lower-third-box-opacity" data-i18n="render.lowerThird.label.boxOpacity">Box Opacity</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-lower-third-box-opacity" class="watermark-opacity-slider" min="0" max="1" step="0.05" value="0.65">
+                          <span id="render-lower-third-box-opacity-value" class="mono watermark-opacity-val">0.65</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="form-row-two">
+                      <div class="form-row">
+                        <label for="render-lower-third-start" data-i18n="render.lowerThird.label.start">Start (s)</label>
+                        <input type="number" id="render-lower-third-start" class="input-control mono" min="0" max="86400" step="0.1" value="0.0">
+                      </div>
+                      <div class="form-row">
+                        <label for="render-lower-third-duration" data-i18n="render.lowerThird.label.duration">Duration (s)</label>
+                        <input type="number" id="render-lower-third-duration" class="input-control mono" min="0.1" max="86400" step="0.1" value="5.0">
+                      </div>
+                    </div>
+                    <div id="render-lower-third-preview" class="code-box lower-third-preview mono" aria-live="polite">(off)</div>
+                  </div>
+                  <div id="deliver-film-grain-card" class="film-grain-deliver-card">
+                    <div class="film-grain-deliver-head">
+                      <span class="film-grain-deliver-title" data-i18n="render.filmGrain.title">Film Grain (35mm / 16mm / Super 8)</span>
+                      <div class="film-grain-deliver-head-actions">
+                        <span id="render-film-grain-badge" class="nle-tag mono">OFF</span>
+                        <label class="check-label film-grain-toggle-label">
+                          <input type="checkbox" id="render-film-grain-enabled">
+                          <span data-i18n="render.filmGrain.toggle">Enable</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="film-grain-deliver-preset-row" role="group" aria-label="Film Grain Presets">
+                      <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="35mm_fine" aria-pressed="false" data-i18n="render.filmGrain.preset.35mm">35mm Fine</button>
+                      <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="16mm_organic" aria-pressed="false" data-i18n="render.filmGrain.preset.16mm">16mm Organic</button>
+                      <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="super8_heavy" aria-pressed="false" data-i18n="render.filmGrain.preset.super8">Super 8 Heavy</button>
+                    </div>
+                    <div class="film-grain-deliver-controls-row">
+                      <div class="form-row film-grain-deliver-slider-col">
+                        <label for="render-film-grain-strength" data-i18n="render.filmGrain.label.strength">Strength (0-60)</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-film-grain-strength" class="watermark-opacity-slider" min="0" max="60" step="1" value="12">
+                          <span id="render-film-grain-strength-value" class="mono watermark-opacity-val">12</span>
+                        </div>
+                      </div>
+                      <div class="form-row film-grain-deliver-temporal-col">
+                        <label class="check-label film-grain-temporal-label">
+                          <input type="checkbox" id="render-film-grain-temporal" checked>
+                          <span data-i18n="render.filmGrain.label.temporal">Temporal</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div id="render-film-grain-preview" class="code-box film-grain-deliver-preview mono" aria-live="polite">(off)</div>
+                  </div>
+                  <div id="deliver-vignette-card" class="vignette-deliver-card">
+                    <div class="vignette-deliver-head">
+                      <span class="vignette-deliver-title" data-i18n="render.vignette.title">Cinematic Vignette</span>
+                      <div class="vignette-deliver-head-actions">
+                        <span id="render-vignette-badge" class="nle-tag mono">OFF</span>
+                        <label class="check-label vignette-toggle-label">
+                          <input type="checkbox" id="render-vignette-enabled">
+                          <span data-i18n="render.vignette.toggle">Enable</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="vignette-deliver-preset-row" role="group" aria-label="Cinematic Vignette Presets">
+                      <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="subtle_cinema" aria-pressed="false" data-i18n="render.vignette.preset.subtle">Subtle Cinema (18 deg)</button>
+                      <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="moody_portrait" aria-pressed="false" data-i18n="render.vignette.preset.moody">Moody Portrait (32 deg)</button>
+                      <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="heavy_noir" aria-pressed="false" data-i18n="render.vignette.preset.noir">Heavy Noir (52 deg)</button>
+                    </div>
+                    <div class="vignette-deliver-controls-row">
+                      <div class="form-row vignette-deliver-slider-col">
+                        <label for="render-vignette-angle" data-i18n="render.vignette.label.angle">Angle (5-75 deg)</label>
+                        <div class="watermark-opacity-row">
+                          <input type="range" id="render-vignette-angle" class="watermark-opacity-slider" min="5" max="75" step="0.5" value="24">
+                          <span id="render-vignette-angle-value" class="mono watermark-opacity-val">24.0 deg</span>
+                        </div>
+                      </div>
+                      <div class="form-row vignette-deliver-mode-col">
+                        <label for="render-vignette-mode" data-i18n="render.vignette.label.mode">Mode</label>
+                        <select id="render-vignette-mode" class="input-control vignette-deliver-select mono">
+                          <option value="forward" data-i18n="render.vignette.mode.forward">Darken Edges (forward)</option>
+                          <option value="backward" data-i18n="render.vignette.mode.backward">Brighten (backward)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div id="render-vignette-preview" class="code-box vignette-deliver-preview mono" aria-live="polite">(off)</div>
+                  </div>
+                  <div class="checkbox-row">
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-studio-cdl">
+                      <span data-i18n="render.check.studioCdl">Bake &amp; apply active Color Page CDL grade when LUT path is empty</span>
+                    </label>
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-studio-fx">
+                      <span data-i18n="render.check.studioFx">Apply active FX Studio filtergraph stack</span>
+                    </label>
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-studio-title">
+                      <span data-i18n="render.check.studioTitle">Burn in active Title / Lower-Third overlay (drawbox + drawtext)</span>
+                    </label>
+                    <label class="check-label">
+                      <input type="checkbox" id="render-use-studio-subtitles">
+                      <span data-i18n="render.check.studioSubtitles">Burn in active Captions / SRT track (drawtext)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div id="render-tabpanel-file" class="deliver-tabpanel is-hidden" role="tabpanel" aria-labelledby="render-tab-file" hidden>
+                  <div class="render-engine-bar">
+                    <span class="pill-label" data-i18n="render.engine.label">Render Engine</span>
+                    <div class="engine-switch" role="group" aria-label="Render Engine">
+                      <button type="button" id="btn-engine-local" class="engine-btn is-active" data-render-engine="local" aria-pressed="true" data-i18n="render.engine.local">Local</button>
+                      <button type="button" id="btn-engine-remote" class="engine-btn" data-render-engine="remote" aria-pressed="false" data-i18n="render.engine.remote">Remote Server</button>
+                    </div>
+                    <span id="remote-node-status-pill" class="nle-tag mono is-hidden">OFFLINE</span>
+                  </div>
+                  <div id="remote-render-panel" class="remote-panel is-hidden">
+                    <div class="form-row-two">
+                      <div class="form-row">
+                        <label for="remote-node-url" data-i18n="render.remote.url">Remote Node URL (HTTPS / LAN)</label>
+                        <input type="url" id="remote-node-url" class="input-control mono" placeholder="http://192.168.1.50:8742">
+                      </div>
+                      <div class="form-row">
+                        <label for="remote-bearer-token" data-i18n="render.remote.token">Bearer Token</label>
+                        <input type="password" id="remote-bearer-token" class="input-control mono" placeholder="taktcut-node-token" autocomplete="off">
+                      </div>
+                    </div>
+                    <div class="btn-row">
+                      <button type="button" id="btn-remote-probe" class="btn btn-secondary" data-i18n="render.remote.probe">Probe Remote Node</button>
+                      <span id="remote-node-caps-note" class="telemetry-note mono" data-i18n="render.remote.hint">SSRF guard active: HTTPS or private LAN/loopback HTTP only.</span>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <label for="render-input-select" data-i18n="render.label.pickMedia">Workspace Media Shortcut</label>
+                    <select id="render-input-select" class="input-control mono"></select>
+                  </div>
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="render-input-path" data-i18n="render.label.inputPath">Input Media Path</label>
+                      <input type="text" id="render-input-path" class="input-control mono" value=".taktcut-samples/sample_rec709.mp4">
+                    </div>
+                    <div class="form-row">
+                      <label for="render-output-path" data-i18n="render.label.outputPath">Output Media Path</label>
+                      <input type="text" id="render-output-path" class="input-control mono" value="renders/delivery_web.mp4">
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div id="remote-render-panel" class="remote-panel is-hidden">
-                <div class="form-row-two">
-                  <div class="form-row">
-                    <label for="remote-node-url" data-i18n="render.remote.url">Remote Node URL (HTTPS / LAN)</label>
-                    <input type="url" id="remote-node-url" class="input-control mono" placeholder="http://192.168.1.50:8742">
+              <div class="deliver-actions-footer">
+                <div class="deliver-estimate-bar" role="status" aria-live="polite">
+                  <div class="deliver-estimate-main">
+                    <span class="deliver-estimate-label" data-i18n="render.estimate.label">Estimated Export Size</span>
+                    <span id="deliver-size-estimate" class="nle-tag is-blue mono deliver-estimate-badge">0 MB</span>
                   </div>
-                  <div class="form-row">
-                    <label for="remote-bearer-token" data-i18n="render.remote.token">Bearer Token</label>
-                    <input type="password" id="remote-bearer-token" class="input-control mono" placeholder="taktcut-node-token" autocomplete="off">
-                  </div>
+                  <span id="deliver-size-detail" class="deliver-estimate-detail mono"></span>
                 </div>
                 <div class="btn-row">
-                  <button type="button" id="btn-remote-probe" class="btn btn-secondary" data-i18n="render.remote.probe">Probe Remote Node</button>
-                  <span id="remote-node-caps-note" class="telemetry-note mono" data-i18n="render.remote.hint">SSRF guard active: HTTPS or private LAN/loopback HTTP only.</span>
+                  <button type="button" id="btn-build-render-plan" class="btn btn-primary" data-i18n="render.btn.buildPlan">Build Plan (Dry-Run)</button>
+                  <button type="button" id="btn-execute-render" class="btn btn-secondary" data-i18n="render.btn.execute">Execute Render</button>
+                  <button type="button" id="btn-copy-ffmpeg-cmd" class="btn btn-secondary" data-i18n="render.btn.copyCmd">Copy Command</button>
                 </div>
-              </div>
-              <div class="form-row">
-                <label for="render-input-select" data-i18n="render.label.pickMedia">Workspace Media Shortcut</label>
-                <select id="render-input-select" class="input-control mono"></select>
-              </div>
-              <div class="form-row-two">
-                <div class="form-row">
-                  <label for="render-input-path" data-i18n="render.label.inputPath">Input Media Path</label>
-                  <input type="text" id="render-input-path" class="input-control mono" value=".taktcut-samples/sample_rec709.mp4">
-                </div>
-                <div class="form-row">
-                  <label for="render-output-path" data-i18n="render.label.outputPath">Output Media Path</label>
-                  <input type="text" id="render-output-path" class="input-control mono" value="renders/delivery_web.mp4">
-                </div>
-              </div>
-              <div class="form-row-two">
-                <div class="form-row">
-                  <label for="render-profile" data-i18n="render.label.profile">Delivery Profile</label>
-                  <select id="render-profile" class="input-control mono">
-                    <option value="web_h264">web_h264 (H.264 + AAC + faststart)</option>
-                    <option value="master_hevc">master_hevc (HEVC + AAC + faststart)</option>
-                    <option value="prores_hq">prores_hq (ProRes 422 HQ + 24-bit PCM)</option>
-                  </select>
-                </div>
-                <div class="form-row">
-                  <label for="render-container" data-i18n="render.label.container">Container Format</label>
-                  <select id="render-container" class="input-control mono">
-                    <option value="mp4">MP4 (.mp4 + faststart)</option>
-                    <option value="mov">QuickTime (.mov)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-row-three">
-                <div class="form-row">
-                  <label for="render-crf" data-i18n="render.label.crf">Video Quality (CRF / CQ)</label>
-                  <input type="number" id="render-crf" class="input-control mono" min="0" max="51" step="1" value="18" placeholder="18">
-                </div>
-                <div class="form-row">
-                  <label for="render-audio-bitrate" data-i18n="render.label.audioBitrate">Audio Bitrate</label>
-                  <select id="render-audio-bitrate" class="input-control mono">
-                    <option value="96">AAC 96 kbps</option>
-                    <option value="128">AAC 128 kbps</option>
-                    <option value="160">AAC 160 kbps</option>
-                    <option value="192" selected>AAC 192 kbps</option>
-                    <option value="256">AAC 256 kbps</option>
-                    <option value="320">AAC 320 kbps</option>
-                    <option value="pcm_s24le">PCM 24-bit 48 kHz</option>
-                  </select>
-                </div>
-                <div class="form-row">
-                  <label for="render-audio-only-format" data-i18n="render.label.audioOnly">Audio-Only Master</label>
-                  <select id="render-audio-only-format" class="input-control mono">
-                    <option value="off" data-i18n="render.audioOnly.off" selected>Off (Video + Audio)</option>
-                    <option value="wav24" data-i18n="render.audioOnly.wav24">WAV 24-bit 48 kHz (.wav)</option>
-                    <option value="mp3_320" data-i18n="render.audioOnly.mp3_320">MP3 320 kbps (.mp3)</option>
-                    <option value="aac_256" data-i18n="render.audioOnly.aac_256">AAC 256 kbps (.aac)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-row-three">
-                <div class="form-row">
-                  <label for="render-fps" data-i18n="render.label.fps">Target Rational FPS</label>
-                  <input type="text" id="render-fps" class="input-control mono" value="25" placeholder="25 or 24000/1001">
-                </div>
-                <div class="form-row">
-                  <label for="render-export-fps" data-i18n="render.label.exportFps">Export Frame Rate (CFR)</label>
-                  <select id="render-export-fps" class="input-control mono">
-                    <option value="source" data-i18n="render.exportFps.source" selected>Source (Timeline)</option>
-                    <option value="24">24 fps</option>
-                    <option value="25">25 fps</option>
-                    <option value="30">30 fps</option>
-                    <option value="60">60 fps</option>
-                  </select>
-                </div>
-                <div class="form-row">
-                  <label for="render-lufs" data-i18n="render.label.lufs">Target Loudness (LUFS)</label>
-                  <input type="number" id="render-lufs" class="input-control mono" step="0.5" value="-14.0" placeholder="-14.0">
-                </div>
-              </div>
-              <div class="form-row-two">
-                <div class="form-row">
-                  <label for="render-loudness-preset" data-i18n="render.label.loudnessPreset">Loudness Target Normalizer</label>
-                  <select id="render-loudness-preset" class="input-control mono">
-                    <option value="off" data-i18n="fairlight.loudness.off">Off (Bypass)</option>
-                    <option value="youtube_14" data-i18n="fairlight.loudness.youtube_14">YouTube (-14 LUFS / -1.0 dBTP)</option>
-                    <option value="reels_16" data-i18n="fairlight.loudness.reels_16">Reels / TikTok (-16 LUFS / -1.0 dBTP)</option>
-                    <option value="broadcast_23" data-i18n="fairlight.loudness.broadcast_23">Broadcast EBU R128 (-23 LUFS / -1.0 dBTP)</option>
-                  </select>
-                </div>
-                <div class="form-row">
-                  <label for="render-dialogue-eq" data-i18n="render.label.dialogueEq">Fairlight Dialogue EQ</label>
-                  <select id="render-dialogue-eq" class="input-control mono">
-                    <option value="off" data-i18n="fairlight.eq.off">Off (Bypass)</option>
-                    <option value="voice_clarity" data-i18n="fairlight.eq.voice_clarity">Voice Clarity (HP 80 Hz +3 dB @ 3 kHz)</option>
-                    <option value="podcast_warm" data-i18n="fairlight.eq.podcast_warm">Podcast Warm (HP 70 Hz +2 dB @ 180 Hz / 4 kHz)</option>
-                    <option value="derumble" data-i18n="fairlight.eq.derumble">De-Rumble (HP 100 Hz)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-row">
-                <label for="render-audio-af-preview" data-i18n="render.label.afChain">Audio Filter Chain (-af)</label>
-                <div id="render-audio-af-preview" class="code-box af-chain-preview mono" aria-live="polite">(none)</div>
-              </div>
-              <div id="deliver-voice-cleanup-card" class="voice-cleanup-deliver-card">
-                <div class="voice-cleanup-deliver-head">
-                  <span class="voice-cleanup-deliver-title" data-i18n="render.voiceCleanup.title">Fairlight Voice Cleanup</span>
-                  <div class="voice-cleanup-deliver-head-actions">
-                    <span id="render-voice-cleanup-badge" class="nle-tag mono">OFF</span>
-                    <label class="check-label voice-cleanup-toggle-label">
-                      <input type="checkbox" id="render-voice-cleanup-enabled">
-                      <span data-i18n="render.voiceCleanup.toggle">Enable</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="voice-cleanup-deliver-preset-row" role="group" aria-label="Fairlight Voice Cleanup Presets">
-                  <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="youtube_voice" aria-pressed="false" data-i18n="render.voiceCleanup.preset.youtube">YouTube Voice</button>
-                  <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="podcast_warm" aria-pressed="false" data-i18n="render.voiceCleanup.preset.podcast">Podcast Warm</button>
-                  <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="broadcast_crisp" aria-pressed="false" data-i18n="render.voiceCleanup.preset.broadcast">Broadcast Crisp</button>
-                </div>
-                <div class="voice-cleanup-deliver-controls-row">
-                  <div class="form-row voice-cleanup-deliver-slider-col">
-                    <label for="render-voice-cleanup-highpass" data-i18n="render.voiceCleanup.label.highpass">High-Pass (Hz)</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-voice-cleanup-highpass" class="watermark-opacity-slider" min="40" max="200" step="1" value="85">
-                      <span id="render-voice-cleanup-highpass-value" class="mono watermark-opacity-val">85 Hz</span>
-                    </div>
-                  </div>
-                  <div class="form-row voice-cleanup-deliver-slider-col">
-                    <label for="render-voice-cleanup-presence" data-i18n="render.voiceCleanup.label.presence">Presence 3.2kHz (dB)</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-voice-cleanup-presence" class="watermark-opacity-slider" min="-6" max="6" step="0.5" value="2.5">
-                      <span id="render-voice-cleanup-presence-value" class="mono watermark-opacity-val">+2.5 dB</span>
-                    </div>
-                  </div>
-                  <div class="form-row voice-cleanup-deliver-slider-col">
-                    <label for="render-voice-cleanup-deess" data-i18n="render.voiceCleanup.label.deess">De-Esser</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-voice-cleanup-deess" class="watermark-opacity-slider" min="0" max="1" step="0.05" value="0.35">
-                      <span id="render-voice-cleanup-deess-value" class="mono watermark-opacity-val">0.35</span>
-                    </div>
-                  </div>
-                </div>
-                <div id="render-voice-cleanup-preview" class="code-box voice-cleanup-deliver-preview mono" aria-live="polite">(off)</div>
-              </div>
-              <div class="form-row-two">
-                <div class="form-row">
-                  <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
-                  <input type="text" id="render-lut-path" class="input-control mono" placeholder="luts/editorial_look.cube">
-                </div>
-                <div class="form-row">
-                  <label for="render-timecode-burnin" data-i18n="render.label.timecodeBurnin">Timecode Burn-In (SMPTE)</label>
-                  <select id="render-timecode-burnin" class="input-control mono">
-                    <option value="off" data-i18n="render.timecode.off">Off (Clean Master)</option>
-                    <option value="top_left" data-i18n="render.timecode.top_left">Top Left (Client Review)</option>
-                    <option value="bottom_center" data-i18n="render.timecode.bottom_center">Bottom Center (Broadcast)</option>
-                    <option value="bottom_right" data-i18n="render.timecode.bottom_right">Bottom Right (Corner Slate)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-row-two">
-                <div class="form-row">
-                  <label for="render-watermark-text" data-i18n="render.label.reviewWatermark">Review Watermark Overlay</label>
-                  <input type="text" id="render-watermark-text" class="input-control mono" maxlength="40" placeholder="Off (e.g. DRAFT - CLIENT REVIEW)">
-                  <div class="watermark-preset-row" role="group" aria-label="Review Watermark Presets">
-                    <button type="button" class="watermark-preset-btn is-active" data-watermark-preset="" aria-pressed="true" data-i18n="render.watermark.preset.off">Off</button>
-                    <button type="button" class="watermark-preset-btn" data-watermark-preset="DRAFT - CLIENT REVIEW" aria-pressed="false" data-i18n="render.watermark.preset.draft">DRAFT - CLIENT REVIEW</button>
-                    <button type="button" class="watermark-preset-btn" data-watermark-preset="CONFIDENTIAL" aria-pressed="false" data-i18n="render.watermark.preset.confidential">CONFIDENTIAL</button>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <label for="render-watermark-opacity" data-i18n="render.label.watermarkOpacity">Watermark Opacity</label>
-                  <div class="watermark-opacity-row">
-                    <input type="range" id="render-watermark-opacity" class="watermark-opacity-slider" min="0.15" max="0.80" step="0.05" value="0.35">
-                    <span id="render-watermark-opacity-value" class="mono watermark-opacity-val">0.35</span>
-                  </div>
-                </div>
-              </div>
-              <div id="deliver-lower-third-card" class="lower-third-card">
-                <div class="lower-third-head">
-                  <span class="lower-third-title" data-i18n="render.lowerThird.title">Lower-Third / Title Overlay</span>
-                  <div class="lower-third-head-actions">
-                    <span id="render-lower-third-badge" class="nle-tag mono">OFF</span>
-                    <label class="check-label lower-third-toggle-label">
-                      <input type="checkbox" id="render-lower-third-enabled">
-                      <span data-i18n="render.lowerThird.toggle">Enable</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="lower-third-preset-row" role="group" aria-label="Lower-Third Presets">
-                  <button type="button" class="lower-third-preset-btn" data-lt-preset="interview" aria-pressed="false" data-i18n="render.lowerThird.preset.interview">Interview</button>
-                  <button type="button" class="lower-third-preset-btn" data-lt-preset="youtube_intro" aria-pressed="false" data-i18n="render.lowerThird.preset.youtubeIntro">YouTube Intro</button>
-                  <button type="button" class="lower-third-preset-btn" data-lt-preset="broadcast_tag" aria-pressed="false" data-i18n="render.lowerThird.preset.broadcastTag">Broadcast Tag</button>
-                </div>
-                <div class="form-row-two">
-                  <div class="form-row">
-                    <label for="render-lower-third-title" data-i18n="render.lowerThird.label.title">Title</label>
-                    <input type="text" id="render-lower-third-title" class="input-control" maxlength="120" placeholder="Claire Laurent">
-                  </div>
-                  <div class="form-row">
-                    <label for="render-lower-third-subtitle" data-i18n="render.lowerThird.label.subtitle">Subtitle</label>
-                    <input type="text" id="render-lower-third-subtitle" class="input-control" maxlength="120" placeholder="Lead Cinematographer | Studio Paris">
-                  </div>
-                </div>
-                <div class="form-row-three">
-                  <div class="form-row">
-                    <label for="render-lower-third-position" data-i18n="render.lowerThird.label.position">Position</label>
-                    <select id="render-lower-third-position" class="input-control mono">
-                      <option value="bottom_left" data-i18n="render.lowerThird.pos.bottomLeft" selected>Bottom Left</option>
-                      <option value="bottom_center" data-i18n="render.lowerThird.pos.bottomCenter">Bottom Center</option>
-                      <option value="top_left" data-i18n="render.lowerThird.pos.topLeft">Top Left</option>
-                    </select>
-                  </div>
-                  <div class="form-row">
-                    <label for="render-lower-third-font-size" data-i18n="render.lowerThird.label.fontSize">Font Size (px)</label>
-                    <input type="number" id="render-lower-third-font-size" class="input-control mono" min="16" max="96" step="1" value="36">
-                  </div>
-                  <div class="form-row">
-                    <label for="render-lower-third-box-opacity" data-i18n="render.lowerThird.label.boxOpacity">Box Opacity</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-lower-third-box-opacity" class="watermark-opacity-slider" min="0" max="1" step="0.05" value="0.65">
-                      <span id="render-lower-third-box-opacity-value" class="mono watermark-opacity-val">0.65</span>
-                    </div>
-                  </div>
-                </div>
-                <div class="form-row-two">
-                  <div class="form-row">
-                    <label for="render-lower-third-start" data-i18n="render.lowerThird.label.start">Start (s)</label>
-                    <input type="number" id="render-lower-third-start" class="input-control mono" min="0" max="86400" step="0.1" value="0.0">
-                  </div>
-                  <div class="form-row">
-                    <label for="render-lower-third-duration" data-i18n="render.lowerThird.label.duration">Duration (s)</label>
-                    <input type="number" id="render-lower-third-duration" class="input-control mono" min="0.1" max="86400" step="0.1" value="5.0">
-                  </div>
-                </div>
-                <div id="render-lower-third-preview" class="code-box lower-third-preview mono" aria-live="polite">(off)</div>
-              </div>
-              <div id="deliver-retime-card" class="retime-deliver-card">
-                <div class="retime-deliver-head">
-                  <span class="retime-deliver-title" data-i18n="render.retime.title">Retime (Speed &amp; Reverse)</span>
-                  <div class="retime-deliver-head-actions">
-                    <span id="render-retime-badge" class="nle-tag mono">OFF</span>
-                    <label class="check-label retime-toggle-label">
-                      <input type="checkbox" id="render-retime-enabled">
-                      <span data-i18n="render.retime.toggle">Enable</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="retime-deliver-preset-row" role="group" aria-label="Retime Speed Presets">
-                  <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="0.25" aria-pressed="false">0.25x</button>
-                  <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="0.5" aria-pressed="false">0.5x</button>
-                  <button type="button" class="retime-deliver-preset-btn is-active" data-deliver-retime-speed="1" aria-pressed="true">1x</button>
-                  <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="1.5" aria-pressed="false">1.5x</button>
-                  <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="2" aria-pressed="false">2x</button>
-                  <button type="button" class="retime-deliver-preset-btn" data-deliver-retime-speed="4" aria-pressed="false">4x</button>
-                </div>
-                <div class="retime-deliver-speed-row">
-                  <div class="form-row retime-deliver-slider-col">
-                    <label for="render-retime-speed" data-i18n="render.retime.label.speed">Speed (0.25x - 4.0x)</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-retime-speed" class="watermark-opacity-slider" min="0.25" max="4.0" step="0.05" value="1.00">
-                      <span id="render-retime-speed-value" class="mono watermark-opacity-val">1.00x</span>
-                    </div>
-                  </div>
-                  <div class="form-row retime-deliver-rev-col">
-                    <span class="retime-deliver-rev-caption" data-i18n="render.retime.label.direction">Direction</span>
-                    <button type="button" id="render-retime-reverse" class="btn btn-secondary retime-deliver-reverse-btn" aria-pressed="false" data-i18n="render.retime.reverse">Reverse</button>
-                  </div>
-                </div>
-                <div class="retime-deliver-meta-row">
-                  <span class="retime-deliver-dur-label" data-i18n="render.retime.label.duration">Effective Duration</span>
-                  <span id="render-retime-duration-estimate" class="mono retime-deliver-dur-val" aria-live="polite">--</span>
-                </div>
-                <div id="render-retime-preview" class="code-box retime-deliver-preview mono" aria-live="polite">(off)</div>
-              </div>
-              <div id="deliver-reframe-card" class="reframe-deliver-card">
-                <div class="reframe-deliver-head">
-                  <span class="reframe-deliver-title" data-i18n="render.reframe.title">Auto-Reframe &amp; Social Crop</span>
-                  <div class="reframe-deliver-head-actions">
-                    <span id="render-reframe-badge" class="nle-tag mono">OFF</span>
-                    <label class="check-label reframe-toggle-label">
-                      <input type="checkbox" id="render-reframe-enabled">
-                      <span data-i18n="render.reframe.toggle">Enable</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="reframe-deliver-preset-row" role="group" aria-label="Auto-Reframe Aspect Ratio">
-                  <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="16:9" aria-pressed="false">16:9</button>
-                  <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="9:16" aria-pressed="false">9:16 Reels</button>
-                  <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="4:5" aria-pressed="false">4:5 IG</button>
-                  <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="1:1" aria-pressed="false">1:1 Square</button>
-                  <button type="button" class="reframe-deliver-preset-btn" data-deliver-reframe-ratio="2.39:1" aria-pressed="false">2.39:1 Scope</button>
-                </div>
-                <div class="reframe-deliver-pan-row">
-                  <div class="form-row reframe-deliver-slider-col">
-                    <label for="render-reframe-pan-x" data-i18n="render.reframe.label.panX">Pan X (-1.0 to +1.0)</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-reframe-pan-x" class="watermark-opacity-slider" min="-1.0" max="1.0" step="0.05" value="0.00">
-                      <span id="render-reframe-pan-x-value" class="mono watermark-opacity-val">0.00</span>
-                    </div>
-                  </div>
-                  <div class="form-row reframe-deliver-slider-col">
-                    <label for="render-reframe-pan-y" data-i18n="render.reframe.label.panY">Pan Y (-1.0 to +1.0)</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-reframe-pan-y" class="watermark-opacity-slider" min="-1.0" max="1.0" step="0.05" value="0.00">
-                      <span id="render-reframe-pan-y-value" class="mono watermark-opacity-val">0.00</span>
-                    </div>
-                  </div>
-                  <div class="form-row reframe-deliver-reset-col">
-                    <button type="button" id="render-reframe-reset" class="btn btn-secondary reframe-deliver-reset-btn" data-i18n="render.reframe.reset">Center</button>
-                  </div>
-                </div>
-                <div id="render-reframe-preview" class="code-box reframe-deliver-preview mono" aria-live="polite">(off)</div>
-              </div>
-              <div id="deliver-film-grain-card" class="film-grain-deliver-card">
-                <div class="film-grain-deliver-head">
-                  <span class="film-grain-deliver-title" data-i18n="render.filmGrain.title">Film Grain (35mm / 16mm / Super 8)</span>
-                  <div class="film-grain-deliver-head-actions">
-                    <span id="render-film-grain-badge" class="nle-tag mono">OFF</span>
-                    <label class="check-label film-grain-toggle-label">
-                      <input type="checkbox" id="render-film-grain-enabled">
-                      <span data-i18n="render.filmGrain.toggle">Enable</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="film-grain-deliver-preset-row" role="group" aria-label="Film Grain Presets">
-                  <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="35mm_fine" aria-pressed="false" data-i18n="render.filmGrain.preset.35mm">35mm Fine</button>
-                  <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="16mm_organic" aria-pressed="false" data-i18n="render.filmGrain.preset.16mm">16mm Organic</button>
-                  <button type="button" class="film-grain-deliver-preset-btn" data-deliver-film-grain-preset="super8_heavy" aria-pressed="false" data-i18n="render.filmGrain.preset.super8">Super 8 Heavy</button>
-                </div>
-                <div class="film-grain-deliver-controls-row">
-                  <div class="form-row film-grain-deliver-slider-col">
-                    <label for="render-film-grain-strength" data-i18n="render.filmGrain.label.strength">Strength (0-60)</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-film-grain-strength" class="watermark-opacity-slider" min="0" max="60" step="1" value="12">
-                      <span id="render-film-grain-strength-value" class="mono watermark-opacity-val">12</span>
-                    </div>
-                  </div>
-                  <div class="form-row film-grain-deliver-temporal-col">
-                    <label class="check-label film-grain-temporal-label">
-                      <input type="checkbox" id="render-film-grain-temporal" checked>
-                      <span data-i18n="render.filmGrain.label.temporal">Temporal</span>
-                    </label>
-                  </div>
-                </div>
-                <div id="render-film-grain-preview" class="code-box film-grain-deliver-preview mono" aria-live="polite">(off)</div>
-              </div>
-              <div id="deliver-vignette-card" class="vignette-deliver-card">
-                <div class="vignette-deliver-head">
-                  <span class="vignette-deliver-title" data-i18n="render.vignette.title">Cinematic Vignette</span>
-                  <div class="vignette-deliver-head-actions">
-                    <span id="render-vignette-badge" class="nle-tag mono">OFF</span>
-                    <label class="check-label vignette-toggle-label">
-                      <input type="checkbox" id="render-vignette-enabled">
-                      <span data-i18n="render.vignette.toggle">Enable</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="vignette-deliver-preset-row" role="group" aria-label="Cinematic Vignette Presets">
-                  <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="subtle_cinema" aria-pressed="false" data-i18n="render.vignette.preset.subtle">Subtle Cinema (18 deg)</button>
-                  <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="moody_portrait" aria-pressed="false" data-i18n="render.vignette.preset.moody">Moody Portrait (32 deg)</button>
-                  <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="heavy_noir" aria-pressed="false" data-i18n="render.vignette.preset.noir">Heavy Noir (52 deg)</button>
-                </div>
-                <div class="vignette-deliver-controls-row">
-                  <div class="form-row vignette-deliver-slider-col">
-                    <label for="render-vignette-angle" data-i18n="render.vignette.label.angle">Angle (5-75 deg)</label>
-                    <div class="watermark-opacity-row">
-                      <input type="range" id="render-vignette-angle" class="watermark-opacity-slider" min="5" max="75" step="0.5" value="24">
-                      <span id="render-vignette-angle-value" class="mono watermark-opacity-val">24.0 deg</span>
-                    </div>
-                  </div>
-                  <div class="form-row vignette-deliver-mode-col">
-                    <label for="render-vignette-mode" data-i18n="render.vignette.label.mode">Mode</label>
-                    <select id="render-vignette-mode" class="input-control vignette-deliver-select mono">
-                      <option value="forward" data-i18n="render.vignette.mode.forward">Darken Edges (forward)</option>
-                      <option value="backward" data-i18n="render.vignette.mode.backward">Brighten (backward)</option>
-                    </select>
-                  </div>
-                </div>
-                <div id="render-vignette-preview" class="code-box vignette-deliver-preview mono" aria-live="polite">(off)</div>
-              </div>
-              <div class="form-row-three">
-                <div class="form-row">
-                  <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>
-                  <select id="render-aspect-preset" class="input-control mono">
-                    <option value="16:9">16:9</option>
-                    <option value="9:16">9:16 Reels/Shorts</option>
-                    <option value="1:1">1:1 Square</option>
-                    <option value="4:5">4:5 Feed</option>
-                  </select>
-                </div>
-                <div class="form-row">
-                  <label for="render-resolution" data-i18n="render.label.resolution">Target Resolution</label>
-                  <select id="render-resolution" class="input-control mono">
-                    <option value="1920x1080">1920x1080 (FHD 1080p)</option>
-                    <option value="3840x2160">3840x2160 (4K UHD)</option>
-                    <option value="1280x720">1280x720 (HD 720p)</option>
-                    <option value="1080x1920">1080x1920 (9:16 Vertical)</option>
-                    <option value="1080x1080">1080x1080 (1:1 Square)</option>
-                    <option value="1080x1350">1080x1350 (4:5 Feed)</option>
-                  </select>
-                </div>
-                <div class="form-row">
-                  <label for="render-framing-mode" data-i18n="render.label.framingMode">Reframe Mode</label>
-                  <select id="render-framing-mode" class="input-control mono">
-                    <option value="fill" data-i18n="framing.mode.fillFull">Fill (Scale + Center Crop)</option>
-                    <option value="fit" data-i18n="framing.mode.fitFull">Fit (Scale + Black Pad)</option>
-                  </select>
-                </div>
-              </div>
-              <div class="checkbox-row">
-                <label class="check-label">
-                  <input type="checkbox" id="render-deinterlace">
-                  <span data-i18n="render.check.deinterlace">Broadcast Deinterlace (yadif field-to-frame)</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-framing">
-                  <span data-i18n="render.check.framing">Conform output aspect ratio &amp; resolution (scale + crop/pad)</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-studio-cdl">
-                  <span data-i18n="render.check.studioCdl">Bake &amp; apply active Color Page CDL grade when LUT path is empty</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-studio-fx">
-                  <span data-i18n="render.check.studioFx">Apply active FX Studio filtergraph stack</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-studio-title">
-                  <span data-i18n="render.check.studioTitle">Burn in active Title / Lower-Third overlay (drawbox + drawtext)</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-studio-subtitles">
-                  <span data-i18n="render.check.studioSubtitles">Burn in active Captions / SRT track (drawtext)</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-clip-audio" checked>
-                  <span data-i18n="render.check.clipAudio">Apply selected clip audio gain, fades &amp; track mute/solo</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-clip-retime" checked>
-                  <span data-i18n="render.check.clipRetime">Apply selected clip speed / retime (setpts + atempo + reverse)</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-use-clip-transform" checked>
-                  <span data-i18n="render.check.clipTransform">Apply selected clip motion transform (zoom / pos / rot / opacity / dynamic zoom)</span>
-                </label>
-                <label class="check-label">
-                  <input type="checkbox" id="render-prefer-hw" checked>
-                  <span data-i18n="render.check.preferHw">Prefer GPU NVENC encoder (fallback to CPU libx264/libx265)</span>
-                </label>
-              </div>
-              <div class="deliver-estimate-bar" role="status" aria-live="polite">
-                <div class="deliver-estimate-main">
-                  <span class="deliver-estimate-label" data-i18n="render.estimate.label">Estimated Export Size</span>
-                  <span id="deliver-size-estimate" class="nle-tag is-blue mono deliver-estimate-badge">0 MB</span>
-                </div>
-                <span id="deliver-size-detail" class="deliver-estimate-detail mono"></span>
-              </div>
-              <div class="btn-row">
-                <button type="button" id="btn-build-render-plan" class="btn btn-primary" data-i18n="render.btn.buildPlan">Build Plan (Dry-Run)</button>
-                <button type="button" id="btn-execute-render" class="btn btn-secondary" data-i18n="render.btn.execute">Execute Render</button>
-                <button type="button" id="btn-copy-ffmpeg-cmd" class="btn btn-secondary" data-i18n="render.btn.copyCmd">Copy Command</button>
               </div>
             </div>
           </section>
@@ -2128,7 +2165,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | I/O: In/Out | Alt+X: Clear I/O | A/B: Select/Blade | N: Snap | M: Marker | ?: Shortcuts</span>
       </span>
-      <span id="version-badge">v0.1.25</span>
+      <span id="version-badge">v0.1.26</span>
     </footer>
   </div>
 
@@ -2141,6 +2178,26 @@
       <button type="button" id="btn-close-shortcuts-dialog" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
     </div>
     <div id="nle-shortcuts-grid" class="nle-dialog-body shortcuts-grid"></div>
+  </dialog>
+
+  <dialog id="media-pool-info-dialog" class="nle-dialog media-pool-info-dialog" aria-labelledby="media-pool-info-title">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="media-pool-info-title" data-i18n="timeline.mediapool.infoTitle">Clip Info</h2>
+        <p id="media-pool-info-subtitle" class="nle-dialog-subtitle mono"></p>
+      </div>
+      <div class="viewer-controls">
+        <span id="media-pool-info-badge" class="nle-tag mono">--</span>
+        <button type="button" id="btn-close-media-pool-info" class="btn btn-mini" data-i18n="timeline.mediapool.close">Close</button>
+      </div>
+    </div>
+    <div class="nle-dialog-body">
+      <div id="media-pool-info-kv" class="kv-grid mono"></div>
+      <div class="btn-row media-pool-info-actions">
+        <button type="button" id="btn-media-pool-info-jump" class="btn btn-primary" data-i18n="timeline.mediapool.jump">Jump to Clip</button>
+        <button type="button" id="btn-media-pool-info-close-footer" class="btn btn-secondary" data-i18n="timeline.mediapool.close">Close</button>
+      </div>
+    </div>
   </dialog>
 
   <script type="module" src="./app.js"></script>
