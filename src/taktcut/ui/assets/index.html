@@ -1453,6 +1453,24 @@
                   </select>
                 </div>
               </div>
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="render-watermark-text" data-i18n="render.label.reviewWatermark">Review Watermark Overlay</label>
+                  <input type="text" id="render-watermark-text" class="input-control mono" maxlength="40" placeholder="Off (e.g. DRAFT - CLIENT REVIEW)">
+                  <div class="watermark-preset-row" role="group" aria-label="Review Watermark Presets">
+                    <button type="button" class="watermark-preset-btn is-active" data-watermark-preset="" aria-pressed="true" data-i18n="render.watermark.preset.off">Off</button>
+                    <button type="button" class="watermark-preset-btn" data-watermark-preset="DRAFT - CLIENT REVIEW" aria-pressed="false" data-i18n="render.watermark.preset.draft">DRAFT - CLIENT REVIEW</button>
+                    <button type="button" class="watermark-preset-btn" data-watermark-preset="CONFIDENTIAL" aria-pressed="false" data-i18n="render.watermark.preset.confidential">CONFIDENTIAL</button>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <label for="render-watermark-opacity" data-i18n="render.label.watermarkOpacity">Watermark Opacity</label>
+                  <div class="watermark-opacity-row">
+                    <input type="range" id="render-watermark-opacity" class="watermark-opacity-slider" min="0.15" max="0.80" step="0.05" value="0.35">
+                    <span id="render-watermark-opacity-value" class="mono watermark-opacity-val">0.35</span>
+                  </div>
+                </div>
+              </div>
               <div class="form-row-three">
                 <div class="form-row">
                   <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>

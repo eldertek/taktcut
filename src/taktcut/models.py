@@ -194,6 +194,11 @@ ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "bottom_right",
 )
 
+REVIEW_WATERMARK_MAX_LEN: int = 40
+REVIEW_WATERMARK_OPACITY_MIN: float = 0.15
+REVIEW_WATERMARK_OPACITY_MAX: float = 0.80
+REVIEW_WATERMARK_OPACITY_DEFAULT: float = 0.35
+
 ALLOWED_TRANSITION_PRESETS: frozenset[str] = frozenset(
     {"fade", "fadeblack", "wipeleft", "slideright", "zoomin"}
 )
@@ -498,6 +503,8 @@ class RenderPlan(BaseModel):
     loudness_preset: LoudnessPresetId = "off"
     dialogue_eq: DialogueEqPresetId = "off"
     timecode_burnin: TimecodeBurnInPosition = "off"
+    review_watermark_text: str = ""
+    review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     target_width: int | None = None
     target_height: int | None = None
     framing_mode: str | None = None

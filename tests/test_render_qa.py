@@ -40,6 +40,7 @@ from taktcut.render import (
     compile_loudness_preset_filter,
     compile_retime_filter,
     compile_retime_filter_result,
+    compile_review_watermark_filter,
     compile_timecode_burnin_filter,
     compile_transform_filter,
     compile_transform_filter_result,
@@ -47,6 +48,8 @@ from taktcut.render import (
     get_delivery_preset,
     list_aspect_presets,
     list_delivery_presets,
+    validate_review_watermark_opacity,
+    validate_review_watermark_text,
     validate_timecode_burnin,
 )
 
@@ -1113,6 +1116,101 @@ def test_timecode_burnin_validation_compile_and_real_ffmpeg_render(tmp_path: Pat
     assert res.success is True, res.stderr_tail
     assert res.bytes_written > 0
     probe = probe_media(out_tc)
+    assert probe.is_cfr is True
+    assert probe.width == 640
+    assert probe.height == 360
+
+
+def test_review_watermark_validation_and_compile() -> None:
+    assert validate_review_watermark_text("") == ""
+    assert validate_review_watermark_text("   ") == ""
+    assert validate_review_watermark_text("  DRAFT - CLIENT REVIEW  ") == "DRAFT - CLIENT REVIEW"
+    assert validate_review_watermark_text("CONFIDENTIAL") == "CONFIDENTIAL"
+    assert validate_review_watermark_text("Client_01, Cut-2.v3") == "Client_01, Cut-2.v3"
+    assert validate_review_watermark_text("A" * 40) == "A" * 40
+
+    for bad_wm in (
+        "A" * 41,
+        "DRAFT;evil",
+        "DRAFT:1",
+        "CLIENT'S",
+        'CLIENT"S',
+        "a=1",
+        "$(whoami)",
+        "%{pts}",
+        "a\\b",
+        "a/b",
+        "line1\nline2",
+        "line1\r",
+        "tab\there",
+        123,
+        True,
+        None,
+    ):
+        with pytest.raises(ValueError):
+            validate_review_watermark_text(bad_wm)
+
+    assert validate_review_watermark_opacity(0.15) == pytest.approx(0.15)
+    assert validate_review_watermark_opacity(0.35) == pytest.approx(0.35)
+    assert validate_review_watermark_opacity(0.80) == pytest.approx(0.80)
+
+    for bad_op in (0.14, 0.81, -0.5, float("nan"), float("inf"), True, "0.35"):
+        with pytest.raises(ValueError):
+            validate_review_watermark_opacity(bad_op)
+
+    assert compile_review_watermark_filter("") is None
+    assert compile_review_watermark_filter("   ", 0.50) is None
+
+    compiled = compile_review_watermark_filter("DRAFT - CLIENT, REVIEW_01.v2", 0.45)
+    assert compiled is not None
+    assert "drawtext=" in compiled
+    assert (
+        "text='DRAFT - CLIENT, REVIEW_01.v2':fontsize=42"
+        ":fontcolor=white@0.45:x=(w-text_w)/2:y=(h-text_h)/2"
+    ) in compiled
+
+
+def test_review_watermark_real_ffmpeg_render(tmp_path: Path) -> None:
+
+    src = tmp_path / "wm_src.mp4"
+    _generate_synthetic_clip(src)
+
+    clean_plan = build_render_plan(
+        input_path=src,
+        output_path=tmp_path / "wm_clean.mp4",
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        review_watermark_text="",
+        prefer_hw=False,
+    )
+    assert clean_plan.review_watermark_text == ""
+    assert clean_plan.review_watermark_opacity == pytest.approx(0.35)
+    assert clean_plan.video_filter is None
+
+    out_wm = tmp_path / "wm_burned.mp4"
+    wm_plan = build_render_plan(
+        input_path=src,
+        output_path=out_wm,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        timecode_burnin="bottom_center",
+        review_watermark_text="DRAFT - CLIENT REVIEW",
+        review_watermark_opacity=0.40,
+        prefer_hw=False,
+    )
+    assert wm_plan.review_watermark_text == "DRAFT - CLIENT REVIEW"
+    assert wm_plan.review_watermark_opacity == pytest.approx(0.40)
+    assert wm_plan.video_filter is not None
+    assert "timecode='00\\:00\\:00\\:00':rate=25" in wm_plan.video_filter
+    assert (
+        "text='DRAFT - CLIENT REVIEW':fontsize=42"
+        ":fontcolor=white@0.40:x=(w-text_w)/2:y=(h-text_h)/2"
+    ) in wm_plan.video_filter
+
+    res = execute_render_plan(wm_plan)
+    assert res.success is True, res.stderr_tail
+    assert res.bytes_written > 0
+    probe = probe_media(out_wm)
     assert probe.is_cfr is True
     assert probe.width == 640
     assert probe.height == 360

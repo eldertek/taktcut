@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -24,6 +25,10 @@ from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
     ALLOWED_TIMECODE_BURNIN,
+    REVIEW_WATERMARK_MAX_LEN,
+    REVIEW_WATERMARK_OPACITY_DEFAULT,
+    REVIEW_WATERMARK_OPACITY_MAX,
+    REVIEW_WATERMARK_OPACITY_MIN,
     ClipTransformParams,
     DialogueEqPresetId,
     DynamicZoomPresetId,
@@ -36,7 +41,12 @@ from taktcut.models import (
     TimecodeBurnInPosition,
 )
 from taktcut.subtitles import SubtitleTrackParams, compile_subtitles_filter
-from taktcut.titles import TitleOverlayParams, compile_title_filter, resolve_default_fontfile
+from taktcut.titles import (
+    TitleOverlayParams,
+    compile_title_filter,
+    escape_ffmpeg_drawtext_text,
+    resolve_default_fontfile,
+)
 
 AUDIO_GAIN_DB_MIN: float = -24.0
 AUDIO_GAIN_DB_MAX: float = 12.0
@@ -134,6 +144,21 @@ def resolve_timecode_fontfile() -> Path | None:
     return resolve_default_fontfile()
 
 
+def _resolve_burnin_fontfile(
+    fontfile: Path | str | None,
+    default_resolver: Callable[[], Path | None],
+) -> Path | None:
+    if fontfile is not None:
+        raw_str = str(fontfile)
+        if any(ord(c) < 32 or ord(c) == 127 for c in raw_str):
+            raise ValueError("fontfile path contains invalid control characters")
+        candidate = Path(raw_str)
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Font file not found: {candidate}")
+        return candidate
+    return default_resolver()
+
+
 def compile_timecode_burnin_filter(
     timecode_burnin: TimecodeBurnInPosition,
     fps: RationalFrameRate,
@@ -145,23 +170,67 @@ def compile_timecode_burnin_filter(
     if pos == "off":
         return None
 
-    resolved_font: Path | None = None
-    if fontfile is not None:
-        raw_str = str(fontfile)
-        if any(ord(c) < 32 or ord(c) == 127 for c in raw_str):
-            raise ValueError("fontfile path contains invalid control characters")
-        candidate = Path(raw_str)
-        if not candidate.is_file():
-            raise FileNotFoundError(f"Font file not found: {candidate}")
-        resolved_font = candidate
-    else:
-        resolved_font = resolve_timecode_fontfile()
-
+    resolved_font = _resolve_burnin_fontfile(fontfile, resolve_timecode_fontfile)
     font_opt = f"fontfile='{escape_ffmpeg_filter_path(resolved_font)}':" if resolved_font else ""
     coords = TIMECODE_BURNIN_POSITIONS[pos]
     return (
         f"drawtext={font_opt}timecode='00\\:00\\:00\\:00':rate={fps.ffmpeg_rate}"
         f":fontsize=28:fontcolor=white:box=1:boxcolor=black@0.65:{coords}"
+    )
+
+
+_REVIEW_WATERMARK_RE = re.compile(r"^[A-Za-z0-9 _.,-]+$")
+
+
+def validate_review_watermark_text(raw: Any) -> str:
+    """Validate and sanitize a Client-Review watermark overlay text (max 40 safe chars)."""
+    if not isinstance(raw, str):
+        raise ValueError(f"review_watermark_text must be a string, got {raw!r}")
+    if any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise ValueError("review_watermark_text contains forbidden control characters")
+    cleaned = raw.strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > REVIEW_WATERMARK_MAX_LEN:
+        raise ValueError(
+            f"review_watermark_text exceeds maximum length of {REVIEW_WATERMARK_MAX_LEN} characters"
+        )
+    if not _REVIEW_WATERMARK_RE.fullmatch(cleaned):
+        raise ValueError(
+            "review_watermark_text may only contain alphanumeric characters, "
+            "spaces, '-', '_', '.', and ','"
+        )
+    return cleaned
+
+
+def validate_review_watermark_opacity(raw: Any) -> float:
+    """Validate Client-Review watermark opacity within [0.15, 0.80]."""
+    return _validate_bounded_float(
+        raw,
+        "review_watermark_opacity",
+        REVIEW_WATERMARK_OPACITY_MIN,
+        REVIEW_WATERMARK_OPACITY_MAX,
+    )
+
+
+def compile_review_watermark_filter(
+    review_watermark_text: str,
+    review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT,
+    *,
+    fontfile: Path | str | None = None,
+) -> str | None:
+    """Compile a validated Client-Review watermark overlay into an FFmpeg drawtext filter."""
+    cleaned = validate_review_watermark_text(review_watermark_text)
+    opacity = validate_review_watermark_opacity(review_watermark_opacity)
+    if not cleaned:
+        return None
+
+    resolved_font = _resolve_burnin_fontfile(fontfile, resolve_default_fontfile)
+    font_opt = f"fontfile='{escape_ffmpeg_filter_path(resolved_font)}':" if resolved_font else ""
+    escaped_text = escape_ffmpeg_drawtext_text(cleaned)
+    return (
+        f"drawtext={font_opt}text='{escaped_text}':fontsize=42"
+        f":fontcolor=white@{opacity:.2f}:x=(w-text_w)/2:y=(h-text_h)/2"
     )
 
 
@@ -1310,6 +1379,8 @@ def build_render_plan(
     loudness_preset: LoudnessPresetId | None = None,
     dialogue_eq: DialogueEqPresetId | None = None,
     timecode_burnin: TimecodeBurnInPosition | None = None,
+    review_watermark_text: str | None = None,
+    review_watermark_opacity: float | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1321,6 +1392,16 @@ def build_render_plan(
     )
     resolved_timecode_burnin: TimecodeBurnInPosition = (
         validate_timecode_burnin(timecode_burnin) if timecode_burnin is not None else "off"
+    )
+    resolved_watermark_text: str = (
+        validate_review_watermark_text(review_watermark_text)
+        if review_watermark_text is not None
+        else ""
+    )
+    resolved_watermark_opacity: float = (
+        validate_review_watermark_opacity(review_watermark_opacity)
+        if review_watermark_opacity is not None
+        else REVIEW_WATERMARK_OPACITY_DEFAULT
     )
     resolved_profile = (
         profile
@@ -1458,6 +1539,12 @@ def build_render_plan(
     tc_vf = compile_timecode_burnin_filter(resolved_timecode_burnin, target_fps)
     if tc_vf is not None:
         vf_parts.append(tc_vf)
+    wm_vf = compile_review_watermark_filter(
+        resolved_watermark_text,
+        resolved_watermark_opacity,
+    )
+    if wm_vf is not None:
+        vf_parts.append(wm_vf)
     video_filter = ",".join(vf_parts) if vf_parts else None
 
     resolved_clip_dur = clip_duration_s
@@ -1579,6 +1666,8 @@ def build_render_plan(
         loudness_preset=resolved_loudness_preset,
         dialogue_eq=resolved_dialogue_eq,
         timecode_burnin=resolved_timecode_burnin,
+        review_watermark_text=resolved_watermark_text,
+        review_watermark_opacity=resolved_watermark_opacity,
         target_width=target_width,
         target_height=target_height,
         framing_mode=framing_mode,

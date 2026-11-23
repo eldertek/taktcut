@@ -862,3 +862,36 @@ def test_project_delivery_timecode_burnin_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["timecode_burnin"] = bad_tc
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_review_watermark_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    assert proj.delivery.review_watermark_text == ""
+    assert proj.delivery.review_watermark_opacity == pytest.approx(0.35)
+
+    proj.delivery.review_watermark_text = "DRAFT - CLIENT REVIEW"
+    proj.delivery.review_watermark_opacity = 0.50
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.review_watermark_text == "DRAFT - CLIENT REVIEW"
+    assert loaded.delivery.review_watermark_opacity == pytest.approx(0.50)
+
+    proj_path = tmp_path / "client_review_wm.taktcut.json"
+    proj.delivery.review_watermark_text = "CONFIDENTIAL"
+    proj.delivery.review_watermark_opacity = 0.25
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.review_watermark_text == "CONFIDENTIAL"
+    assert disk_loaded.delivery.review_watermark_opacity == pytest.approx(0.25)
+
+    for bad_wm in ("A" * 41, "bad;text", "bad:text", "CLIENT'S", 42, True):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["review_watermark_text"] = bad_wm
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_op in (0.14, 0.81, True, "0.40"):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["review_watermark_opacity"] = bad_op
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

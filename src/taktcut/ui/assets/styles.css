@@ -3048,6 +3048,58 @@ input[type="range"] {
   white-space: nowrap;
 }
 
+/* DELIVER CLIENT-REVIEW WATERMARK */
+.watermark-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+
+.watermark-preset-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.watermark-preset-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-amber);
+}
+
+.watermark-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #f4a46b;
+}
+
+.watermark-opacity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  min-width: 0;
+}
+
+.watermark-opacity-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent-amber);
+}
+
+.watermark-opacity-val {
+  min-width: 38px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
 /* RESPONSIVE BREAKPOINTS */
 @media (max-width: 1180px) {
   .deliver-preset-strip {
@@ -3139,7 +3191,9 @@ input[type="range"] {
   #panel-render .input-control,
   #panel-render .btn,
   #panel-render .engine-btn,
-  #panel-render .check-label {
+  #panel-render .check-label,
+  #panel-render .watermark-preset-btn,
+  #panel-render .watermark-opacity-slider {
     min-height: 44px;
   }
 }

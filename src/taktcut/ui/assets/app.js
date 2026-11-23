@@ -485,6 +485,10 @@ function setLanguage(lang) {
       grabBtn.title = t("stills.btn.grabTitle");
     }
   }
+  const wmInput = byId("render-watermark-text");
+  if (wmInput) {
+    wmInput.placeholder = t("render.watermark.placeholder");
+  }
   updateTransportStatusUI();
   updateIoRangeUI();
   renderShortcutsDialog();
@@ -2017,6 +2021,8 @@ function serializeFullProjectState() {
       loudness_preset: normalizeFairlightAudioParams(state.fairlight).loudness_preset,
       dialogue_eq: normalizeFairlightAudioParams(state.fairlight).dialogue_eq,
       timecode_burnin: txt("render-timecode-burnin", "off") || "off",
+      review_watermark_text: txt("render-watermark-text", ""),
+      review_watermark_opacity: Number(byId("render-watermark-opacity")?.value ?? 0.35),
       lut_path: txt("render-lut-path", ""),
       input_path: txt("render-input-path", ".taktcut-samples/sample_rec709.mp4"),
       output_path: txt("render-output-path", "renders/delivery_web.mp4"),
@@ -2186,6 +2192,16 @@ function applyFullProjectState(project, validation) {
   });
   setVal("render-lut-path", del.lut_path || "");
   setVal("render-timecode-burnin", del.timecode_burnin || "off");
+  setVal("render-watermark-text", del.review_watermark_text || "");
+  const wmOpacityVal =
+    del.review_watermark_opacity !== null && del.review_watermark_opacity !== undefined
+      ? Number(del.review_watermark_opacity)
+      : 0.35;
+  setVal(
+    "render-watermark-opacity",
+    Number.isFinite(wmOpacityVal) ? wmOpacityVal.toFixed(2) : "0.35"
+  );
+  syncReviewWatermarkControlsUI();
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -4461,6 +4477,23 @@ function markDeliverPresetCustom() {
   }
 }
 
+function syncReviewWatermarkControlsUI() {
+  const wmInput = byId("render-watermark-text");
+  const wmText = wmInput ? wmInput.value.trim() : "";
+  for (const btn of document.querySelectorAll(".watermark-preset-btn[data-watermark-preset]")) {
+    const presetVal = btn.getAttribute("data-watermark-preset") || "";
+    const active = wmText === presetVal;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  const opSlider = byId("render-watermark-opacity");
+  const opLabel = byId("render-watermark-opacity-value");
+  if (opSlider && opLabel) {
+    const num = Number(opSlider.value);
+    opLabel.textContent = Number.isFinite(num) ? num.toFixed(2) : "0.35";
+  }
+}
+
 function applyDeliveryPreset(presetId) {
   const presets = getDeliveryPresetsList();
   const preset = presets.find((p) => p.id === presetId);
@@ -4604,6 +4637,10 @@ async function buildOrExecuteRender(execute) {
     const fairlightPayload = normalizeFairlightAudioParams(state.fairlight);
     const tcBurnInEl = byId("render-timecode-burnin");
     const timecodeBurnin = tcBurnInEl ? tcBurnInEl.value : "off";
+    const wmTextEl = byId("render-watermark-text");
+    const reviewWatermarkText = wmTextEl ? wmTextEl.value.trim() : "";
+    const wmOpacityEl = byId("render-watermark-opacity");
+    const reviewWatermarkOpacity = wmOpacityEl ? Number(wmOpacityEl.value) : 0.35;
 
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
@@ -4630,6 +4667,8 @@ async function buildOrExecuteRender(execute) {
         loudness_preset: fairlightPayload.loudness_preset,
         dialogue_eq: fairlightPayload.dialogue_eq,
         timecode_burnin: timecodeBurnin,
+        review_watermark_text: reviewWatermarkText,
+        review_watermark_opacity: reviewWatermarkOpacity,
         prefer_hw: preferHw
       });
       renderRemoteJobTelemetry(submitData);
@@ -4685,6 +4724,8 @@ async function buildOrExecuteRender(execute) {
       loudness_preset: fairlightPayload.loudness_preset,
       dialogue_eq: fairlightPayload.dialogue_eq,
       timecode_burnin: timecodeBurnin,
+      review_watermark_text: reviewWatermarkText,
+      review_watermark_opacity: reviewWatermarkOpacity,
       prefer_hw: preferHw,
       execute
     };
@@ -4722,6 +4763,12 @@ async function buildOrExecuteRender(execute) {
       ["Pixel Format", plan.pix_fmt],
       ["MP4 Faststart", String(plan.faststart)],
       [t("render.plan.timecodeBurnin"), plan.timecode_burnin || "off"],
+      [
+        t("render.plan.reviewWatermark"),
+        plan.review_watermark_text
+          ? `${plan.review_watermark_text} (${Math.round((plan.review_watermark_opacity ?? 0.35) * 100)}%)`
+          : "off"
+      ],
       ["Video Filter", plan.video_filter || t("common.none")],
       ["Audio Filter", plan.audio_filter || t("common.none")]
     ]);
@@ -8380,6 +8427,25 @@ function wireEvents() {
     }
   });
   byId("btn-generate-sample-clip").addEventListener("click", generateSampleClip);
+  const wmTextInput = byId("render-watermark-text");
+  if (wmTextInput) {
+    wmTextInput.addEventListener("input", syncReviewWatermarkControlsUI);
+  }
+  const wmOpacitySlider = byId("render-watermark-opacity");
+  if (wmOpacitySlider) {
+    wmOpacitySlider.addEventListener("input", syncReviewWatermarkControlsUI);
+    wmOpacitySlider.addEventListener("change", syncReviewWatermarkControlsUI);
+  }
+  for (const btn of document.querySelectorAll(".watermark-preset-btn[data-watermark-preset]")) {
+    btn.addEventListener("click", () => {
+      const presetVal = btn.getAttribute("data-watermark-preset") || "";
+      if (wmTextInput) {
+        wmTextInput.value = presetVal;
+      }
+      syncReviewWatermarkControlsUI();
+    });
+  }
+  syncReviewWatermarkControlsUI();
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {

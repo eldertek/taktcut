@@ -1078,6 +1078,26 @@ export function createApiClient() {
             `drawtext=timecode='00\\:00\\:00\\:00':rate=${rateStr}:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.65:${tcPos}`
           );
         }
+        const rawWmText = typeof body.review_watermark_text === "string" ? body.review_watermark_text.trim() : "";
+        if (rawWmText.length > 40) {
+          throw new Error("review_watermark_text exceeds maximum length of 40 characters");
+        }
+        if (rawWmText && !/^[A-Za-z0-9 _.,-]+$/.test(rawWmText)) {
+          throw new Error("review_watermark_text contains unsupported characters");
+        }
+        const rawWmOpacity =
+          body.review_watermark_opacity !== null && body.review_watermark_opacity !== undefined
+            ? Number(body.review_watermark_opacity)
+            : 0.35;
+        if (!Number.isFinite(rawWmOpacity) || rawWmOpacity < 0.15 || rawWmOpacity > 0.80) {
+          throw new Error("review_watermark_opacity must be within [0.15, 0.80]");
+        }
+        if (rawWmText) {
+          const escWm = escapeDrawtextClient(rawWmText);
+          vfParts.push(
+            `drawtext=text='${escWm}':fontsize=42:fontcolor=white@${rawWmOpacity.toFixed(2)}:x=(w-text_w)/2:y=(h-text_h)/2`
+          );
+        }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
         const hasLoudnessPreset =
           body.loudness_preset !== null && body.loudness_preset !== undefined;
@@ -1169,6 +1189,8 @@ export function createApiClient() {
             loudness_preset: fairlight.loudness_preset,
             dialogue_eq: fairlight.dialogue_eq,
             timecode_burnin: tcModeRaw,
+            review_watermark_text: rawWmText,
+            review_watermark_opacity: rawWmOpacity,
             target_width: targetWidth,
             target_height: targetHeight,
             framing_mode: framingMode,

@@ -22,6 +22,7 @@ from taktcut.fx import (
     normalize_fx_node,
 )
 from taktcut.models import (
+    REVIEW_WATERMARK_OPACITY_DEFAULT,
     BpmGridConfig,
     DialogueEqPresetId,
     LoudnessPresetId,
@@ -43,6 +44,8 @@ from taktcut.render import (
     FramingParams,
     validate_dialogue_eq,
     validate_loudness_preset,
+    validate_review_watermark_opacity,
+    validate_review_watermark_text,
     validate_timecode_burnin,
 )
 from taktcut.subtitles import SubtitleTrackParams
@@ -161,6 +164,8 @@ class ProjectDeliveryState(BaseModel):
     loudness_preset: LoudnessPresetId = "off"
     dialogue_eq: DialogueEqPresetId = "off"
     timecode_burnin: TimecodeBurnInPosition = "off"
+    review_watermark_text: str = ""
+    review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     lut_path: str = ""
     input_path: str = ".taktcut-samples/sample_rec709.mp4"
     output_path: str = "renders/delivery_web.mp4"
@@ -214,6 +219,16 @@ class ProjectDeliveryState(BaseModel):
     @classmethod
     def _validate_timecode_burnin(cls, raw: Any) -> TimecodeBurnInPosition:
         return validate_timecode_burnin(raw)
+
+    @field_validator("review_watermark_text", mode="before")
+    @classmethod
+    def _validate_review_watermark_text(cls, raw: Any) -> str:
+        return validate_review_watermark_text(raw)
+
+    @field_validator("review_watermark_opacity", mode="before")
+    @classmethod
+    def _validate_review_watermark_opacity(cls, raw: Any) -> float:
+        return validate_review_watermark_opacity(raw)
 
     @field_validator("fps", mode="before")
     @classmethod

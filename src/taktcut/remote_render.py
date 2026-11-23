@@ -32,6 +32,7 @@ from taktcut import __version__
 from taktcut.color import ColorGradeParams, bake_cdl_to_cube, parse_cube_lut
 from taktcut.fx import ChromaKeyParams, FxNode, compile_fx_filtergraph
 from taktcut.models import (
+    REVIEW_WATERMARK_OPACITY_DEFAULT,
     AscCdlParams,
     ClipTransformParams,
     DialogueEqPresetId,
@@ -52,6 +53,8 @@ from taktcut.render import (
     probe_hardware_capabilities,
     validate_dialogue_eq,
     validate_loudness_preset,
+    validate_review_watermark_opacity,
+    validate_review_watermark_text,
     validate_timecode_burnin,
 )
 from taktcut.security import (
@@ -228,6 +231,8 @@ class RemoteRenderJobRequest(BaseModel):
     loudness_preset: LoudnessPresetId = "off"
     dialogue_eq: DialogueEqPresetId = "off"
     timecode_burnin: TimecodeBurnInPosition = "off"
+    review_watermark_text: str = ""
+    review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     prefer_hw: bool = True
     chroma_key: ChromaKeyParams | None = None
     fx_stack: list[FxNode] = Field(default_factory=list)
@@ -256,6 +261,16 @@ class RemoteRenderJobRequest(BaseModel):
     @classmethod
     def _validate_timecode_burnin(cls, raw: Any) -> TimecodeBurnInPosition:
         return validate_timecode_burnin(raw)
+
+    @field_validator("review_watermark_text", mode="before")
+    @classmethod
+    def _validate_review_watermark_text(cls, raw: Any) -> str:
+        return validate_review_watermark_text(raw)
+
+    @field_validator("review_watermark_opacity", mode="before")
+    @classmethod
+    def _validate_review_watermark_opacity(cls, raw: Any) -> float:
+        return validate_review_watermark_opacity(raw)
 
     @field_validator("input_filename", "output_filename")
     @classmethod
@@ -537,6 +552,8 @@ class RemoteRenderState:
             loudness_preset=req.loudness_preset,
             dialogue_eq=req.dialogue_eq,
             timecode_burnin=req.timecode_burnin,
+            review_watermark_text=req.review_watermark_text,
+            review_watermark_opacity=req.review_watermark_opacity,
             prefer_hw=req.prefer_hw,
             caps=caps,
         )

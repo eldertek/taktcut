@@ -61,6 +61,7 @@ from taktcut.fx import (
     list_fx_presets,
 )
 from taktcut.models import (
+    REVIEW_WATERMARK_OPACITY_DEFAULT,
     AscCdlParams,
     ClipTransformParams,
     DialogueEqPresetId,
@@ -113,6 +114,8 @@ from taktcut.render import (
     probe_hardware_capabilities,
     validate_dialogue_eq,
     validate_loudness_preset,
+    validate_review_watermark_opacity,
+    validate_review_watermark_text,
     validate_timecode_burnin,
 )
 from taktcut.subtitles import (
@@ -435,6 +438,18 @@ def _extract_timecode_burnin(payload: dict[str, Any]) -> TimecodeBurnInPosition:
     if raw is None or raw == "":
         return "off"
     return validate_timecode_burnin(raw)
+
+
+def _extract_review_watermark(payload: dict[str, Any]) -> tuple[str, float]:
+    raw_text = payload.get("review_watermark_text")
+    text = validate_review_watermark_text(raw_text) if raw_text is not None else ""
+    raw_opacity = payload.get("review_watermark_opacity")
+    opacity = (
+        validate_review_watermark_opacity(raw_opacity)
+        if raw_opacity is not None
+        else REVIEW_WATERMARK_OPACITY_DEFAULT
+    )
+    return text, opacity
 
 
 def _build_retime_params_from_payload(
@@ -1518,6 +1533,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             timecode_burnin = _extract_timecode_burnin(payload)
+            review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1560,6 +1576,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 loudness_preset=loudness_preset,
                 dialogue_eq=dialogue_eq,
                 timecode_burnin=timecode_burnin,
+                review_watermark_text=review_watermark_text,
+                review_watermark_opacity=review_watermark_opacity,
                 prefer_hw=prefer_hw,
                 caps=caps,
                 delivery_preset=delivery_preset,
@@ -1943,6 +1961,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             timecode_burnin = _extract_timecode_burnin(payload)
+            review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1980,6 +1999,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 loudness_preset=loudness_preset or "off",
                 dialogue_eq=dialogue_eq or "off",
                 timecode_burnin=timecode_burnin,
+                review_watermark_text=review_watermark_text,
+                review_watermark_opacity=review_watermark_opacity,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
             job = client.submit_job(job_req)

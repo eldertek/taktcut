@@ -2432,6 +2432,44 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert "drawtext=" in tc_argv
                 assert "timecode=" in tc_argv
 
+                # Verify Client-Review Watermark Overlay control, presets, opacity, & touch target
+                wm_input = page.locator("#render-watermark-text")
+                wm_preset_draft = page.locator('[data-watermark-preset="DRAFT - CLIENT REVIEW"]')
+                wm_opacity = page.locator("#render-watermark-opacity")
+                assert wm_input.is_visible() is True
+                assert wm_preset_draft.is_visible() is True
+                assert wm_opacity.is_visible() is True
+                if width <= 820:
+                    for loc in (wm_input, wm_preset_draft, wm_opacity):
+                        box = loc.bounding_box()
+                        assert box is not None and box["height"] >= 44
+                wm_preset_draft.click()
+                assert wm_input.input_value() == "DRAFT - CLIENT REVIEW"
+                assert wm_preset_draft.get_attribute("aria-pressed") == "true"
+                wm_opacity.fill("0.50")
+                wm_opacity.dispatch_event("input")
+                assert page.locator("#render-watermark-opacity-value").text_content() == "0.50"
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('DRAFT - CLIENT REVIEW')"
+                )
+                wm_argv = page.locator("#render-argv-output").text_content() or ""
+                wm_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "DRAFT - CLIENT REVIEW" in wm_argv
+                assert "white@0.50" in wm_argv
+                assert (
+                    "text='DRAFT - CLIENT REVIEW':fontsize=42"
+                    ":fontcolor=white@0.50:x=(w-text_w)/2:y=(h-text_h)/2"
+                ) in wm_kv
+
+                wm_render_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert wm_render_overflow <= 0, (
+                    f"Deliver watermark overflow at {width}x{height}: {wm_render_overflow}px"
+                )
+
                 # Verify Save Project / Open Project controls and round-trip in top bar
                 assert page.locator("#btn-save-project").is_visible() is True
                 assert page.locator("#btn-open-project").is_visible() is True
@@ -3456,5 +3494,72 @@ def test_ui_render_plan_timecode_burnin_endpoint_and_assets(
         "render.timecode.bottom_center",
         "render.timecode.bottom_right",
         "render.plan.timecodeBurnin",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+
+def test_ui_render_plan_review_watermark_endpoint_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    status, _, raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/wm_review.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "review_watermark_text": "DRAFT - CLIENT REVIEW",
+            "review_watermark_opacity": 0.45,
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert status == 200
+    plan = json.loads(raw.decode("utf-8"))["plan"]
+    assert plan["review_watermark_text"] == "DRAFT - CLIENT REVIEW"
+    assert plan["review_watermark_opacity"] == pytest.approx(0.45)
+    assert (
+        "text='DRAFT - CLIENT REVIEW':fontsize=42"
+        ":fontcolor=white@0.45:x=(w-text_w)/2:y=(h-text_h)/2"
+    ) in plan["video_filter"]
+
+    for bad_payload in (
+        {"review_watermark_text": "A" * 41},
+        {"review_watermark_text": "DRAFT;evil"},
+        {"review_watermark_text": "CLIENT:REVIEW"},
+        {"review_watermark_opacity": 0.10},
+        {"review_watermark_opacity": 0.90},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": "renders/wm_bad.mp4",
+                "execute": False,
+                **bad_payload,
+            },
+        )
+        assert bad_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="render-watermark-text"' in html_text
+    assert 'id="render-watermark-opacity"' in html_text
+    assert 'data-watermark-preset="DRAFT - CLIENT REVIEW"' in html_text
+    assert 'data-watermark-preset="CONFIDENTIAL"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.label.reviewWatermark",
+        "render.watermark.placeholder",
+        "render.watermark.preset.off",
+        "render.watermark.preset.draft",
+        "render.watermark.preset.confidential",
+        "render.label.watermarkOpacity",
+        "render.plan.reviewWatermark",
     ):
         assert i18n_text.count(f'"{key}"') == 2
