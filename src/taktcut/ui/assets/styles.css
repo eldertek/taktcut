@@ -2611,6 +2611,85 @@ input[type="range"] {
   min-width: 0;
 }
 
+/* TIMELINE CLIP LABEL COLOR INSPECTOR */
+.clip-label-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.clip-label-color-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.clip-label-color-group.is-disabled {
+  opacity: 0.55;
+}
+
+.clip-label-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  border: 1px solid var(--border-inner);
+  font-size: 10px;
+}
+
+.clip-label-pill.is-active {
+  background: var(--bg-hover);
+  border-color: var(--accent-amber);
+  color: var(--text-primary);
+}
+
+.clip-label-pill:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: 1px;
+}
+
+.clip-label-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.clip-label-swatch.is-default {
+  background: linear-gradient(135deg, #4b5563 0%, #4b5563 45%, #1f2937 45%, #1f2937 100%);
+  border: 1px solid #6b7280;
+}
+
+.clip-label-swatch.is-blue {
+  background: #4c8dff;
+}
+
+.clip-label-swatch.is-teal {
+  background: #2dd4bf;
+}
+
+.clip-label-swatch.is-amber {
+  background: #f59e0b;
+}
+
+.clip-label-swatch.is-rose {
+  background: #f43f5e;
+}
+
+.clip-label-swatch.is-emerald {
+  background: #34d399;
+}
+
 /* TIMELINE MARKERS INSPECTOR & LIST */
 .marker-inspector-dock {
   display: flex;
@@ -3256,6 +3335,18 @@ input[type="range"] {
   .transform-preset-btn,
   .transform-inspector-dock .btn-mini {
     min-height: 44px;
+  }
+  .clip-label-color-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .clip-label-pill {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: flex-start;
+    padding: 6px 10px;
+    font-size: 11px;
   }
   #panel-fx .btn,
   #panel-fx .btn-mini,

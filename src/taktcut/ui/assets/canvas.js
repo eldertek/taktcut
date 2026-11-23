@@ -1,4 +1,5 @@
 import {
+  CLIP_LABEL_COLORS,
   MARKER_COLOR_HEX,
   clampSplitWipePercent,
   computeBpmBeatFrames,
@@ -12,6 +13,7 @@ import {
   getTransitionPresetName,
   getTransitionShortTag,
   isClipTransformIdentity,
+  normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition
@@ -2585,6 +2587,18 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.fillStyle = baseFill;
       roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
       ctx.fill();
+
+      const labelColorId = normalizeClipLabelColor(clip.label_color);
+      const labelMeta = CLIP_LABEL_COLORS[labelColorId];
+      if (labelMeta && labelMeta.hex && drawW > 4) {
+        ctx.save();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+        ctx.clip();
+        ctx.fillStyle = trackAudiblyMuted ? labelMeta.mutedHex : labelMeta.hex;
+        ctx.fillRect(drawX, clipY, drawW, 4);
+        ctx.restore();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+      }
 
       ctx.strokeStyle = borderCol;
       ctx.lineWidth = isSelected ? 2 : 1;

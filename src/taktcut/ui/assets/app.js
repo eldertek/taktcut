@@ -100,6 +100,7 @@ import {
   isTrackAudiblyMuted,
   normalizeAutoDuckParams,
   normalizeClipAudio,
+  normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
@@ -109,6 +110,7 @@ import {
   removeStillById,
   rippleDeleteClipInDocument,
   sanitizeStillDataUrl,
+  setClipLabelColor,
   setInOutRange,
   splitClipInDocument,
   splitClipsAtPlayhead,
@@ -494,6 +496,10 @@ function setLanguage(lang) {
   const wmInput = byId("render-watermark-text");
   if (wmInput) {
     wmInput.placeholder = t("render.watermark.placeholder");
+  }
+  const clipLabelGroup = byId("clip-label-color-group");
+  if (clipLabelGroup) {
+    clipLabelGroup.setAttribute("aria-label", t("timeline.clipLabel.ariaGroup"));
   }
   updateTransportStatusUI();
   updateIoRangeUI();
@@ -1715,6 +1721,28 @@ function renderTimelineMarkerInspector() {
   }
 }
 
+function renderTimelineClipLabelInspector() {
+  const group = byId("clip-label-color-group");
+  const badge = byId("clip-label-color-badge");
+  if (!group) return;
+  const info = getSelectedClipTrack();
+  const hasClip = Boolean(info && info.clip);
+  group.classList.toggle("is-disabled", !hasClip);
+  const activeColor = hasClip ? normalizeClipLabelColor(info.clip.label_color) : "default";
+  if (badge) {
+    badge.textContent = hasClip
+      ? t(`timeline.clipLabel.${activeColor}`)
+      : t("timeline.clipLabel.noneSelected");
+  }
+  for (const btn of group.querySelectorAll("[data-clip-label-color]")) {
+    const colorId = btn.getAttribute("data-clip-label-color");
+    const isSel = hasClip && colorId === activeColor;
+    btn.disabled = !hasClip;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+}
+
 function renderTimelineSelection() {
   const box = byId("timeline-selection-detail");
   const rippleBtn = byId("btn-clip-ripple-delete");
@@ -1724,6 +1752,7 @@ function renderTimelineSelection() {
   }
   if (!sel) {
     box.replaceChildren(dom("span", "kv-val", t("timeline.empty.selection")));
+    renderTimelineClipLabelInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
     renderTimelineAudioInspector();
@@ -1737,6 +1766,7 @@ function renderTimelineSelection() {
     const retimeNorm = normalizeClipRetime(c);
     const transformNorm = normalizeClipTransform(c);
     const transNorm = normalizeClipTransition(c);
+    const labelColorId = normalizeClipLabelColor(c.label_color);
     const srcFps = c.source_fps
       ? c.source_fps.den === 1
         ? String(c.source_fps.num)
@@ -1752,6 +1782,7 @@ function renderTimelineSelection() {
     renderKv(box, [
       ["Type", sel.kind === "transition" ? `Transition (${c.media_type.toUpperCase()})` : `Clip (${c.media_type.toUpperCase()})`],
       ["Name", c.name],
+      ["Label", t(`timeline.clipLabel.${labelColorId}`)],
       ["Track", `${c.media_type === "audio" ? "A" : "V"}${c.track_index}`],
       ["Range", `${c.start_frame}f .. ${c.start_frame + c.duration_frames}f (${c.duration_frames}f)`],
       ["Transform", transformLabel],
@@ -1761,6 +1792,7 @@ function renderTimelineSelection() {
       ["Source In", `${c.source_in_frame}f (${srcFps})`],
       ["Source Path", c.source_path || t("common.none")]
     ]);
+    renderTimelineClipLabelInspector();
     renderTimelineMarkerInspector();
     renderTimelineTransformInspector();
     renderTimelineAudioInspector();
@@ -1777,6 +1809,7 @@ function renderTimelineSelection() {
     ["Color", mk.color],
     ["Note", mk.note || t("common.none")]
   ]);
+  renderTimelineClipLabelInspector();
   renderTimelineMarkerInspector();
   renderTimelineTransformInspector();
   renderTimelineAudioInspector();
@@ -7907,6 +7940,30 @@ function wireTimelineMarkerAndBpmControls() {
   }
 }
 
+function wireTimelineClipLabelControls() {
+  const group = byId("clip-label-color-group");
+  if (!group) return;
+  for (const btn of group.querySelectorAll("[data-clip-label-color]")) {
+    btn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      const colorId = btn.getAttribute("data-clip-label-color");
+      if (!info || !colorId || !state.timelineDoc) return;
+      const clipId =
+        info.clip && info.clip.id != null
+          ? String(info.clip.id)
+          : `${info.ref.trackKind}:${info.ref.trackIndex}:${info.ref.clipIndex}`;
+      const res = setClipLabelColor(state.timelineDoc, clipId, colorId);
+      if (res.changed && res.clip) {
+        const selKind =
+          state.timelineSelected && state.timelineSelected.kind === "transition"
+            ? "transition"
+            : "clip";
+        commitTimelineMutation(res.doc, { kind: selKind, data: res.clip });
+      }
+    });
+  }
+}
+
 function wireEvents() {
   byId("status-banner-close").addEventListener("click", hideBanner);
   const updateBtn = byId("update-banner-btn");
@@ -8091,6 +8148,7 @@ function wireEvents() {
   wireClipRetimeInspector();
   wireClipTransformInspector();
   wireClipTransitionInspector();
+  wireTimelineClipLabelControls();
   wireTimelineMarkerAndBpmControls();
 
   // FX page events

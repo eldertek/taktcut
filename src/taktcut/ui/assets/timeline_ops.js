@@ -84,6 +84,53 @@ export const MARKER_COLOR_HEX = {
   Purple: "#a371f7"
 };
 
+export const CLIP_LABEL_COLORS = Object.freeze({
+  default: Object.freeze({
+    id: "default",
+    label: "Default",
+    label_fr: "Par défaut",
+    hex: null,
+    mutedHex: null
+  }),
+  blue: Object.freeze({
+    id: "blue",
+    label: "A-Roll",
+    label_fr: "A-Roll",
+    hex: "#4c8dff",
+    mutedHex: "#31538f"
+  }),
+  teal: Object.freeze({
+    id: "teal",
+    label: "B-Roll",
+    label_fr: "B-Roll",
+    hex: "#2dd4bf",
+    mutedHex: "#207b70"
+  }),
+  amber: Object.freeze({
+    id: "amber",
+    label: "VFX/GFX",
+    label_fr: "VFX/GFX",
+    hex: "#f59e0b",
+    mutedHex: "#926111"
+  }),
+  rose: Object.freeze({
+    id: "rose",
+    label: "Review",
+    label_fr: "Révision",
+    hex: "#f43f5e",
+    mutedHex: "#8d283b"
+  }),
+  emerald: Object.freeze({
+    id: "emerald",
+    label: "Audio",
+    label_fr: "Audio",
+    hex: "#34d399",
+    mutedHex: "#247d5d"
+  })
+});
+
+export const CLIP_LABEL_COLOR_IDS = Object.freeze(Object.keys(CLIP_LABEL_COLORS));
+
 export const TRANSITION_PRESETS = [
   { id: "fade", name: "Cross Dissolve", shortTag: "FADE" },
   { id: "fadeblack", name: "Dip to Black", shortTag: "DIP BLK" },
@@ -1631,6 +1678,89 @@ export function updateClipTransformInDocument(doc, trackKind, trackIndex, clipIn
   const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
   if (!found) return { doc, clip: null, changed: false };
   found.clip.transform = isClipTransformIdentity(nextNorm) ? null : nextNorm;
+  return { doc: nextDoc, clip: found.clip, changed: true };
+}
+
+export function isValidClipLabelColor(colorId) {
+  return (
+    typeof colorId === "string" &&
+    Object.prototype.hasOwnProperty.call(CLIP_LABEL_COLORS, colorId)
+  );
+}
+
+export function normalizeClipLabelColor(raw) {
+  if (typeof raw !== "string") return "default";
+  const clean = raw.trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(CLIP_LABEL_COLORS, clean) ? clean : "default";
+}
+
+function _resolveClipLocationById(doc, clipId) {
+  if (!doc || !Array.isArray(doc.tracks) || clipId == null) return null;
+  if (typeof clipId === "object") {
+    if (
+      typeof clipId.trackKind === "string" &&
+      Number.isInteger(clipId.trackIndex) &&
+      Number.isInteger(clipId.clipIndex)
+    ) {
+      return findTrackAndClip(doc, clipId.trackKind, clipId.trackIndex, clipId.clipIndex)
+        ? {
+            trackKind: clipId.trackKind,
+            trackIndex: clipId.trackIndex,
+            clipIndex: clipId.clipIndex
+          }
+        : null;
+    }
+    return findClipIndex(doc, clipId);
+  }
+  if (typeof clipId !== "string" && typeof clipId !== "number") return null;
+  const needle = String(clipId);
+  if (!needle) return null;
+  for (const trk of doc.tracks) {
+    const clips = trk && Array.isArray(trk.clips) ? trk.clips : [];
+    for (let i = 0; i < clips.length; i++) {
+      const c = clips[i];
+      if (c && c.id != null && String(c.id) === needle) {
+        return { trackKind: trk.kind, trackIndex: trk.index, clipIndex: i };
+      }
+    }
+  }
+  const compositeMatch = /^(video|audio):(\d+):(\d+)$/.exec(needle);
+  if (compositeMatch) {
+    const trackKind = compositeMatch[1];
+    const trackIndex = Number(compositeMatch[2]);
+    const clipIndex = Number(compositeMatch[3]);
+    if (findTrackAndClip(doc, trackKind, trackIndex, clipIndex)) {
+      return { trackKind, trackIndex, clipIndex };
+    }
+  }
+  return null;
+}
+
+export function setClipLabelColor(doc, clipId, colorId) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return { doc, clip: null, changed: false };
+  }
+  if (!isValidClipLabelColor(colorId)) {
+    return { doc, clip: null, changed: false };
+  }
+  const loc = _resolveClipLocationById(doc, clipId);
+  if (!loc) {
+    return { doc, clip: null, changed: false };
+  }
+  const foundOrig = findTrackAndClip(doc, loc.trackKind, loc.trackIndex, loc.clipIndex);
+  if (!foundOrig) {
+    return { doc, clip: null, changed: false };
+  }
+  const origColor = normalizeClipLabelColor(foundOrig.clip.label_color);
+  if (colorId === origColor) {
+    return { doc, clip: foundOrig.clip, changed: false };
+  }
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, loc.trackKind, loc.trackIndex, loc.clipIndex);
+  if (!found) {
+    return { doc, clip: null, changed: false };
+  }
+  found.clip.label_color = colorId;
   return { doc: nextDoc, clip: found.clip, changed: true };
 }
 

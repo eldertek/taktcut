@@ -200,6 +200,39 @@
                 </div>
                 <div id="timeline-selection-detail" class="kv-grid mono"></div>
 
+              <div id="timeline-clip-label-inspector" class="clip-label-inspector-dock">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.clipLabel.title">Clip Color Label</span>
+                  <span id="clip-label-color-badge" class="nle-tag mono" data-i18n="timeline.clipLabel.noneSelected">No clip</span>
+                </div>
+                <div id="clip-label-color-group" class="clip-label-color-group" role="group" aria-label="Clip color label">
+                  <button type="button" class="btn btn-mini clip-label-pill" data-clip-label-color="default" aria-pressed="false" disabled>
+                    <span class="clip-label-swatch is-default" aria-hidden="true"></span>
+                    <span data-i18n="timeline.clipLabel.default">Default</span>
+                  </button>
+                  <button type="button" class="btn btn-mini clip-label-pill" data-clip-label-color="blue" aria-pressed="false" disabled>
+                    <span class="clip-label-swatch is-blue" aria-hidden="true"></span>
+                    <span data-i18n="timeline.clipLabel.blue">A-Roll</span>
+                  </button>
+                  <button type="button" class="btn btn-mini clip-label-pill" data-clip-label-color="teal" aria-pressed="false" disabled>
+                    <span class="clip-label-swatch is-teal" aria-hidden="true"></span>
+                    <span data-i18n="timeline.clipLabel.teal">B-Roll</span>
+                  </button>
+                  <button type="button" class="btn btn-mini clip-label-pill" data-clip-label-color="amber" aria-pressed="false" disabled>
+                    <span class="clip-label-swatch is-amber" aria-hidden="true"></span>
+                    <span data-i18n="timeline.clipLabel.amber">VFX/GFX</span>
+                  </button>
+                  <button type="button" class="btn btn-mini clip-label-pill" data-clip-label-color="rose" aria-pressed="false" disabled>
+                    <span class="clip-label-swatch is-rose" aria-hidden="true"></span>
+                    <span data-i18n="timeline.clipLabel.rose">Review</span>
+                  </button>
+                  <button type="button" class="btn btn-mini clip-label-pill" data-clip-label-color="emerald" aria-pressed="false" disabled>
+                    <span class="clip-label-swatch is-emerald" aria-hidden="true"></span>
+                    <span data-i18n="timeline.clipLabel.emerald">Audio</span>
+                  </button>
+                </div>
+              </div>
+
               <div id="timeline-marker-inspector" class="marker-inspector-dock is-hidden">
                 <div class="pane-subheader">
                   <span data-i18n="timeline.marker.editorTitle">Selected Marker</span>

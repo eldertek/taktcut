@@ -933,6 +933,8 @@ import {{
   BPM_DEFAULT,
   BPM_MAX,
   BPM_MIN,
+  CLIP_LABEL_COLORS,
+  CLIP_LABEL_COLOR_IDS,
   DELIVERY_PRESETS,
   MARKER_COLORS,
   SHUTTLE_MAX_SPEED,
@@ -976,8 +978,10 @@ import {{
   getDeliveryPresetClient,
   isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
+  isValidClipLabelColor,
   normalizeBpmConfig,
   normalizeClipAudio,
+  normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransition,
   normalizeFairlightAudioParams,
@@ -987,6 +991,7 @@ import {{
   sanitizeStillDataUrl,
   normalizeSplitWipeState,
   rippleDeleteClipInDocument,
+  setClipLabelColor,
   setInOutRange,
   splitClipInDocument,
   splitClipsAtPlayhead,
@@ -2051,6 +2056,90 @@ assert.ok(
       'start="24024/24000s" duration="48048/24000s" />'
   )
 );
+
+// Cycle #57: Clip Label Colors + setClipLabelColor
+assert.deepEqual(
+  CLIP_LABEL_COLOR_IDS,
+  ["default", "blue", "teal", "amber", "rose", "emerald"]
+);
+assert.equal(CLIP_LABEL_COLORS.default.hex, null);
+assert.equal(CLIP_LABEL_COLORS.blue.label, "A-Roll");
+assert.equal(CLIP_LABEL_COLORS.teal.label, "B-Roll");
+assert.equal(CLIP_LABEL_COLORS.amber.label, "VFX/GFX");
+assert.equal(CLIP_LABEL_COLORS.rose.label, "Review");
+assert.equal(CLIP_LABEL_COLORS.emerald.label, "Audio");
+assert.equal(isValidClipLabelColor("blue"), true);
+assert.equal(isValidClipLabelColor("purple"), false);
+assert.equal(isValidClipLabelColor("__proto__"), false);
+assert.equal(isValidClipLabelColor("constructor"), false);
+assert.equal(normalizeClipLabelColor("  TEAL "), "teal");
+assert.equal(normalizeClipLabelColor("unknown"), "default");
+
+const labelDocBase = {{
+  name: "Label_Test",
+  source_format: "drt",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [
+        {{
+          id: "clip-a",
+          name: "A_Roll_01",
+          track_index: 1,
+          media_type: "video",
+          start_frame: 0,
+          duration_frames: 100,
+          source_in_frame: 0
+        }},
+        {{
+          name: "B_Roll_01",
+          track_index: 1,
+          media_type: "video",
+          start_frame: 100,
+          duration_frames: 100,
+          source_in_frame: 0
+        }}
+      ]
+    }}
+  ],
+  markers: []
+}};
+
+const lblSetBlue = setClipLabelColor(labelDocBase, "clip-a", "blue");
+assert.equal(lblSetBlue.changed, true);
+assert.equal(lblSetBlue.clip.label_color, "blue");
+assert.equal(labelDocBase.tracks[0].clips[0].label_color, undefined);
+
+const lblRepeat = setClipLabelColor(lblSetBlue.doc, "clip-a", "blue");
+assert.equal(lblRepeat.changed, false);
+assert.equal(lblRepeat.doc, lblSetBlue.doc);
+
+const lblComposite = setClipLabelColor(lblSetBlue.doc, "video:1:1", "teal");
+assert.equal(lblComposite.changed, true);
+assert.equal(lblComposite.doc.tracks[0].clips[1].label_color, "teal");
+assert.equal(lblComposite.doc.tracks[0].clips[0].label_color, "blue");
+
+const lblResetDefault = setClipLabelColor(lblComposite.doc, "clip-a", "default");
+assert.equal(lblResetDefault.changed, true);
+assert.equal(lblResetDefault.clip.label_color, "default");
+
+const lblBadColor = setClipLabelColor(labelDocBase, "clip-a", "purple");
+assert.equal(lblBadColor.changed, false);
+assert.equal(lblBadColor.doc, labelDocBase);
+
+const lblProtoColor = setClipLabelColor(labelDocBase, "clip-a", "__proto__");
+assert.equal(lblProtoColor.changed, false);
+assert.equal(lblProtoColor.doc, labelDocBase);
+
+const lblBadClip = setClipLabelColor(labelDocBase, "missing-clip", "amber");
+assert.equal(lblBadClip.changed, false);
+assert.equal(lblBadClip.doc, labelDocBase);
 """
     proc = subprocess.run(
         [node, "--input-type=module"],
@@ -2498,6 +2587,22 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert frame_down != frame_mid
                     assert page.locator("#program-tc").text_content() != "00:00:00:00"
 
+                    # Verify Clip Label Color selector, badge, and undo/redo
+                    teal_pill = page.locator(
+                        '#clip-label-color-group [data-clip-label-color="teal"]'
+                    )
+                    teal_pill.click()
+                    assert teal_pill.get_attribute("aria-pressed") == "true"
+                    assert page.locator("#clip-label-color-badge").text_content() == "B-Roll"
+                    sel_detail = (
+                        page.locator("#timeline-selection-detail").text_content() or ""
+                    )
+                    assert "B-Roll" in sel_detail
+                    page.locator("#btn-timeline-undo").click()
+                    assert page.locator("#clip-label-color-badge").text_content() == "Default"
+                    page.locator("#btn-timeline-redo").click()
+                    assert page.locator("#clip-label-color-badge").text_content() == "B-Roll"
+
                     # Verify Clip Audio Gain / Fade Controls & Track Mute/Solo Mixer
                     page.locator("#clip-audio-gain-num").fill("-6.0")
                     page.locator("#clip-audio-gain-num").press("Enter")
@@ -2581,6 +2686,12 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator("#bpm-grid-offset").press("Enter")
 
                 if width == 375:
+                    pill_box = page.locator(
+                        '#clip-label-color-group [data-clip-label-color="blue"]'
+                    ).bounding_box()
+                    assert pill_box is not None and pill_box["height"] >= 44, (
+                        f"Expected clip label pill >= 44px on mobile, got {pill_box}"
+                    )
                     page.locator("#btn-bpm-grid").click()
                     page.locator("#btn-timeline-add-marker").click()
                     mobile_overflow = page.evaluate(
