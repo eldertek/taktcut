@@ -3832,6 +3832,97 @@ input[type="range"] {
   word-break: break-all;
 }
 
+/* DELIVER FAIRLIGHT VOICE CLEANUP */
+.voice-cleanup-deliver-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 8px;
+  padding: 10px 12px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.voice-cleanup-deliver-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.voice-cleanup-deliver-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.voice-cleanup-deliver-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.voice-cleanup-toggle-label {
+  margin: 0;
+}
+
+.voice-cleanup-deliver-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.voice-cleanup-deliver-preset-btn {
+  padding: 4px 9px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.voice-cleanup-deliver-preset-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-amber);
+}
+
+.voice-cleanup-deliver-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #f4a46b;
+}
+
+.voice-cleanup-deliver-controls-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  min-width: 0;
+}
+
+.voice-cleanup-deliver-slider-col {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.voice-cleanup-deliver-preview {
+  max-height: 64px;
+  overflow-x: auto;
+  overflow-y: auto;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* DELIVER ESTIMATED EXPORT FILE SIZE READOUT */
 .deliver-estimate-bar {
   display: flex;
@@ -4051,19 +4142,22 @@ input[type="range"] {
   #panel-render .reframe-deliver-reset-btn,
   #panel-render .film-grain-deliver-preset-btn,
   #panel-render .vignette-deliver-preset-btn,
-  #panel-render .vignette-deliver-select {
+  #panel-render .vignette-deliver-select,
+  #panel-render .voice-cleanup-deliver-preset-btn {
     min-height: 45px;
   }
   #panel-render .retime-deliver-preset-btn,
   #panel-render .reframe-deliver-preset-btn,
   #panel-render .film-grain-deliver-preset-btn,
-  #panel-render .vignette-deliver-preset-btn {
+  #panel-render .vignette-deliver-preset-btn,
+  #panel-render .voice-cleanup-deliver-preset-btn {
     min-width: 44px;
   }
   .retime-deliver-speed-row,
   .reframe-deliver-pan-row,
   .film-grain-deliver-controls-row,
-  .vignette-deliver-controls-row {
+  .vignette-deliver-controls-row,
+  .voice-cleanup-deliver-controls-row {
     grid-template-columns: minmax(0, 1fr);
   }
   .deliver-chapters-actions .btn {

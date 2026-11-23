@@ -795,6 +795,77 @@ function compileVignetteClient(payload) {
   };
 }
 
+const VOICE_CLEANUP_ALLOWED_PRESETS_DEMO = new Set([
+  "youtube_voice",
+  "podcast_warm",
+  "broadcast_crisp",
+  "custom"
+]);
+
+function compileVoiceCleanupClient(payload) {
+  const src = payload && payload.voice_cleanup ? payload.voice_cleanup : payload || {};
+  const enabled = src.enabled !== undefined ? src.enabled : false;
+  if (typeof enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const rawPreset =
+    src.preset !== undefined && src.preset !== null
+      ? String(src.preset).trim().toLowerCase()
+      : "youtube_voice";
+  if (!VOICE_CLEANUP_ALLOWED_PRESETS_DEMO.has(rawPreset)) {
+    throw new Error(`Unsupported voice cleanup preset ${src.preset}`);
+  }
+  const rawHp = src.highpass_hz !== undefined && src.highpass_hz !== null ? src.highpass_hz : 85;
+  if (typeof rawHp === "boolean" || typeof rawHp !== "number" || !Number.isInteger(rawHp) || rawHp < 40 || rawHp > 200) {
+    throw new Error("highpass_hz must be an integer within [40, 200]");
+  }
+  const rawPresence =
+    src.presence_db !== undefined && src.presence_db !== null ? src.presence_db : 2.5;
+  if (
+    typeof rawPresence === "boolean" ||
+    typeof rawPresence !== "number" ||
+    !Number.isFinite(rawPresence) ||
+    rawPresence < -6.0 ||
+    rawPresence > 6.0
+  ) {
+    throw new Error("presence_db must be within [-6.0, 6.0]");
+  }
+  const rawDeEss = src.de_ess !== undefined && src.de_ess !== null ? src.de_ess : 0.35;
+  if (
+    typeof rawDeEss === "boolean" ||
+    typeof rawDeEss !== "number" ||
+    !Number.isFinite(rawDeEss) ||
+    rawDeEss < 0.0 ||
+    rawDeEss > 1.0
+  ) {
+    throw new Error("de_ess must be within [0.0, 1.0]");
+  }
+  let fg = "";
+  if (enabled) {
+    const parts = [`highpass=f=${rawHp}`];
+    if (Math.abs(rawPresence) > 1e-6) {
+      parts.push(`equalizer=f=3200:t=q:w=1.2:g=${rawPresence.toFixed(1)}`);
+    }
+    if (rawDeEss > 1e-6) {
+      parts.push(`deesser=i=${rawDeEss.toFixed(2)}:m=0.50:f=0.50:s=o`);
+    }
+    fg = parts.join(",");
+  }
+  return {
+    filtergraph: fg,
+    ffmpeg_af_args: fg ? ["-af", fg] : [],
+    is_identity: !enabled,
+    is_active: Boolean(enabled),
+    params: {
+      enabled,
+      preset: rawPreset,
+      highpass_hz: rawHp,
+      presence_db: rawPresence,
+      de_ess: rawDeEss
+    }
+  };
+}
+
 const CAPTION_STYLE_SPECS = [
   {
     id: "clean_white",
@@ -1527,15 +1598,37 @@ export function createApiClient() {
                 ? presetObj.target_lufs
                 : null;
         }
+        let voiceCleanupEnabled = false;
+        let voiceCleanupPreset = "youtube_voice";
+        let voiceCleanupHighpassHz = 85;
+        let voiceCleanupPresenceDb = 2.5;
+        let voiceCleanupDeEss = 0.35;
+        let voiceCleanupAf = "";
+        if (body.voice_cleanup) {
+          const compiledVc = compileVoiceCleanupClient(body.voice_cleanup);
+          if (compiledVc.is_active && compiledVc.filtergraph) {
+            voiceCleanupEnabled = true;
+            voiceCleanupPreset = compiledVc.params.preset;
+            voiceCleanupHighpassHz = compiledVc.params.highpass_hz;
+            voiceCleanupPresenceDb = compiledVc.params.presence_db;
+            voiceCleanupDeEss = compiledVc.params.de_ess;
+            voiceCleanupAf = compiledVc.filtergraph;
+          }
+        }
+        const isMutedDemo = Boolean(body.audio_params && body.audio_params.muted);
         if (body.audio_params) {
-          const compiledAudio = compileAudioFilterClient(
+          const clipOnlyAudio = compileAudioFilterClient(
             body.audio_params,
             body.clip_duration_s ?? null,
-            effectiveLufs,
-            fairlight
+            null,
+            null
           );
-          if (compiledAudio.filtergraph) afParts.push(compiledAudio.filtergraph);
-        } else {
+          if (clipOnlyAudio.filtergraph) afParts.push(clipOnlyAudio.filtergraph);
+        }
+        if (!isMutedDemo) {
+          if (voiceCleanupAf) {
+            afParts.push(voiceCleanupAf);
+          }
           const compiledFairlight = compileFairlightAudioFilterClient(fairlight);
           if (compiledFairlight.filtergraph) {
             afParts.push(compiledFairlight.filtergraph);
@@ -1606,6 +1699,11 @@ export function createApiClient() {
               vignette_preset: "subtle_cinema",
               vignette_angle_deg: 24.0,
               vignette_mode: "forward",
+              voice_cleanup_enabled: voiceCleanupEnabled && !isMutedDemo,
+              voice_cleanup_preset: voiceCleanupPreset,
+              voice_cleanup_highpass_hz: voiceCleanupHighpassHz,
+              voice_cleanup_presence_db: voiceCleanupPresenceDb,
+              voice_cleanup_de_ess: voiceCleanupDeEss,
               export_fps: rawExportFps,
               deinterlace,
               audio_only_format: rawAudioOnly,
@@ -1689,6 +1787,11 @@ export function createApiClient() {
             vignette_preset: vignettePreset,
             vignette_angle_deg: vignetteAngleDeg,
             vignette_mode: vignetteMode,
+            voice_cleanup_enabled: voiceCleanupEnabled && !isMutedDemo,
+            voice_cleanup_preset: voiceCleanupPreset,
+            voice_cleanup_highpass_hz: voiceCleanupHighpassHz,
+            voice_cleanup_presence_db: voiceCleanupPresenceDb,
+            voice_cleanup_de_ess: voiceCleanupDeEss,
             export_fps: rawExportFps,
             deinterlace,
             audio_only_format: "off",
@@ -1874,6 +1977,12 @@ export function createApiClient() {
         return compileVignetteClient(payload);
       }
       return requestJson("/api/vignette/compile", { method: "POST", body: payload });
+    },
+    async compileVoiceCleanupFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileVoiceCleanupClient(payload);
+      }
+      return requestJson("/api/voice-cleanup/compile", { method: "POST", body: payload });
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {

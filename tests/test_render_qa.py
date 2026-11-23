@@ -32,6 +32,7 @@ from taktcut.render import (
     ReframeParams,
     RetimeParams,
     VignetteParams,
+    VoiceCleanupParams,
     build_atempo_stages,
     build_render_plan,
     compile_audio_filter,
@@ -63,6 +64,8 @@ from taktcut.render import (
     compile_video_fade_filter_result,
     compile_vignette_filter,
     compile_vignette_filter_result,
+    compile_voice_cleanup_filter,
+    compile_voice_cleanup_filter_result,
     execute_render_plan,
     get_delivery_preset,
     list_aspect_presets,
@@ -2003,6 +2006,177 @@ def test_vignette_params_validation_and_filter_compile(tmp_path: Path) -> None:
     assert plan.vignette_mode == "forward"
     assert plan.video_filter is not None
     assert expected_moody_vf in plan.video_filter
+
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0
+
+
+def test_voice_cleanup_params_validation_and_filter_compile(tmp_path: Path) -> None:
+    from taktcut.render import VOICE_CLEANUP_PRESETS
+
+    default_vc = VoiceCleanupParams()
+    assert default_vc.enabled is False
+    assert default_vc.preset == "youtube_voice"
+    assert default_vc.highpass_hz == 85
+    assert default_vc.presence_db == pytest.approx(2.5)
+    assert default_vc.de_ess == pytest.approx(0.35)
+    assert default_vc.is_active() is False
+    assert default_vc.is_identity() is True
+    assert compile_voice_cleanup_filter(default_vc) == ""
+
+    disabled_vc = VoiceCleanupParams(
+        enabled=False,
+        preset="broadcast_crisp",
+        highpass_hz=110,
+        presence_db=4.0,
+        de_ess=0.50,
+    )
+    assert disabled_vc.is_active() is False
+    assert compile_voice_cleanup_filter(disabled_vc) == ""
+
+    assert VOICE_CLEANUP_PRESETS["youtube_voice"] == (85, 2.5, 0.35)
+    assert VOICE_CLEANUP_PRESETS["podcast_warm"] == (65, 1.5, 0.25)
+    assert VOICE_CLEANUP_PRESETS["broadcast_crisp"] == (110, 4.0, 0.50)
+
+    for preset_name, hp_hz, pres_db, de_ess, expected_af in (
+        (
+            "youtube_voice",
+            85,
+            2.5,
+            0.35,
+            "highpass=f=85,equalizer=f=3200:t=q:w=1.2:g=2.5,deesser=i=0.35:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "podcast_warm",
+            65,
+            1.5,
+            0.25,
+            "highpass=f=65,equalizer=f=3200:t=q:w=1.2:g=1.5,deesser=i=0.25:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "broadcast_crisp",
+            110,
+            4.0,
+            0.50,
+            "highpass=f=110,equalizer=f=3200:t=q:w=1.2:g=4.0,deesser=i=0.50:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "custom",
+            40,
+            -6.0,
+            1.0,
+            "highpass=f=40,equalizer=f=3200:t=q:w=1.2:g=-6.0,deesser=i=1.00:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "custom",
+            100,
+            0.0,
+            0.40,
+            "highpass=f=100,deesser=i=0.40:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "custom",
+            120,
+            3.0,
+            0.0,
+            "highpass=f=120,equalizer=f=3200:t=q:w=1.2:g=3.0",
+        ),
+        (
+            "custom",
+            200,
+            0.0,
+            0.0,
+            "highpass=f=200",
+        ),
+    ):
+        vc = VoiceCleanupParams(
+            enabled=True,
+            preset=preset_name,  # type: ignore[arg-type]
+            highpass_hz=hp_hz,
+            presence_db=pres_db,
+            de_ess=de_ess,
+        )
+        assert vc.is_active() is True
+        assert compile_voice_cleanup_filter(vc) == expected_af
+
+    res = compile_voice_cleanup_filter_result(
+        VoiceCleanupParams(
+            enabled=True,
+            preset="podcast_warm",
+            highpass_hz=65,
+            presence_db=1.5,
+            de_ess=0.25,
+        )
+    )
+    expected_pod_af = (
+        "highpass=f=65,equalizer=f=3200:t=q:w=1.2:g=1.5,deesser=i=0.25:m=0.50:f=0.50:s=o"
+    )
+    assert res.is_active is True
+    assert res.is_identity is False
+    assert res.filtergraph == expected_pod_af
+    assert res.ffmpeg_af_args == ["-af", expected_pod_af]
+
+    for bad_kwargs in (
+        {"enabled": "yes"},
+        {"enabled": True, "preset": "studio_magic"},
+        {"enabled": True, "preset": 42},
+        {"enabled": True, "highpass_hz": 39},
+        {"enabled": True, "highpass_hz": 201},
+        {"enabled": True, "highpass_hz": 85.5},
+        {"enabled": True, "highpass_hz": True},
+        {"enabled": True, "presence_db": -6.1},
+        {"enabled": True, "presence_db": 6.1},
+        {"enabled": True, "presence_db": float("nan")},
+        {"enabled": True, "presence_db": True},
+        {"enabled": True, "de_ess": -0.01},
+        {"enabled": True, "de_ess": 1.01},
+        {"enabled": True, "de_ess": float("nan")},
+        {"enabled": True, "de_ess": True},
+        {"unknown_field": 1},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            VoiceCleanupParams(**bad_kwargs)  # type: ignore[arg-type]
+
+    src = tmp_path / "voice_cleanup_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "voice_cleanup_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        voice_cleanup=VoiceCleanupParams(
+            enabled=True,
+            preset="broadcast_crisp",
+            highpass_hz=110,
+            presence_db=4.0,
+            de_ess=0.50,
+        ),
+        prefer_hw=False,
+    )
+    assert plan.voice_cleanup_enabled is True
+    assert plan.voice_cleanup_preset == "broadcast_crisp"
+    assert plan.voice_cleanup_highpass_hz == 110
+    assert plan.voice_cleanup_presence_db == pytest.approx(4.0)
+    assert plan.voice_cleanup_de_ess == pytest.approx(0.50)
+    assert plan.audio_filter is not None
+    expected_bc_af = (
+        "highpass=f=110,equalizer=f=3200:t=q:w=1.2:g=4.0,deesser=i=0.50:m=0.50:f=0.50:s=o"
+    )
+    assert expected_bc_af in plan.audio_filter
+
+    muted_plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        audio_params=ClipAudioParams(muted=True),
+        voice_cleanup=VoiceCleanupParams(enabled=True, preset="youtube_voice"),
+        prefer_hw=False,
+    )
+    assert muted_plan.voice_cleanup_enabled is False
+    assert muted_plan.audio_filter == "volume=0"
 
     result = execute_render_plan(plan)
     assert result.success is True, result.stderr_tail

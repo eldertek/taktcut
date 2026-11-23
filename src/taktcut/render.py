@@ -32,6 +32,7 @@ from taktcut.models import (
     ALLOWED_TIMECODE_BURNIN,
     ALLOWED_VIGNETTE_MODES,
     ALLOWED_VIGNETTE_PRESETS,
+    ALLOWED_VOICE_CLEANUP_PRESETS,
     FILM_GRAIN_STRENGTH_DEFAULT,
     FILM_GRAIN_STRENGTH_MAX,
     FILM_GRAIN_STRENGTH_MIN,
@@ -51,6 +52,15 @@ from taktcut.models import (
     VIGNETTE_ANGLE_DEG_DEFAULT,
     VIGNETTE_ANGLE_DEG_MAX,
     VIGNETTE_ANGLE_DEG_MIN,
+    VOICE_CLEANUP_DE_ESS_DEFAULT,
+    VOICE_CLEANUP_DE_ESS_MAX,
+    VOICE_CLEANUP_DE_ESS_MIN,
+    VOICE_CLEANUP_HIGHPASS_HZ_DEFAULT,
+    VOICE_CLEANUP_HIGHPASS_HZ_MAX,
+    VOICE_CLEANUP_HIGHPASS_HZ_MIN,
+    VOICE_CLEANUP_PRESENCE_DB_DEFAULT,
+    VOICE_CLEANUP_PRESENCE_DB_MAX,
+    VOICE_CLEANUP_PRESENCE_DB_MIN,
     YADIF_DEINTERLACE_FILTER,
     AudioOnlyFormatId,
     ClipTransformParams,
@@ -69,6 +79,7 @@ from taktcut.models import (
     TimecodeBurnInPosition,
     VignetteMode,
     VignettePresetId,
+    VoiceCleanupPresetId,
 )
 from taktcut.subtitles import SubtitleTrackParams, compile_subtitles_filter
 from taktcut.titles import (
@@ -1797,6 +1808,127 @@ def compile_vignette_filter_result(params: VignetteParams) -> VignetteCompileRes
     )
 
 
+_VOICE_CLEANUP_CANONICAL_PRESETS: dict[str, VoiceCleanupPresetId] = {
+    item: item for item in ALLOWED_VOICE_CLEANUP_PRESETS
+}
+VOICE_CLEANUP_PRESETS: dict[VoiceCleanupPresetId, tuple[int, float, float]] = {
+    "youtube_voice": (85, 2.5, 0.35),
+    "podcast_warm": (65, 1.5, 0.25),
+    "broadcast_crisp": (110, 4.0, 0.50),
+    "custom": (
+        VOICE_CLEANUP_HIGHPASS_HZ_DEFAULT,
+        VOICE_CLEANUP_PRESENCE_DB_DEFAULT,
+        VOICE_CLEANUP_DE_ESS_DEFAULT,
+    ),
+}
+
+
+class VoiceCleanupParams(BaseModel):
+    """DaVinci Fairlight / Premiere Pro Voice Clarity & Rumble Cut parameters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    preset: VoiceCleanupPresetId = "youtube_voice"
+    highpass_hz: int = VOICE_CLEANUP_HIGHPASS_HZ_DEFAULT
+    presence_db: float = VOICE_CLEANUP_PRESENCE_DB_DEFAULT
+    de_ess: float = VOICE_CLEANUP_DE_ESS_DEFAULT
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"enabled must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> VoiceCleanupPresetId:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        canonical = _VOICE_CLEANUP_CANONICAL_PRESETS.get(cleaned)
+        if canonical is None:
+            allowed = ", ".join(ALLOWED_VOICE_CLEANUP_PRESETS)
+            raise ValueError(
+                f"Unsupported voice cleanup preset {raw!r}; expected one of: {allowed}"
+            )
+        return canonical
+
+    @field_validator("highpass_hz", mode="before")
+    @classmethod
+    def _validate_highpass_hz(cls, raw: Any) -> int:
+        return _validate_bounded_int(
+            raw,
+            "highpass_hz",
+            VOICE_CLEANUP_HIGHPASS_HZ_MIN,
+            VOICE_CLEANUP_HIGHPASS_HZ_MAX,
+        )
+
+    @field_validator("presence_db", mode="before")
+    @classmethod
+    def _validate_presence_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "presence_db",
+            VOICE_CLEANUP_PRESENCE_DB_MIN,
+            VOICE_CLEANUP_PRESENCE_DB_MAX,
+        )
+
+    @field_validator("de_ess", mode="before")
+    @classmethod
+    def _validate_de_ess(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "de_ess",
+            VOICE_CLEANUP_DE_ESS_MIN,
+            VOICE_CLEANUP_DE_ESS_MAX,
+        )
+
+    def is_active(self) -> bool:
+        """Return True when Fairlight Voice Cleanup is enabled."""
+        return bool(self.enabled)
+
+    def is_identity(self) -> bool:
+        """Return True when Fairlight Voice Cleanup is disabled."""
+        return not self.is_active()
+
+
+class VoiceCleanupCompileResult(BaseModel):
+    """Compiled FFmpeg audio filtergraph for Fairlight Voice Cleanup."""
+
+    filtergraph: str
+    ffmpeg_af_args: list[str]
+    is_identity: bool
+    is_active: bool = False
+    params: VoiceCleanupParams
+
+
+def compile_voice_cleanup_filter(params: VoiceCleanupParams) -> str:
+    """Compile validated VoiceCleanupParams into an FFmpeg -af chain (or '')."""
+    if not params.is_active():
+        return ""
+    parts: list[str] = [f"highpass=f={params.highpass_hz}"]
+    if not math.isclose(params.presence_db, 0.0, abs_tol=1e-6):
+        parts.append(f"equalizer=f=3200:t=q:w=1.2:g={params.presence_db:.1f}")
+    if params.de_ess > 1e-6:
+        parts.append(f"deesser=i={params.de_ess:.2f}:m=0.50:f=0.50:s=o")
+    return ",".join(parts)
+
+
+def compile_voice_cleanup_filter_result(params: VoiceCleanupParams) -> VoiceCleanupCompileResult:
+    """Compile Fairlight Voice Cleanup parameters into structured filtergraph and argv slice."""
+    fg = compile_voice_cleanup_filter(params)
+    is_act = fg != ""
+    return VoiceCleanupCompileResult(
+        filtergraph=fg,
+        ffmpeg_af_args=["-af", fg] if fg else [],
+        is_identity=not is_act,
+        is_active=is_act,
+        params=params,
+    )
+
+
 ALLOWED_TRANSFORM_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "yuv444p", "rgba", "rgb24"}
 )
@@ -2123,6 +2255,7 @@ def build_render_plan(
     reframe: ReframeParams | None = None,
     film_grain: FilmGrainParams | None = None,
     vignette: VignetteParams | None = None,
+    voice_cleanup: VoiceCleanupParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -2316,6 +2449,21 @@ def build_render_plan(
             vignette_angle_deg = vignette.angle_deg
             vignette_mode = vignette.mode
 
+    voice_cleanup_af = ""
+    voice_cleanup_enabled = False
+    voice_cleanup_preset: VoiceCleanupPresetId = "youtube_voice"
+    voice_cleanup_highpass_hz = VOICE_CLEANUP_HIGHPASS_HZ_DEFAULT
+    voice_cleanup_presence_db = VOICE_CLEANUP_PRESENCE_DB_DEFAULT
+    voice_cleanup_de_ess = VOICE_CLEANUP_DE_ESS_DEFAULT
+    if voice_cleanup is not None and voice_cleanup.is_active():
+        voice_cleanup_af = compile_voice_cleanup_filter(voice_cleanup)
+        if voice_cleanup_af:
+            voice_cleanup_enabled = True
+            voice_cleanup_preset = voice_cleanup.preset
+            voice_cleanup_highpass_hz = voice_cleanup.highpass_hz
+            voice_cleanup_presence_db = voice_cleanup.presence_db
+            voice_cleanup_de_ess = voice_cleanup.de_ess
+
     transform_vf: str | None = None
     if transform_params is not None and not transform_params.is_identity():
         transform_vf = compile_transform_filter(
@@ -2422,6 +2570,8 @@ def build_render_plan(
             af_parts.append(clip_af)
     is_muted = audio_params is not None and audio_params.muted
     if not is_muted:
+        if voice_cleanup_af:
+            af_parts.append(voice_cleanup_af)
         eq_af = compile_dialogue_eq_filter(resolved_dialogue_eq)
         if eq_af is not None:
             af_parts.append(eq_af)
@@ -2494,6 +2644,11 @@ def build_render_plan(
             vignette_preset="subtle_cinema",
             vignette_angle_deg=VIGNETTE_ANGLE_DEG_DEFAULT,
             vignette_mode="forward",
+            voice_cleanup_enabled=voice_cleanup_enabled and not is_muted,
+            voice_cleanup_preset=voice_cleanup_preset,
+            voice_cleanup_highpass_hz=voice_cleanup_highpass_hz,
+            voice_cleanup_presence_db=voice_cleanup_presence_db,
+            voice_cleanup_de_ess=voice_cleanup_de_ess,
             export_fps=resolved_export_fps,
             deinterlace=resolved_deinterlace,
             audio_only_format=resolved_audio_only,
@@ -2609,6 +2764,11 @@ def build_render_plan(
         vignette_preset=vignette_preset,
         vignette_angle_deg=vignette_angle_deg,
         vignette_mode=vignette_mode,
+        voice_cleanup_enabled=voice_cleanup_enabled and not is_muted,
+        voice_cleanup_preset=voice_cleanup_preset,
+        voice_cleanup_highpass_hz=voice_cleanup_highpass_hz,
+        voice_cleanup_presence_db=voice_cleanup_presence_db,
+        voice_cleanup_de_ess=voice_cleanup_de_ess,
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
         audio_only_format=resolved_audio_only,

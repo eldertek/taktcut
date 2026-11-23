@@ -1133,3 +1133,53 @@ def test_project_delivery_vignette_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["vignette"][bad_key] = bad_val
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_voice_cleanup_roundtrip(tmp_path: Path) -> None:
+    from taktcut.render import VoiceCleanupParams
+
+    proj = _build_full_test_project()
+    assert proj.delivery.voice_cleanup.enabled is False
+    assert proj.delivery.voice_cleanup.preset == "youtube_voice"
+    assert proj.delivery.voice_cleanup.highpass_hz == 85
+    assert proj.delivery.voice_cleanup.presence_db == pytest.approx(2.5)
+    assert proj.delivery.voice_cleanup.de_ess == pytest.approx(0.35)
+
+    proj.delivery.voice_cleanup = VoiceCleanupParams(
+        enabled=True,
+        preset="broadcast_crisp",
+        highpass_hz=110,
+        presence_db=4.0,
+        de_ess=0.50,
+    )
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.voice_cleanup.enabled is True
+    assert loaded.delivery.voice_cleanup.preset == "broadcast_crisp"
+    assert loaded.delivery.voice_cleanup.highpass_hz == 110
+    assert loaded.delivery.voice_cleanup.presence_db == pytest.approx(4.0)
+    assert loaded.delivery.voice_cleanup.de_ess == pytest.approx(0.50)
+
+    proj_path = tmp_path / "voice_cleanup_proj.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.voice_cleanup.enabled is True
+    assert disk_loaded.delivery.voice_cleanup.preset == "broadcast_crisp"
+    assert disk_loaded.delivery.voice_cleanup.highpass_hz == 110
+    assert disk_loaded.delivery.voice_cleanup.presence_db == pytest.approx(4.0)
+    assert disk_loaded.delivery.voice_cleanup.de_ess == pytest.approx(0.50)
+
+    for bad_key, bad_val in (
+        ("preset", "studio_magic"),
+        ("highpass_hz", 39),
+        ("highpass_hz", 201),
+        ("highpass_hz", True),
+        ("presence_db", -6.5),
+        ("presence_db", 6.5),
+        ("de_ess", -0.1),
+        ("de_ess", 1.2),
+    ):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["voice_cleanup"][bad_key] = bad_val
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

@@ -420,6 +420,15 @@ const state = {
   },
   vignetteCompileSeq: 0,
   vignetteCompileTimer: null,
+  voiceCleanup: {
+    enabled: false,
+    preset: "youtube_voice",
+    highpass_hz: 85,
+    presence_db: 2.5,
+    de_ess: 0.35
+  },
+  voiceCleanupCompileSeq: 0,
+  voiceCleanupCompileTimer: null,
   subtitleTrack: {
     enabled: true,
     style: "clean_white",
@@ -2374,6 +2383,7 @@ function serializeFullProjectState() {
       reframe: { ...state.reframe },
       film_grain: { ...state.filmGrain },
       vignette: { ...state.vignette },
+      voice_cleanup: { ...state.voiceCleanup },
       export_fps: txt("render-export-fps", "source") || "source",
       deinterlace: chk("render-deinterlace", false),
       audio_only_format: txt("render-audio-only-format", "off") || "off",
@@ -2641,6 +2651,29 @@ function applyFullProjectState(project, validation) {
     state.vignette = { enabled: false, preset: "subtle_cinema", angle_deg: 24.0, mode: "forward" };
   }
   syncVignetteControlsUI({ syncInputs: true });
+  if (del.voice_cleanup && typeof del.voice_cleanup === "object") {
+    const allowedVcPresets = new Set(["youtube_voice", "podcast_warm", "broadcast_crisp", "custom"]);
+    const rawVcPreset = String(del.voice_cleanup.preset || "youtube_voice").trim().toLowerCase();
+    const rawVcHp = Number(del.voice_cleanup.highpass_hz);
+    const rawVcPres = Number(del.voice_cleanup.presence_db);
+    const rawVcDeEss = Number(del.voice_cleanup.de_ess);
+    state.voiceCleanup = {
+      enabled: Boolean(del.voice_cleanup.enabled),
+      preset: allowedVcPresets.has(rawVcPreset) ? rawVcPreset : "youtube_voice",
+      highpass_hz: Number.isFinite(rawVcHp) ? Math.min(200, Math.max(40, Math.round(rawVcHp))) : 85,
+      presence_db: Number.isFinite(rawVcPres) ? Math.min(6.0, Math.max(-6.0, rawVcPres)) : 2.5,
+      de_ess: Number.isFinite(rawVcDeEss) ? Math.min(1.0, Math.max(0.0, rawVcDeEss)) : 0.35
+    };
+  } else {
+    state.voiceCleanup = {
+      enabled: false,
+      preset: "youtube_voice",
+      highpass_hz: 85,
+      presence_db: 2.5,
+      de_ess: 0.35
+    };
+  }
+  syncVoiceCleanupControlsUI({ syncInputs: true });
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -5644,6 +5677,114 @@ function scheduleVignetteCompile() {
   }, 80);
 }
 
+const VOICE_CLEANUP_PRESETS = {
+  youtube_voice: { highpass_hz: 85, presence_db: 2.5, de_ess: 0.35 },
+  podcast_warm: { highpass_hz: 65, presence_db: 1.5, de_ess: 0.25 },
+  broadcast_crisp: { highpass_hz: 110, presence_db: 4.0, de_ess: 0.50 }
+};
+
+const VOICE_CLEANUP_BADGE_LABELS = {
+  youtube_voice: "YOUTUBE",
+  podcast_warm: "PODCAST",
+  broadcast_crisp: "BROADCAST",
+  custom: "CUSTOM"
+};
+
+function getNormalizedVoiceCleanupPayload() {
+  const vc = state.voiceCleanup;
+  const allowedPresets = new Set(["youtube_voice", "podcast_warm", "broadcast_crisp", "custom"]);
+  const rawPreset = String(vc.preset || "youtube_voice").trim().toLowerCase();
+  const preset = allowedPresets.has(rawPreset) ? rawPreset : "youtube_voice";
+  const rawHp = Number(vc.highpass_hz);
+  const highpass_hz = Number.isFinite(rawHp) ? Math.min(200, Math.max(40, Math.round(rawHp))) : 85;
+  const rawPres = Number(vc.presence_db);
+  const presence_db = Number.isFinite(rawPres) ? Math.min(6.0, Math.max(-6.0, rawPres)) : 2.5;
+  const rawDeEss = Number(vc.de_ess);
+  const de_ess = Number.isFinite(rawDeEss) ? Math.min(1.0, Math.max(0.0, rawDeEss)) : 0.35;
+  return {
+    enabled: Boolean(vc.enabled),
+    preset,
+    highpass_hz,
+    presence_db,
+    de_ess
+  };
+}
+
+function syncVoiceCleanupPresetButtons() {
+  const vc = getNormalizedVoiceCleanupPayload();
+  for (const btn of document.querySelectorAll(".voice-cleanup-deliver-preset-btn[data-deliver-voice-cleanup-preset]")) {
+    const btnPreset = String(btn.getAttribute("data-deliver-voice-cleanup-preset") || "").trim().toLowerCase();
+    const isMatch = vc.preset === btnPreset;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function syncVoiceCleanupControlsUI(opts = {}) {
+  const vc = getNormalizedVoiceCleanupPayload();
+  const syncInputs = Boolean(opts.syncInputs);
+  const enabledEl = byId("render-voice-cleanup-enabled");
+  if (enabledEl && enabledEl.checked !== vc.enabled) {
+    enabledEl.checked = vc.enabled;
+  }
+  const hpEl = byId("render-voice-cleanup-highpass");
+  if (syncInputs && hpEl) hpEl.value = String(vc.highpass_hz);
+  const hpValEl = byId("render-voice-cleanup-highpass-value");
+  if (hpValEl) hpValEl.textContent = `${vc.highpass_hz} Hz`;
+
+  const presEl = byId("render-voice-cleanup-presence");
+  if (syncInputs && presEl) presEl.value = String(vc.presence_db);
+  const presValEl = byId("render-voice-cleanup-presence-value");
+  if (presValEl) {
+    const sign = vc.presence_db > 0 ? "+" : "";
+    presValEl.textContent = `${sign}${vc.presence_db.toFixed(1)} dB`;
+  }
+
+  const deEssEl = byId("render-voice-cleanup-deess");
+  if (syncInputs && deEssEl) deEssEl.value = String(vc.de_ess);
+  const deEssValEl = byId("render-voice-cleanup-deess-value");
+  if (deEssValEl) deEssValEl.textContent = vc.de_ess.toFixed(2);
+
+  const badgeEl = byId("render-voice-cleanup-badge");
+  if (badgeEl) {
+    if (!vc.enabled) {
+      badgeEl.textContent = "OFF";
+      badgeEl.className = "nle-tag mono";
+    } else {
+      const tag = VOICE_CLEANUP_BADGE_LABELS[vc.preset] || "CUSTOM";
+      badgeEl.textContent = `${tag} HP${vc.highpass_hz}`;
+      badgeEl.className = "nle-tag is-active mono";
+    }
+  }
+  syncVoiceCleanupPresetButtons();
+  scheduleVoiceCleanupCompile();
+}
+
+function scheduleVoiceCleanupCompile() {
+  if (state.voiceCleanupCompileTimer) {
+    window.clearTimeout(state.voiceCleanupCompileTimer);
+  }
+  const seq = ++state.voiceCleanupCompileSeq;
+  state.voiceCleanupCompileTimer = window.setTimeout(async () => {
+    const previewEl = byId("render-voice-cleanup-preview");
+    const payload = getNormalizedVoiceCleanupPayload();
+    if (!payload.enabled) {
+      if (previewEl) previewEl.textContent = "(off)";
+      return;
+    }
+    try {
+      const compiled = await api.compileVoiceCleanupFilter({ voice_cleanup: payload });
+      if (seq !== state.voiceCleanupCompileSeq) return;
+      if (previewEl) {
+        previewEl.textContent = compiled.filtergraph ? `-af ${compiled.filtergraph}` : "(off)";
+      }
+    } catch (err) {
+      if (seq !== state.voiceCleanupCompileSeq) return;
+      if (previewEl) previewEl.textContent = `Error: ${err.message}`;
+    }
+  }, 80);
+}
+
 function applyDeliveryPreset(presetId) {
   const presets = getDeliveryPresetsList();
   const preset = presets.find((p) => p.id === presetId);
@@ -5929,6 +6070,8 @@ async function buildOrExecuteRender(execute) {
       filmGrainPayload.enabled && filmGrainPayload.strength > 0 ? filmGrainPayload : null;
     const vignettePayload = getNormalizedVignettePayload();
     const vignetteActivePayload = vignettePayload.enabled ? vignettePayload : null;
+    const voiceCleanupPayload = getNormalizedVoiceCleanupPayload();
+    const voiceCleanupActivePayload = voiceCleanupPayload.enabled ? voiceCleanupPayload : null;
     const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
     const exportFpsEl = byId("render-export-fps");
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
@@ -5963,6 +6106,7 @@ async function buildOrExecuteRender(execute) {
         reframe: reframeActivePayload,
         film_grain: filmGrainActivePayload,
         vignette: vignetteActivePayload,
+        voice_cleanup: voiceCleanupActivePayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
         loudness_preset: fairlightPayload.loudness_preset,
@@ -6029,6 +6173,7 @@ async function buildOrExecuteRender(execute) {
       reframe: reframeActivePayload,
       film_grain: filmGrainActivePayload,
       vignette: vignetteActivePayload,
+      voice_cleanup: voiceCleanupActivePayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
       loudness_preset: fairlightPayload.loudness_preset,
@@ -6133,6 +6278,12 @@ async function buildOrExecuteRender(execute) {
         t("render.plan.vignette"),
         plan.vignette_enabled
           ? `${plan.vignette_preset} (${Number(plan.vignette_angle_deg ?? 24).toFixed(1)} deg, ${plan.vignette_mode})`
+          : "off"
+      ],
+      [
+        t("render.plan.voiceCleanup"),
+        plan.voice_cleanup_enabled
+          ? `${plan.voice_cleanup_preset} (HP ${plan.voice_cleanup_highpass_hz}Hz, ${Number(plan.voice_cleanup_presence_db ?? 2.5) >= 0 ? "+" : ""}${Number(plan.voice_cleanup_presence_db ?? 2.5).toFixed(1)}dB, DS ${Number(plan.voice_cleanup_de_ess ?? 0.35).toFixed(2)})`
           : "off"
       ],
       ["Video Filter", plan.video_filter || t("common.none")],
@@ -10257,6 +10408,77 @@ function wireEvents() {
     });
   }
   syncVignetteControlsUI({ syncInputs: true });
+
+  const matchVoiceCleanupPreset = () => {
+    const hit = Object.entries(VOICE_CLEANUP_PRESETS).find(([, spec]) => (
+      spec.highpass_hz === state.voiceCleanup.highpass_hz &&
+      Math.abs(spec.presence_db - state.voiceCleanup.presence_db) < 1e-6 &&
+      Math.abs(spec.de_ess - state.voiceCleanup.de_ess) < 1e-6
+    ));
+    state.voiceCleanup.preset = hit ? hit[0] : "custom";
+  };
+
+  const vcEnabledEl = byId("render-voice-cleanup-enabled");
+  if (vcEnabledEl) {
+    vcEnabledEl.addEventListener("change", () => {
+      state.voiceCleanup.enabled = Boolean(vcEnabledEl.checked);
+      syncVoiceCleanupControlsUI();
+    });
+  }
+  for (const btn of document.querySelectorAll(".voice-cleanup-deliver-preset-btn[data-deliver-voice-cleanup-preset]")) {
+    btn.addEventListener("click", () => {
+      const preset = String(btn.getAttribute("data-deliver-voice-cleanup-preset") || "youtube_voice").trim().toLowerCase();
+      state.voiceCleanup.preset = preset;
+      if (Object.prototype.hasOwnProperty.call(VOICE_CLEANUP_PRESETS, preset)) {
+        const spec = VOICE_CLEANUP_PRESETS[preset];
+        state.voiceCleanup.highpass_hz = spec.highpass_hz;
+        state.voiceCleanup.presence_db = spec.presence_db;
+        state.voiceCleanup.de_ess = spec.de_ess;
+      }
+      state.voiceCleanup.enabled = true;
+      syncVoiceCleanupControlsUI({ syncInputs: true });
+    });
+  }
+  const vcHpEl = byId("render-voice-cleanup-highpass");
+  if (vcHpEl) {
+    const onHpChange = () => {
+      const val = Number.parseInt(vcHpEl.value, 10);
+      if (Number.isInteger(val) && val >= 40 && val <= 200) {
+        state.voiceCleanup.highpass_hz = val;
+        matchVoiceCleanupPreset();
+        syncVoiceCleanupControlsUI();
+      }
+    };
+    vcHpEl.addEventListener("input", onHpChange);
+    vcHpEl.addEventListener("change", onHpChange);
+  }
+  const vcPresEl = byId("render-voice-cleanup-presence");
+  if (vcPresEl) {
+    const onPresChange = () => {
+      const val = Number.parseFloat(vcPresEl.value);
+      if (Number.isFinite(val) && val >= -6.0 && val <= 6.0) {
+        state.voiceCleanup.presence_db = val;
+        matchVoiceCleanupPreset();
+        syncVoiceCleanupControlsUI();
+      }
+    };
+    vcPresEl.addEventListener("input", onPresChange);
+    vcPresEl.addEventListener("change", onPresChange);
+  }
+  const vcDeEssEl = byId("render-voice-cleanup-deess");
+  if (vcDeEssEl) {
+    const onDeEssChange = () => {
+      const val = Number.parseFloat(vcDeEssEl.value);
+      if (Number.isFinite(val) && val >= 0.0 && val <= 1.0) {
+        state.voiceCleanup.de_ess = val;
+        matchVoiceCleanupPreset();
+        syncVoiceCleanupControlsUI();
+      }
+    };
+    vcDeEssEl.addEventListener("input", onDeEssChange);
+    vcDeEssEl.addEventListener("change", onDeEssChange);
+  }
+  syncVoiceCleanupControlsUI({ syncInputs: true });
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {

@@ -49,6 +49,7 @@ from taktcut.render import (
     ReframeParams,
     RetimeParams,
     VignetteParams,
+    VoiceCleanupParams,
     validate_audio_only_format,
     validate_dialogue_eq,
     validate_export_fps,
@@ -180,6 +181,7 @@ class ProjectDeliveryState(BaseModel):
     reframe: ReframeParams = Field(default_factory=ReframeParams)
     film_grain: FilmGrainParams = Field(default_factory=FilmGrainParams)
     vignette: VignetteParams = Field(default_factory=VignetteParams)
+    voice_cleanup: VoiceCleanupParams = Field(default_factory=VoiceCleanupParams)
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

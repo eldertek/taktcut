@@ -479,3 +479,30 @@ def test_remote_render_request_accepts_vignette() -> None:
             input_base64="AAAA",
             vignette={"enabled": True, "angle_deg": 90.0},  # type: ignore[arg-type]
         )
+
+
+def test_remote_render_request_accepts_voice_cleanup() -> None:
+    from taktcut.remote_render import RemoteRenderJobRequest
+
+    req = RemoteRenderJobRequest(
+        input_base64="AAAA",
+        voice_cleanup={  # type: ignore[arg-type]
+            "enabled": True,
+            "preset": "podcast_warm",
+            "highpass_hz": 65,
+            "presence_db": 1.5,
+            "de_ess": 0.25,
+        },
+    )
+    assert req.voice_cleanup is not None
+    assert req.voice_cleanup.enabled is True
+    assert req.voice_cleanup.preset == "podcast_warm"
+    assert req.voice_cleanup.highpass_hz == 65
+    assert req.voice_cleanup.presence_db == pytest.approx(1.5)
+    assert req.voice_cleanup.de_ess == pytest.approx(0.25)
+
+    with pytest.raises((ValueError, Exception)):
+        RemoteRenderJobRequest(
+            input_base64="AAAA",
+            voice_cleanup={"enabled": True, "highpass_hz": 250},  # type: ignore[arg-type]
+        )

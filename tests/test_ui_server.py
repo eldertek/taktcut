@@ -3774,6 +3774,66 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 vig_mode.select_option("forward")
                 vig_chk.uncheck()
 
+                # Verify Deliver Fairlight Voice Cleanup
+                vc_card = page.locator("#deliver-voice-cleanup-card")
+                vc_chk = page.locator("#render-voice-cleanup-enabled")
+                vc_hp = page.locator("#render-voice-cleanup-highpass")
+                vc_pres = page.locator("#render-voice-cleanup-presence")
+                vc_deess = page.locator("#render-voice-cleanup-deess")
+                vc_yt = page.locator(
+                    '.voice-cleanup-deliver-preset-btn[data-deliver-voice-cleanup-preset="youtube_voice"]'
+                )
+                vc_pod = page.locator(
+                    '.voice-cleanup-deliver-preset-btn[data-deliver-voice-cleanup-preset="podcast_warm"]'
+                )
+                vc_bc = page.locator(
+                    '.voice-cleanup-deliver-preset-btn[data-deliver-voice-cleanup-preset="broadcast_crisp"]'
+                )
+                assert vc_card.is_visible() is True
+                assert vc_chk.is_checked() is False
+                if width <= 820:
+                    for vc_loc in (vc_hp, vc_pres, vc_deess, vc_yt, vc_pod, vc_bc):
+                        vc_box = vc_loc.bounding_box()
+                        assert vc_box is not None and vc_box["height"] >= 44
+                vc_pod.click()
+                assert vc_chk.is_checked() is True
+                assert vc_pod.get_attribute("aria-pressed") == "true"
+                page.wait_for_function(
+                    "() => (document.getElementById('render-voice-cleanup-preview')"
+                    ".textContent || '').includes("
+                    "'highpass=f=65,equalizer=f=3200:t=q:w=1.2:g=1.5,deesser=i=0.25:m=0.50:f=0.50:s=o')"
+                )
+                vc_hp.fill("100")
+                vc_hp.dispatch_event("input")
+                vc_pres.fill("3.5")
+                vc_pres.dispatch_event("input")
+                vc_deess.fill("0.45")
+                vc_deess.dispatch_event("input")
+                page.wait_for_function(
+                    "() => (document.getElementById('render-voice-cleanup-preview')"
+                    ".textContent || '').includes("
+                    "'highpass=f=100,equalizer=f=3200:t=q:w=1.2:g=3.5,deesser=i=0.45:m=0.50:f=0.50:s=o')"
+                )
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('equalizer=f=3200')"
+                )
+                vc_argv = page.locator("#render-argv-output").text_content() or ""
+                vc_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert (
+                    "highpass=f=100,equalizer=f=3200:t=q:w=1.2:g=3.5,deesser=i=0.45:m=0.50:f=0.50:s=o"
+                    in vc_argv
+                )
+                assert "custom (HP 100Hz, +3.5dB, DS 0.45)" in vc_kv
+                vc_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert vc_overflow <= 0, (
+                    f"Deliver voice cleanup overflow at {width}x{height}: {vc_overflow}px"
+                )
+                vc_chk.uncheck()
+
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
@@ -5869,3 +5929,192 @@ def test_ui_vignette_compile_and_render_plan_endpoints(
 
     canvas_text = (assets_dir / "canvas.js").read_text(encoding="utf-8")
     assert "drawCinematicVignetteOverlayOnFrame" in canvas_text
+
+
+def test_ui_voice_cleanup_compile_and_render_plan_endpoints(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    for preset_name, hp_hz, pres_db, de_ess, expected_af in (
+        (
+            "youtube_voice",
+            85,
+            2.5,
+            0.35,
+            "highpass=f=85,equalizer=f=3200:t=q:w=1.2:g=2.5,deesser=i=0.35:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "podcast_warm",
+            65,
+            1.5,
+            0.25,
+            "highpass=f=65,equalizer=f=3200:t=q:w=1.2:g=1.5,deesser=i=0.25:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "broadcast_crisp",
+            110,
+            4.0,
+            0.50,
+            "highpass=f=110,equalizer=f=3200:t=q:w=1.2:g=4.0,deesser=i=0.50:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "custom",
+            100,
+            0.0,
+            0.40,
+            "highpass=f=100,deesser=i=0.40:m=0.50:f=0.50:s=o",
+        ),
+        (
+            "custom",
+            120,
+            3.0,
+            0.0,
+            "highpass=f=120,equalizer=f=3200:t=q:w=1.2:g=3.0",
+        ),
+        (
+            "custom",
+            90,
+            0.0,
+            0.0,
+            "highpass=f=90",
+        ),
+    ):
+        c_status, _, c_raw = _http_call(
+            f"{base_url}/api/voice-cleanup/compile",
+            method="POST",
+            payload={
+                "enabled": True,
+                "preset": preset_name,
+                "highpass_hz": hp_hz,
+                "presence_db": pres_db,
+                "de_ess": de_ess,
+            },
+        )
+        assert c_status == 200
+        compiled = json.loads(c_raw.decode("utf-8"))
+        assert compiled["is_active"] is True
+        assert compiled["is_identity"] is False
+        assert compiled["filtergraph"] == expected_af
+        assert compiled["ffmpeg_af_args"] == ["-af", expected_af]
+
+    off_status, _, off_raw = _http_call(
+        f"{base_url}/api/voice-cleanup/compile",
+        method="POST",
+        payload={
+            "enabled": False,
+            "preset": "broadcast_crisp",
+            "highpass_hz": 110,
+            "presence_db": 4.0,
+            "de_ess": 0.50,
+        },
+    )
+    assert off_status == 200
+    off_compiled = json.loads(off_raw.decode("utf-8"))
+    assert off_compiled["is_active"] is False
+    assert off_compiled["is_identity"] is True
+    assert off_compiled["filtergraph"] == ""
+    assert off_compiled["ffmpeg_af_args"] == []
+
+    for bad_vc in (
+        {"enabled": True, "preset": "studio_magic"},
+        {"enabled": True, "preset": "youtube_voice", "highpass_hz": 39},
+        {"enabled": True, "preset": "youtube_voice", "highpass_hz": 201},
+        {"enabled": True, "preset": "youtube_voice", "highpass_hz": True},
+        {"enabled": True, "preset": "youtube_voice", "presence_db": -6.5},
+        {"enabled": True, "preset": "youtube_voice", "presence_db": 6.5},
+        {"enabled": True, "preset": "youtube_voice", "de_ess": -0.1},
+        {"enabled": True, "preset": "youtube_voice", "de_ess": 1.1},
+        {"enabled": "yes", "preset": "youtube_voice"},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/voice-cleanup/compile",
+            method="POST",
+            payload=bad_vc,
+        )
+        assert bad_status == 400
+
+    rp_status, _, rp_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/voice_cleanup_dryrun.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "voice_cleanup": {
+                "enabled": True,
+                "preset": "podcast_warm",
+                "highpass_hz": 65,
+                "presence_db": 1.5,
+                "de_ess": 0.25,
+            },
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert rp_status == 200
+    plan = json.loads(rp_raw.decode("utf-8"))["plan"]
+    assert plan["voice_cleanup_enabled"] is True
+    assert plan["voice_cleanup_preset"] == "podcast_warm"
+    assert plan["voice_cleanup_highpass_hz"] == 65
+    assert plan["voice_cleanup_presence_db"] == pytest.approx(1.5)
+    assert plan["voice_cleanup_de_ess"] == pytest.approx(0.25)
+    expected_plan_af = (
+        "highpass=f=65,equalizer=f=3200:t=q:w=1.2:g=1.5,deesser=i=0.25:m=0.50:f=0.50:s=o"
+    )
+    assert expected_plan_af in plan["audio_filter"]
+
+    bad_rp_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/voice_cleanup_bad.mp4",
+            "voice_cleanup": {"enabled": True, "highpass_hz": 300},
+            "execute": False,
+        },
+    )
+    assert bad_rp_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "deliver-voice-cleanup-card",
+        "render-voice-cleanup-enabled",
+        "render-voice-cleanup-badge",
+        "render-voice-cleanup-highpass",
+        "render-voice-cleanup-highpass-value",
+        "render-voice-cleanup-presence",
+        "render-voice-cleanup-presence-value",
+        "render-voice-cleanup-deess",
+        "render-voice-cleanup-deess-value",
+        "render-voice-cleanup-preview",
+    ):
+        assert f'id="{elem_id}"' in html_text
+    for preset_attr in ("youtube_voice", "podcast_warm", "broadcast_crisp"):
+        assert f'data-deliver-voice-cleanup-preset="{preset_attr}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.voiceCleanup.title",
+        "render.voiceCleanup.toggle",
+        "render.voiceCleanup.preset.youtube",
+        "render.voiceCleanup.preset.podcast",
+        "render.voiceCleanup.preset.broadcast",
+        "render.voiceCleanup.label.highpass",
+        "render.voiceCleanup.label.presence",
+        "render.voiceCleanup.label.deess",
+        "render.plan.voiceCleanup",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    demo_text = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    assert "compileVoiceCleanupClient" in demo_text
+    assert "voice_cleanup_enabled" in demo_text
+    assert "innerHTML" not in demo_text
+
+    for asset_name in ("index.html", "app.js", "demo_adapter.js", "i18n.js", "styles.css"):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content
+        assert "\u2013" not in content

@@ -191,6 +191,7 @@ ReframeAspectRatio = Literal["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]
 FilmGrainPresetId = Literal["35mm_fine", "16mm_organic", "super8_heavy", "custom"]
 VignettePresetId = Literal["subtle_cinema", "moody_portrait", "heavy_noir", "custom"]
 VignetteMode = Literal["forward", "backward"]
+VoiceCleanupPresetId = Literal["youtube_voice", "podcast_warm", "broadcast_crisp", "custom"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
 
@@ -232,6 +233,21 @@ ALLOWED_VIGNETTE_MODES: tuple[VignetteMode, ...] = ("forward", "backward")
 VIGNETTE_ANGLE_DEG_MIN: float = 5.0
 VIGNETTE_ANGLE_DEG_MAX: float = 75.0
 VIGNETTE_ANGLE_DEG_DEFAULT: float = 24.0
+ALLOWED_VOICE_CLEANUP_PRESETS: tuple[VoiceCleanupPresetId, ...] = (
+    "youtube_voice",
+    "podcast_warm",
+    "broadcast_crisp",
+    "custom",
+)
+VOICE_CLEANUP_HIGHPASS_HZ_MIN: int = 40
+VOICE_CLEANUP_HIGHPASS_HZ_MAX: int = 200
+VOICE_CLEANUP_HIGHPASS_HZ_DEFAULT: int = 85
+VOICE_CLEANUP_PRESENCE_DB_MIN: float = -6.0
+VOICE_CLEANUP_PRESENCE_DB_MAX: float = 6.0
+VOICE_CLEANUP_PRESENCE_DB_DEFAULT: float = 2.5
+VOICE_CLEANUP_DE_ESS_MIN: float = 0.0
+VOICE_CLEANUP_DE_ESS_MAX: float = 1.0
+VOICE_CLEANUP_DE_ESS_DEFAULT: float = 0.35
 ALLOWED_EXPORT_FPS: tuple[ExportFpsOption, ...] = ("source", "24", "25", "30", "60")
 ALLOWED_AUDIO_ONLY_FORMATS: tuple[AudioOnlyFormatId, ...] = (
     "off",
@@ -581,6 +597,11 @@ class RenderPlan(BaseModel):
     vignette_preset: VignettePresetId = "subtle_cinema"
     vignette_angle_deg: float = VIGNETTE_ANGLE_DEG_DEFAULT
     vignette_mode: VignetteMode = "forward"
+    voice_cleanup_enabled: bool = False
+    voice_cleanup_preset: VoiceCleanupPresetId = "youtube_voice"
+    voice_cleanup_highpass_hz: int = VOICE_CLEANUP_HIGHPASS_HZ_DEFAULT
+    voice_cleanup_presence_db: float = VOICE_CLEANUP_PRESENCE_DB_DEFAULT
+    voice_cleanup_de_ess: float = VOICE_CLEANUP_DE_ESS_DEFAULT
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

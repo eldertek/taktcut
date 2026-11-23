@@ -1577,6 +1577,47 @@
                 <label for="render-audio-af-preview" data-i18n="render.label.afChain">Audio Filter Chain (-af)</label>
                 <div id="render-audio-af-preview" class="code-box af-chain-preview mono" aria-live="polite">(none)</div>
               </div>
+              <div id="deliver-voice-cleanup-card" class="voice-cleanup-deliver-card">
+                <div class="voice-cleanup-deliver-head">
+                  <span class="voice-cleanup-deliver-title" data-i18n="render.voiceCleanup.title">Fairlight Voice Cleanup</span>
+                  <div class="voice-cleanup-deliver-head-actions">
+                    <span id="render-voice-cleanup-badge" class="nle-tag mono">OFF</span>
+                    <label class="check-label voice-cleanup-toggle-label">
+                      <input type="checkbox" id="render-voice-cleanup-enabled">
+                      <span data-i18n="render.voiceCleanup.toggle">Enable</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="voice-cleanup-deliver-preset-row" role="group" aria-label="Fairlight Voice Cleanup Presets">
+                  <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="youtube_voice" aria-pressed="false" data-i18n="render.voiceCleanup.preset.youtube">YouTube Voice</button>
+                  <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="podcast_warm" aria-pressed="false" data-i18n="render.voiceCleanup.preset.podcast">Podcast Warm</button>
+                  <button type="button" class="voice-cleanup-deliver-preset-btn" data-deliver-voice-cleanup-preset="broadcast_crisp" aria-pressed="false" data-i18n="render.voiceCleanup.preset.broadcast">Broadcast Crisp</button>
+                </div>
+                <div class="voice-cleanup-deliver-controls-row">
+                  <div class="form-row voice-cleanup-deliver-slider-col">
+                    <label for="render-voice-cleanup-highpass" data-i18n="render.voiceCleanup.label.highpass">High-Pass (Hz)</label>
+                    <div class="watermark-opacity-row">
+                      <input type="range" id="render-voice-cleanup-highpass" class="watermark-opacity-slider" min="40" max="200" step="1" value="85">
+                      <span id="render-voice-cleanup-highpass-value" class="mono watermark-opacity-val">85 Hz</span>
+                    </div>
+                  </div>
+                  <div class="form-row voice-cleanup-deliver-slider-col">
+                    <label for="render-voice-cleanup-presence" data-i18n="render.voiceCleanup.label.presence">Presence 3.2kHz (dB)</label>
+                    <div class="watermark-opacity-row">
+                      <input type="range" id="render-voice-cleanup-presence" class="watermark-opacity-slider" min="-6" max="6" step="0.5" value="2.5">
+                      <span id="render-voice-cleanup-presence-value" class="mono watermark-opacity-val">+2.5 dB</span>
+                    </div>
+                  </div>
+                  <div class="form-row voice-cleanup-deliver-slider-col">
+                    <label for="render-voice-cleanup-deess" data-i18n="render.voiceCleanup.label.deess">De-Esser</label>
+                    <div class="watermark-opacity-row">
+                      <input type="range" id="render-voice-cleanup-deess" class="watermark-opacity-slider" min="0" max="1" step="0.05" value="0.35">
+                      <span id="render-voice-cleanup-deess-value" class="mono watermark-opacity-val">0.35</span>
+                    </div>
+                  </div>
+                </div>
+                <div id="render-voice-cleanup-preview" class="code-box voice-cleanup-deliver-preview mono" aria-live="polite">(off)</div>
+              </div>
               <div class="form-row-two">
                 <div class="form-row">
                   <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
