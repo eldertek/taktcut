@@ -11,7 +11,9 @@ from pydantic import ValidationError
 
 from taktcut.color import (
     COLOR_GRADE_PRESETS,
+    CURVE_CHANNELS,
     POWER_WINDOW_SHAPES,
+    ColorCurvesParams,
     ColorGradeParams,
     ColorNodeParams,
     PowerWindowParams,
@@ -20,13 +22,19 @@ from taktcut.color import (
     bake_cdl_to_cube,
     bake_color_grade_to_cube,
     bake_color_node_chain_to_cube,
+    build_curve_lut_256,
     build_rec709_lut_filter,
+    compile_color_curves_filter,
     compile_color_grade,
     compile_color_grade_filter,
     compile_color_node_chain,
     compile_power_window_mask_expr,
+    evaluate_curve_pchip,
+    get_color_curves_preset,
     get_color_preset,
+    list_color_curves_presets,
     list_color_presets,
+    normalize_curve_points,
     parse_cdl_xml,
     parse_cube_lut,
     parse_cube_lut_text,
@@ -520,3 +528,133 @@ def test_power_window_shapes_execute_and_mask_pixels_in_real_ffmpeg() -> None:
             # Gradient top is desaturated, bottom stays blue
             assert abs(top_px[0] - top_px[2]) < 15
             assert corner_px[2] > corner_px[0] + 180
+
+
+def test_color_curves_pchip_normalization_and_presets() -> None:
+    pts = normalize_curve_points([(0.75, 0.85), (0.25, 0.15)])
+    assert pts[0] == (0.0, 0.0)
+    assert pts[-1] == (1.0, 1.0)
+    assert len(pts) == 4
+    assert evaluate_curve_pchip(pts, 0.25) == pytest.approx(0.15, abs=1e-4)
+    assert evaluate_curve_pchip(pts, 0.75) == pytest.approx(0.85, abs=1e-4)
+    # PCHIP must stay monotone over strictly increasing knots without overshoot
+    lut = build_curve_lut_256(pts)
+    assert len(lut) == 256
+    assert all(lut[i] <= lut[i + 1] + 1e-6 for i in range(255))
+
+    with pytest.raises(ValidationError):
+        ColorCurvesParams(master=[(0.0, 0.0), (0.5, 1.5), (1.0, 1.0)])
+
+    presets = list_color_curves_presets()
+    assert len(presets) == 6
+    assert CURVE_CHANNELS == ("master", "red", "green", "blue")
+    s_curve = get_color_curves_preset("film_s_curve")
+    assert not s_curve.curves.is_identity()
+    assert ColorCurvesParams().is_identity() is True
+
+    # FFmpeg curves apply per-channel first, then master
+    c = ColorCurvesParams(
+        master=[(0.0, 0.0), (0.5, 0.25), (1.0, 1.0)],
+        red=[(0.0, 0.0), (0.25, 0.50), (1.0, 1.0)],
+    )
+    r_out, g_out, b_out = c.apply_rgb(0.25, 0.50, 0.50)
+    assert r_out == pytest.approx(0.25, abs=1e-3)
+    assert g_out == pytest.approx(0.25, abs=1e-3)
+    assert b_out == pytest.approx(0.25, abs=1e-3)
+
+
+def test_color_node_curves_compile_bake_and_render_plan(tmp_path: Path) -> None:
+    curves = get_color_curves_preset("warm_gold").curves
+    fg_curves = compile_color_curves_filter(curves)
+    assert fg_curves.startswith("curves=interp=pchip:")
+    assert "red=" in fg_curves
+    assert "blue=" in fg_curves
+    assert "master=" not in fg_curves
+
+    # Curves-only node (neutral grade) must still compile and trigger RenderPlan video_filter
+    node = ColorNodeParams(
+        id="node-1",
+        label="Curves Only",
+        enabled=True,
+        grade=ColorGradeParams(),
+        curves=curves,
+        power_window=PowerWindowParams(shape="circle", center_x=0.5, center_y=0.5),
+    )
+    compiled = compile_color_node_chain([node], pix_fmt="yuv420p")
+    assert compiled.is_identity is False
+    assert compiled.has_curves is True
+    assert compiled.has_power_windows is True
+    assert "curves=interp=pchip:" in compiled.filtergraph
+    assert "maskedmerge" in compiled.filtergraph
+
+    caps = HardwareCapabilities(ffmpeg_path="ffmpeg", libx264=True)
+    plan = build_render_plan(
+        input_path=tmp_path / "in.mp4",
+        output_path=tmp_path / "out_curves.mp4",
+        profile=RenderProfile.WEB_H264,
+        color_nodes=[node],
+        prefer_hw=False,
+        caps=caps,
+    )
+    assert plan.video_filter is not None
+    assert "curves=interp=pchip:" in plan.video_filter
+
+    # Bake node with curves into 3D .cube LUT and verify warm shift at mid-gray
+    cube_path = tmp_path / "curves_warm.cube"
+    info = bake_color_node_chain_to_cube([node], cube_path, size=17, title="curves_warm")
+    assert info.entry_count == 17**3
+    _lut_info, table = parse_cube_lut_text(cube_path.read_text(encoding="utf-8"))
+    mid_idx = 8 * 17 * 17 + 8 * 17 + 8
+    mr, _mg, mb = table[mid_idx]
+    assert mr > mb + 0.08
+
+
+def test_color_curves_ffmpeg_execution_runtime() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    assert ffmpeg_bin is not None
+    node = ColorNodeParams(
+        id="node-1",
+        label="Matte Lift + PW",
+        enabled=True,
+        curves=ColorCurvesParams(
+            master=[(0.0, 0.12), (0.5, 0.62), (1.0, 0.94)],
+            red=[(0.0, 0.0), (0.5, 0.68), (1.0, 1.0)],
+        ),
+        power_window=PowerWindowParams(
+            shape="circle",
+            center_x=0.5,
+            center_y=0.5,
+            width=0.45,
+            height=0.45,
+            softness=0.05,
+        ),
+    )
+    fg = compile_color_node_chain([node], pix_fmt="rgb24").filtergraph
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=gray:s=64x64:d=0.1",
+        "-vf",
+        fg,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    assert proc.returncode == 0, f"FFmpeg rejected curves graph: {proc.stderr.decode()}"
+    raw = proc.stdout
+    assert len(raw) == 64 * 64 * 3
+    ctr_idx = (32 * 64 + 32) * 3
+    crn_idx = (4 * 64 + 4) * 3
+    center_px = (raw[ctr_idx], raw[ctr_idx + 1], raw[ctr_idx + 2])
+    corner_px = (raw[crn_idx], raw[crn_idx + 1], raw[crn_idx + 2])
+    # Center inside Power Window gets lifted & red-boosted; corner outside stays neutral gray
+    assert center_px[0] > center_px[2] + 20
+    assert abs(corner_px[0] - corner_px[2]) < 5

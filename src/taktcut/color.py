@@ -57,6 +57,19 @@ ALLOWED_COLOR_PIX_FMTS: frozenset[str] = frozenset(
 
 ColorPresetId = Literal["rec709_clean", "teal_orange", "film_warm", "noir_bw"]
 
+ColorCurveChannel = Literal["master", "red", "green", "blue"]
+CURVE_CHANNELS: tuple[ColorCurveChannel, ...] = ("master", "red", "green", "blue")
+MAX_CURVE_POINTS: int = 16
+DEFAULT_CURVE_POINTS: tuple[tuple[float, float], ...] = ((0.0, 0.0), (1.0, 1.0))
+ColorCurvesPresetId = Literal[
+    "linear",
+    "film_s_curve",
+    "matte_lift",
+    "crisp_contrast",
+    "warm_gold",
+    "cool_shadows",
+]
+
 
 def _clamp_unit(value: float) -> float:
     if value < 0.0:
@@ -789,13 +802,284 @@ def compile_power_window_mask_expr(pw: PowerWindowParams) -> str:
     return f"{setup}255*(1-({t_expr}))"
 
 
+def normalize_curve_points(raw_points: Any) -> list[tuple[float, float]]:
+    """Validate, sort, and clamp YRGB curve points to [0, 1] with pinned endpoints."""
+    if raw_points is None:
+        return list(DEFAULT_CURVE_POINTS)
+    if not isinstance(raw_points, (list, tuple)):
+        raise ValueError("Curve points must be a list of [x, y] pairs")
+    if len(raw_points) == 0:
+        return list(DEFAULT_CURVE_POINTS)
+    if len(raw_points) > MAX_CURVE_POINTS:
+        raise ValueError(f"Curve channel cannot exceed {MAX_CURVE_POINTS} points")
+
+    parsed: list[tuple[float, float]] = []
+    for idx, pt in enumerate(raw_points):
+        if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+            raise ValueError(f"Curve point[{idx}] must be an [x, y] pair")
+        px = _validate_bounded_float(pt[0], f"curve[{idx}].x", 0.0, 1.0)
+        py = _validate_bounded_float(pt[1], f"curve[{idx}].y", 0.0, 1.0)
+        parsed.append((round(px, 4), round(py, 4)))
+
+    parsed.sort(key=lambda p: p[0])
+
+    deduped: list[tuple[float, float]] = []
+    for px, py in parsed:
+        if deduped and abs(px - deduped[-1][0]) < 1e-3:
+            deduped[-1] = (deduped[-1][0], py)
+        else:
+            deduped.append((px, py))
+
+    if deduped[0][0] > 1e-3:
+        deduped.insert(0, (0.0, 0.0))
+    else:
+        deduped[0] = (0.0, deduped[0][1])
+
+    if deduped[-1][0] < 1.0 - 1e-3:
+        deduped.append((1.0, 1.0))
+    else:
+        deduped[-1] = (1.0, deduped[-1][1])
+
+    if len(deduped) > MAX_CURVE_POINTS:
+        interior = deduped[1 : MAX_CURVE_POINTS - 1]
+        deduped = [deduped[0], *interior, deduped[-1]]
+
+    return deduped
+
+
+def _compute_pchip_tangents(pts: Sequence[tuple[float, float]]) -> list[float]:
+    """Compute Fritsch-Carlson monotone cubic Hermite tangents for sorted curve points."""
+    n = len(pts)
+    if n < 2:
+        return [0.0] * n
+    h = [max(1e-6, pts[i + 1][0] - pts[i][0]) for i in range(n - 1)]
+    d = [(pts[i + 1][1] - pts[i][1]) / h[i] for i in range(n - 1)]
+    if n == 2:
+        return [d[0], d[0]]
+
+    m = [0.0] * n
+    for k in range(1, n - 1):
+        if d[k - 1] * d[k] <= 0.0:
+            m[k] = 0.0
+        else:
+            w1 = 2.0 * h[k] + h[k - 1]
+            w2 = h[k] + 2.0 * h[k - 1]
+            m[k] = (w1 + w2) / (w1 / d[k - 1] + w2 / d[k])
+
+    def _endpoint_slope(h0: float, h1: float, d0: float, d1: float) -> float:
+        slope = ((2.0 * h0 + h1) * d0 - h0 * d1) / (h0 + h1)
+        if slope * d0 <= 0.0:
+            return 0.0
+        if (d0 * d1 <= 0.0) and (abs(slope) > 3.0 * abs(d0)):
+            return 3.0 * d0
+        return slope
+
+    m[0] = _endpoint_slope(h[0], h[1], d[0], d[1])
+    m[n - 1] = _endpoint_slope(h[n - 2], h[n - 3], d[n - 2], d[n - 3])
+    return m
+
+
+def evaluate_curve_pchip(points: Sequence[tuple[float, float]], x: float) -> float:
+    """Evaluate a monotone PCHIP cubic spline curve at x in [0, 1]."""
+    pts = list(points) if points else list(DEFAULT_CURVE_POINTS)
+    xc = _clamp_unit(float(x))
+    if len(pts) == 1:
+        return _clamp_unit(pts[0][1])
+    if xc <= pts[0][0]:
+        return _clamp_unit(pts[0][1])
+    if xc >= pts[-1][0]:
+        return _clamp_unit(pts[-1][1])
+
+    m = _compute_pchip_tangents(pts)
+    idx = 0
+    for i in range(len(pts) - 1):
+        if xc <= pts[i + 1][0]:
+            idx = i
+            break
+    x0, y0 = pts[idx]
+    x1, y1 = pts[idx + 1]
+    h = max(1e-6, x1 - x0)
+    t = (xc - x0) / h
+    t2 = t * t
+    t3 = t2 * t
+    h00 = 2.0 * t3 - 3.0 * t2 + 1.0
+    h10 = t3 - 2.0 * t2 + t
+    h01 = -2.0 * t3 + 3.0 * t2
+    h11 = t3 - t2
+    val = h00 * y0 + h10 * h * m[idx] + h01 * y1 + h11 * h * m[idx + 1]
+    return _clamp_unit(val)
+
+
+def build_curve_lut_256(points: Sequence[tuple[float, float]]) -> list[float]:
+    """Sample a PCHIP curve into a 256-entry lookup table in [0, 1]."""
+    return [evaluate_curve_pchip(points, i / 255.0) for i in range(256)]
+
+
+def is_curve_channel_identity(points: Sequence[tuple[float, float]]) -> bool:
+    """Return True when every knot lies on the diagonal y = x."""
+    if not points:
+        return True
+    return all(abs(py - px) < 1e-4 for px, py in points)
+
+
+class ColorCurvesParams(BaseModel):
+    """DaVinci Resolve custom YRGB spline curves (Master, Red, Green, Blue)."""
+
+    master: list[tuple[float, float]] = Field(
+        default_factory=lambda: list(DEFAULT_CURVE_POINTS)
+    )
+    red: list[tuple[float, float]] = Field(
+        default_factory=lambda: list(DEFAULT_CURVE_POINTS)
+    )
+    green: list[tuple[float, float]] = Field(
+        default_factory=lambda: list(DEFAULT_CURVE_POINTS)
+    )
+    blue: list[tuple[float, float]] = Field(
+        default_factory=lambda: list(DEFAULT_CURVE_POINTS)
+    )
+
+    @field_validator("master", "red", "green", "blue", mode="before")
+    @classmethod
+    def _validate_channel_points(cls, raw: Any) -> list[tuple[float, float]]:
+        return normalize_curve_points(raw)
+
+    def is_identity(self) -> bool:
+        """Return True when all four YRGB channels are diagonal identity curves."""
+        return (
+            is_curve_channel_identity(self.master)
+            and is_curve_channel_identity(self.red)
+            and is_curve_channel_identity(self.green)
+            and is_curve_channel_identity(self.blue)
+        )
+
+    def apply_rgb(self, r: float, g: float, b: float) -> tuple[float, float, float]:
+        """Apply channel curves first, then Master curve (matching FFmpeg vf_curves)."""
+        rc = _clamp_unit(r)
+        gc = _clamp_unit(g)
+        bc = _clamp_unit(b)
+        if not is_curve_channel_identity(self.red):
+            rc = evaluate_curve_pchip(self.red, rc)
+        if not is_curve_channel_identity(self.green):
+            gc = evaluate_curve_pchip(self.green, gc)
+        if not is_curve_channel_identity(self.blue):
+            bc = evaluate_curve_pchip(self.blue, bc)
+        if not is_curve_channel_identity(self.master):
+            rc = evaluate_curve_pchip(self.master, rc)
+            gc = evaluate_curve_pchip(self.master, gc)
+            bc = evaluate_curve_pchip(self.master, bc)
+        return (rc, gc, bc)
+
+    def build_luts_256(self) -> dict[ColorCurveChannel, list[float]]:
+        """Return 256-entry lookup tables for all four YRGB curve channels."""
+        return {
+            "master": build_curve_lut_256(self.master),
+            "red": build_curve_lut_256(self.red),
+            "green": build_curve_lut_256(self.green),
+            "blue": build_curve_lut_256(self.blue),
+        }
+
+
+class ColorCurvesPreset(BaseModel):
+    """Named studio YRGB curve preset."""
+
+    id: ColorCurvesPresetId
+    label: str
+    description: str
+    curves: ColorCurvesParams
+
+
+COLOR_CURVES_PRESETS: tuple[ColorCurvesPreset, ...] = (
+    ColorCurvesPreset(
+        id="linear",
+        label="Linear",
+        description="Neutral unity curve across Y, R, G, and B channels.",
+        curves=ColorCurvesParams(),
+    ),
+    ColorCurvesPreset(
+        id="film_s_curve",
+        label="Film S-Curve",
+        description="Gentle shadow toe and highlight shoulder for cinematic contrast.",
+        curves=ColorCurvesParams(
+            master=[(0.0, 0.0), (0.25, 0.19), (0.5, 0.50), (0.75, 0.82), (1.0, 1.0)],
+        ),
+    ),
+    ColorCurvesPreset(
+        id="matte_lift",
+        label="Matte Lift",
+        description="Lifted black floor and soft highlight roll-off for editorial film matte.",
+        curves=ColorCurvesParams(
+            master=[(0.0, 0.08), (0.25, 0.24), (0.75, 0.78), (1.0, 0.94)],
+        ),
+    ),
+    ColorCurvesPreset(
+        id="crisp_contrast",
+        label="Crisp Contrast",
+        description="Deep shadows and punchy upper-midtones.",
+        curves=ColorCurvesParams(
+            master=[(0.0, 0.0), (0.22, 0.14), (0.5, 0.52), (0.78, 0.88), (1.0, 1.0)],
+        ),
+    ),
+    ColorCurvesPreset(
+        id="warm_gold",
+        label="Warm Gold",
+        description="Golden midtone warmth with restrained blue highlights.",
+        curves=ColorCurvesParams(
+            red=[(0.0, 0.0), (0.5, 0.56), (1.0, 1.0)],
+            blue=[(0.0, 0.0), (0.5, 0.43), (1.0, 0.95)],
+        ),
+    ),
+    ColorCurvesPreset(
+        id="cool_shadows",
+        label="Cool Shadows",
+        description="Cool blue shadow tint with balanced skin highlights.",
+        curves=ColorCurvesParams(
+            red=[(0.0, 0.0), (0.25, 0.20), (0.75, 0.76), (1.0, 1.0)],
+            blue=[(0.0, 0.04), (0.25, 0.32), (0.75, 0.74), (1.0, 1.0)],
+        ),
+    ),
+)
+
+
+def list_color_curves_presets() -> tuple[ColorCurvesPreset, ...]:
+    """Return all built-in studio YRGB curve presets."""
+    return COLOR_CURVES_PRESETS
+
+
+def get_color_curves_preset(preset_id: str) -> ColorCurvesPreset:
+    """Resolve a built-in curve preset by id."""
+    for preset in COLOR_CURVES_PRESETS:
+        if preset.id == preset_id:
+            return preset
+    raise ValueError(f"Unknown color curves preset {preset_id!r}")
+
+
+def compile_color_curves_filter(curves: ColorCurvesParams) -> str:
+    """Compile ColorCurvesParams to an FFmpeg curves=interp=pchip filter expression."""
+    if curves.is_identity():
+        return ""
+    opts: list[str] = ["interp=pchip"]
+    channel_pairs: tuple[tuple[str, list[tuple[float, float]]], ...] = (
+        ("master", curves.master),
+        ("red", curves.red),
+        ("green", curves.green),
+        ("blue", curves.blue),
+    )
+    for name, pts in channel_pairs:
+        if is_curve_channel_identity(pts):
+            continue
+        encoded = " ".join(f"{px:.4f}/{py:.4f}" for px, py in pts)
+        opts.append(f"{name}='{encoded}'")
+    return f"curves={':'.join(opts)}"
+
+
 class ColorNodeParams(BaseModel):
-    """A single serial color grading node combining Lift/Gamma/Gain/Tone, Power Window, and LUT."""
+    """A single serial color grading node combining Wheels/Tone, Curves, Power Window, and LUT."""
 
     id: str = "node-1"
     label: str = "Primary"
     enabled: bool = True
     grade: ColorGradeParams = Field(default_factory=ColorGradeParams)
+    curves: ColorCurvesParams = Field(default_factory=ColorCurvesParams)
     power_window: PowerWindowParams = Field(default_factory=PowerWindowParams)
     lut_title: str = ""
     lut_dimension: Literal["1D", "3D"] | None = None
@@ -902,20 +1186,28 @@ class ColorNodeParams(BaseModel):
         """Return True when this node carries an imported .cube LUT or workspace LUT path."""
         return bool((self.lut_table is not None and self.lut_size is not None) or self.lut_path)
 
+    def has_curves(self) -> bool:
+        """Return True when this node has non-identity YRGB spline curves."""
+        return not self.curves.is_identity()
+
     def is_identity(self) -> bool:
-        """Return True when disabled or both primary grade and LUT mix are neutral."""
+        """Return True when disabled or grade, curves, and LUT mix are neutral."""
         if not self.enabled:
             return True
         if not self.grade.is_identity():
             return False
+        if not self.curves.is_identity():
+            return False
         return not (self.has_lut() and self.lut_mix > 1e-6)
 
     def apply_rgb(self, r: float, g: float, b: float) -> tuple[float, float, float]:
-        """Apply this node's grade and optional .cube LUT to an RGB triplet in [0, 1]."""
+        """Apply this node's grade, YRGB curves, and optional .cube LUT to [0, 1] RGB."""
         in_rgb = (_clamp_unit(r), _clamp_unit(g), _clamp_unit(b))
         if not self.enabled:
             return in_rgb
         out_r, out_g, out_b = self.grade.apply_rgb(in_rgb[0], in_rgb[1], in_rgb[2])
+        if not self.curves.is_identity():
+            out_r, out_g, out_b = self.curves.apply_rgb(out_r, out_g, out_b)
         if (
             self.lut_table is not None
             and self.lut_size is not None
@@ -943,7 +1235,7 @@ class ColorNodeParams(BaseModel):
         u: float = 0.5,
         v: float = 0.5,
     ) -> tuple[float, float, float]:
-        """Apply this node's grade and optional LUT blended by its Power Window mask at (u, v)."""
+        """Apply this node's grade, curves, and optional LUT blended by its Power Window mask."""
         in_rgb = (_clamp_unit(r), _clamp_unit(g), _clamp_unit(b))
         if not self.enabled:
             return in_rgb
@@ -968,6 +1260,7 @@ class ColorNodeChainCompileResult(BaseModel):
     total_node_count: int
     has_lut_nodes: bool
     has_power_windows: bool = False
+    has_curves: bool = False
 
 
 def _coerce_color_nodes(
@@ -988,7 +1281,7 @@ def compile_color_node_chain_filter(
     *,
     pix_fmt: str | None = None,
 ) -> str:
-    """Compile a serial node chain into FFmpeg colorbalance, eq, and maskedmerge stages."""
+    """Compile a serial node chain into FFmpeg colorbalance, eq, curves, and maskedmerge."""
     if pix_fmt is not None and pix_fmt not in ALLOWED_COLOR_PIX_FMTS:
         raise ValueError(f"Unsupported pixel format {pix_fmt!r}")
     validated = _coerce_color_nodes(nodes)
@@ -997,11 +1290,18 @@ def compile_color_node_chain_filter(
     for node in validated:
         if not node.enabled:
             continue
-        if node.grade.is_identity():
+        node_stages: list[str] = []
+        if not node.grade.is_identity():
+            node_stages.append(compile_color_grade_filter(node.grade, pix_fmt=None))
+        if not node.curves.is_identity():
+            curves_fg = compile_color_curves_filter(node.curves)
+            if curves_fg:
+                node_stages.append(curves_fg)
+        if not node_stages:
             continue
-        grade_fg = compile_color_grade_filter(node.grade, pix_fmt=None)
+        node_fg = ",".join(node_stages)
         if not node.power_window.is_active():
-            parts.append(grade_fg)
+            parts.append(node_fg)
             continue
         tag = f"pw{pw_idx}"
         pw_idx += 1
@@ -1009,7 +1309,7 @@ def compile_color_node_chain_filter(
         parts.append(
             f"split=3[{tag}b][{tag}g][{tag}m];"
             f"[{tag}b]format=gbrp[{tag}bg];"
-            f"[{tag}g]{grade_fg},format=gbrp[{tag}fg];"
+            f"[{tag}g]{node_fg},format=gbrp[{tag}fg];"
             f"[{tag}m]format=gray,geq=lum='{mask_expr}',split=3[{tag}mr][{tag}mg][{tag}mb];"
             f"[{tag}mr][{tag}mg][{tag}mb]mergeplanes=0x001020:gbrp[{tag}msk];"
             f"[{tag}bg][{tag}fg][{tag}msk]maskedmerge"
@@ -1032,6 +1332,7 @@ def compile_color_node_chain(
     active_nodes = [n for n in validated if n.enabled and not n.is_identity()]
     has_lut_nodes = any(n.enabled and n.has_lut() and n.lut_mix > 1e-6 for n in validated)
     has_power_windows = any(n.enabled and n.power_window.is_active() for n in validated)
+    has_curves = any(n.enabled and not n.curves.is_identity() for n in validated)
     return ColorNodeChainCompileResult(
         filtergraph=fg,
         ffmpeg_vf_args=["-vf", fg],
@@ -1040,6 +1341,7 @@ def compile_color_node_chain(
         total_node_count=len(validated),
         has_lut_nodes=has_lut_nodes,
         has_power_windows=has_power_windows,
+        has_curves=has_curves,
     )
 
 

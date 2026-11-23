@@ -3071,7 +3071,10 @@ def build_render_plan(
             vf_parts.append(ck_fg)
     if fx_filtergraph:
         vf_parts.append(fx_filtergraph)
-    if color_nodes and any(n.enabled and not n.grade.is_identity() for n in color_nodes):
+    if color_nodes and any(
+        n.enabled and (not n.grade.is_identity() or not n.curves.is_identity())
+        for n in color_nodes
+    ):
         vf_parts.append(compile_color_node_chain_filter(color_nodes, pix_fmt=pix_fmt))
     elif color_grade is not None and not color_grade.is_identity():
         vf_parts.append(compile_color_grade_filter(color_grade, pix_fmt=pix_fmt))

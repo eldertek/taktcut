@@ -1,11 +1,13 @@
 import {
   CLIP_LABEL_COLORS,
+  CURVE_CHANNELS,
   MARKER_COLOR_HEX,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   TRANSFORM_PARAM_BOUNDS,
   applyColorNodeChainRgbAtClient,
   applyColorNodeChainRgbClient,
+  buildCurveLut256Client,
   clampSplitWipePercent,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
@@ -28,11 +30,14 @@ import {
   getTransitionShortTag,
   hasTransformKeyframes,
   isClipTransformIdentity,
+  isCurveChannelIdentity,
   isPowerWindowActive,
   normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
+  normalizeColorCurves,
+  normalizeCurvePoints,
   normalizePowerWindow,
   resolveTransformKeyframeBezier,
   sampleTransformCurve
@@ -5359,4 +5364,186 @@ export function drawRetimeRampEditorCanvas(canvas, opts = {}) {
     posToX,
     xToPos
   };
+}
+
+const CURVE_CHANNEL_COLORS = {
+  master: "#e6e6ee",
+  red: "#f06565",
+  green: "#56cf74",
+  blue: "#58a6ff"
+};
+
+export function drawColorCurvesCanvas(
+  canvas,
+  rawCurves,
+  activeChannel = "master",
+  selectedPointIdx = -1,
+  opts = {}
+) {
+  if (!canvas) return null;
+  const selfRect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+  const width = Math.max(176, Math.floor(selfRect && selfRect.width > 0 ? selfRect.width : 212));
+  const height = 196;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const curves = normalizeColorCurves(rawCurves);
+  const ch = CURVE_CHANNELS.includes(activeChannel) ? activeChannel : "master";
+  const pad = 14;
+  const plotW = Math.max(40, width - pad * 2);
+  const plotH = Math.max(40, height - pad * 2);
+
+  const toX = (u) => pad + clamp01(u) * plotW;
+  const toY = (v) => pad + (1 - clamp01(v)) * plotH;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "#14161c";
+  ctx.fillRect(pad, pad, plotW, plotH);
+
+  // Live channel histogram backdrop sampled from graded color viewer
+  const previewCanvas = opts && opts.previewCanvas ? opts.previewCanvas : null;
+  const srcImg = previewCanvas ? getGradedPreviewImageData(previewCanvas, opts.cdl || null) : null;
+  if (srcImg && srcImg.data && srcImg.data.length > 0) {
+    const bins = 48;
+    const hist = new Float32Array(bins);
+    const data = srcImg.data;
+    const step = Math.max(4, Math.floor(data.length / 4 / 1200) * 4);
+    for (let i = 0; i < data.length; i += step) {
+      const r = data[i] / 255;
+      const g = data[i + 1] / 255;
+      const b = data[i + 2] / 255;
+      let val = 0;
+      if (ch === "red") val = r;
+      else if (ch === "green") val = g;
+      else if (ch === "blue") val = b;
+      else val = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const bin = Math.min(bins - 1, Math.max(0, Math.floor(val * bins)));
+      hist[bin] += 1;
+    }
+    let maxH = 1;
+    for (let b = 0; b < bins; b++) {
+      if (hist[b] > maxH) maxH = hist[b];
+    }
+    const barW = plotW / bins;
+    ctx.fillStyle =
+      ch === "red"
+        ? "rgba(240, 101, 101, 0.16)"
+        : ch === "green"
+          ? "rgba(86, 207, 116, 0.16)"
+          : ch === "blue"
+            ? "rgba(88, 166, 255, 0.16)"
+            : "rgba(216, 216, 226, 0.14)";
+    for (let b = 0; b < bins; b++) {
+      const hNorm = Math.sqrt(hist[b] / maxH);
+      const bh = hNorm * plotH * 0.78;
+      if (bh > 0.5) {
+        ctx.fillRect(pad + b * barW, pad + plotH - bh, Math.max(1, barW - 0.5), bh);
+      }
+    }
+  }
+
+  // 4x4 reference grid
+  ctx.strokeStyle = "#22242e";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const gx = Math.round(pad + (i / 4) * plotW) + 0.5;
+    const gy = Math.round(pad + (i / 4) * plotH) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(gx, pad);
+    ctx.lineTo(gx, pad + plotH);
+    ctx.moveTo(pad, gy);
+    ctx.lineTo(pad + plotW, gy);
+    ctx.stroke();
+  }
+
+  // Diagonal unity line
+  ctx.save();
+  ctx.strokeStyle = "#343746";
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(toX(0), toY(0));
+  ctx.lineTo(toX(1), toY(1));
+  ctx.stroke();
+  ctx.restore();
+
+  // Draw inactive channels subtly when modified
+  for (const channel of CURVE_CHANNELS) {
+    if (channel === ch) continue;
+    const pts = curves[channel];
+    if (isCurveChannelIdentity(pts)) continue;
+    const lut = buildCurveLut256Client(pts);
+    ctx.save();
+    ctx.strokeStyle = CURVE_CHANNEL_COLORS[channel];
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    for (let i = 0; i < 256; i++) {
+      const px = toX(i / 255);
+      const py = toY(lut[i]);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw active channel PCHIP spline
+  const activePts = normalizeCurvePoints(curves[ch]);
+  const activeLut = buildCurveLut256Client(activePts);
+  const strokeColor = CURVE_CHANNEL_COLORS[ch];
+
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 2.1;
+  ctx.beginPath();
+  for (let i = 0; i < 256; i++) {
+    const px = toX(i / 255);
+    const py = toY(activeLut[i]);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // Control knots
+  const renderedPts = [];
+  for (let i = 0; i < activePts.length; i++) {
+    const [u, v] = activePts[i];
+    const px = toX(u);
+    const py = toY(v);
+    const isSel = i === selectedPointIdx;
+    renderedPts.push({ index: i, u, v, x: px, y: py });
+
+    if (isSel) {
+      ctx.fillStyle = "rgba(224, 123, 57, 0.28)";
+      ctx.beginPath();
+      ctx.arc(px, py, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = isSel ? "#e07b39" : "#14151a";
+    ctx.strokeStyle = isSel ? "#ffd166" : strokeColor;
+    ctx.lineWidth = isSel ? 2 : 1.75;
+    ctx.beginPath();
+    ctx.arc(px, py, isSel ? 5 : 4.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  const geom = {
+    pad,
+    plotW,
+    plotH,
+    width,
+    height,
+    activeChannel: ch,
+    points: renderedPts
+  };
+  canvas._curvesGeom = geom;
+  return geom;
 }

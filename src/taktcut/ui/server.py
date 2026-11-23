@@ -42,6 +42,7 @@ from taktcut.color import (
     bake_color_node_chain_to_cube,
     compile_color_grade,
     compile_color_node_chain,
+    list_color_curves_presets,
     list_color_presets,
     parse_cdl_xml,
     parse_cube_lut,
@@ -1212,6 +1213,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "presets": [p.model_dump(mode="json") for p in list_color_presets()],
+                    "curve_presets": [
+                        p.model_dump(mode="json") for p in list_color_curves_presets()
+                    ],
                     "bounds": {
                         "lift": {
                             "min": COLOR_BALANCE_MIN,
@@ -1613,6 +1617,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, compiled_chain.model_dump(mode="json"))
                 return
             grade = _build_color_grade_from_payload(payload)
+            if isinstance(payload.get("curves"), dict):
+                single_node = ColorNodeParams.model_validate(
+                    {"grade": grade, "curves": payload["curves"]}
+                )
+                compiled_chain = compile_color_node_chain([single_node], pix_fmt=pix_fmt)
+                self._send_json(HTTPStatus.OK, compiled_chain.model_dump(mode="json"))
+                return
             compiled_color = compile_color_grade(grade, pix_fmt=pix_fmt)
             self._send_json(HTTPStatus.OK, compiled_color.model_dump(mode="json"))
             return

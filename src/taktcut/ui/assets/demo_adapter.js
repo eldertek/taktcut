@@ -1,6 +1,7 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ASPECT_RATIO_PRESETS,
+  COLOR_CURVE_PRESETS,
   DELIVERY_PRESETS,
   LOUDNESS_PRESET_LUFS,
   TRANSITION_PRESETS,
@@ -19,6 +20,7 @@ import {
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
   computeRetimeRampSummary,
+  createColorNode,
   deserializeColorNodeFromApi,
   getDeliveryPresetClient,
   normalizeFairlightAudioParams,
@@ -161,6 +163,13 @@ function compileColorClient(payload, opts = {}) {
   if (payload && Array.isArray(payload.nodes) && payload.nodes.length > 0) {
     const clientNodes = payload.nodes.map((n, idx) => deserializeColorNodeFromApi(n, idx));
     return compileColorNodeChainClient(clientNodes, opts.pix_fmt || null);
+  }
+  if (payload && payload.curves && typeof payload.curves === "object") {
+    const singleNode = createColorNode(1, {
+      grade: payload.grade || payload,
+      curves: payload.curves
+    });
+    return compileColorNodeChainClient([singleNode], opts.pix_fmt || null);
   }
   const g = payload && payload.grade ? payload.grade : payload || {};
   const lift = Array.isArray(g.lift) && g.lift.length === 3 ? g.lift.map(Number) : [0, 0, 0];
@@ -2089,7 +2098,11 @@ export function createApiClient() {
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {
-        return { presets: [], bounds: {} };
+        return {
+          presets: [],
+          curve_presets: Object.values(COLOR_CURVE_PRESETS),
+          bounds: {}
+        };
       }
       return requestJson("/api/color/presets");
     },

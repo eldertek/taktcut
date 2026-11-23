@@ -1677,25 +1677,63 @@
                 </div>
               </div>
 
-              <!-- LUMETRI TONE CONTROLS: CONTRAST / SATURATION / TEMPERATURE -->
-              <div class="grade-tone-grid mono">
-                <div class="grade-tone-row">
-                  <label for="grade-contrast-range" data-i18n="color.group.contrast">CONTRAST</label>
-                  <input type="range" id="grade-contrast-range" min="0" max="2" step="0.01" value="1.00">
-                  <input type="number" id="grade-contrast-num" class="input-num" min="0" max="2" step="0.01" value="1.00" aria-label="Contrast value">
-                  <button type="button" id="btn-reset-contrast" class="btn btn-mini" aria-label="Reset Contrast">Rst</button>
+              <!-- DAVINCI CUSTOM YRGB CURVES + LUMETRI TONE CONTROLS -->
+              <div class="color-curves-tone-split">
+                <div id="color-curves-dock" class="color-curves-dock" role="region" aria-label="Custom YRGB Spline Curves">
+                  <div class="curves-toolbar">
+                    <div class="curves-title-group">
+                      <span class="pane-subheader-label" data-i18n="color.curves.title">Custom Curves (YRGB)</span>
+                      <span id="curves-status-badge" class="nle-tag mono">LINEAR</span>
+                    </div>
+                    <div id="curves-channel-group" class="curves-channel-group" role="group" aria-label="Curve Channel">
+                      <button type="button" class="btn btn-mini curves-ch-btn is-active" data-curve-channel="master" aria-pressed="true" data-i18n="color.curves.chMaster">YRGB</button>
+                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-red" data-curve-channel="red" aria-pressed="false">R</button>
+                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-green" data-curve-channel="green" aria-pressed="false">G</button>
+                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-blue" data-curve-channel="blue" aria-pressed="false">B</button>
+                    </div>
+                    <div class="curves-actions">
+                      <button type="button" id="btn-curves-delete-pt" class="btn btn-mini" disabled title="Remove selected interior knot (Delete)" data-i18n="color.curves.delPt">Del Pt</button>
+                      <button type="button" id="btn-curves-reset-ch" class="btn btn-mini" title="Reset active channel curve" data-i18n="color.curves.resetCh">Rst Ch</button>
+                      <button type="button" id="btn-curves-reset-all" class="btn btn-mini" title="Reset all YRGB curves" data-i18n="color.curves.resetAll">Rst All</button>
+                    </div>
+                  </div>
+                  <div class="curves-stage">
+                    <canvas id="color-curves-canvas" class="color-curves-canvas" tabindex="0" aria-label="Custom YRGB spline curve editor"></canvas>
+                    <div class="curves-meta-rail">
+                      <div id="curves-point-readout" class="curves-point-readout mono" aria-live="polite">PT -- | IN -- | OUT --</div>
+                      <div id="curves-preset-strip" class="curves-preset-strip" role="group" aria-label="Curve Presets">
+                        <button type="button" class="btn btn-chip curves-preset-btn is-active" data-curve-preset="linear" aria-pressed="true" data-i18n="color.curves.preset.linear">Linear</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="film_s_curve" aria-pressed="false" data-i18n="color.curves.preset.filmS">Film S-Curve</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="matte_lift" aria-pressed="false" data-i18n="color.curves.preset.matteLift">Matte Lift</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="crisp_contrast" aria-pressed="false" data-i18n="color.curves.preset.crisp">Crisp Contrast</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="warm_gold" aria-pressed="false" data-i18n="color.curves.preset.warmGold">Warm Gold</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="cool_shadows" aria-pressed="false" data-i18n="color.curves.preset.coolShadows">Cool Shadows</button>
+                      </div>
+                      <div class="curves-hint mono" data-i18n="color.curves.hint">Click curve to add knot, drag to shape, double-click or Del to remove.</div>
+                    </div>
+                  </div>
                 </div>
-                <div class="grade-tone-row">
-                  <label for="grade-saturation-range" data-i18n="color.group.sat">SATURATION</label>
-                  <input type="range" id="grade-saturation-range" min="0" max="3" step="0.01" value="1.00">
-                  <input type="number" id="grade-saturation-num" class="input-num" min="0" max="3" step="0.01" value="1.00" aria-label="Saturation value">
-                  <button type="button" id="btn-reset-saturation" class="btn btn-mini" aria-label="Reset Saturation">Rst</button>
-                </div>
-                <div class="grade-tone-row">
-                  <label for="grade-temperature-range" data-i18n="color.group.temperature">TEMPERATURE</label>
-                  <input type="range" id="grade-temperature-range" class="temp-slider" min="-1" max="1" step="0.01" value="0.00">
-                  <input type="number" id="grade-temperature-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Temperature value">
-                  <button type="button" id="btn-reset-temperature" class="btn btn-mini" aria-label="Reset Temperature">Rst</button>
+
+                <!-- LUMETRI TONE CONTROLS: CONTRAST / SATURATION / TEMPERATURE -->
+                <div class="grade-tone-grid mono">
+                  <div class="grade-tone-row">
+                    <label for="grade-contrast-range" data-i18n="color.group.contrast">CONTRAST</label>
+                    <input type="range" id="grade-contrast-range" min="0" max="2" step="0.01" value="1.00">
+                    <input type="number" id="grade-contrast-num" class="input-num" min="0" max="2" step="0.01" value="1.00" aria-label="Contrast value">
+                    <button type="button" id="btn-reset-contrast" class="btn btn-mini" aria-label="Reset Contrast">Rst</button>
+                  </div>
+                  <div class="grade-tone-row">
+                    <label for="grade-saturation-range" data-i18n="color.group.sat">SATURATION</label>
+                    <input type="range" id="grade-saturation-range" min="0" max="3" step="0.01" value="1.00">
+                    <input type="number" id="grade-saturation-num" class="input-num" min="0" max="3" step="0.01" value="1.00" aria-label="Saturation value">
+                    <button type="button" id="btn-reset-saturation" class="btn btn-mini" aria-label="Reset Saturation">Rst</button>
+                  </div>
+                  <div class="grade-tone-row">
+                    <label for="grade-temperature-range" data-i18n="color.group.temperature">TEMPERATURE</label>
+                    <input type="range" id="grade-temperature-range" class="temp-slider" min="-1" max="1" step="0.01" value="0.00">
+                    <input type="number" id="grade-temperature-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Temperature value">
+                    <button type="button" id="btn-reset-temperature" class="btn btn-mini" aria-label="Reset Temperature">Rst</button>
+                  </div>
                 </div>
               </div>
             </div>

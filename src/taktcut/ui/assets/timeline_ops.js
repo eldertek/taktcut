@@ -5104,6 +5104,240 @@ export function compilePowerWindowMaskExprClient(pwRaw) {
   return pw.invert ? `${setup}255*(${tExpr})` : `${setup}255*(1-(${tExpr}))`;
 }
 
+export const CURVE_CHANNELS = ["master", "red", "green", "blue"];
+export const MAX_CURVE_POINTS = 16;
+
+export const COLOR_CURVE_PRESETS = {
+  linear: {
+    id: "linear",
+    label: "Linear",
+    curves: {
+      master: [[0, 0], [1, 1]],
+      red: [[0, 0], [1, 1]],
+      green: [[0, 0], [1, 1]],
+      blue: [[0, 0], [1, 1]]
+    }
+  },
+  film_s_curve: {
+    id: "film_s_curve",
+    label: "Film S-Curve",
+    curves: {
+      master: [[0, 0], [0.25, 0.19], [0.5, 0.5], [0.75, 0.82], [1, 1]],
+      red: [[0, 0], [1, 1]],
+      green: [[0, 0], [1, 1]],
+      blue: [[0, 0], [1, 1]]
+    }
+  },
+  matte_lift: {
+    id: "matte_lift",
+    label: "Matte Lift",
+    curves: {
+      master: [[0, 0.08], [0.25, 0.24], [0.75, 0.78], [1, 0.94]],
+      red: [[0, 0], [1, 1]],
+      green: [[0, 0], [1, 1]],
+      blue: [[0, 0], [1, 1]]
+    }
+  },
+  crisp_contrast: {
+    id: "crisp_contrast",
+    label: "Crisp Contrast",
+    curves: {
+      master: [[0, 0], [0.22, 0.14], [0.5, 0.52], [0.78, 0.88], [1, 1]],
+      red: [[0, 0], [1, 1]],
+      green: [[0, 0], [1, 1]],
+      blue: [[0, 0], [1, 1]]
+    }
+  },
+  warm_gold: {
+    id: "warm_gold",
+    label: "Warm Gold",
+    curves: {
+      master: [[0, 0], [1, 1]],
+      red: [[0, 0], [0.5, 0.56], [1, 1]],
+      green: [[0, 0], [1, 1]],
+      blue: [[0, 0], [0.5, 0.43], [1, 0.95]]
+    }
+  },
+  cool_shadows: {
+    id: "cool_shadows",
+    label: "Cool Shadows",
+    curves: {
+      master: [[0, 0], [1, 1]],
+      red: [[0, 0], [0.25, 0.2], [0.75, 0.76], [1, 1]],
+      green: [[0, 0], [1, 1]],
+      blue: [[0, 0.04], [0.25, 0.32], [0.75, 0.74], [1, 1]]
+    }
+  }
+};
+
+export function normalizeCurvePoints(rawPoints) {
+  if (!Array.isArray(rawPoints) || rawPoints.length === 0) {
+    return [[0, 0], [1, 1]];
+  }
+  const parsed = [];
+  for (const pt of rawPoints) {
+    if (!Array.isArray(pt) || pt.length !== 2) continue;
+    const x = Number(pt[0]);
+    const y = Number(pt[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    parsed.push([
+      Math.round(clampUnitColor(x) * 10000) / 10000,
+      Math.round(clampUnitColor(y) * 10000) / 10000
+    ]);
+  }
+  if (parsed.length === 0) {
+    return [[0, 0], [1, 1]];
+  }
+  parsed.sort((a, b) => a[0] - b[0]);
+  const deduped = [];
+  for (const [px, py] of parsed) {
+    if (deduped.length > 0 && Math.abs(px - deduped[deduped.length - 1][0]) < 1e-3) {
+      deduped[deduped.length - 1] = [deduped[deduped.length - 1][0], py];
+    } else {
+      deduped.push([px, py]);
+    }
+  }
+  if (deduped[0][0] > 1e-3) {
+    deduped.unshift([0, 0]);
+  } else {
+    deduped[0] = [0, deduped[0][1]];
+  }
+  if (deduped[deduped.length - 1][0] < 1 - 1e-3) {
+    deduped.push([1, 1]);
+  } else {
+    deduped[deduped.length - 1] = [1, deduped[deduped.length - 1][1]];
+  }
+  if (deduped.length > MAX_CURVE_POINTS) {
+    return [deduped[0], ...deduped.slice(1, MAX_CURVE_POINTS - 1), deduped[deduped.length - 1]];
+  }
+  return deduped;
+}
+
+export function createDefaultColorCurves(overrides = {}) {
+  const src = overrides && typeof overrides === "object" ? overrides : {};
+  return {
+    master: normalizeCurvePoints(src.master),
+    red: normalizeCurvePoints(src.red),
+    green: normalizeCurvePoints(src.green),
+    blue: normalizeCurvePoints(src.blue)
+  };
+}
+
+export function normalizeColorCurves(raw) {
+  return createDefaultColorCurves(raw);
+}
+
+export function isCurveChannelIdentity(points) {
+  if (!Array.isArray(points) || points.length === 0) return true;
+  return points.every(([px, py]) => Math.abs(py - px) < 1e-4);
+}
+
+export function isColorCurvesIdentity(curves) {
+  const c = normalizeColorCurves(curves);
+  return (
+    isCurveChannelIdentity(c.master) &&
+    isCurveChannelIdentity(c.red) &&
+    isCurveChannelIdentity(c.green) &&
+    isCurveChannelIdentity(c.blue)
+  );
+}
+
+function computePchipTangentsClient(pts) {
+  const n = pts.length;
+  if (n < 2) return new Array(n).fill(0);
+  const h = [];
+  const d = [];
+  for (let i = 0; i < n - 1; i++) {
+    const hi = Math.max(1e-6, pts[i + 1][0] - pts[i][0]);
+    h.push(hi);
+    d.push((pts[i + 1][1] - pts[i][1]) / hi);
+  }
+  if (n === 2) return [d[0], d[0]];
+  const m = new Array(n).fill(0);
+  for (let k = 1; k < n - 1; k++) {
+    if (d[k - 1] * d[k] <= 0) {
+      m[k] = 0;
+    } else {
+      const w1 = 2 * h[k] + h[k - 1];
+      const w2 = h[k] + 2 * h[k - 1];
+      m[k] = (w1 + w2) / (w1 / d[k - 1] + w2 / d[k]);
+    }
+  }
+  const endSlope = (h0, h1, d0, d1) => {
+    const slope = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
+    if (slope * d0 <= 0) return 0;
+    if (d0 * d1 <= 0 && Math.abs(slope) > 3 * Math.abs(d0)) return 3 * d0;
+    return slope;
+  };
+  m[0] = endSlope(h[0], h[1], d[0], d[1]);
+  m[n - 1] = endSlope(h[n - 2], h[n - 3], d[n - 2], d[n - 3]);
+  return m;
+}
+
+export function evaluateCurvePchipClient(points, x) {
+  const pts = Array.isArray(points) && points.length > 0 ? points : [[0, 0], [1, 1]];
+  const xc = clampUnitColor(x);
+  if (pts.length === 1) return clampUnitColor(pts[0][1]);
+  if (xc <= pts[0][0]) return clampUnitColor(pts[0][1]);
+  if (xc >= pts[pts.length - 1][0]) return clampUnitColor(pts[pts.length - 1][1]);
+  const m = computePchipTangentsClient(pts);
+  let idx = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (xc <= pts[i + 1][0]) {
+      idx = i;
+      break;
+    }
+  }
+  const [x0, y0] = pts[idx];
+  const [x1, y1] = pts[idx + 1];
+  const h = Math.max(1e-6, x1 - x0);
+  const t = (xc - x0) / h;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  return clampUnitColor(h00 * y0 + h10 * h * m[idx] + h01 * y1 + h11 * h * m[idx + 1]);
+}
+
+export function buildCurveLut256Client(points) {
+  const lut = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    lut[i] = evaluateCurvePchipClient(points, i / 255);
+  }
+  return lut;
+}
+
+export function applyColorCurvesRgbClient(r, g, b, curves) {
+  const c = normalizeColorCurves(curves);
+  let rc = clampUnitColor(r);
+  let gc = clampUnitColor(g);
+  let bc = clampUnitColor(b);
+  if (!isCurveChannelIdentity(c.red)) rc = evaluateCurvePchipClient(c.red, rc);
+  if (!isCurveChannelIdentity(c.green)) gc = evaluateCurvePchipClient(c.green, gc);
+  if (!isCurveChannelIdentity(c.blue)) bc = evaluateCurvePchipClient(c.blue, bc);
+  if (!isCurveChannelIdentity(c.master)) {
+    rc = evaluateCurvePchipClient(c.master, rc);
+    gc = evaluateCurvePchipClient(c.master, gc);
+    bc = evaluateCurvePchipClient(c.master, bc);
+  }
+  return [rc, gc, bc];
+}
+
+export function compileColorCurvesFilterClient(curves) {
+  const c = normalizeColorCurves(curves);
+  if (isColorCurvesIdentity(c)) return "";
+  const opts = ["interp=pchip"];
+  for (const ch of CURVE_CHANNELS) {
+    const pts = c[ch];
+    if (isCurveChannelIdentity(pts)) continue;
+    const encoded = pts.map(([px, py]) => `${px.toFixed(4)}/${py.toFixed(4)}`).join(" ");
+    opts.push(`${ch}='${encoded}'`);
+  }
+  return `curves=${opts.join(":")}`;
+}
+
 export function createColorNode(index = 1, overrides = {}) {
   const safeIdx = Math.max(1, Math.round(Number(index) || 1));
   return {
@@ -5119,6 +5353,7 @@ export function createColorNode(index = 1, overrides = {}) {
           : `Serial ${safeIdx}`,
     enabled: overrides.enabled !== false,
     grade: normalizeColorGrade(overrides.grade),
+    curves: normalizeColorCurves(overrides.curves),
     power_window: normalizePowerWindow(overrides.power_window),
     lut: normalizeNodeLut(overrides.lut)
   };
@@ -5131,6 +5366,7 @@ export function normalizeColorNode(raw, index = 0) {
     label: n.label,
     enabled: n.enabled,
     grade: n.grade,
+    curves: n.curves,
     power_window: n.power_window,
     lut: n.lut
   });
@@ -5174,6 +5410,7 @@ export function getSelectedColorNode(tree) {
 export function isColorNodeIdentity(node) {
   if (!node || node.enabled === false) return true;
   if (!isColorGradeIdentity(node.grade)) return false;
+  if (!isColorCurvesIdentity(node.curves)) return false;
   if (node.lut && Number(node.lut.mix ?? 1.0) > 1e-6) return false;
   return true;
 }
@@ -5196,6 +5433,7 @@ export function addColorNodeToTree(tree, opts = {}) {
     id: `node-${seq}`,
     label: defaultLabel,
     grade: opts.grade,
+    curves: opts.curves,
     power_window: opts.power_window,
     lut: opts.lut
   });
@@ -5287,6 +5525,10 @@ export function updateColorNodeInTree(tree, nodeId, patch = {}) {
             : n.label,
         enabled: patch.enabled !== undefined ? Boolean(patch.enabled) : n.enabled,
         grade: patch.grade !== undefined ? normalizeColorGrade(patch.grade) : n.grade,
+        curves:
+          patch.curves !== undefined
+            ? normalizeColorCurves(patch.curves)
+            : normalizeColorCurves(n.curves),
         power_window:
           patch.power_window !== undefined
             ? normalizePowerWindow(patch.power_window)
@@ -5309,6 +5551,9 @@ export function applyColorNodeChainRgbClient(r, g, b, treeOrNodes) {
   for (const node of nodes) {
     if (!node || node.enabled === false) continue;
     [curR, curG, curB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+    if (!isColorCurvesIdentity(node.curves)) {
+      [curR, curG, curB] = applyColorCurvesRgbClient(curR, curG, curB, node.curves);
+    }
     if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
       [curR, curG, curB] = applyCubeLutRgbClient(curR, curG, curB, node.lut, node.lut.mix);
     }
@@ -5328,6 +5573,9 @@ export function applyColorNodeChainRgbAtClient(r, g, b, u, v, treeOrNodes) {
   for (const node of nodes) {
     if (!node || node.enabled === false) continue;
     let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+    if (!isColorCurvesIdentity(node.curves)) {
+      [outR, outG, outB] = applyColorCurvesRgbClient(outR, outG, outB, node.curves);
+    }
     if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
       [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
     }
@@ -5381,6 +5629,7 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
   let activeCount = 0;
   let hasLutNodes = false;
   let hasPowerWindows = false;
+  let hasCurves = false;
   let pwIdx = 0;
 
   for (const node of nodes) {
@@ -5388,8 +5637,17 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
     const hasLut = Boolean(node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6);
     if (hasLut) hasLutNodes = true;
     if (isPowerWindowActive(node.power_window)) hasPowerWindows = true;
+    const nodeStages = [];
     if (!isColorGradeIdentity(node.grade)) {
-      const gradeFg = compileSingleGradeFilterStr(node.grade);
+      nodeStages.push(compileSingleGradeFilterStr(node.grade));
+    }
+    if (!isColorCurvesIdentity(node.curves)) {
+      hasCurves = true;
+      const curvesFg = compileColorCurvesFilterClient(node.curves);
+      if (curvesFg) nodeStages.push(curvesFg);
+    }
+    if (nodeStages.length > 0) {
+      const nodeFg = nodeStages.join(",");
       if (isPowerWindowActive(node.power_window)) {
         const tag = `pw${pwIdx}`;
         pwIdx += 1;
@@ -5397,13 +5655,13 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
         parts.push(
           `split=3[${tag}b][${tag}g][${tag}m];` +
             `[${tag}b]format=gbrp[${tag}bg];` +
-            `[${tag}g]${gradeFg},format=gbrp[${tag}fg];` +
+            `[${tag}g]${nodeFg},format=gbrp[${tag}fg];` +
             `[${tag}m]format=gray,geq=lum='${maskExpr}',split=3[${tag}mr][${tag}mg][${tag}mb];` +
             `[${tag}mr][${tag}mg][${tag}mb]mergeplanes=0x001020:gbrp[${tag}msk];` +
             `[${tag}bg][${tag}fg][${tag}msk]maskedmerge`
         );
       } else {
-        parts.push(gradeFg);
+        parts.push(nodeFg);
       }
     }
     if (!isColorNodeIdentity(node)) {
@@ -5425,7 +5683,8 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
     active_node_count: activeCount,
     total_node_count: nodes.length,
     has_lut_nodes: hasLutNodes,
-    has_power_windows: hasPowerWindows
+    has_power_windows: hasPowerWindows,
+    has_curves: hasCurves
   };
 }
 
@@ -5437,6 +5696,7 @@ export function serializeColorNodeForApi(node) {
     label: norm.label,
     enabled: norm.enabled,
     grade: norm.grade,
+    curves: normalizeColorCurves(norm.curves),
     power_window: normalizePowerWindow(norm.power_window),
     lut_title: lut ? lut.title : "",
     lut_dimension: lut ? lut.dimension : null,
@@ -5470,6 +5730,7 @@ export function deserializeColorNodeFromApi(rawNode, index = 0) {
     label: n.label,
     enabled: n.enabled,
     grade: n.grade,
+    curves: n.curves,
     power_window: n.power_window,
     lut
   });

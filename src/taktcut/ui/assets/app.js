@@ -1,6 +1,7 @@
 import {
   captureCleanColorStill,
   captureCleanFxStill,
+  drawColorCurvesCanvas,
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
   drawFramesCanvas,
@@ -40,11 +41,14 @@ import {
   BPM_MIN,
   BPM_OFFSET_MAX_S,
   BPM_OFFSET_MIN_S,
+  COLOR_CURVE_PRESETS,
+  CURVE_CHANNELS,
   DELIVERY_PRESETS,
   DYNAMIC_ZOOM_DEFAULT,
   LOUDNESS_PRESET_LUFS,
   MARKER_COLOR_HEX,
   MAX_COLOR_NODES,
+  MAX_CURVE_POINTS,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   SNAP_THRESHOLD_PX,
@@ -96,6 +100,7 @@ import {
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
+  createDefaultColorCurves,
   createDefaultColorNodeTree,
   createDefaultPowerWindow,
   createEmptyTransformKeyframes,
@@ -104,6 +109,7 @@ import {
   deserializeColorNodeFromApi,
   estimateRenderFileSize,
   evaluateClipTransformAtTime,
+  evaluateCurvePchipClient,
   evaluatePowerWindowMask,
   evaluateRetimeSpeedAt,
   evaluateTransformParamAtTime,
@@ -133,7 +139,9 @@ import {
   hasTransformKeyframes,
   insertClipAtFrameInDocument,
   isClipTransformIdentity,
+  isColorCurvesIdentity,
   isColorNodeIdentity,
+  isCurveChannelIdentity,
   isPointerOnSplitWipeDivider,
   isPowerWindowActive,
   isTrackAudiblyMuted,
@@ -144,8 +152,10 @@ import {
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
+  normalizeColorCurves,
   normalizeColorGrade,
   normalizeColorNodeTree,
+  normalizeCurvePoints,
   normalizeFairlightAudioParams,
   normalizeInOutRange,
   normalizeMarkerColor,
@@ -417,6 +427,9 @@ const state = {
   colorCompileSeq: 0,
   powerWindowOverlay: true,
   powerWindowDrag: null,
+  colorCurvesChannel: "master",
+  colorCurvesSelectedPt: -1,
+  colorCurvesDrag: null,
   wipeRatio: 0.5,
   colorSplitWipe: {
     enabled: true,
@@ -1076,6 +1089,13 @@ function redrawActiveCanvases() {
       activeColorChain,
       state.colorScopeMode,
       previewCanvas
+    );
+    drawColorCurvesCanvas(
+      byId("color-curves-canvas"),
+      activeNode ? activeNode.curves : createDefaultColorCurves(),
+      state.colorCurvesChannel,
+      state.colorCurvesSelectedPt,
+      { previewCanvas, cdl: activeColorChain }
     );
     drawColorWheel(byId("wheel-lift"), "lift", state.colorGrade.lift);
     drawColorWheel(byId("wheel-gamma"), "gamma", state.colorGrade.gamma);
@@ -5542,11 +5562,14 @@ function renderColorCompileResult(res) {
     out.textContent = "";
     return;
   }
-  badge.textContent = res.is_identity
-    ? "UNITY"
-    : res.has_power_windows
-      ? "GRADED | PW"
-      : "GRADED";
+  if (res.is_identity) {
+    badge.textContent = "UNITY";
+  } else {
+    const tags = ["GRADED"];
+    if (res.has_power_windows) tags.push("PW");
+    if (res.has_curves) tags.push("CRV");
+    badge.textContent = tags.join(" | ");
+  }
   badge.className = `nle-tag mono ${res.is_identity ? "" : "is-pass"}`;
   out.textContent = res.filtergraph;
   renderColorNodeTreeUI();
@@ -5697,6 +5720,9 @@ function renderColorNodeTreeUI() {
         )
       );
     }
+    if (!isColorCurvesIdentity(node.curves)) {
+      metaRow.appendChild(dom("span", "color-node-crv-tag", "CRV"));
+    }
     selBtn.replaceChildren(topRow, metaRow);
     selBtn.addEventListener("click", () => selectColorNodeAction(node.id));
 
@@ -5719,6 +5745,7 @@ function renderColorNodeTreeUI() {
   flowChildren.push(dom("span", "color-node-pin mono", "OUT"));
   graph.replaceChildren(...flowChildren);
   renderPowerWindowControlsUI(activeNode);
+  renderColorCurvesControlsUI(activeNode);
 }
 
 const POWER_WINDOW_CONTROL_DEFS = [
@@ -5805,10 +5832,120 @@ function updateActivePowerWindow(patch, shouldCompile = true) {
   }
 }
 
+function getActiveCurvePresetId(curves) {
+  const c = normalizeColorCurves(curves);
+  if (isColorCurvesIdentity(c)) return "linear";
+  const samePts = (a, b) =>
+    a.length === b.length &&
+    a.every((pt, idx) => Math.abs(pt[0] - b[idx][0]) < 1e-3 && Math.abs(pt[1] - b[idx][1]) < 1e-3);
+  for (const preset of Object.values(COLOR_CURVE_PRESETS)) {
+    if (CURVE_CHANNELS.every((ch) => samePts(c[ch], normalizeCurvePoints(preset.curves[ch])))) {
+      return preset.id;
+    }
+  }
+  return "";
+}
+
+function renderColorCurvesControlsUI(activeNode) {
+  const curves = normalizeColorCurves(activeNode ? activeNode.curves : null);
+  const ch = CURVE_CHANNELS.includes(state.colorCurvesChannel) ? state.colorCurvesChannel : "master";
+  const pts = normalizeCurvePoints(curves[ch]);
+  if (state.colorCurvesSelectedPt >= pts.length) {
+    state.colorCurvesSelectedPt = -1;
+  }
+
+  const badge = byId("curves-status-badge");
+  if (badge) {
+    const activeChannels = CURVE_CHANNELS.filter((c) => !isCurveChannelIdentity(curves[c]));
+    if (activeChannels.length === 0) {
+      badge.textContent = "LINEAR";
+      badge.className = "nle-tag mono";
+    } else {
+      const labels = activeChannels.map((c) => (c === "master" ? "Y" : c[0].toUpperCase()));
+      badge.textContent = `ACTIVE | ${labels.join("+")}`;
+      badge.className = "nle-tag is-blue mono";
+    }
+  }
+
+  for (const btn of document.querySelectorAll("[data-curve-channel]")) {
+    const isSel = btn.getAttribute("data-curve-channel") === ch;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  const matchedPreset = getActiveCurvePresetId(curves);
+  for (const btn of document.querySelectorAll("[data-curve-preset]")) {
+    const isSel = btn.getAttribute("data-curve-preset") === matchedPreset;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  const selIdx = state.colorCurvesSelectedPt;
+  const canDelete = selIdx > 0 && selIdx < pts.length - 1;
+  const delBtn = byId("btn-curves-delete-pt");
+  if (delBtn) delBtn.disabled = !canDelete;
+
+  const rstChBtn = byId("btn-curves-reset-ch");
+  if (rstChBtn) rstChBtn.disabled = isCurveChannelIdentity(pts);
+
+  const rstAllBtn = byId("btn-curves-reset-all");
+  if (rstAllBtn) rstAllBtn.disabled = isColorCurvesIdentity(curves);
+
+  const readout = byId("curves-point-readout");
+  if (readout) {
+    if (selIdx >= 0 && selIdx < pts.length) {
+      const [px, py] = pts[selIdx];
+      readout.textContent = `PT ${selIdx + 1}/${pts.length} | IN ${px.toFixed(2)} | OUT ${py.toFixed(2)}`;
+    } else {
+      readout.textContent = `${ch === "master" ? "YRGB" : ch.toUpperCase()} | ${pts.length} KNOTS`;
+    }
+  }
+}
+
+function updateActiveColorCurvesChannel(channel, nextPoints, shouldCompile = true, immediateCompile = false) {
+  const active = syncActiveColorGradeFromTree();
+  const ch = CURVE_CHANNELS.includes(channel) ? channel : "master";
+  const curCurves = normalizeColorCurves(active.curves);
+  const nextCurves = normalizeColorCurves({
+    ...curCurves,
+    [ch]: nextPoints
+  });
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    curves: nextCurves
+  });
+  syncActiveColorGradeFromTree();
+  renderColorNodeTreeUI();
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+  if (immediateCompile) {
+    compileColorNow();
+  } else if (shouldCompile) {
+    scheduleColorCompile();
+  }
+}
+
+function applyColorCurvePresetAction(presetId) {
+  const preset = COLOR_CURVE_PRESETS[presetId];
+  if (!preset) return;
+  const active = syncActiveColorGradeFromTree();
+  state.colorCurvesSelectedPt = -1;
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    curves: normalizeColorCurves(preset.curves)
+  });
+  syncActiveColorGradeFromTree();
+  renderColorNodeTreeUI();
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+  compileColorNow();
+}
+
 function selectColorNodeAction(nodeId) {
   state.colorNodeTree = selectColorNodeInTree(state.colorNodeTree, nodeId);
   syncActiveColorGradeFromTree();
   state.colorActivePresetId = "";
+  state.colorCurvesSelectedPt = -1;
   syncColorInputsFromState();
 }
 
@@ -5817,6 +5954,7 @@ function addColorNodeAction() {
   state.colorNodeTree = addColorNodeToTree(state.colorNodeTree);
   syncActiveColorGradeFromTree();
   state.colorActivePresetId = "";
+  state.colorCurvesSelectedPt = -1;
   syncColorInputsFromState();
   compileColorNow();
 }
@@ -5828,6 +5966,7 @@ function addOutsideColorNodeAction() {
   state.colorNodeTree = addOutsideColorNodeInTree(state.colorNodeTree, active.id);
   syncActiveColorGradeFromTree();
   state.colorActivePresetId = "";
+  state.colorCurvesSelectedPt = -1;
   syncColorInputsFromState();
   compileColorNow();
 }
@@ -5838,6 +5977,7 @@ function removeColorNodeAction() {
   state.colorNodeTree = removeColorNodeFromTree(state.colorNodeTree, active.id);
   syncActiveColorGradeFromTree();
   state.colorActivePresetId = "";
+  state.colorCurvesSelectedPt = -1;
   syncColorInputsFromState();
   compileColorNow();
 }
@@ -5861,8 +6001,10 @@ function moveColorNodeAction(direction) {
 
 function resetSelectedColorNodeAction() {
   const active = syncActiveColorGradeFromTree();
+  state.colorCurvesSelectedPt = -1;
   state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
     grade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
+    curves: createDefaultColorCurves(),
     power_window: createDefaultPowerWindow(),
     lut: null
   });
@@ -5879,8 +6021,11 @@ async function compileColorNow() {
     const hasPw = serializedNodes.some(
       (n) => n.power_window && n.power_window.shape && n.power_window.shape !== "off"
     );
+    const hasCurves = serializedNodes.some(
+      (n) => n.curves && !isColorCurvesIdentity(n.curves)
+    );
     const payload =
-      serializedNodes.length === 1 && !serializedNodes[0].lut_table && !hasPw
+      serializedNodes.length === 1 && !serializedNodes[0].lut_table && !hasPw && !hasCurves
         ? { grade: state.colorGrade }
         : { nodes: serializedNodes };
     const compiled = await api.compileColorGrade(payload);
@@ -6560,6 +6705,7 @@ function wireColorInputs() {
 
   byId("btn-cdl-reset").addEventListener("click", () => {
     state.colorNodeTree = createDefaultColorNodeTree();
+    state.colorCurvesSelectedPt = -1;
     syncActiveColorGradeFromTree();
     state.colorActivePresetId = "rec709_clean";
     syncColorInputsFromState();
@@ -12739,6 +12885,207 @@ function wireEvents() {
       }
       const clamped = Math.min(def.max, Math.max(def.min, raw));
       updateActivePowerWindow({ [def.key]: clamped / def.scale }, true);
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-curve-channel]")) {
+    btn.addEventListener("click", () => {
+      const ch = btn.getAttribute("data-curve-channel") || "master";
+      if (!CURVE_CHANNELS.includes(ch)) return;
+      state.colorCurvesChannel = ch;
+      state.colorCurvesSelectedPt = -1;
+      renderColorNodeTreeUI();
+      if (state.activeTab === "color") redrawActiveCanvases();
+    });
+  }
+
+  for (const btn of document.querySelectorAll("[data-curve-preset]")) {
+    btn.addEventListener("click", () => {
+      const presetId = btn.getAttribute("data-curve-preset") || "linear";
+      applyColorCurvePresetAction(presetId);
+    });
+  }
+
+  byId("btn-curves-delete-pt")?.addEventListener("click", () => {
+    const active = syncActiveColorGradeFromTree();
+    const ch = state.colorCurvesChannel || "master";
+    const pts = normalizeCurvePoints(normalizeColorCurves(active.curves)[ch]);
+    const idx = state.colorCurvesSelectedPt;
+    if (idx <= 0 || idx >= pts.length - 1) return;
+    const nextPts = pts.filter((_, i) => i !== idx);
+    state.colorCurvesSelectedPt = -1;
+    updateActiveColorCurvesChannel(ch, nextPts, true, true);
+  });
+
+  byId("btn-curves-reset-ch")?.addEventListener("click", () => {
+    const ch = state.colorCurvesChannel || "master";
+    state.colorCurvesSelectedPt = -1;
+    updateActiveColorCurvesChannel(ch, [[0, 0], [1, 1]], true, true);
+  });
+
+  byId("btn-curves-reset-all")?.addEventListener("click", () => {
+    const active = syncActiveColorGradeFromTree();
+    state.colorCurvesSelectedPt = -1;
+    state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+      curves: createDefaultColorCurves()
+    });
+    syncActiveColorGradeFromTree();
+    renderColorNodeTreeUI();
+    if (state.activeTab === "color") redrawActiveCanvases();
+    compileColorNow();
+  });
+
+  const curvesCanvas = byId("color-curves-canvas");
+  if (curvesCanvas) {
+    const getCurveCanvasCoords = (ev) => {
+      const rect = curvesCanvas.getBoundingClientRect();
+      const geom = curvesCanvas._curvesGeom || {
+        pad: 14,
+        width: Math.max(176, rect.width),
+        height: Math.max(176, rect.height),
+        plotW: Math.max(40, rect.width - 28),
+        plotH: Math.max(40, rect.height - 28)
+      };
+      const scaleX = rect.width > 0 ? geom.width / rect.width : 1;
+      const scaleY = rect.height > 0 ? geom.height / rect.height : 1;
+      const px = (ev.clientX - rect.left) * scaleX;
+      const py = (ev.clientY - rect.top) * scaleY;
+      const u = Math.min(1, Math.max(0, (px - geom.pad) / geom.plotW));
+      const v = Math.min(1, Math.max(0, 1 - (py - geom.pad) / geom.plotH));
+      return { px, py, u, v, geom };
+    };
+
+    const findCurveKnotNear = (px, py, geom) => {
+      if (!geom || !Array.isArray(geom.points)) return -1;
+      let bestIdx = -1;
+      let bestDist = 11;
+      for (const pt of geom.points) {
+        const d = Math.hypot(px - pt.x, py - pt.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          bestIdx = pt.index;
+        }
+      }
+      return bestIdx;
+    };
+
+    curvesCanvas.addEventListener("pointerdown", (ev) => {
+      if (ev.button === 2) return;
+      curvesCanvas.focus();
+      const { px, py, u, v, geom } = getCurveCanvasCoords(ev);
+      const ch = state.colorCurvesChannel || "master";
+      const active = syncActiveColorGradeFromTree();
+      let pts = normalizeCurvePoints(normalizeColorCurves(active.curves)[ch]);
+      let hitIdx = findCurveKnotNear(px, py, geom);
+      if (hitIdx < 0) {
+        if (pts.length >= MAX_CURVE_POINTS) {
+          showBanner(`Curve channel max ${MAX_CURVE_POINTS} knots reached`, "info");
+          return;
+        }
+        const snappedY = Math.round(v * 10000) / 10000;
+        const snappedX = Math.round(Math.min(0.99, Math.max(0.01, u)) * 10000) / 10000;
+        const merged = normalizeCurvePoints([...pts, [snappedX, snappedY]]);
+        hitIdx = merged.findIndex((p) => Math.abs(p[0] - snappedX) < 0.002);
+        if (hitIdx < 0) hitIdx = 0;
+        pts = merged;
+        state.colorCurvesSelectedPt = hitIdx;
+        updateActiveColorCurvesChannel(ch, pts, false, false);
+      } else {
+        state.colorCurvesSelectedPt = hitIdx;
+        renderColorCurvesControlsUI(active);
+        redrawActiveCanvases();
+      }
+      state.colorCurvesDrag = { channel: ch, index: hitIdx };
+      try {
+        curvesCanvas.setPointerCapture(ev.pointerId);
+      } catch (_) {}
+    });
+
+    curvesCanvas.addEventListener("pointermove", (ev) => {
+      if (!state.colorCurvesDrag) return;
+      const { u, v } = getCurveCanvasCoords(ev);
+      const { channel, index } = state.colorCurvesDrag;
+      const active = syncActiveColorGradeFromTree();
+      const pts = normalizeCurvePoints(normalizeColorCurves(active.curves)[channel]);
+      if (index < 0 || index >= pts.length) return;
+      let nextX = pts[index][0];
+      if (index > 0 && index < pts.length - 1) {
+        const minX = pts[index - 1][0] + 0.01;
+        const maxX = pts[index + 1][0] - 0.01;
+        nextX = Math.min(maxX, Math.max(minX, u));
+      }
+      const nextY = Math.min(1, Math.max(0, v));
+      const updated = pts.map((p, i) =>
+        i === index ? [Math.round(nextX * 10000) / 10000, Math.round(nextY * 10000) / 10000] : p
+      );
+      state.colorCurvesSelectedPt = index;
+      updateActiveColorCurvesChannel(channel, updated, false, false);
+    });
+
+    const endCurveDrag = (ev) => {
+      if (!state.colorCurvesDrag) return;
+      state.colorCurvesDrag = null;
+      try {
+        if (ev && ev.pointerId !== undefined) curvesCanvas.releasePointerCapture(ev.pointerId);
+      } catch (_) {}
+      scheduleColorCompile();
+    };
+    curvesCanvas.addEventListener("pointerup", endCurveDrag);
+    curvesCanvas.addEventListener("pointercancel", endCurveDrag);
+
+    const removeKnotAtEvent = (ev) => {
+      const { px, py, geom } = getCurveCanvasCoords(ev);
+      const hitIdx = findCurveKnotNear(px, py, geom);
+      const ch = state.colorCurvesChannel || "master";
+      const active = syncActiveColorGradeFromTree();
+      const pts = normalizeCurvePoints(normalizeColorCurves(active.curves)[ch]);
+      if (hitIdx > 0 && hitIdx < pts.length - 1) {
+        const nextPts = pts.filter((_, i) => i !== hitIdx);
+        state.colorCurvesSelectedPt = -1;
+        updateActiveColorCurvesChannel(ch, nextPts, true, true);
+      }
+    };
+    curvesCanvas.addEventListener("dblclick", removeKnotAtEvent);
+    curvesCanvas.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      removeKnotAtEvent(ev);
+    });
+
+    curvesCanvas.addEventListener("keydown", (ev) => {
+      const idx = state.colorCurvesSelectedPt;
+      const ch = state.colorCurvesChannel || "master";
+      const active = syncActiveColorGradeFromTree();
+      const pts = normalizeCurvePoints(normalizeColorCurves(active.curves)[ch]);
+      if (idx < 0 || idx >= pts.length) return;
+      if (ev.key === "Delete" || ev.key === "Backspace") {
+        if (idx > 0 && idx < pts.length - 1) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const nextPts = pts.filter((_, i) => i !== idx);
+          state.colorCurvesSelectedPt = -1;
+          updateActiveColorCurvesChannel(ch, nextPts, true, true);
+        }
+        return;
+      }
+      const step = ev.shiftKey ? 0.005 : 0.02;
+      let dx = 0;
+      let dy = 0;
+      if (ev.key === "ArrowUp") dy = step;
+      else if (ev.key === "ArrowDown") dy = -step;
+      else if (ev.key === "ArrowRight") dx = step;
+      else if (ev.key === "ArrowLeft") dx = -step;
+      else return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      let nx = pts[idx][0];
+      if (idx > 0 && idx < pts.length - 1) {
+        nx = Math.min(pts[idx + 1][0] - 0.01, Math.max(pts[idx - 1][0] + 0.01, nx + dx));
+      }
+      const ny = Math.min(1, Math.max(0, pts[idx][1] + dy));
+      const updated = pts.map((p, i) =>
+        i === idx ? [Math.round(nx * 10000) / 10000, Math.round(ny * 10000) / 10000] : p
+      );
+      updateActiveColorCurvesChannel(ch, updated, true, false);
     });
   }
 

@@ -990,6 +990,15 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-pw-reset",
         "pw-cx-range",
         "pw-soft-range",
+        "color-curves-dock",
+        "color-curves-canvas",
+        "curves-status-badge",
+        "curves-channel-group",
+        "curves-preset-strip",
+        "curves-point-readout",
+        "btn-curves-delete-pt",
+        "btn-curves-reset-ch",
+        "btn-curves-reset-all",
         "clip-retime-process",
         "retime-ramp-editor",
         "clip-retime-ramp-badge",
@@ -1020,6 +1029,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert ".color-node-card" in css_text
     assert ".color-power-window-dock" in css_text
     assert ".pw-param-grid" in css_text
+    assert ".color-curves-dock" in css_text
+    assert ".color-curves-canvas" in css_text
+    assert ".color-curves-tone-split" in css_text
     assert ".retime-ramp-editor" in css_text
     assert ".retime-ramp-canvas" in css_text
     assert ".retime-deliver-advanced-row" in css_text
@@ -3790,6 +3802,36 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert page.locator("#pw-status-badge").text_content() == "LINEAR"
                     page.locator('[data-pw-shape="gradient"]').click()
                     assert page.locator("#pw-status-badge").text_content() == "GRADIENT"
+
+                    # Custom YRGB Spline Curves: preset, canvas knot insert + keyboard nudge + reset
+                    assert page.locator("#curves-status-badge").text_content() == "LINEAR"
+                    page.locator('[data-curve-preset="film_s_curve"]').click()
+                    page.wait_for_function(
+                        "() => (document.getElementById('color-filtergraph-output')"
+                        ".textContent || '').includes('curves=interp=pchip:master=')"
+                    )
+                    assert page.locator("#curves-status-badge").text_content() == "ACTIVE | Y"
+                    assert "CRV" in (page.locator("#color-compile-badge").text_content() or "")
+                    assert page.locator("#color-node-graph .color-node-crv-tag").count() >= 1
+
+                    page.locator('[data-curve-channel="red"]').click()
+                    curves_box = page.locator("#color-curves-canvas").bounding_box()
+                    assert curves_box is not None and curves_box["width"] > 120
+                    page.mouse.click(
+                        curves_box["x"] + curves_box["width"] * 0.5,
+                        curves_box["y"] + curves_box["height"] * 0.35,
+                    )
+                    assert page.locator("#curves-status-badge").text_content() == "ACTIVE | Y+R"
+                    assert page.locator("#btn-curves-delete-pt").is_disabled() is False
+                    readout_before = page.locator("#curves-point-readout").text_content() or ""
+                    assert "PT " in readout_before
+                    page.locator("#color-curves-canvas").press("ArrowUp")
+                    readout_after = page.locator("#curves-point-readout").text_content() or ""
+                    assert readout_after != readout_before
+                    page.locator("#btn-curves-delete-pt").click()
+                    assert page.locator("#curves-status-badge").text_content() == "ACTIVE | Y"
+                    page.locator("#btn-curves-reset-all").click()
+                    assert page.locator("#curves-status-badge").text_content() == "LINEAR"
                     page.locator("#btn-cdl-reset").click()
                 else:
                     # Mobile check: Grab Still + Serial Node targets >= 44px + 0 overflow
@@ -3808,6 +3850,8 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                             "#btn-color-node-bypass",
                             "#cube-file-input",
                             '[data-pw-shape="circle"]',
+                            '[data-curve-channel="master"]',
+                            '[data-curve-preset="film_s_curve"]',
                         ):
                             node_box = page.locator(node_sel).bounding_box()
                             assert node_box is not None and node_box["height"] >= 44
@@ -7431,5 +7475,88 @@ def test_ui_optical_flow_speed_ramp_endpoints_and_project_roundtrip(
     assert imp_clip["retime_process"] == "optical_flow"
     assert imp_clip["retime_ramp_preset"] == "bullet_pulse"
     assert len(imp_clip["retime_ramp_points"]) == 4
+
+
+def test_ui_color_curves_endpoints_and_project_roundtrip(ui_server: tuple[str, Path]) -> None:
+    base_url, _workspace = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/color/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    curve_presets = presets_data["curve_presets"]
+    assert len(curve_presets) == 6
+    assert any(p["id"] == "film_s_curve" for p in curve_presets)
+
+    curves_payload = {
+        "master": [[0.0, 0.0], [0.25, 0.18], [0.75, 0.84], [1.0, 1.0]],
+        "red": [[0.0, 0.0], [0.5, 0.58], [1.0, 1.0]],
+        "green": [[0.0, 0.0], [1.0, 1.0]],
+        "blue": [[0.0, 0.0], [0.5, 0.44], [1.0, 1.0]],
+    }
+    nodes_payload = [
+        {
+            "id": "node-1",
+            "label": "Curves Primary",
+            "enabled": True,
+            "curves": curves_payload,
+        }
+    ]
+    comp_status, _, comp_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"nodes": nodes_payload, "pix_fmt": "yuv420p"},
+    )
+    assert comp_status == 200
+    comp = json.loads(comp_raw.decode("utf-8"))
+    assert comp["is_identity"] is False
+    assert comp["has_curves"] is True
+    assert "curves=interp=pchip:master=" in comp["filtergraph"]
+    assert "red=" in comp["filtergraph"]
+    assert "blue=" in comp["filtergraph"]
+
+    shortcut_status, _, shortcut_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"curves": curves_payload},
+    )
+    assert shortcut_status == 200
+    shortcut = json.loads(shortcut_raw.decode("utf-8"))
+    assert shortcut["has_curves"] is True
+
+    bake_status, _, baked_raw = _http_call(
+        f"{base_url}/api/color/bake",
+        method="POST",
+        payload={"nodes": nodes_payload, "size": 5, "title": "api_curves_bake"},
+    )
+    assert bake_status == 200
+    baked = json.loads(baked_raw.decode("utf-8"))
+    assert "LUT_3D_SIZE 5" in baked["cube_text"]
+
+    sample_status, _, sample_raw = _http_call(f"{base_url}/api/sample")
+    assert sample_status == 200
+    doc = json.loads(sample_raw.decode("utf-8"))["document"]
+    exp_status, _, exp_raw = _http_call(
+        f"{base_url}/api/project/export",
+        method="POST",
+        payload={
+            "project": {
+                "schema_version": "taktcut.project.v1",
+                "project_name": "Curves_Roundtrip_Test",
+                "timeline": doc,
+                "color": {"nodes": nodes_payload, "selected_node_id": "node-1"},
+            }
+        },
+    )
+    assert exp_status == 200
+    exported_text = json.loads(exp_raw.decode("utf-8"))["project_json"]
+    imp_status, _, imp_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={"project_json": exported_text},
+    )
+    assert imp_status == 200
+    imp_node = json.loads(imp_raw.decode("utf-8"))["project"]["color"]["nodes"][0]
+    assert len(imp_node["curves"]["master"]) == 4
+    assert imp_node["curves"]["red"][1] == [0.5, 0.58]
 
 
