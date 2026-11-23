@@ -840,3 +840,25 @@ def test_project_fx_mosaic_pixelate_invert_negative_retro_arcade_roundtrip(
         bad_payload["fx"]["nodes"][1]["params"]["mode"] = bad_mode
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_timecode_burnin_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    assert proj.delivery.timecode_burnin == "off"
+
+    proj.delivery.timecode_burnin = "bottom_center"
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.timecode_burnin == "bottom_center"
+
+    proj_path = tmp_path / "client_review_tc.taktcut.json"
+    proj.delivery.timecode_burnin = "top_left"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.timecode_burnin == "top_left"
+
+    for bad_tc in ("top_right", "", "bottom_center;evil", 42, True):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["timecode_burnin"] = bad_tc
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

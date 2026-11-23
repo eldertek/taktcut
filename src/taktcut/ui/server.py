@@ -68,6 +68,7 @@ from taktcut.models import (
     LoudnessPresetId,
     RationalFrameRate,
     RenderProfile,
+    TimecodeBurnInPosition,
     TimelineDocument,
 )
 from taktcut.project import (
@@ -112,6 +113,7 @@ from taktcut.render import (
     probe_hardware_capabilities,
     validate_dialogue_eq,
     validate_loudness_preset,
+    validate_timecode_burnin,
 )
 from taktcut.subtitles import (
     CAPTION_FONT_SIZE_MAX,
@@ -426,6 +428,13 @@ def _build_fairlight_params_from_payload(
     if "dialogue_eq" in payload and payload["dialogue_eq"] is not None:
         dialogue_eq = validate_dialogue_eq(payload["dialogue_eq"])
     return loudness_preset, dialogue_eq
+
+
+def _extract_timecode_burnin(payload: dict[str, Any]) -> TimecodeBurnInPosition:
+    raw = payload.get("timecode_burnin")
+    if raw is None or raw == "":
+        return "off"
+    return validate_timecode_burnin(raw)
 
 
 def _build_retime_params_from_payload(
@@ -1508,6 +1517,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
+            timecode_burnin = _extract_timecode_burnin(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1549,6 +1559,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 target_lufs=target_lufs,
                 loudness_preset=loudness_preset,
                 dialogue_eq=dialogue_eq,
+                timecode_burnin=timecode_burnin,
                 prefer_hw=prefer_hw,
                 caps=caps,
                 delivery_preset=delivery_preset,
@@ -1863,7 +1874,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if route == "/api/remote/jobs":
+        if route in {"/api/remote/jobs", "/api/render/remote/submit"}:
             remote_url = payload.get("remote_url")
             bearer_token = payload.get("bearer_token")
             raw_in = payload.get("input_path")
@@ -1931,6 +1942,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
+            timecode_burnin = _extract_timecode_burnin(payload)
             retime_params = _build_retime_params_from_payload(payload)
             transform_params = _build_transform_params_from_payload(payload)
             framing_params = _build_framing_params_from_payload(payload)
@@ -1967,6 +1979,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 clip_duration_s=clip_duration_s,
                 loudness_preset=loudness_preset or "off",
                 dialogue_eq=dialogue_eq or "off",
+                timecode_burnin=timecode_burnin,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
             job = client.submit_job(job_req)

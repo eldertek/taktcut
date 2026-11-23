@@ -3136,6 +3136,12 @@ input[type="range"] {
   #panel-fx .fx-node-actions .btn-mini {
     min-width: 44px;
   }
+  #panel-render .input-control,
+  #panel-render .btn,
+  #panel-render .engine-btn,
+  #panel-render .check-label {
+    min-height: 44px;
+  }
 }
 
 @media (max-width: 640px) {

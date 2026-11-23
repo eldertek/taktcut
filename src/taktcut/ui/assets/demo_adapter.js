@@ -1062,6 +1062,22 @@ export function createApiClient() {
             vfParts.push(compiledSubs.filtergraph);
           }
         }
+        const tcModeRaw = typeof body.timecode_burnin === "string" ? body.timecode_burnin.trim().toLowerCase() : "off";
+        const tcCoords = {
+          top_left: "x=24:y=24",
+          bottom_center: "x=(w-tw)/2:y=h-th-24",
+          bottom_right: "x=w-tw-24:y=h-th-24"
+        };
+        if (tcModeRaw !== "off" && !Object.prototype.hasOwnProperty.call(tcCoords, tcModeRaw)) {
+          throw new Error(`Unsupported timecode_burnin '${body.timecode_burnin}'`);
+        }
+        const tcPos = tcModeRaw !== "off" ? tcCoords[tcModeRaw] : null;
+        if (tcPos) {
+          const rateStr = fpsDen === 1 ? String(fpsNum) : `${fpsNum}/${fpsDen}`;
+          vfParts.push(
+            `drawtext=timecode='00\\:00\\:00\\:00':rate=${rateStr}:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.65:${tcPos}`
+          );
+        }
         const vf = vfParts.length > 0 ? vfParts.join(",") : null;
         const hasLoudnessPreset =
           body.loudness_preset !== null && body.loudness_preset !== undefined;
@@ -1152,6 +1168,7 @@ export function createApiClient() {
             target_lufs: effectiveLufs,
             loudness_preset: fairlight.loudness_preset,
             dialogue_eq: fairlight.dialogue_eq,
+            timecode_burnin: tcModeRaw,
             target_width: targetWidth,
             target_height: targetHeight,
             framing_mode: framingMode,

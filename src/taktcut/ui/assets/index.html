@@ -1438,9 +1438,20 @@
                 <label for="render-audio-af-preview" data-i18n="render.label.afChain">Audio Filter Chain (-af)</label>
                 <div id="render-audio-af-preview" class="code-box af-chain-preview mono" aria-live="polite">(none)</div>
               </div>
-              <div class="form-row">
-                <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
-                <input type="text" id="render-lut-path" class="input-control mono" placeholder="luts/editorial_look.cube">
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="render-lut-path" data-i18n="render.label.lutPath">Optional .cube LUT Path</label>
+                  <input type="text" id="render-lut-path" class="input-control mono" placeholder="luts/editorial_look.cube">
+                </div>
+                <div class="form-row">
+                  <label for="render-timecode-burnin" data-i18n="render.label.timecodeBurnin">Timecode Burn-In (SMPTE)</label>
+                  <select id="render-timecode-burnin" class="input-control mono">
+                    <option value="off" data-i18n="render.timecode.off">Off (Clean Master)</option>
+                    <option value="top_left" data-i18n="render.timecode.top_left">Top Left (Client Review)</option>
+                    <option value="bottom_center" data-i18n="render.timecode.bottom_center">Bottom Center (Broadcast)</option>
+                    <option value="bottom_right" data-i18n="render.timecode.bottom_right">Bottom Right (Corner Slate)</option>
+                  </select>
+                </div>
               </div>
               <div class="form-row-three">
                 <div class="form-row">

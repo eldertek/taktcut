@@ -27,6 +27,7 @@ from taktcut.models import (
     LoudnessPresetId,
     RationalFrameRate,
     RenderProfile,
+    TimecodeBurnInPosition,
     TimelineDocument,
 )
 from taktcut.render import (
@@ -42,6 +43,7 @@ from taktcut.render import (
     FramingParams,
     validate_dialogue_eq,
     validate_loudness_preset,
+    validate_timecode_burnin,
 )
 from taktcut.subtitles import SubtitleTrackParams
 from taktcut.titles import TitleOverlayParams, apply_title_preset
@@ -158,6 +160,7 @@ class ProjectDeliveryState(BaseModel):
     target_lufs: float | None = -14.0
     loudness_preset: LoudnessPresetId = "off"
     dialogue_eq: DialogueEqPresetId = "off"
+    timecode_burnin: TimecodeBurnInPosition = "off"
     lut_path: str = ""
     input_path: str = ".taktcut-samples/sample_rec709.mp4"
     output_path: str = "renders/delivery_web.mp4"
@@ -206,6 +209,11 @@ class ProjectDeliveryState(BaseModel):
     @classmethod
     def _validate_dialogue_eq(cls, raw: Any) -> DialogueEqPresetId:
         return validate_dialogue_eq(raw)
+
+    @field_validator("timecode_burnin", mode="before")
+    @classmethod
+    def _validate_timecode_burnin(cls, raw: Any) -> TimecodeBurnInPosition:
+        return validate_timecode_burnin(raw)
 
     @field_validator("fps", mode="before")
     @classmethod

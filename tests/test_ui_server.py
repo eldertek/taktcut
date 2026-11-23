@@ -2415,6 +2415,23 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert page.locator("#render-output-path").input_value().endswith(".mov")
                 assert page.locator("#render-crf").is_disabled() is True
 
+                # Verify Data Burn-In (SMPTE Timecode Overlay) control & touch target
+                tc_sel = page.locator("#render-timecode-burnin")
+                assert tc_sel.is_visible() is True
+                tc_sel.select_option("bottom_center")
+                assert tc_sel.input_value() == "bottom_center"
+                if width <= 820:
+                    tc_box = tc_sel.bounding_box()
+                    assert tc_box is not None and tc_box["height"] >= 44
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('timecode=')"
+                )
+                tc_argv = page.locator("#render-argv-output").text_content() or ""
+                assert "drawtext=" in tc_argv
+                assert "timecode=" in tc_argv
+
                 # Verify Save Project / Open Project controls and round-trip in top bar
                 assert page.locator("#btn-save-project").is_visible() is True
                 assert page.locator("#btn-open-project").is_visible() is True
@@ -3383,3 +3400,61 @@ def test_ui_sapphire_mosaic_pixelate_invert_negative_retro_arcade_endpoints_and_
         assert "\u2013" not in content, f"U+2013 found in {asset_name}"
         if asset_name.endswith(".js"):
             assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+
+def test_ui_render_plan_timecode_burnin_endpoint_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    for pos, expected_coords in (
+        ("top_left", "x=24:y=24"),
+        ("bottom_center", "x=(w-tw)/2:y=h-th-24"),
+        ("bottom_right", "x=w-tw-24:y=h-th-24"),
+    ):
+        status, _, raw = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": f"renders/tc_{pos}.mp4",
+                "profile": "web_h264",
+                "fps": "25",
+                "timecode_burnin": pos,
+                "prefer_hw": False,
+                "execute": False,
+            },
+        )
+        assert status == 200
+        plan = json.loads(raw.decode("utf-8"))["plan"]
+        assert plan["timecode_burnin"] == pos
+        assert "drawtext=" in plan["video_filter"]
+        assert "timecode='00\\:00\\:00\\:00':rate=25" in plan["video_filter"]
+        assert expected_coords in plan["video_filter"]
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/tc_bad.mp4",
+            "timecode_burnin": "top_right",
+            "execute": False,
+        },
+    )
+    assert bad_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="render-timecode-burnin"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.label.timecodeBurnin",
+        "render.timecode.off",
+        "render.timecode.top_left",
+        "render.timecode.bottom_center",
+        "render.timecode.bottom_right",
+        "render.plan.timecodeBurnin",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2

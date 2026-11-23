@@ -40,12 +40,14 @@ from taktcut.render import (
     compile_loudness_preset_filter,
     compile_retime_filter,
     compile_retime_filter_result,
+    compile_timecode_burnin_filter,
     compile_transform_filter,
     compile_transform_filter_result,
     execute_render_plan,
     get_delivery_preset,
     list_aspect_presets,
     list_delivery_presets,
+    validate_timecode_burnin,
 )
 
 
@@ -1050,3 +1052,67 @@ def test_compile_fairlight_loudness_and_dialogue_eq_filters(tmp_path: Path) -> N
     )
     assert off_plan.audio_filter == "highpass=f=100"
     assert off_plan.target_lufs is None
+
+
+def test_timecode_burnin_validation_compile_and_real_ffmpeg_render(tmp_path: Path) -> None:
+    assert validate_timecode_burnin("off") == "off"
+    assert validate_timecode_burnin(" TOP_LEFT ") == "top_left"
+    assert validate_timecode_burnin("bottom_center") == "bottom_center"
+    assert validate_timecode_burnin("bottom_right") == "bottom_right"
+
+    for bad_tc in ("", "center", "top_right", "top_left;evil", 123, True, None):
+        with pytest.raises(ValueError):
+            validate_timecode_burnin(bad_tc)
+
+    fps_25 = RationalFrameRate(num=25, den=1)
+    fps_ntsc = RationalFrameRate(num=24000, den=1001)
+    assert compile_timecode_burnin_filter("off", fps_25) is None
+
+    expected_coords = {
+        "top_left": "x=24:y=24",
+        "bottom_center": "x=(w-tw)/2:y=h-th-24",
+        "bottom_right": "x=w-tw-24:y=h-th-24",
+    }
+    for pos, coords in expected_coords.items():
+        compiled = compile_timecode_burnin_filter(pos, fps_ntsc)  # type: ignore[arg-type]
+        assert compiled is not None
+        assert "drawtext=" in compiled
+        assert "timecode='00\\:00\\:00\\:00':rate=24000/1001" in compiled
+        assert "fontsize=28:fontcolor=white:box=1:boxcolor=black@0.65:" in compiled
+        assert compiled.endswith(coords)
+
+    src = tmp_path / "tc_src.mp4"
+    _generate_synthetic_clip(src)
+
+    clean_plan = build_render_plan(
+        input_path=src,
+        output_path=tmp_path / "tc_clean.mp4",
+        profile=RenderProfile.WEB_H264,
+        fps=fps_25,
+        timecode_burnin="off",
+        prefer_hw=False,
+    )
+    assert clean_plan.timecode_burnin == "off"
+    assert clean_plan.video_filter is None
+
+    out_tc = tmp_path / "tc_burned.mp4"
+    tc_plan = build_render_plan(
+        input_path=src,
+        output_path=out_tc,
+        profile=RenderProfile.WEB_H264,
+        fps=fps_25,
+        timecode_burnin="bottom_center",
+        prefer_hw=False,
+    )
+    assert tc_plan.timecode_burnin == "bottom_center"
+    assert tc_plan.video_filter is not None
+    assert "timecode='00\\:00\\:00\\:00':rate=25" in tc_plan.video_filter
+    assert "x=(w-tw)/2:y=h-th-24" in tc_plan.video_filter
+
+    res = execute_render_plan(tc_plan)
+    assert res.success is True, res.stderr_tail
+    assert res.bytes_written > 0
+    probe = probe_media(out_tc)
+    assert probe.is_cfr is True
+    assert probe.width == 640
+    assert probe.height == 360

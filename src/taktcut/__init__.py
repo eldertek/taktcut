@@ -13,6 +13,7 @@ from taktcut.fx import (
     list_chroma_key_presets,
 )
 from taktcut.models import (
+    ALLOWED_TIMECODE_BURNIN,
     MARKER_COLOR_PRESETS,
     AscCdlParams,
     BpmBeatTick,
@@ -31,6 +32,7 @@ from taktcut.models import (
     RenderProfile,
     RenderResult,
     StreamProbe,
+    TimecodeBurnInPosition,
     TimelineClip,
     TimelineDocument,
     TimelineMarker,
@@ -74,11 +76,13 @@ from taktcut.render import (
     compile_loudness_preset_filter,
     compile_retime_filter,
     compile_retime_filter_result,
+    compile_timecode_burnin_filter,
     compile_transform_filter,
     compile_transform_filter_result,
     get_delivery_preset,
     list_aspect_presets,
     list_delivery_presets,
+    validate_timecode_burnin,
 )
 from taktcut.subtitles import (
     CaptionStyleId,
@@ -112,6 +116,7 @@ __version__ = "0.1.13"
 
 __all__ = [
     "__version__",
+    "ALLOWED_TIMECODE_BURNIN",
     "apply_chroma_key_preset",
     "apply_transition_preset",
     "AscCdlParams",
@@ -140,6 +145,7 @@ __all__ = [
     "compile_retime_filter_result",
     "compile_subtitles",
     "compile_subtitles_filter",
+    "compile_timecode_burnin_filter",
     "compile_transform_filter",
     "compile_transform_filter_result",
     "compile_transition_filter",
@@ -197,6 +203,7 @@ __all__ = [
     "SubtitleCue",
     "SubtitleTrackParams",
     "TaktcutProject",
+    "TimecodeBurnInPosition",
     "TimelineClip",
     "TimelineDocument",
     "TimelineMarker",
@@ -207,4 +214,5 @@ __all__ = [
     "TransitionParams",
     "TransitionPreset",
     "validate_project_payload",
+    "validate_timecode_burnin",
 ]

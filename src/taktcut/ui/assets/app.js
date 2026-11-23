@@ -2016,6 +2016,7 @@ function serializeFullProjectState() {
       target_lufs: targetLufs,
       loudness_preset: normalizeFairlightAudioParams(state.fairlight).loudness_preset,
       dialogue_eq: normalizeFairlightAudioParams(state.fairlight).dialogue_eq,
+      timecode_burnin: txt("render-timecode-burnin", "off") || "off",
       lut_path: txt("render-lut-path", ""),
       input_path: txt("render-input-path", ".taktcut-samples/sample_rec709.mp4"),
       output_path: txt("render-output-path", "renders/delivery_web.mp4"),
@@ -2184,6 +2185,7 @@ function applyFullProjectState(project, validation) {
     dialogue_eq: del.dialogue_eq || "off"
   });
   setVal("render-lut-path", del.lut_path || "");
+  setVal("render-timecode-burnin", del.timecode_burnin || "off");
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -4600,6 +4602,8 @@ async function buildOrExecuteRender(execute) {
         : null;
 
     const fairlightPayload = normalizeFairlightAudioParams(state.fairlight);
+    const tcBurnInEl = byId("render-timecode-burnin");
+    const timecodeBurnin = tcBurnInEl ? tcBurnInEl.value : "off";
 
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
@@ -4625,6 +4629,7 @@ async function buildOrExecuteRender(execute) {
         target_lufs: targetLufs,
         loudness_preset: fairlightPayload.loudness_preset,
         dialogue_eq: fairlightPayload.dialogue_eq,
+        timecode_burnin: timecodeBurnin,
         prefer_hw: preferHw
       });
       renderRemoteJobTelemetry(submitData);
@@ -4679,6 +4684,7 @@ async function buildOrExecuteRender(execute) {
       target_lufs: targetLufs,
       loudness_preset: fairlightPayload.loudness_preset,
       dialogue_eq: fairlightPayload.dialogue_eq,
+      timecode_burnin: timecodeBurnin,
       prefer_hw: preferHw,
       execute
     };
@@ -4715,6 +4721,7 @@ async function buildOrExecuteRender(execute) {
       ["GOP Frames", String(plan.gop_frames)],
       ["Pixel Format", plan.pix_fmt],
       ["MP4 Faststart", String(plan.faststart)],
+      [t("render.plan.timecodeBurnin"), plan.timecode_burnin || "off"],
       ["Video Filter", plan.video_filter || t("common.none")],
       ["Audio Filter", plan.audio_filter || t("common.none")]
     ]);

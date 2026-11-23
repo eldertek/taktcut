@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -17,10 +18,12 @@ from taktcut.color import (
     ColorGradeParams,
     build_rec709_lut_filter,
     compile_color_grade_filter,
+    escape_ffmpeg_filter_path,
 )
 from taktcut.fx import ChromaKeyParams, compile_chroma_key_filter
 from taktcut.models import (
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
+    ALLOWED_TIMECODE_BURNIN,
     ClipTransformParams,
     DialogueEqPresetId,
     DynamicZoomPresetId,
@@ -30,9 +33,10 @@ from taktcut.models import (
     RenderPlan,
     RenderProfile,
     RenderResult,
+    TimecodeBurnInPosition,
 )
 from taktcut.subtitles import SubtitleTrackParams, compile_subtitles_filter
-from taktcut.titles import TitleOverlayParams, compile_title_filter
+from taktcut.titles import TitleOverlayParams, compile_title_filter, resolve_default_fontfile
 
 AUDIO_GAIN_DB_MIN: float = -24.0
 AUDIO_GAIN_DB_MAX: float = 12.0
@@ -83,6 +87,82 @@ ENCODER_PRESET_MAP: dict[str, tuple[str, str]] = {
     "medium": ("p5", "medium"),
     "slow": ("p7", "slow"),
 }
+
+TIMECODE_BURNIN_POSITIONS: dict[str, str] = {
+    "top_left": "x=24:y=24",
+    "bottom_center": "x=(w-tw)/2:y=h-th-24",
+    "bottom_right": "x=w-tw-24:y=h-th-24",
+}
+_TIMECODE_MONO_FONTS_WIN: tuple[str, ...] = (
+    "C:/Windows/Fonts/consola.ttf",
+    "C:/Windows/Fonts/cour.ttf",
+)
+_TIMECODE_MONO_FONTS_MAC: tuple[str, ...] = (
+    "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+)
+_TIMECODE_MONO_FONTS_LINUX: tuple[str, ...] = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+)
+
+
+def validate_timecode_burnin(raw: Any) -> TimecodeBurnInPosition:
+    """Validate and normalize a Data Burn-In SMPTE timecode overlay position."""
+    if not isinstance(raw, str):
+        raise ValueError(f"timecode_burnin must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned not in ALLOWED_TIMECODE_BURNIN:
+        allowed = ", ".join(ALLOWED_TIMECODE_BURNIN)
+        raise ValueError(f"Unsupported timecode_burnin {raw!r}; expected one of: {allowed}")
+    return cleaned
+
+
+def resolve_timecode_fontfile() -> Path | None:
+    """Locate a standard monospace (or sans-serif) font file for SMPTE timecode drawtext."""
+    if sys.platform.startswith("win"):
+        candidates = _TIMECODE_MONO_FONTS_WIN
+    elif sys.platform == "darwin":
+        candidates = _TIMECODE_MONO_FONTS_MAC
+    else:
+        candidates = _TIMECODE_MONO_FONTS_LINUX
+    for raw in candidates:
+        candidate = Path(raw)
+        if candidate.is_file():
+            return candidate
+    return resolve_default_fontfile()
+
+
+def compile_timecode_burnin_filter(
+    timecode_burnin: TimecodeBurnInPosition,
+    fps: RationalFrameRate,
+    *,
+    fontfile: Path | str | None = None,
+) -> str | None:
+    """Compile a validated SMPTE timecode burn-in position into an FFmpeg drawtext filter."""
+    pos = validate_timecode_burnin(timecode_burnin)
+    if pos == "off":
+        return None
+
+    resolved_font: Path | None = None
+    if fontfile is not None:
+        raw_str = str(fontfile)
+        if any(ord(c) < 32 or ord(c) == 127 for c in raw_str):
+            raise ValueError("fontfile path contains invalid control characters")
+        candidate = Path(raw_str)
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Font file not found: {candidate}")
+        resolved_font = candidate
+    else:
+        resolved_font = resolve_timecode_fontfile()
+
+    font_opt = f"fontfile='{escape_ffmpeg_filter_path(resolved_font)}':" if resolved_font else ""
+    coords = TIMECODE_BURNIN_POSITIONS[pos]
+    return (
+        f"drawtext={font_opt}timecode='00\\:00\\:00\\:00':rate={fps.ffmpeg_rate}"
+        f":fontsize=28:fontcolor=white:box=1:boxcolor=black@0.65:{coords}"
+    )
 
 
 def _validate_bounded_int(
@@ -1229,6 +1309,7 @@ def build_render_plan(
     encoder_preset: str | None = None,
     loudness_preset: LoudnessPresetId | None = None,
     dialogue_eq: DialogueEqPresetId | None = None,
+    timecode_burnin: TimecodeBurnInPosition | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1237,6 +1318,9 @@ def build_render_plan(
     )
     resolved_dialogue_eq: DialogueEqPresetId = (
         validate_dialogue_eq(dialogue_eq) if dialogue_eq is not None else "off"
+    )
+    resolved_timecode_burnin: TimecodeBurnInPosition = (
+        validate_timecode_burnin(timecode_burnin) if timecode_burnin is not None else "off"
     )
     resolved_profile = (
         profile
@@ -1371,6 +1455,9 @@ def build_render_plan(
         sub_fg = compile_subtitles_filter(subtitle_track, pix_fmt=pix_fmt)
         if sub_fg:
             vf_parts.append(sub_fg)
+    tc_vf = compile_timecode_burnin_filter(resolved_timecode_burnin, target_fps)
+    if tc_vf is not None:
+        vf_parts.append(tc_vf)
     video_filter = ",".join(vf_parts) if vf_parts else None
 
     resolved_clip_dur = clip_duration_s
@@ -1491,6 +1578,7 @@ def build_render_plan(
         target_lufs=effective_lufs,
         loudness_preset=resolved_loudness_preset,
         dialogue_eq=resolved_dialogue_eq,
+        timecode_burnin=resolved_timecode_burnin,
         target_width=target_width,
         target_height=target_height,
         framing_mode=framing_mode,

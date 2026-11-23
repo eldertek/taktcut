@@ -41,6 +41,7 @@ from taktcut.models import (
     RenderPlan,
     RenderProfile,
     RenderResult,
+    TimecodeBurnInPosition,
 )
 from taktcut.render import (
     ClipAudioParams,
@@ -51,6 +52,7 @@ from taktcut.render import (
     probe_hardware_capabilities,
     validate_dialogue_eq,
     validate_loudness_preset,
+    validate_timecode_burnin,
 )
 from taktcut.security import (
     LUT_SUFFIXES,
@@ -225,6 +227,7 @@ class RemoteRenderJobRequest(BaseModel):
     target_lufs: float | None = None
     loudness_preset: LoudnessPresetId = "off"
     dialogue_eq: DialogueEqPresetId = "off"
+    timecode_burnin: TimecodeBurnInPosition = "off"
     prefer_hw: bool = True
     chroma_key: ChromaKeyParams | None = None
     fx_stack: list[FxNode] = Field(default_factory=list)
@@ -248,6 +251,11 @@ class RemoteRenderJobRequest(BaseModel):
     @classmethod
     def _validate_dialogue_eq(cls, raw: Any) -> DialogueEqPresetId:
         return validate_dialogue_eq(raw)
+
+    @field_validator("timecode_burnin", mode="before")
+    @classmethod
+    def _validate_timecode_burnin(cls, raw: Any) -> TimecodeBurnInPosition:
+        return validate_timecode_burnin(raw)
 
     @field_validator("input_filename", "output_filename")
     @classmethod
@@ -528,6 +536,7 @@ class RemoteRenderState:
             target_lufs=req.target_lufs,
             loudness_preset=req.loudness_preset,
             dialogue_eq=req.dialogue_eq,
+            timecode_burnin=req.timecode_burnin,
             prefer_hw=req.prefer_hw,
             caps=caps,
         )
