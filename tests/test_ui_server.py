@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -2939,3 +2940,55 @@ def test_ui_sapphire_halation_letterbox_cinema_35mm_endpoints_and_assets(
         assert "\u2013" not in content, f"U+2013 found in {asset_name}"
         if asset_name.endswith(".js"):
             assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+
+def test_ui_render_plan_dry_run_without_ffmpeg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    sample_in = tmp_path / ".taktcut-samples" / "sample_rec709.mp4"
+    sample_in.parent.mkdir(parents=True, exist_ok=True)
+    sample_in.write_bytes(b"fake-mp4")
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+    try:
+        dry_status, _, dry_raw = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": "renders/youtube_4k_hevc.mp4",
+                "delivery_preset": "youtube_4k_hevc",
+                "prefer_hw": True,
+                "execute": False,
+            },
+        )
+        assert dry_status == 200
+        dry_data = json.loads(dry_raw.decode("utf-8"))
+        assert dry_data["plan"]["encoder"] == "libx265"
+        assert "320k" in dry_data["plan"]["argv"]
+        assert "3840" in dry_data["shell_command"]
+
+        exec_status, _, exec_raw = _http_call(
+            f"{base_url}/api/render/plan",
+            method="POST",
+            payload={
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": "renders/youtube_4k_hevc.mp4",
+                "delivery_preset": "youtube_4k_hevc",
+                "prefer_hw": False,
+                "execute": True,
+            },
+        )
+        assert exec_status == 422
+        assert "ffmpeg" in json.loads(exec_raw.decode("utf-8"))["error"].lower()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

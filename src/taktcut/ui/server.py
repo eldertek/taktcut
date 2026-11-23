@@ -1467,7 +1467,17 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             caps, err = self.app_state.get_capabilities(verify_nvenc_runtime=prefer_hw)
             if caps is None:
-                raise RuntimeError(err or "ffmpeg unavailable")
+                if execute:
+                    raise RuntimeError(err or "ffmpeg unavailable")
+                # Dry-run planning stays deterministic even when ffmpeg is absent from PATH.
+                caps = HardwareCapabilities(
+                    ffmpeg_path="ffmpeg",
+                    h264_nvenc=False,
+                    hevc_nvenc=False,
+                    libx264=True,
+                    libx265=True,
+                    prores_ks=True,
+                )
 
             fx_filtergraph: str | None = None
             raw_fx = payload.get("fx_stack")
