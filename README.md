@@ -1,21 +1,22 @@
 # taktcut
 
 [![CI](https://github.com/eldertek/taktcut/actions/workflows/ci.yml/badge.svg)](https://github.com/eldertek/taktcut/actions/workflows/ci.yml)
-[![Release v0.1.18](https://img.shields.io/badge/release-v0.1.18-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.18)
+[![Release v0.1.19](https://img.shields.io/badge/release-v0.1.19-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.19)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-e68442.svg)](LICENSE)
 
-Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, SMPTE Timecode Burn-In & Client-Review Watermark, Deliver `export_fps` + Broadcast Deinterlace (`yadif`), Live Estimated Export File Size, Audio-Only Master Export (WAV24 / MP3-320 / AAC-256), FCPXML 1.10 Round-Trip Export (`.fcpxml`), CMX 3600 EDL Round-Trip Export (`.edl`), YouTube Chapters / FFMETADATA export, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
+Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, Clip Color Labels (A-Roll / B-Roll / VFX / Review / Audio), ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, SMPTE Timecode Burn-In & Client-Review Watermark, Deliver `export_fps` + Broadcast Deinterlace (`yadif`), Live Estimated Export File Size, Audio-Only Master Export (WAV24 / MP3-320 / AAC-256), FCPXML 1.10 Round-Trip Export (`.fcpxml`), CMX 3600 EDL Round-Trip Export (`.edl`), YouTube Chapters / FFMETADATA export, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
 
-`taktcut` (`v0.1.18`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
+`taktcut` (`v0.1.19`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
 
 - **1-Click Desktop Download (Windows / macOS / Linux)**: [https://eclipse-technology.eu/taktcut/](https://eclipse-technology.eu/taktcut/)
 - **Live Browser Demo**: [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)
 
 ![taktcut Web Studio GUI](docs/screenshot-desktop.png)
 
-## What's New in v0.1.18
+## What's New in v0.1.19
 
+- **DaVinci Clip Color Labels (A-Roll / B-Roll / VFX / Review / Audio)**: Timeline Inspector 6-swatch label bar (`Default`, `A-Roll`, `B-Roll`, `VFX/GFX`, `Review`, `Audio`) painting a DaVinci-style color band on timeline canvas clips, updating clip selection metadata, and persisting across Undo/Redo, Split at Playhead, and `.taktcut.json` project save/load.
 - **Audio-Only Master Export (WAV24 / MP3-320 / AAC-256)**: Deliver selector (`wav24`, `mp3_320`, `aac_256`) compiling `-vn` FFmpeg plans (`pcm_s24le` `.wav`, `libmp3lame` 320 kbps `.mp3`, `aac` 256 kbps `.aac`, 48 kHz stereo) with Fairlight EBU R128 loudness & Dialogue EQ, live estimated file size readout, Remote GPU Render Node support, and `.taktcut.json` project state.
 - **FCPXML 1.10 Round-Trip Export (`.fcpxml`)**: 1-click Deliver export generating valid `<fcpxml version="1.10">` XML with `<resources>` (`<format>`, `<asset>` + `<media-rep>`), primary `<spine>` `<asset-clip>` / `<gap>` timing in rational seconds, connected multi-track video/audio lanes, and `<marker>` cues for Final Cut Pro / DaVinci Resolve round-trip interchange.
 
@@ -97,7 +98,7 @@ taktcut-ui --desktop --workspace-dir /path/to/your/project
 ```
 
 Six docked workstation pages:
-1. **Timeline**: Media Pool loader (`.drp`, `.drt`, `.fcpxml`, `.otio`/`.otioz`, or sample fixture), Program Monitor with J/K/L shuttle, I/O range & safe guides, Docked Multi-Track Timeline (`V1`, `V2`, `A1`, `A2`) with Magnetic Snap, Razor Blade, Ripple Delete (`Shift+Backspace`), **Fairlight Loudness (`-14/-16/-23 LUFS`) & Dialogue EQ**, Motion Transform/PiP & **Dynamic Zoom / Ken Burns**, Retime, Cut Transitions, BPM Beat Grid, Markers, continuity validation, and `.otio`/`.otioz` + `.taktcut.json` export.
+1. **Timeline**: Media Pool loader (`.drp`, `.drt`, `.fcpxml`, `.otio`/`.otioz`, or sample fixture), Program Monitor with J/K/L shuttle, I/O range & safe guides, Docked Multi-Track Timeline (`V1`, `V2`, `A1`, `A2`) with **Clip Color Labels (A-Roll / B-Roll / VFX / Review / Audio)**, Magnetic Snap, Razor Blade, Ripple Delete (`Shift+Backspace`), **Fairlight Loudness (`-14/-16/-23 LUFS`) & Dialogue EQ**, Motion Transform/PiP & **Dynamic Zoom / Ken Burns**, Retime, Cut Transitions, BPM Beat Grid, Markers, continuity validation, and `.otio`/`.otioz` + `.taktcut.json` export.
 2. **FX**: 20 Boris FX Sapphire-inspired GPU/FFmpeg FX (`S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `S_Shake` Handheld, `S_LensDistortion`, `S_ScanLines`, `S_Sharpen`, `S_HueSatBright`, `S_FlipFlop`, `S_Mosaic`, `S_Invert`), **Split-Screen Wipe (Before/After)**, **DaVinci Still Gallery (`Shift+S`)**, **Chroma Key**, keyframe curve editor, and 1-click presets (`cinema_35mm`, `action_handheld`, `retro_vhs`, `neon_shift`, `retro_arcade`, etc.).
 3. **Titles**: Interactive Titles & Lower-Thirds generator plus **SRT / VTT Subtitles** cue editor and burn-in controls.
 4. **Color**: Interactive **Lift / Gamma / Gain** DaVinci Color Wheels & Primary Bars, Rec.709 **Split-Screen Wipe (Before/After)** monitor, **DaVinci Still Gallery (`Shift+S`)**, live **RGB Parade / Luma Waveform / Vectorscope**, `.cdl` import, and 3D `.cube` LUT baking.
