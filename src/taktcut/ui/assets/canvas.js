@@ -1238,15 +1238,18 @@ export function drawProgramMonitorCanvas(
     const pCkActive = !pBypassAll && Boolean(pCkRaw && pCkRaw.enabled);
     const pCkMatteView = pCkRaw && pCkRaw.matteView === "alpha_matte" ? "alpha_matte" : "final";
 
-    // Compute spatial shake + gate-weave displacement
+    // Compute spatial shake + camera_shake + gate-weave displacement
     let shiftX = 0;
     let shiftY = 0;
     let motionBlurAmt = 0;
+    let cameraShakeOverscan = 0;
+    let hasLegacyShake = false;
     for (const node of pActiveFx) {
       const p = node.params || {};
       const kfMul = evaluateNodeIntensity(node, tSec);
       if (kfMul <= 0.0001) continue;
       if (node.effect === "shake") {
+        hasLegacyShake = true;
         const amp = Number(p.amplitude ?? 14) * kfMul * (frameW / 640);
         const freq = Number(p.frequency ?? 6);
         const seed = Number(p.seed ?? 42);
@@ -1255,6 +1258,12 @@ export function drawProgramMonitorCanvas(
         shiftX += amp * Math.sin(tSec * freq * Math.PI * 2 + p1);
         shiftY += amp * Math.cos(tSec * freq * 1.37 * Math.PI * 2 + p2);
         motionBlurAmt = Math.max(motionBlurAmt, Number(p.motion_blur ?? 0) * Math.min(1, kfMul));
+      } else if (node.effect === "camera_shake") {
+        const ampPx = Math.min(24, Math.max(1, Number(p.amplitude_px ?? 8))) * kfMul * (frameW / 640);
+        const freq = Math.min(12, Math.max(0.5, Number(p.frequency_hz ?? 4.5)));
+        shiftX += ampPx * Math.sin(tSec * freq * Math.PI * 2);
+        shiftY += ampPx * Math.cos(tSec * freq * 1.37 * Math.PI * 2 + 0.7);
+        cameraShakeOverscan = Math.max(cameraShakeOverscan, ampPx);
       } else if (node.effect === "film_damage") {
         const mix = Number(p.mix ?? 0.75) * Math.min(1, kfMul);
         const weave = Number(p.gate_weave ?? 0.25) * mix;
@@ -1445,11 +1454,65 @@ export function drawProgramMonitorCanvas(
         }
       }
 
+      // Apply S_LensDistortion radial barrel/pincushion warp on frame buffer
+      const lensNodes = pActiveFx.filter((n) => n.effect === "lens_distortion");
+      if (lensNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        let totalK1 = 0;
+        for (const lNode of lensNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(lNode, tSec));
+          if (mul <= 0.0001) continue;
+          const lp = lNode.params || {};
+          const rawK1 = Math.min(0.5, Math.max(-0.5, Number(lp.k1 ?? -0.22)));
+          totalK1 += rawK1 * mul;
+        }
+        if (Math.abs(totalK1) > 0.001) {
+          const srcImg = bctx.getImageData(0, 0, bw, bh);
+          const outImg = bctx.createImageData(bw, bh);
+          const s = srcImg.data;
+          const d = outImg.data;
+          const cx = bw * 0.5;
+          const cy = bh * 0.5;
+          const invR2Max = 1 / Math.max(1, cx * cx + cy * cy);
+          for (let y = 0; y < bh; y++) {
+            const dy = y - cy;
+            const dy2 = dy * dy;
+            const rowOff = y * bw;
+            for (let x = 0; x < bw; x++) {
+              const dx = x - cx;
+              const r2 = (dx * dx + dy2) * invR2Max;
+              const factor = 1 + totalK1 * r2;
+              const sx = Math.round(cx + dx * factor);
+              const sy = Math.round(cy + dy * factor);
+              const oi = (rowOff + x) * 4;
+              if (sx >= 0 && sx < bw && sy >= 0 && sy < bh) {
+                const si = (sy * bw + sx) * 4;
+                d[oi] = s[si];
+                d[oi + 1] = s[si + 1];
+                d[oi + 2] = s[si + 2];
+                d[oi + 3] = s[si + 3];
+              } else {
+                d[oi] = 0;
+                d[oi + 1] = 0;
+                d[oi + 2] = 0;
+                d[oi + 3] = 255;
+              }
+            }
+          }
+          bctx.putImageData(outImg, 0, 0);
+        }
+      }
+
       if (pCkActive && pCkMatteView === "final") {
         drawTransparencyCheckerboard(ctx, fx, fy, frameW, frameH);
       }
 
-      ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
+      const overscan = !hasLegacyShake && cameraShakeOverscan > 0 ? cameraShakeOverscan : 0;
+      const drawX = fx - overscan + shiftX;
+      const drawY = fy - overscan + shiftY;
+      const drawW = frameW + overscan * 2;
+      const drawH = frameH + overscan * 2;
+
+      ctx.drawImage(buf, drawX, drawY, drawW, drawH);
       if (motionBlurAmt >= 0.05 && (Math.abs(shiftX) > 0.2 || Math.abs(shiftY) > 0.2)) {
         ctx.save();
         ctx.globalAlpha = Math.min(0.42, motionBlurAmt * 0.42);
@@ -1475,6 +1538,12 @@ export function drawProgramMonitorCanvas(
       ctx.restore();
     }
 
+    const overscanOut = !hasLegacyShake && cameraShakeOverscan > 0 ? cameraShakeOverscan : 0;
+    const fxOutX = fx - overscanOut + shiftX;
+    const fxOutY = fy - overscanOut + shiftY;
+    const fxOutW = frameW + overscanOut * 2;
+    const fxOutH = frameH + overscanOut * 2;
+
     // Apply optical/lighting FX passes over the 16:9 frame
     if (!(pCkActive && pCkMatteView === "alpha_matte")) for (const node of pActiveFx) {
       const p = node.params || {};
@@ -1492,7 +1561,7 @@ export function drawProgramMonitorCanvas(
           ctx.globalCompositeOperation = "screen";
           ctx.globalAlpha = Math.min(0.85, alpha * 0.8);
           ctx.filter = `blur(${Math.max(2, Math.round(widthPx * 0.45))}px)`;
-          ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
+          ctx.drawImage(buf, fxOutX, fxOutY, fxOutW, fxOutH);
           ctx.restore();
         }
 
@@ -1678,7 +1747,7 @@ export function drawProgramMonitorCanvas(
             ctx.globalAlpha = intensity;
             const blurPx = Math.max(2, Math.round(radius * Math.max(0.5, frameW / 640)));
             ctx.filter = `blur(${blurPx}px)`;
-            ctx.drawImage(buf, fx + shiftX, fy + shiftY, frameW, frameH);
+            ctx.drawImage(buf, fxOutX, fxOutY, fxOutW, fxOutH);
             ctx.restore();
           } else {
             const midX = fx + frameW * 0.5 + shiftX;
@@ -1718,7 +1787,7 @@ export function drawProgramMonitorCanvas(
             ctx.save();
             ctx.globalCompositeOperation = "screen";
             ctx.globalAlpha = Math.min(0.92, strength * 0.85);
-            ctx.drawImage(halCanvas, fx + shiftX, fy + shiftY, frameW, frameH);
+            ctx.drawImage(halCanvas, fxOutX, fxOutY, fxOutW, fxOutH);
             ctx.restore();
           }
           const hx = fx + frameW * 0.72 + shiftX;

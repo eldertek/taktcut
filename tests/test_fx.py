@@ -163,9 +163,10 @@ def test_ten_presets_compile_and_lookup() -> None:
         "Cyberpunk Glow",
         "Anamorphic Dream",
         "35mm Cinema Halation",
+        "Action Handheld",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 11
+    assert len(FX_PRESETS) == 12
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -268,7 +269,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 11
+    assert len(p_data["presets"]) == 12
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -964,3 +965,127 @@ def test_letterbox_and_halation_pixel_output_in_real_ffmpeg() -> None:
         check=False,
     )
     assert proc_hal.returncode == 0, proc_hal.stderr
+
+
+def test_camera_shake_lens_distortion_bounds_and_action_handheld() -> None:
+    cs_low = normalize_fx_node(
+        {
+            "effect": "camera_shake",
+            "params": {"AmplitudePx": -3.0, "FrequencyHz": 0.1},
+        }
+    )
+    assert cs_low.params["amplitude_px"] == 1.0
+    assert cs_low.params["frequency_hz"] == 0.5
+    cs_low_res = compile_fx_filtergraph([cs_low])
+    assert cs_low_res.active_effects == ["camera_shake"]
+    assert "scale=w=iw+2:h=ih+2:flags=bilinear" in cs_low_res.filtergraph
+    assert "crop=w=iw-2:h=ih-2:x='1+1.0000*sin(t*3.1416)'" in cs_low_res.filtergraph
+
+    cs_high = normalize_fx_node(
+        {
+            "effect": "camera_shake",
+            "params": {"amplitude_px": 40.0, "frequency_hz": 25.0},
+        }
+    )
+    assert cs_high.params["amplitude_px"] == 24.0
+    assert cs_high.params["frequency_hz"] == 12.0
+    cs_high_res = compile_fx_filtergraph([cs_high])
+    assert "scale=w=iw+48:h=ih+48:flags=bilinear" in cs_high_res.filtergraph
+    assert "crop=w=iw-48:h=ih-48:x='24+24.0000*sin(" in cs_high_res.filtergraph
+
+    ld_low = normalize_fx_node({"effect": "lens_distortion", "params": {"K1": -1.2}})
+    assert ld_low.params["k1"] == -0.5
+    ld_low_res = compile_fx_filtergraph([ld_low])
+    assert ld_low_res.active_effects == ["lens_distortion"]
+    assert ld_low_res.filtergraph == "lenscorrection=cx=0.5:cy=0.5:k1=-0.5000:k2=0"
+
+    ld_high = normalize_fx_node({"effect": "lens_distortion", "params": {"k1": 0.95}})
+    assert ld_high.params["k1"] == 0.5
+    assert compile_fx_filtergraph([ld_high]).filtergraph == (
+        "lenscorrection=cx=0.5:cy=0.5:k1=0.5000:k2=0"
+    )
+
+    action = compile_preset_filtergraph("action_handheld", duration_seconds=6.0)
+    assert action.active_effects == ["camera_shake", "rgb_split", "vignette"]
+    assert "scale=w=iw+20:h=ih+20:flags=bilinear" in action.filtergraph
+    assert "rgbashift=rh=2:bh=-2" in action.filtergraph
+    assert "vignette=angle=0.520" in action.filtergraph
+
+    for bad_node in (
+        {"effect": "camera_shake", "params": {"amplitude_px": float("nan")}},
+        {"effect": "camera_shake", "params": {"frequency_hz": float("inf")}},
+        {"effect": "camera_shake", "params": {"amplitude_px": True}},
+        {"effect": "lens_distortion", "params": {"k1": float("nan")}},
+        {"effect": "lens_distortion", "params": {"k1": False}},
+    ):
+        with pytest.raises(ValueError):
+            normalize_fx_node(bad_node)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_camera_shake_lens_distortion_and_action_handheld_execute_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    w, h = 320, 180
+
+    # Verify camera_shake preserves exact output dimensions and moves frames cleanly
+    cs = compile_fx_filtergraph(
+        [FxNode(effect="camera_shake", params={"amplitude_px": 10.0, "frequency_hz": 5.5})]
+    )
+    proc_cs = subprocess.run(
+        [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=duration=0.2:size={w}x{h}:rate=25",
+            "-vf",
+            cs.filtergraph,
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    assert proc_cs.returncode == 0, proc_cs.stderr.decode("utf-8", errors="replace")
+    assert len(proc_cs.stdout) == w * h * 3
+
+    # Verify lens_distortion barrel (k1 < 0) and pincushion (k1 > 0) plus action_handheld
+    for stack in (
+        [FxNode(effect="lens_distortion", params={"k1": -0.35})],
+        [FxNode(effect="lens_distortion", params={"k1": 0.35})],
+        get_fx_preset("action_handheld").nodes,
+    ):
+        res = compile_fx_filtergraph(stack, duration_seconds=0.2, width=w, height=h, fps=25.0)
+        proc = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc=duration=0.2:size={w}x{h}:rate=25",
+                "-vf",
+                res.filtergraph,
+                "-frames:v",
+                "3",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert proc.returncode == 0, f"FFmpeg rejected {res.active_effects}: {proc.stderr}"

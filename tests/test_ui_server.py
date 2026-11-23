@@ -2967,7 +2967,7 @@ def test_ui_sapphire_halation_letterbox_cinema_35mm_endpoints_and_assets(
     assert 'data-fx-add="halation"' in html_text
     assert 'data-fx-add="letterbox"' in html_text
     assert 'data-fx-preset="cinema_35mm"' in html_text
-    assert "12 FX" in html_text
+    assert "14 FX" in html_text
 
     for asset_name in (
         "index.html",
@@ -3078,3 +3078,76 @@ def test_ui_dynamic_zoom_assets_and_i18n_parity(ui_server: tuple[str, Path]) -> 
     css_text = css_raw.decode("utf-8")
     assert ".transform-dz-row" in css_text
     assert "max-width: 820px" in css_text
+
+
+def test_ui_sapphire_camera_shake_lens_distortion_action_handheld_endpoints_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/fx/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    preset_ids = {p["id"] for p in presets_data["presets"]}
+    assert "action_handheld" in preset_ids
+    assert "camera_shake" in presets_data["specs"]
+    assert "lens_distortion" in presets_data["specs"]
+
+    compile_status, _, compile_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={"preset_id": "action_handheld", "duration_seconds": 6.0},
+    )
+    assert compile_status == 200
+    compiled = json.loads(compile_raw.decode("utf-8"))
+    assert compiled["active_effects"] == ["camera_shake", "rgb_split", "vignette"]
+    assert "scale=w=iw+20:h=ih+20:flags=bilinear" in compiled["filtergraph"]
+    assert "rgbashift=rh=2:bh=-2" in compiled["filtergraph"]
+    assert "vignette=angle=0.520" in compiled["filtergraph"]
+
+    lens_status, _, lens_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={
+            "nodes": [{"effect": "lens_distortion", "enabled": True, "params": {"k1": -0.3}}],
+            "duration_seconds": 4.0,
+        },
+    )
+    assert lens_status == 200
+    lens_compiled = json.loads(lens_raw.decode("utf-8"))
+    assert lens_compiled["filtergraph"] == "lenscorrection=cx=0.5:cy=0.5:k1=-0.3000:k2=0"
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'data-fx-add="camera_shake"' in html_text
+    assert 'data-fx-add="lens_distortion"' in html_text
+    assert 'data-fx-preset="action_handheld"' in html_text
+    assert "14 FX" in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "fx.preset.actionHandheld",
+        "fx.add.camera_shake",
+        "fx.add.lens_distortion",
+        "fx.param.amplitude_px",
+        "fx.param.frequency_hz",
+        "fx.param.k1",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    css_text = (assets_dir / "styles.css").read_text(encoding="utf-8")
+    assert "#panel-fx .fx-preset-btn" in css_text
+
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "demo_adapter.js",
+        "i18n.js",
+        "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"

@@ -587,3 +587,69 @@ def test_project_fx_halation_letterbox_cinema_35mm_roundtrip(tmp_path: Path) -> 
         bad_payload["fx"]["nodes"][1]["params"]["ratio"] = bad_ratio
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_fx_camera_shake_lens_distortion_action_handheld_roundtrip(
+    tmp_path: Path,
+) -> None:
+    proj = _build_full_test_project()
+    proj.fx.nodes = [
+        FxNode(
+            effect="camera_shake",
+            enabled=True,
+            params={"amplitude_px": 10.0, "frequency_hz": 5.5},
+        ),
+        FxNode(
+            effect="lens_distortion",
+            enabled=True,
+            params={"k1": -0.28},
+        ),
+        FxNode(
+            effect="rgb_split",
+            enabled=True,
+            params={"chroma_shift_px": 2},
+        ),
+        FxNode(
+            effect="vignette",
+            enabled=True,
+            params={"angle_rad": 0.52},
+        ),
+    ]
+    proj.fx.active_preset_id = "action_handheld"
+
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.fx.active_preset_id == "action_handheld"
+    assert [n.effect for n in loaded.fx.nodes] == [
+        "camera_shake",
+        "lens_distortion",
+        "rgb_split",
+        "vignette",
+    ]
+    assert loaded.fx.nodes[0].params["amplitude_px"] == pytest.approx(10.0)
+    assert loaded.fx.nodes[0].params["frequency_hz"] == pytest.approx(5.5)
+    assert loaded.fx.nodes[1].params["k1"] == pytest.approx(-0.28)
+
+    proj_path = tmp_path / "action_handheld.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.fx.nodes[0].params["amplitude_px"] == pytest.approx(10.0)
+    assert disk_loaded.fx.nodes[1].params["k1"] == pytest.approx(-0.28)
+
+    for bad_amp in (0.5, 25.0, True):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["amplitude_px"] = bad_amp
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_freq in (0.2, 13.0, False):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["frequency_hz"] = bad_freq
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_k1 in (-0.65, 0.75, True):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][1]["params"]["k1"] = bad_k1
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

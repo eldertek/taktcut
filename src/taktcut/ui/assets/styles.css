@@ -3119,6 +3119,22 @@ input[type="range"] {
   .transform-inspector-dock .btn-mini {
     min-height: 44px;
   }
+  #panel-fx .btn,
+  #panel-fx .btn-mini,
+  #panel-fx .btn-chip,
+  #panel-fx .fx-preset-btn,
+  #panel-fx .fx-bypass-btn,
+  #panel-fx .fx-color-input,
+  #panel-fx .input-select,
+  #panel-fx .input-num,
+  #panel-fx .input-control,
+  #panel-fx input[type="range"] {
+    min-height: 44px;
+  }
+  #panel-fx .fx-bypass-btn,
+  #panel-fx .fx-node-actions .btn-mini {
+    min-width: 44px;
+  }
 }
 
 @media (max-width: 640px) {

@@ -2294,6 +2294,13 @@ const FX_PARAM_FALLBACK = {
   ],
   letterbox: [
     { name: "ratio", label: "Aspect Ratio", kind: "enum", default: "2.39", unit: ":1", options: ["2.39", "2.35", "1.85", "2.00"] }
+  ],
+  camera_shake: [
+    { name: "amplitude_px", label: "Amplitude", kind: "float", default: 8.0, min_val: 1.0, max_val: 24.0, step: 0.5 },
+    { name: "frequency_hz", label: "Frequency", kind: "float", default: 4.5, min_val: 0.5, max_val: 12.0, step: 0.5 }
+  ],
+  lens_distortion: [
+    { name: "k1", label: "Distortion (k1)", kind: "float", default: -0.22, min_val: -0.50, max_val: 0.50, step: 0.02 }
   ]
 };
 
@@ -2342,6 +2349,11 @@ const FX_PRESET_FALLBACK = {
     { effect: "halation", enabled: true, params: { halation_strength: 0.55, halation_radius: 10 } },
     { effect: "letterbox", enabled: true, params: { ratio: "2.39" } },
     { effect: "film_grain", enabled: true, params: { strength: 14 } }
+  ],
+  action_handheld: [
+    { effect: "camera_shake", enabled: true, params: { amplitude_px: 10.0, frequency_hz: 5.5 } },
+    { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 2 } },
+    { effect: "vignette", enabled: true, params: { angle_rad: 0.52 } }
   ]
 };
 
@@ -2357,7 +2369,9 @@ const FX_DISPLAY_TITLES = {
   optical_glow: "S_OpticalGlow",
   rgb_split: "S_RGBSplit",
   halation: "S_Halation",
-  letterbox: "S_Letterbox"
+  letterbox: "S_Letterbox",
+  camera_shake: "S_Shake Handheld",
+  lens_distortion: "S_LensDistortion"
 };
 
 function getFxParamLabel(spec) {

@@ -22,6 +22,8 @@ FxType = Literal[
     "rgb_split",
     "halation",
     "letterbox",
+    "camera_shake",
+    "lens_distortion",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -37,6 +39,8 @@ FX_TYPES: tuple[FxType, ...] = (
     "rgb_split",
     "halation",
     "letterbox",
+    "camera_shake",
+    "lens_distortion",
 )
 
 LETTERBOX_RATIOS: tuple[str, ...] = ("2.39", "2.35", "1.85", "2.00")
@@ -103,6 +107,9 @@ _PARAM_ALIASES: dict[str, str] = {
     "HalationStrength": "halation_strength",
     "HalationRadius": "halation_radius",
     "Ratio": "ratio",
+    "AmplitudePx": "amplitude_px",
+    "FrequencyHz": "frequency_hz",
+    "K1": "k1",
 }
 
 
@@ -437,6 +444,39 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             options=LETTERBOX_RATIOS,
         ),
     ),
+    "camera_shake": (
+        FxParamSpec(
+            name="amplitude_px",
+            label="Amplitude",
+            kind="float",
+            default=8.0,
+            min_val=1.0,
+            max_val=24.0,
+            step=0.5,
+            unit="px",
+        ),
+        FxParamSpec(
+            name="frequency_hz",
+            label="Frequency",
+            kind="float",
+            default=4.5,
+            min_val=0.5,
+            max_val=12.0,
+            step=0.5,
+            unit="Hz",
+        ),
+    ),
+    "lens_distortion": (
+        FxParamSpec(
+            name="k1",
+            label="Distortion (k1)",
+            kind="float",
+            default=-0.22,
+            min_val=-0.50,
+            max_val=0.50,
+            step=0.02,
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -452,6 +492,8 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "rgb_split": 0.55,
     "halation": 1.25,
     "letterbox": 0.20,
+    "camera_shake": 0.65,
+    "lens_distortion": 0.55,
 }
 
 
@@ -948,6 +990,38 @@ FX_PRESETS: tuple[FxPreset, ...] = (
                 enabled=True,
                 params={
                     "strength": 14.0,
+                },
+            ),
+        ],
+    ),
+    FxPreset(
+        id="action_handheld",
+        name="Action Handheld",
+        category="Motion",
+        description=(
+            "Organic handheld camera shake paired with subtle RGB split and optical vignette."
+        ),
+        nodes=[
+            FxNode(
+                effect="camera_shake",
+                enabled=True,
+                params={
+                    "amplitude_px": 10.0,
+                    "frequency_hz": 5.5,
+                },
+            ),
+            FxNode(
+                effect="rgb_split",
+                enabled=True,
+                params={
+                    "chroma_shift_px": 2,
+                },
+            ),
+            FxNode(
+                effect="vignette",
+                enabled=True,
+                params={
+                    "angle_rad": 0.52,
                 },
             ),
         ],
@@ -1515,6 +1589,40 @@ def _compile_letterbox(params: dict[str, float | int | str]) -> str:
     )
 
 
+def _compile_camera_shake(
+    params: dict[str, float | int | str],
+    keyframes: Sequence[Keyframe] = (),
+) -> str:
+    amp = _clamp_num(float(params["amplitude_px"]), 1.0, 24.0)
+    freq = _clamp_num(float(params["frequency_hz"]), 0.5, 12.0)
+
+    if keyframes:
+        max_k = max(k.value for k in keyframes)
+        if max_k <= 0.0001:
+            return "null"
+        pad_amp = max(1, math.ceil(amp * max_k))
+        kf_expr = _build_keyframe_expr(keyframes, time_var="t", clamp_unit=False)
+        amp_expr = f"({amp:.4f}*({kf_expr}))"
+    else:
+        pad_amp = max(1, math.ceil(amp))
+        amp_expr = f"{amp:.4f}"
+
+    omega_x = round(2.0 * math.pi * freq, 4)
+    omega_y = round(omega_x * 1.37, 4)
+    margin = 2 * pad_amp
+    return (
+        f"scale=w=iw+{margin}:h=ih+{margin}:flags=bilinear,"
+        f"crop=w=iw-{margin}:h=ih-{margin}:"
+        f"x='{pad_amp}+{amp_expr}*sin(t*{omega_x:.4f})':"
+        f"y='{pad_amp}+{amp_expr}*cos(t*{omega_y:.4f}+0.7)'"
+    )
+
+
+def _compile_lens_distortion(params: dict[str, float | int | str]) -> str:
+    k1 = _clamp_num(float(params["k1"]), -0.50, 0.50)
+    return f"lenscorrection=cx=0.5:cy=0.5:k1={k1:.4f}:k2=0"
+
+
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
     """Return all built-in Chroma Key / Green Screen Studio presets."""
     return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
@@ -1698,6 +1806,11 @@ def compile_fx_filtergraph(
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "letterbox":
             seg = _compile_letterbox(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "camera_shake":
+            segments.append(_compile_camera_shake(node.params, node.keyframes))
+        elif node.effect == "lens_distortion":
+            seg = _compile_lens_distortion(node.params)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb or ck_active:

@@ -317,7 +317,7 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2 };
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55 };
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -377,6 +377,19 @@ function compileFxClient(nodes, opts = {}) {
       segs.push(
         `drawbox=x=0:y=0:w=iw:h='round(ih*${barFrac})':color=black@1:t=fill,drawbox=x=0:y='ih-round(ih*${barFrac})':w=iw:h='round(ih*${barFrac})':color=black@1:t=fill`
       );
+    } else if (n.effect === "camera_shake") {
+      const amp = Math.min(24, Math.max(1, Number(p.amplitude_px ?? 8)));
+      const freq = Math.min(12, Math.max(0.5, Number(p.frequency_hz ?? 4.5)));
+      const padAmp = Math.max(1, Math.ceil(amp));
+      const margin = 2 * padAmp;
+      const omegaX = (2 * Math.PI * freq).toFixed(4);
+      const omegaY = (2 * Math.PI * freq * 1.37).toFixed(4);
+      segs.push(
+        `scale=w=iw+${margin}:h=ih+${margin}:flags=bilinear,crop=w=iw-${margin}:h=ih-${margin}:x='${padAmp}+${amp.toFixed(4)}*sin(t*${omegaX})':y='${padAmp}+${amp.toFixed(4)}*cos(t*${omegaY}+0.7)'`
+      );
+    } else if (n.effect === "lens_distortion") {
+      const k1 = Math.min(0.5, Math.max(-0.5, Number(p.k1 ?? -0.22)));
+      segs.push(`lenscorrection=cx=0.5:cy=0.5:k1=${k1.toFixed(4)}:k2=0`);
     }
   });
   if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);
