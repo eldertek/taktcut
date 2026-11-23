@@ -2593,7 +2593,11 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 chapters_text = chapters_preview.text_content() or ""
                 assert "00:00 Intro" in chapters_text
                 assert "00:01 Intro Title Cue" in chapters_text
-                assert (page.locator("#deliver-chapters-count").text_content() or "") == "4 CHP"
+                # 375px and 1440px each retain +1 added marker (4 markers + 00:00 Intro = 5 CHP)
+                expected_chp = "5 CHP" if width in (375, 1440) else "4 CHP"
+                assert (
+                    page.locator("#deliver-chapters-count").text_content() or ""
+                ) == expected_chp
                 if width <= 820:
                     for chp_btn in (btn_yt, btn_ff):
                         chp_box = chp_btn.bounding_box()
