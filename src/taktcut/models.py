@@ -189,6 +189,8 @@ TimecodeBurnInPosition = Literal["off", "top_left", "bottom_center", "bottom_rig
 LowerThirdPosition = Literal["bottom_left", "bottom_center", "top_left"]
 ReframeAspectRatio = Literal["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]
 FilmGrainPresetId = Literal["35mm_fine", "16mm_organic", "super8_heavy", "custom"]
+VignettePresetId = Literal["subtle_cinema", "moody_portrait", "heavy_noir", "custom"]
+VignetteMode = Literal["forward", "backward"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
 
@@ -220,6 +222,16 @@ ALLOWED_FILM_GRAIN_PRESETS: tuple[FilmGrainPresetId, ...] = (
 FILM_GRAIN_STRENGTH_MIN: int = 0
 FILM_GRAIN_STRENGTH_MAX: int = 60
 FILM_GRAIN_STRENGTH_DEFAULT: int = 12
+ALLOWED_VIGNETTE_PRESETS: tuple[VignettePresetId, ...] = (
+    "subtle_cinema",
+    "moody_portrait",
+    "heavy_noir",
+    "custom",
+)
+ALLOWED_VIGNETTE_MODES: tuple[VignetteMode, ...] = ("forward", "backward")
+VIGNETTE_ANGLE_DEG_MIN: float = 5.0
+VIGNETTE_ANGLE_DEG_MAX: float = 75.0
+VIGNETTE_ANGLE_DEG_DEFAULT: float = 24.0
 ALLOWED_EXPORT_FPS: tuple[ExportFpsOption, ...] = ("source", "24", "25", "30", "60")
 ALLOWED_AUDIO_ONLY_FORMATS: tuple[AudioOnlyFormatId, ...] = (
     "off",
@@ -565,6 +577,10 @@ class RenderPlan(BaseModel):
     film_grain_preset: FilmGrainPresetId = "35mm_fine"
     film_grain_strength: int = FILM_GRAIN_STRENGTH_DEFAULT
     film_grain_temporal: bool = True
+    vignette_enabled: bool = False
+    vignette_preset: VignettePresetId = "subtle_cinema"
+    vignette_angle_deg: float = VIGNETTE_ANGLE_DEG_DEFAULT
+    vignette_mode: VignetteMode = "forward"
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

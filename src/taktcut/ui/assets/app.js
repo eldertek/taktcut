@@ -412,6 +412,14 @@ const state = {
   },
   filmGrainCompileSeq: 0,
   filmGrainCompileTimer: null,
+  vignette: {
+    enabled: false,
+    preset: "subtle_cinema",
+    angle_deg: 24.0,
+    mode: "forward"
+  },
+  vignetteCompileSeq: 0,
+  vignetteCompileTimer: null,
   subtitleTrack: {
     enabled: true,
     style: "clean_white",
@@ -753,7 +761,7 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(false),
       null,
       null,
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain }, vignette: { ...state.vignette } }
     );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
@@ -813,7 +821,7 @@ function redrawActiveCanvases() {
         beforeLabel: t("wipe.pill.before"),
         afterLabel: t("wipe.pill.after")
       },
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain }, vignette: { ...state.vignette } }
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -828,7 +836,7 @@ function redrawActiveCanvases() {
       getEffectiveSubtitleState(true),
       null,
       null,
-      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain } }
+      { lowerThird: { ...state.lowerThird }, reframe: { ...state.reframe }, filmGrain: { ...state.filmGrain }, vignette: { ...state.vignette } }
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
@@ -2365,6 +2373,7 @@ function serializeFullProjectState() {
       retime: { ...state.deliverRetime },
       reframe: { ...state.reframe },
       film_grain: { ...state.filmGrain },
+      vignette: { ...state.vignette },
       export_fps: txt("render-export-fps", "source") || "source",
       deinterlace: chk("render-deinterlace", false),
       audio_only_format: txt("render-audio-only-format", "off") || "off",
@@ -2616,6 +2625,22 @@ function applyFullProjectState(project, validation) {
     state.filmGrain = { enabled: false, preset: "35mm_fine", strength: 12, temporal: true };
   }
   syncFilmGrainControlsUI({ syncInputs: true });
+  if (del.vignette && typeof del.vignette === "object") {
+    const allowedVigPresets = new Set(["subtle_cinema", "moody_portrait", "heavy_noir", "custom"]);
+    const allowedVigModes = new Set(["forward", "backward"]);
+    const rawVigPreset = String(del.vignette.preset || "subtle_cinema").trim().toLowerCase();
+    const rawVigAngle = Number(del.vignette.angle_deg);
+    const rawVigMode = String(del.vignette.mode || "forward").trim().toLowerCase();
+    state.vignette = {
+      enabled: Boolean(del.vignette.enabled),
+      preset: allowedVigPresets.has(rawVigPreset) ? rawVigPreset : "subtle_cinema",
+      angle_deg: Number.isFinite(rawVigAngle) ? Math.min(75.0, Math.max(5.0, rawVigAngle)) : 24.0,
+      mode: allowedVigModes.has(rawVigMode) ? rawVigMode : "forward"
+    };
+  } else {
+    state.vignette = { enabled: false, preset: "subtle_cinema", angle_deg: 24.0, mode: "forward" };
+  }
+  syncVignetteControlsUI({ syncInputs: true });
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -5519,6 +5544,106 @@ function scheduleFilmGrainCompile() {
   }, 80);
 }
 
+const VIGNETTE_PRESET_ANGLES_DEG = {
+  subtle_cinema: 18.0,
+  moody_portrait: 32.0,
+  heavy_noir: 52.0
+};
+
+const VIGNETTE_BADGE_LABELS = {
+  subtle_cinema: "SUBTLE",
+  moody_portrait: "MOODY",
+  heavy_noir: "NOIR",
+  custom: "CUSTOM"
+};
+
+function getNormalizedVignettePayload() {
+  const vig = state.vignette;
+  const allowedPresets = new Set(["subtle_cinema", "moody_portrait", "heavy_noir", "custom"]);
+  const allowedModes = new Set(["forward", "backward"]);
+  const rawPreset = String(vig.preset || "subtle_cinema").trim().toLowerCase();
+  const preset = allowedPresets.has(rawPreset) ? rawPreset : "subtle_cinema";
+  const rawAngle = Number(vig.angle_deg);
+  const angle_deg = Number.isFinite(rawAngle) ? Math.min(75.0, Math.max(5.0, rawAngle)) : 24.0;
+  const rawMode = String(vig.mode || "forward").trim().toLowerCase();
+  const mode = allowedModes.has(rawMode) ? rawMode : "forward";
+  return {
+    enabled: Boolean(vig.enabled),
+    preset,
+    angle_deg,
+    mode
+  };
+}
+
+function syncVignettePresetButtons() {
+  const vig = getNormalizedVignettePayload();
+  for (const btn of document.querySelectorAll(".vignette-deliver-preset-btn[data-deliver-vignette-preset]")) {
+    const btnPreset = String(btn.getAttribute("data-deliver-vignette-preset") || "").trim().toLowerCase();
+    const isMatch = vig.preset === btnPreset;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function syncVignetteControlsUI(opts = {}) {
+  const vig = getNormalizedVignettePayload();
+  const syncInputs = Boolean(opts.syncInputs);
+  const enabledEl = byId("render-vignette-enabled");
+  if (enabledEl && enabledEl.checked !== vig.enabled) {
+    enabledEl.checked = vig.enabled;
+  }
+  const angleEl = byId("render-vignette-angle");
+  if (syncInputs && angleEl) {
+    angleEl.value = String(vig.angle_deg);
+  }
+  const angleValEl = byId("render-vignette-angle-value");
+  if (angleValEl) {
+    angleValEl.textContent = `${vig.angle_deg.toFixed(1)} deg`;
+  }
+  const modeEl = byId("render-vignette-mode");
+  if (syncInputs && modeEl) {
+    modeEl.value = vig.mode;
+  }
+  const badgeEl = byId("render-vignette-badge");
+  if (badgeEl) {
+    if (!vig.enabled) {
+      badgeEl.textContent = "OFF";
+      badgeEl.className = "nle-tag mono";
+    } else {
+      const tag = VIGNETTE_BADGE_LABELS[vig.preset] || "CUSTOM";
+      badgeEl.textContent = `${tag} ${vig.angle_deg.toFixed(0)}deg`;
+      badgeEl.className = "nle-tag is-active mono";
+    }
+  }
+  syncVignettePresetButtons();
+  scheduleVignetteCompile();
+}
+
+function scheduleVignetteCompile() {
+  if (state.vignetteCompileTimer) {
+    window.clearTimeout(state.vignetteCompileTimer);
+  }
+  const seq = ++state.vignetteCompileSeq;
+  state.vignetteCompileTimer = window.setTimeout(async () => {
+    const previewEl = byId("render-vignette-preview");
+    const payload = getNormalizedVignettePayload();
+    if (!payload.enabled) {
+      if (previewEl) previewEl.textContent = "(off)";
+      return;
+    }
+    try {
+      const compiled = await api.compileVignetteFilter({ vignette: payload });
+      if (seq !== state.vignetteCompileSeq) return;
+      if (previewEl) {
+        previewEl.textContent = compiled.filtergraph ? `-vf ${compiled.filtergraph}` : "(off)";
+      }
+    } catch (err) {
+      if (seq !== state.vignetteCompileSeq) return;
+      if (previewEl) previewEl.textContent = `Error: ${err.message}`;
+    }
+  }, 80);
+}
+
 function applyDeliveryPreset(presetId) {
   const presets = getDeliveryPresetsList();
   const preset = presets.find((p) => p.id === presetId);
@@ -5802,6 +5927,8 @@ async function buildOrExecuteRender(execute) {
     const filmGrainPayload = getNormalizedFilmGrainPayload();
     const filmGrainActivePayload =
       filmGrainPayload.enabled && filmGrainPayload.strength > 0 ? filmGrainPayload : null;
+    const vignettePayload = getNormalizedVignettePayload();
+    const vignetteActivePayload = vignettePayload.enabled ? vignettePayload : null;
     const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
     const exportFpsEl = byId("render-export-fps");
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
@@ -5835,6 +5962,7 @@ async function buildOrExecuteRender(execute) {
         framing: framingPayload,
         reframe: reframeActivePayload,
         film_grain: filmGrainActivePayload,
+        vignette: vignetteActivePayload,
         clip_duration_s: clipDurationPayload,
         target_lufs: targetLufs,
         loudness_preset: fairlightPayload.loudness_preset,
@@ -5900,6 +6028,7 @@ async function buildOrExecuteRender(execute) {
       framing: framingPayload,
       reframe: reframeActivePayload,
       film_grain: filmGrainActivePayload,
+      vignette: vignetteActivePayload,
       clip_duration_s: clipDurationPayload,
       target_lufs: targetLufs,
       loudness_preset: fairlightPayload.loudness_preset,
@@ -5998,6 +6127,12 @@ async function buildOrExecuteRender(execute) {
         t("render.plan.filmGrain"),
         plan.film_grain_enabled
           ? `${plan.film_grain_preset} (${plan.film_grain_strength}, ${plan.film_grain_temporal ? "T+U" : "U"})`
+          : "off"
+      ],
+      [
+        t("render.plan.vignette"),
+        plan.vignette_enabled
+          ? `${plan.vignette_preset} (${Number(plan.vignette_angle_deg ?? 24).toFixed(1)} deg, ${plan.vignette_mode})`
           : "off"
       ],
       ["Video Filter", plan.video_filter || t("common.none")],
@@ -10076,6 +10211,52 @@ function wireEvents() {
     });
   }
   syncFilmGrainControlsUI({ syncInputs: true });
+
+  const vigEnabledEl = byId("render-vignette-enabled");
+  if (vigEnabledEl) {
+    vigEnabledEl.addEventListener("change", () => {
+      state.vignette.enabled = Boolean(vigEnabledEl.checked);
+      syncVignetteControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  for (const btn of document.querySelectorAll(".vignette-deliver-preset-btn[data-deliver-vignette-preset]")) {
+    btn.addEventListener("click", () => {
+      const preset = String(btn.getAttribute("data-deliver-vignette-preset") || "subtle_cinema").trim().toLowerCase();
+      state.vignette.preset = preset;
+      if (Object.prototype.hasOwnProperty.call(VIGNETTE_PRESET_ANGLES_DEG, preset)) {
+        state.vignette.angle_deg = VIGNETTE_PRESET_ANGLES_DEG[preset];
+      }
+      state.vignette.enabled = true;
+      syncVignetteControlsUI({ syncInputs: true });
+      redrawActiveCanvases();
+    });
+  }
+  const vigAngleEl = byId("render-vignette-angle");
+  if (vigAngleEl) {
+    const onAngleChange = () => {
+      const val = Number.parseFloat(vigAngleEl.value);
+      if (Number.isFinite(val) && val >= 5.0 && val <= 75.0) {
+        state.vignette.angle_deg = val;
+        const matchedPreset = Object.entries(VIGNETTE_PRESET_ANGLES_DEG).find(([, deg]) => Math.abs(deg - val) < 1e-6);
+        state.vignette.preset = matchedPreset ? matchedPreset[0] : "custom";
+        syncVignetteControlsUI();
+        redrawActiveCanvases();
+      }
+    };
+    vigAngleEl.addEventListener("input", onAngleChange);
+    vigAngleEl.addEventListener("change", onAngleChange);
+  }
+  const vigModeEl = byId("render-vignette-mode");
+  if (vigModeEl) {
+    vigModeEl.addEventListener("change", () => {
+      const val = String(vigModeEl.value || "forward").trim().toLowerCase();
+      state.vignette.mode = val === "backward" ? "backward" : "forward";
+      syncVignetteControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  syncVignetteControlsUI({ syncInputs: true });
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {

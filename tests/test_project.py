@@ -1093,3 +1093,43 @@ def test_project_delivery_film_grain_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["film_grain"][bad_key] = bad_val
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_vignette_roundtrip(tmp_path: Path) -> None:
+    from taktcut.render import VignetteParams
+
+    proj = _build_full_test_project()
+    assert proj.delivery.vignette.enabled is False
+    assert proj.delivery.vignette.preset == "subtle_cinema"
+    assert proj.delivery.vignette.angle_deg == pytest.approx(24.0)
+    assert proj.delivery.vignette.mode == "forward"
+
+    proj.delivery.vignette = VignetteParams(
+        enabled=True, preset="heavy_noir", angle_deg=52.0, mode="backward"
+    )
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.vignette.enabled is True
+    assert loaded.delivery.vignette.preset == "heavy_noir"
+    assert loaded.delivery.vignette.angle_deg == pytest.approx(52.0)
+    assert loaded.delivery.vignette.mode == "backward"
+
+    proj_path = tmp_path / "vignette_proj.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.vignette.enabled is True
+    assert disk_loaded.delivery.vignette.preset == "heavy_noir"
+    assert disk_loaded.delivery.vignette.angle_deg == pytest.approx(52.0)
+    assert disk_loaded.delivery.vignette.mode == "backward"
+
+    for bad_key, bad_val in (
+        ("preset", "extreme_vignette"),
+        ("angle_deg", 4.9),
+        ("angle_deg", 75.1),
+        ("angle_deg", True),
+        ("mode", "reverse"),
+    ):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["vignette"][bad_key] = bad_val
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

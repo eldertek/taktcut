@@ -31,6 +31,7 @@ from taktcut.render import (
     LowerThirdParams,
     ReframeParams,
     RetimeParams,
+    VignetteParams,
     build_atempo_stages,
     build_render_plan,
     compile_audio_filter,
@@ -60,6 +61,8 @@ from taktcut.render import (
     compile_transform_filter_result,
     compile_video_fade_filter,
     compile_video_fade_filter_result,
+    compile_vignette_filter,
+    compile_vignette_filter_result,
     execute_render_plan,
     get_delivery_preset,
     list_aspect_presets,
@@ -1907,6 +1910,99 @@ def test_film_grain_params_validation_and_filter_compile(tmp_path: Path) -> None
     assert plan.film_grain_temporal is True
     assert plan.video_filter is not None
     assert "noise=alls=22:allf=t+u" in plan.video_filter
+
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0
+
+
+def test_vignette_params_validation_and_filter_compile(tmp_path: Path) -> None:
+    import math
+
+    from taktcut.render import VIGNETTE_PRESET_ANGLES_DEG
+
+    default_vig = VignetteParams()
+    assert default_vig.enabled is False
+    assert default_vig.preset == "subtle_cinema"
+    assert default_vig.angle_deg == pytest.approx(24.0)
+    assert default_vig.mode == "forward"
+    assert default_vig.is_active() is False
+    assert default_vig.is_identity() is True
+    assert compile_vignette_filter(default_vig) == ""
+
+    disabled_vig = VignetteParams(
+        enabled=False, preset="heavy_noir", angle_deg=52.0, mode="backward"
+    )
+    assert disabled_vig.is_active() is False
+    assert compile_vignette_filter(disabled_vig) == ""
+
+    assert VIGNETTE_PRESET_ANGLES_DEG["subtle_cinema"] == pytest.approx(18.0)
+    assert VIGNETTE_PRESET_ANGLES_DEG["moody_portrait"] == pytest.approx(32.0)
+    assert VIGNETTE_PRESET_ANGLES_DEG["heavy_noir"] == pytest.approx(52.0)
+
+    for preset_name, angle_val, mode_val in (
+        ("subtle_cinema", 18.0, "forward"),
+        ("moody_portrait", 32.0, "forward"),
+        ("heavy_noir", 52.0, "backward"),
+        ("custom", 75.0, "forward"),
+        ("custom", 5.0, "backward"),
+    ):
+        vig = VignetteParams(
+            enabled=True,
+            preset=preset_name,  # type: ignore[arg-type]
+            angle_deg=angle_val,
+            mode=mode_val,  # type: ignore[arg-type]
+        )
+        expected_rad = angle_val * math.pi / 180.0
+        expected_vf = f"vignette=angle={expected_rad:.4f}:mode={mode_val}"
+        assert vig.is_active() is True
+        assert compile_vignette_filter(vig) == expected_vf
+
+    res = compile_vignette_filter_result(
+        VignetteParams(enabled=True, preset="moody_portrait", angle_deg=32.0, mode="forward")
+    )
+    expected_moody_rad = 32.0 * math.pi / 180.0
+    expected_moody_vf = f"vignette=angle={expected_moody_rad:.4f}:mode=forward"
+    assert res.is_active is True
+    assert res.is_identity is False
+    assert res.angle_rad == pytest.approx(round(expected_moody_rad, 4))
+    assert res.filtergraph == expected_moody_vf
+    assert res.ffmpeg_vf_args == ["-vf", expected_moody_vf]
+
+    for bad_kwargs in (
+        {"enabled": "yes"},
+        {"enabled": True, "preset": "anamorphic_bad"},
+        {"enabled": True, "preset": 18},
+        {"enabled": True, "angle_deg": 4.99},
+        {"enabled": True, "angle_deg": 75.01},
+        {"enabled": True, "angle_deg": float("nan")},
+        {"enabled": True, "angle_deg": True},
+        {"enabled": True, "mode": "reverse"},
+        {"enabled": True, "mode": 1},
+        {"unknown_field": 1},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            VignetteParams(**bad_kwargs)  # type: ignore[arg-type]
+
+    src = tmp_path / "vignette_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "vignette_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        vignette=VignetteParams(
+            enabled=True, preset="moody_portrait", angle_deg=32.0, mode="forward"
+        ),
+        prefer_hw=False,
+    )
+    assert plan.vignette_enabled is True
+    assert plan.vignette_preset == "moody_portrait"
+    assert plan.vignette_angle_deg == pytest.approx(32.0)
+    assert plan.vignette_mode == "forward"
+    assert plan.video_filter is not None
+    assert expected_moody_vf in plan.video_filter
 
     result = execute_render_plan(plan)
     assert result.success is True, result.stderr_tail

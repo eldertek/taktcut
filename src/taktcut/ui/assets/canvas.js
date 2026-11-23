@@ -1169,6 +1169,66 @@ export function drawFilmGrainOverlayOnFrame(ctx, fx, fy, frameW, frameH, filmGra
   return true;
 }
 
+const VIGNETTE_PRESET_TAGS = {
+  subtle_cinema: "SUBTLE",
+  moody_portrait: "MOODY",
+  heavy_noir: "NOIR",
+  custom: "CUSTOM"
+};
+
+export function drawCinematicVignetteOverlayOnFrame(ctx, fx, fy, frameW, frameH, vignetteState) {
+  if (!vignetteState || !vignetteState.enabled) return false;
+  const rawAngle = Number(vignetteState.angle_deg ?? 24.0);
+  const angleDeg = Number.isFinite(rawAngle) ? Math.max(5.0, Math.min(75.0, rawAngle)) : 24.0;
+  const mode = String(vignetteState.mode || "forward").trim().toLowerCase() === "backward"
+    ? "backward"
+    : "forward";
+  const presetKey = String(vignetteState.preset || "subtle_cinema").trim().toLowerCase();
+  const presetTag = VIGNETTE_PRESET_TAGS[presetKey] || "SUBTLE";
+  const norm = (angleDeg - 5.0) / 70.0;
+
+  const cx = fx + frameW * 0.5;
+  const cy = fy + frameH * 0.5;
+  const rOuter = Math.max(2, Math.hypot(frameW * 0.5, frameH * 0.5));
+  const rInner = Math.max(1, rOuter * (0.58 - norm * 0.34));
+  const edgeAlpha = Math.min(0.88, 0.22 + norm * 0.62);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(fx, fy, frameW, frameH);
+  ctx.clip();
+
+  const grad = ctx.createRadialGradient(cx, cy, rInner, cx, cy, rOuter);
+  if (mode === "backward") {
+    grad.addColorStop(0, "rgba(255, 250, 240, 0)");
+    grad.addColorStop(0.55, `rgba(255, 250, 240, ${(edgeAlpha * 0.28).toFixed(3)})`);
+    grad.addColorStop(1, `rgba(255, 250, 240, ${(edgeAlpha * 0.72).toFixed(3)})`);
+  } else {
+    grad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    grad.addColorStop(0.55, `rgba(0, 0, 0, ${(edgeAlpha * 0.36).toFixed(3)})`);
+    grad.addColorStop(1, `rgba(0, 0, 0, ${edgeAlpha.toFixed(3)})`);
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(fx, fy, frameW, frameH);
+
+  const label = `VIG ${presetTag} ${angleDeg.toFixed(0)}deg ${mode === "backward" ? "BRIGHT" : "DARK"}`;
+  ctx.font = "700 9px ui-monospace, monospace";
+  const pillW = Math.min(Math.max(48, frameW - 16), ctx.measureText(label).width + 10);
+  const pillX = fx + 8;
+  const pillY = fy + frameH - 23;
+  ctx.fillStyle = "rgba(20, 20, 22, 0.86)";
+  ctx.fillRect(pillX, pillY, pillW, 15);
+  ctx.strokeStyle = mode === "backward" ? "rgba(120, 195, 255, 0.72)" : "rgba(230, 132, 66, 0.72)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(pillX + 0.5, pillY + 0.5, Math.max(1, pillW - 1), 14);
+  ctx.fillStyle = mode === "backward" ? "#8ad0ff" : "#f4a46b";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillText(fitCanvasText(ctx, label, Math.max(16, pillW - 8)), pillX + 5, pillY + 3);
+  ctx.restore();
+  return true;
+}
+
 function drawTransparencyCheckerboard(ctx, x, y, w, h, tile = 10) {
   ctx.fillStyle = "#1f1f24";
   ctx.fillRect(x, y, w, h);
@@ -2511,6 +2571,10 @@ export function drawProgramMonitorCanvas(
   // Auto-Reframe & Social Aspect Ratio Crop overlay
   const reframeState = renderOpts && renderOpts.reframe ? renderOpts.reframe : null;
   drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeState);
+
+  // Cinematic Vignette preview overlay
+  const vignetteState = renderOpts && renderOpts.vignette ? renderOpts.vignette : null;
+  drawCinematicVignetteOverlayOnFrame(ctx, fx, fy, frameW, frameH, vignetteState);
 
   // Film Grain (35mm / 16mm / Super 8) preview overlay
   const filmGrainState = renderOpts && renderOpts.filmGrain ? renderOpts.filmGrain : null;

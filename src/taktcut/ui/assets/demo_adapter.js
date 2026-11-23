@@ -757,6 +757,44 @@ function compileFilmGrainClient(payload) {
   };
 }
 
+const VIGNETTE_ALLOWED_PRESETS_DEMO = new Set(["subtle_cinema", "moody_portrait", "heavy_noir", "custom"]);
+const VIGNETTE_ALLOWED_MODES_DEMO = new Set(["forward", "backward"]);
+
+function compileVignetteClient(payload) {
+  const src = payload && payload.vignette ? payload.vignette : payload || {};
+  const enabled = src.enabled !== undefined ? src.enabled : false;
+  if (typeof enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  const rawPreset = src.preset !== undefined && src.preset !== null ? String(src.preset).trim().toLowerCase() : "subtle_cinema";
+  if (!VIGNETTE_ALLOWED_PRESETS_DEMO.has(rawPreset)) {
+    throw new Error(`Unsupported vignette preset ${src.preset}`);
+  }
+  const rawAngle = src.angle_deg !== undefined && src.angle_deg !== null ? src.angle_deg : 24.0;
+  if (typeof rawAngle === "boolean" || typeof rawAngle !== "number" || !Number.isFinite(rawAngle) || rawAngle < 5.0 || rawAngle > 75.0) {
+    throw new Error("angle_deg must be within [5.0, 75.0]");
+  }
+  const rawMode = src.mode !== undefined && src.mode !== null ? String(src.mode).trim().toLowerCase() : "forward";
+  if (!VIGNETTE_ALLOWED_MODES_DEMO.has(rawMode)) {
+    throw new Error(`Unsupported vignette mode ${src.mode}`);
+  }
+  const rad = (rawAngle * Math.PI) / 180.0;
+  const fg = enabled ? `vignette=angle=${rad.toFixed(4)}:mode=${rawMode}` : "";
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: fg ? ["-vf", fg] : [],
+    is_identity: !enabled,
+    is_active: Boolean(enabled),
+    angle_rad: Number(rad.toFixed(4)),
+    params: {
+      enabled,
+      preset: rawPreset,
+      angle_deg: rawAngle,
+      mode: rawMode
+    }
+  };
+}
+
 const CAPTION_STYLE_SPECS = [
   {
     id: "clean_white",
@@ -1385,6 +1423,20 @@ export function createApiClient() {
             vfParts.push(compiledVideoFade.filtergraph);
           }
         }
+        let vignetteEnabled = false;
+        let vignettePreset = "subtle_cinema";
+        let vignetteAngleDeg = 24.0;
+        let vignetteMode = "forward";
+        if (body.vignette) {
+          const compiledVignette = compileVignetteClient(body.vignette);
+          if (compiledVignette.is_active && compiledVignette.filtergraph) {
+            vfParts.push(compiledVignette.filtergraph);
+            vignetteEnabled = true;
+            vignettePreset = compiledVignette.params.preset;
+            vignetteAngleDeg = compiledVignette.params.angle_deg;
+            vignetteMode = compiledVignette.params.mode;
+          }
+        }
         let filmGrainEnabled = false;
         let filmGrainPreset = "35mm_fine";
         let filmGrainStrength = 12;
@@ -1550,6 +1602,10 @@ export function createApiClient() {
               film_grain_preset: "35mm_fine",
               film_grain_strength: 12,
               film_grain_temporal: true,
+              vignette_enabled: false,
+              vignette_preset: "subtle_cinema",
+              vignette_angle_deg: 24.0,
+              vignette_mode: "forward",
               export_fps: rawExportFps,
               deinterlace,
               audio_only_format: rawAudioOnly,
@@ -1629,6 +1685,10 @@ export function createApiClient() {
             film_grain_preset: filmGrainPreset,
             film_grain_strength: filmGrainStrength,
             film_grain_temporal: filmGrainTemporal,
+            vignette_enabled: vignetteEnabled,
+            vignette_preset: vignettePreset,
+            vignette_angle_deg: vignetteAngleDeg,
+            vignette_mode: vignetteMode,
             export_fps: rawExportFps,
             deinterlace,
             audio_only_format: "off",
@@ -1808,6 +1868,12 @@ export function createApiClient() {
         return compileFilmGrainClient(payload);
       }
       return requestJson("/api/film-grain/compile", { method: "POST", body: payload });
+    },
+    async compileVignetteFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileVignetteClient(payload);
+      }
+      return requestJson("/api/vignette/compile", { method: "POST", body: payload });
     },
     async getColorPresets() {
       if (resolvedMode === "static-demo") {

@@ -109,6 +109,7 @@ from taktcut.render import (
     LowerThirdParams,
     ReframeParams,
     RetimeParams,
+    VignetteParams,
     build_render_plan,
     compile_audio_filter_result,
     compile_auto_duck_filter_result,
@@ -119,6 +120,7 @@ from taktcut.render import (
     compile_retime_filter_result,
     compile_transform_filter_result,
     compile_video_fade_filter_result,
+    compile_vignette_filter_result,
     execute_render_plan,
     list_aspect_presets,
     list_delivery_presets,
@@ -578,6 +580,25 @@ def _build_film_grain_from_payload(
         allowed_keys = ("enabled", "preset", "strength", "temporal")
         subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
         return FilmGrainParams.model_validate(subset)
+    return None
+
+
+def _build_vignette_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> VignetteParams | None:
+    if "vignette" in payload:
+        raw_vig = payload.get("vignette")
+        if raw_vig is None:
+            return None
+        if not isinstance(raw_vig, dict):
+            raise ValueError("'vignette' must be a JSON object")
+        return VignetteParams.model_validate(raw_vig)
+    if allow_top_level:
+        allowed_keys = ("enabled", "preset", "angle_deg", "mode")
+        subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
+        return VignetteParams.model_validate(subset)
     return None
 
 
@@ -1706,6 +1727,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             framing_params = _build_framing_params_from_payload(payload)
             reframe_obj = _build_reframe_from_payload(payload)
             film_grain_obj = _build_film_grain_from_payload(payload)
+            vignette_obj = _build_vignette_from_payload(payload)
 
             title_overlay_obj: TitleOverlayParams | None = None
             raw_title_overlay = payload.get("title_overlay")
@@ -1747,6 +1769,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 framing=framing_params,
                 reframe=reframe_obj,
                 film_grain=film_grain_obj,
+                vignette=vignette_obj,
                 clip_duration_s=clip_duration_s,
                 target_lufs=target_lufs,
                 loudness_preset=loudness_preset,
@@ -1988,6 +2011,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, compiled_film_grain.model_dump(mode="json"))
             return
 
+        if route == "/api/vignette/compile":
+            vignette_obj = _build_vignette_from_payload(payload, allow_top_level=True)
+            assert vignette_obj is not None
+            compiled_vignette = compile_vignette_filter_result(vignette_obj)
+            self._send_json(HTTPStatus.OK, compiled_vignette.model_dump(mode="json"))
+            return
+
         if route == "/api/transitions/compile":
             trans_params = _build_transition_params_from_payload(payload)
             raw_dur_a = payload.get("clip_a_duration_s")
@@ -2215,6 +2245,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             framing_params = _build_framing_params_from_payload(payload)
             reframe_obj = _build_reframe_from_payload(payload)
             film_grain_obj = _build_film_grain_from_payload(payload)
+            vignette_obj = _build_vignette_from_payload(payload)
             title_overlay_remote: TitleOverlayParams | None = None
             if isinstance(payload.get("title_overlay"), dict):
                 title_overlay_remote = _build_title_overlay_from_payload(
@@ -2251,6 +2282,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 framing=framing_params,
                 reframe=reframe_obj,
                 film_grain=film_grain_obj,
+                vignette=vignette_obj,
                 clip_duration_s=clip_duration_s,
                 loudness_preset=loudness_preset or "off",
                 dialogue_eq=dialogue_eq or "off",

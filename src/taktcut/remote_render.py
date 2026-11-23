@@ -55,6 +55,7 @@ from taktcut.render import (
     LowerThirdParams,
     ReframeParams,
     RetimeParams,
+    VignetteParams,
     build_render_plan,
     execute_render_plan,
     probe_hardware_capabilities,
@@ -264,6 +265,7 @@ class RemoteRenderJobRequest(BaseModel):
     framing: FramingParams | None = None
     reframe: ReframeParams | None = None
     film_grain: FilmGrainParams | None = None
+    vignette: VignetteParams | None = None
     clip_duration_s: float | None = None
 
     @field_validator("loudness_preset", mode="before")
@@ -587,6 +589,7 @@ class RemoteRenderState:
             framing=req.framing,
             reframe=req.reframe,
             film_grain=req.film_grain,
+            vignette=req.vignette,
             clip_duration_s=req.clip_duration_s,
             target_lufs=req.target_lufs,
             loudness_preset=req.loudness_preset,

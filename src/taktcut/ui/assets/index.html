@@ -1779,6 +1779,40 @@
                 </div>
                 <div id="render-film-grain-preview" class="code-box film-grain-deliver-preview mono" aria-live="polite">(off)</div>
               </div>
+              <div id="deliver-vignette-card" class="vignette-deliver-card">
+                <div class="vignette-deliver-head">
+                  <span class="vignette-deliver-title" data-i18n="render.vignette.title">Cinematic Vignette</span>
+                  <div class="vignette-deliver-head-actions">
+                    <span id="render-vignette-badge" class="nle-tag mono">OFF</span>
+                    <label class="check-label vignette-toggle-label">
+                      <input type="checkbox" id="render-vignette-enabled">
+                      <span data-i18n="render.vignette.toggle">Enable</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="vignette-deliver-preset-row" role="group" aria-label="Cinematic Vignette Presets">
+                  <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="subtle_cinema" aria-pressed="false" data-i18n="render.vignette.preset.subtle">Subtle Cinema (18 deg)</button>
+                  <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="moody_portrait" aria-pressed="false" data-i18n="render.vignette.preset.moody">Moody Portrait (32 deg)</button>
+                  <button type="button" class="vignette-deliver-preset-btn" data-deliver-vignette-preset="heavy_noir" aria-pressed="false" data-i18n="render.vignette.preset.noir">Heavy Noir (52 deg)</button>
+                </div>
+                <div class="vignette-deliver-controls-row">
+                  <div class="form-row vignette-deliver-slider-col">
+                    <label for="render-vignette-angle" data-i18n="render.vignette.label.angle">Angle (5-75 deg)</label>
+                    <div class="watermark-opacity-row">
+                      <input type="range" id="render-vignette-angle" class="watermark-opacity-slider" min="5" max="75" step="0.5" value="24">
+                      <span id="render-vignette-angle-value" class="mono watermark-opacity-val">24.0 deg</span>
+                    </div>
+                  </div>
+                  <div class="form-row vignette-deliver-mode-col">
+                    <label for="render-vignette-mode" data-i18n="render.vignette.label.mode">Mode</label>
+                    <select id="render-vignette-mode" class="input-control vignette-deliver-select mono">
+                      <option value="forward" data-i18n="render.vignette.mode.forward">Darken Edges (forward)</option>
+                      <option value="backward" data-i18n="render.vignette.mode.backward">Brighten (backward)</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="render-vignette-preview" class="code-box vignette-deliver-preview mono" aria-live="polite">(off)</div>
+              </div>
               <div class="form-row-three">
                 <div class="form-row">
                   <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>

@@ -30,6 +30,8 @@ from taktcut.models import (
     ALLOWED_LOWER_THIRD_POSITIONS,
     ALLOWED_REFRAME_ASPECT_RATIOS,
     ALLOWED_TIMECODE_BURNIN,
+    ALLOWED_VIGNETTE_MODES,
+    ALLOWED_VIGNETTE_PRESETS,
     FILM_GRAIN_STRENGTH_DEFAULT,
     FILM_GRAIN_STRENGTH_MAX,
     FILM_GRAIN_STRENGTH_MIN,
@@ -46,6 +48,9 @@ from taktcut.models import (
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     REVIEW_WATERMARK_OPACITY_MAX,
     REVIEW_WATERMARK_OPACITY_MIN,
+    VIGNETTE_ANGLE_DEG_DEFAULT,
+    VIGNETTE_ANGLE_DEG_MAX,
+    VIGNETTE_ANGLE_DEG_MIN,
     YADIF_DEINTERLACE_FILTER,
     AudioOnlyFormatId,
     ClipTransformParams,
@@ -62,6 +67,8 @@ from taktcut.models import (
     RenderProfile,
     RenderResult,
     TimecodeBurnInPosition,
+    VignetteMode,
+    VignettePresetId,
 )
 from taktcut.subtitles import SubtitleTrackParams, compile_subtitles_filter
 from taktcut.titles import (
@@ -1678,6 +1685,118 @@ def compile_film_grain_filter_result(params: FilmGrainParams) -> FilmGrainCompil
     )
 
 
+_VIGNETTE_CANONICAL_PRESETS: dict[str, VignettePresetId] = {
+    item: item for item in ALLOWED_VIGNETTE_PRESETS
+}
+_VIGNETTE_CANONICAL_MODES: dict[str, VignetteMode] = {
+    item: item for item in ALLOWED_VIGNETTE_MODES
+}
+VIGNETTE_PRESET_ANGLES_DEG: dict[VignettePresetId, float] = {
+    "subtle_cinema": 18.0,
+    "moody_portrait": 32.0,
+    "heavy_noir": 52.0,
+    "custom": VIGNETTE_ANGLE_DEG_DEFAULT,
+}
+
+
+class VignetteParams(BaseModel):
+    """DaVinci Resolve / Boris FX Sapphire Cinematic Vignette (FFmpeg vignette) parameters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    preset: VignettePresetId = "subtle_cinema"
+    angle_deg: float = VIGNETTE_ANGLE_DEG_DEFAULT
+    mode: VignetteMode = "forward"
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"enabled must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _validate_preset(cls, raw: Any) -> VignettePresetId:
+        if not isinstance(raw, str):
+            raise ValueError(f"preset must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        canonical = _VIGNETTE_CANONICAL_PRESETS.get(cleaned)
+        if canonical is None:
+            allowed = ", ".join(ALLOWED_VIGNETTE_PRESETS)
+            raise ValueError(
+                f"Unsupported vignette preset {raw!r}; expected one of: {allowed}"
+            )
+        return canonical
+
+    @field_validator("angle_deg", mode="before")
+    @classmethod
+    def _validate_angle_deg(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "angle_deg",
+            VIGNETTE_ANGLE_DEG_MIN,
+            VIGNETTE_ANGLE_DEG_MAX,
+        )
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _validate_mode(cls, raw: Any) -> VignetteMode:
+        if not isinstance(raw, str):
+            raise ValueError(f"mode must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        canonical = _VIGNETTE_CANONICAL_MODES.get(cleaned)
+        if canonical is None:
+            allowed = ", ".join(ALLOWED_VIGNETTE_MODES)
+            raise ValueError(
+                f"Unsupported vignette mode {raw!r}; expected one of: {allowed}"
+            )
+        return canonical
+
+    def is_active(self) -> bool:
+        """Return True when Cinematic Vignette is enabled."""
+        return bool(self.enabled)
+
+    def is_identity(self) -> bool:
+        """Return True when Cinematic Vignette is disabled."""
+        return not self.is_active()
+
+
+class VignetteCompileResult(BaseModel):
+    """Compiled FFmpeg vignette filtergraph for Cinematic Vignette."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_identity: bool
+    is_active: bool = False
+    angle_rad: float
+    params: VignetteParams
+
+
+def compile_vignette_filter(params: VignetteParams) -> str:
+    """Compile validated VignetteParams into an FFmpeg vignette filter string (or '')."""
+    if not params.is_active():
+        return ""
+    rad = params.angle_deg * math.pi / 180.0
+    return f"vignette=angle={rad:.4f}:mode={params.mode}"
+
+
+def compile_vignette_filter_result(params: VignetteParams) -> VignetteCompileResult:
+    """Compile Cinematic Vignette parameters into structured filtergraph and argv slice."""
+    fg = compile_vignette_filter(params)
+    is_act = fg != ""
+    rad = params.angle_deg * math.pi / 180.0
+    return VignetteCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_identity=not is_act,
+        is_active=is_act,
+        angle_rad=round(rad, 4),
+        params=params,
+    )
+
+
 ALLOWED_TRANSFORM_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "yuv444p", "rgba", "rgb24"}
 )
@@ -2003,6 +2122,7 @@ def build_render_plan(
     retime: RetimeParams | None = None,
     reframe: ReframeParams | None = None,
     film_grain: FilmGrainParams | None = None,
+    vignette: VignetteParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -2183,6 +2303,19 @@ def build_render_plan(
             film_grain_strength = film_grain.strength
             film_grain_temporal = film_grain.temporal
 
+    vignette_vf = ""
+    vignette_enabled = False
+    vignette_preset: VignettePresetId = "subtle_cinema"
+    vignette_angle_deg = VIGNETTE_ANGLE_DEG_DEFAULT
+    vignette_mode: VignetteMode = "forward"
+    if vignette is not None and vignette.is_active():
+        vignette_vf = compile_vignette_filter(vignette)
+        if vignette_vf:
+            vignette_enabled = True
+            vignette_preset = vignette.preset
+            vignette_angle_deg = vignette.angle_deg
+            vignette_mode = vignette.mode
+
     transform_vf: str | None = None
     if transform_params is not None and not transform_params.is_identity():
         transform_vf = compile_transform_filter(
@@ -2254,6 +2387,8 @@ def build_render_plan(
         )
         if video_fade_vf is not None:
             vf_parts.append(video_fade_vf)
+    if vignette_vf:
+        vf_parts.append(vignette_vf)
     if film_grain_vf:
         vf_parts.append(film_grain_vf)
     if title_overlay is not None and title_overlay.is_active():
@@ -2355,6 +2490,10 @@ def build_render_plan(
             film_grain_preset="35mm_fine",
             film_grain_strength=FILM_GRAIN_STRENGTH_DEFAULT,
             film_grain_temporal=True,
+            vignette_enabled=False,
+            vignette_preset="subtle_cinema",
+            vignette_angle_deg=VIGNETTE_ANGLE_DEG_DEFAULT,
+            vignette_mode="forward",
             export_fps=resolved_export_fps,
             deinterlace=resolved_deinterlace,
             audio_only_format=resolved_audio_only,
@@ -2466,6 +2605,10 @@ def build_render_plan(
         film_grain_preset=film_grain_preset,
         film_grain_strength=film_grain_strength,
         film_grain_temporal=film_grain_temporal,
+        vignette_enabled=vignette_enabled,
+        vignette_preset=vignette_preset,
+        vignette_angle_deg=vignette_angle_deg,
+        vignette_mode=vignette_mode,
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
         audio_only_format=resolved_audio_only,

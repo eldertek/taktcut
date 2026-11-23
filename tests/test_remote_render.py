@@ -454,3 +454,28 @@ def test_remote_render_request_accepts_film_grain() -> None:
             input_base64="AAAA",
             film_grain={"enabled": True, "strength": 75},  # type: ignore[arg-type]
         )
+
+
+def test_remote_render_request_accepts_vignette() -> None:
+    from taktcut.remote_render import RemoteRenderJobRequest
+
+    req = RemoteRenderJobRequest(
+        input_base64="AAAA",
+        vignette={  # type: ignore[arg-type]
+            "enabled": True,
+            "preset": "moody_portrait",
+            "angle_deg": 32.0,
+            "mode": "backward",
+        },
+    )
+    assert req.vignette is not None
+    assert req.vignette.enabled is True
+    assert req.vignette.preset == "moody_portrait"
+    assert req.vignette.angle_deg == pytest.approx(32.0)
+    assert req.vignette.mode == "backward"
+
+    with pytest.raises((ValueError, Exception)):
+        RemoteRenderJobRequest(
+            input_base64="AAAA",
+            vignette={"enabled": True, "angle_deg": 90.0},  # type: ignore[arg-type]
+        )

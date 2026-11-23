@@ -3715,6 +3715,65 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 fg_temporal.check()
                 fg_chk.uncheck()
 
+                # Verify Deliver Cinematic Vignette + Program Monitor live frame
+                vig_card = page.locator("#deliver-vignette-card")
+                vig_chk = page.locator("#render-vignette-enabled")
+                vig_angle = page.locator("#render-vignette-angle")
+                vig_mode = page.locator("#render-vignette-mode")
+                vig_subtle = page.locator(
+                    '.vignette-deliver-preset-btn[data-deliver-vignette-preset="subtle_cinema"]'
+                )
+                vig_moody = page.locator(
+                    '.vignette-deliver-preset-btn[data-deliver-vignette-preset="moody_portrait"]'
+                )
+                vig_noir = page.locator(
+                    '.vignette-deliver-preset-btn[data-deliver-vignette-preset="heavy_noir"]'
+                )
+                assert vig_card.is_visible() is True
+                assert vig_chk.is_checked() is False
+                assert vig_mode.input_value() == "forward"
+                if width <= 820:
+                    for vig_loc in (vig_angle, vig_mode, vig_subtle, vig_moody, vig_noir):
+                        vig_box = vig_loc.bounding_box()
+                        assert vig_box is not None and vig_box["height"] >= 44
+                vig_moody.click()
+                assert vig_chk.is_checked() is True
+                assert vig_moody.get_attribute("aria-pressed") == "true"
+                page.wait_for_function(
+                    "() => (document.getElementById('render-vignette-preview')"
+                    ".textContent || '').includes('vignette=angle=0.5585:mode=forward')"
+                )
+                vig_mode.select_option("backward")
+                vig_angle.fill("40")
+                vig_angle.dispatch_event("input")
+                page.wait_for_function(
+                    "() => (document.getElementById('render-vignette-preview')"
+                    ".textContent || '').includes('vignette=angle=0.6981:mode=backward')"
+                )
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('vignette=angle=')"
+                )
+                vig_argv = page.locator("#render-argv-output").text_content() or ""
+                vig_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "vignette=angle=0.6981:mode=backward" in vig_argv
+                assert "custom (40.0 deg, backward)" in vig_kv
+                vig_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert vig_overflow <= 0, (
+                    f"Deliver vignette overflow at {width}x{height}: {vig_overflow}px"
+                )
+                page.locator("#tab-timeline").click()
+                prog_with_vig = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                assert prog_with_vig != prog_without_lt
+                page.locator("#tab-render").click()
+                vig_mode.select_option("forward")
+                vig_chk.uncheck()
+
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
@@ -5669,3 +5728,144 @@ def test_ui_film_grain_compile_and_render_plan_endpoints(
 
     canvas_text = (assets_dir / "canvas.js").read_text(encoding="utf-8")
     assert "drawFilmGrainOverlayOnFrame" in canvas_text
+
+
+def test_ui_vignette_compile_and_render_plan_endpoints(
+    ui_server: tuple[str, Path],
+) -> None:
+    import math
+
+    base_url, _ = ui_server
+
+    for preset_name, angle_val, mode_val in (
+        ("subtle_cinema", 18.0, "forward"),
+        ("moody_portrait", 32.0, "forward"),
+        ("heavy_noir", 52.0, "backward"),
+        ("custom", 40.0, "backward"),
+    ):
+        c_status, _, c_raw = _http_call(
+            f"{base_url}/api/vignette/compile",
+            method="POST",
+            payload={
+                "enabled": True,
+                "preset": preset_name,
+                "angle_deg": angle_val,
+                "mode": mode_val,
+            },
+        )
+        assert c_status == 200
+        compiled = json.loads(c_raw.decode("utf-8"))
+        expected_rad = angle_val * math.pi / 180.0
+        expected_vf = f"vignette=angle={expected_rad:.4f}:mode={mode_val}"
+        assert compiled["is_active"] is True
+        assert compiled["is_identity"] is False
+        assert compiled["filtergraph"] == expected_vf
+        assert compiled["ffmpeg_vf_args"] == ["-vf", expected_vf]
+
+    off_status, _, off_raw = _http_call(
+        f"{base_url}/api/vignette/compile",
+        method="POST",
+        payload={
+            "enabled": False,
+            "preset": "heavy_noir",
+            "angle_deg": 52.0,
+            "mode": "forward",
+        },
+    )
+    assert off_status == 200
+    off_compiled = json.loads(off_raw.decode("utf-8"))
+    assert off_compiled["is_active"] is False
+    assert off_compiled["is_identity"] is True
+    assert off_compiled["filtergraph"] == ""
+    assert off_compiled["ffmpeg_vf_args"] == []
+
+    for bad_vig in (
+        {"enabled": True, "preset": "anamorphic_bad", "angle_deg": 24.0},
+        {"enabled": True, "preset": "subtle_cinema", "angle_deg": 4.5},
+        {"enabled": True, "preset": "subtle_cinema", "angle_deg": 76.0},
+        {"enabled": True, "preset": "subtle_cinema", "angle_deg": True},
+        {"enabled": "yes", "preset": "subtle_cinema", "angle_deg": 24.0},
+        {"enabled": True, "preset": "subtle_cinema", "angle_deg": 24.0, "mode": "reverse"},
+    ):
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/vignette/compile",
+            method="POST",
+            payload=bad_vig,
+        )
+        assert bad_status == 400
+
+    rp_status, _, rp_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/vignette_dryrun.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "vignette": {
+                "enabled": True,
+                "preset": "moody_portrait",
+                "angle_deg": 32.0,
+                "mode": "forward",
+            },
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert rp_status == 200
+    plan = json.loads(rp_raw.decode("utf-8"))["plan"]
+    assert plan["vignette_enabled"] is True
+    assert plan["vignette_preset"] == "moody_portrait"
+    assert plan["vignette_angle_deg"] == pytest.approx(32.0)
+    assert plan["vignette_mode"] == "forward"
+    expected_plan_vf = f"vignette=angle={32.0 * math.pi / 180.0:.4f}:mode=forward"
+    assert expected_plan_vf in plan["video_filter"]
+
+    bad_rp_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/vignette_bad.mp4",
+            "vignette": {"enabled": True, "preset": "subtle_cinema", "angle_deg": 99.0},
+            "execute": False,
+        },
+    )
+    assert bad_rp_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "deliver-vignette-card",
+        "render-vignette-enabled",
+        "render-vignette-badge",
+        "render-vignette-angle",
+        "render-vignette-angle-value",
+        "render-vignette-mode",
+        "render-vignette-preview",
+    ):
+        assert f'id="{elem_id}"' in html_text
+    for preset_attr in ("subtle_cinema", "moody_portrait", "heavy_noir"):
+        assert f'data-deliver-vignette-preset="{preset_attr}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.vignette.title",
+        "render.vignette.toggle",
+        "render.vignette.preset.subtle",
+        "render.vignette.preset.moody",
+        "render.vignette.preset.noir",
+        "render.vignette.label.angle",
+        "render.vignette.label.mode",
+        "render.vignette.mode.forward",
+        "render.vignette.mode.backward",
+        "render.plan.vignette",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    demo_text = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    assert "compileVignetteClient" in demo_text
+    assert "vignette_enabled" in demo_text
+
+    canvas_text = (assets_dir / "canvas.js").read_text(encoding="utf-8")
+    assert "drawCinematicVignetteOverlayOnFrame" in canvas_text
