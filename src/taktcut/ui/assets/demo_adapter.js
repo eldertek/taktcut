@@ -959,7 +959,7 @@ export function createApiClient() {
     }
     return {
       status: "ok",
-      version: "0.1.21",
+      version: "0.1.22",
       workspace_dir: "browser-static-demo",
       ffmpeg_available: false,
       capabilities: {
@@ -1645,8 +1645,8 @@ export function createApiClient() {
     async checkForUpdate() {
       if (resolvedMode === "static-demo") {
         return {
-          current_version: "0.1.21",
-          latest_version: "0.1.21",
+          current_version: "0.1.22",
+          latest_version: "0.1.22",
           update_available: false,
           can_apply_ota: false,
           error: null
@@ -1897,7 +1897,7 @@ export function createApiClient() {
         }
         const project = {
           ...rawProj,
-          app_version: rawProj.app_version || "0.1.21",
+          app_version: rawProj.app_version || "0.1.22",
           saved_at: rawProj.saved_at || new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
         };
         const projectJson = JSON.stringify(project, null, 2) + "\n";
