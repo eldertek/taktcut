@@ -7,6 +7,7 @@ import {
   COLOR_WARPER_SAT_RINGS,
   CURVE_CHANNELS,
   FAIRLIGHT_EQ_BAND_SPECS,
+  FFT_BAND_FREQS_HZ,
   HSL_CURVE_MODES,
   HSL_HUE_ANCHOR_DEGREES,
   HSL_HUE_BOUNDS,
@@ -15,6 +16,7 @@ import {
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   TRANSFORM_PARAM_BOUNDS,
+  TRANSIENT_FOCUS_FREQ_RANGES,
   applyColorNodeChainRgbAtClient,
   applyColorNodeChainRgbClient,
   applyColorNodesBeforeTargetClient,
@@ -4412,6 +4414,26 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.restore();
     }
 
+    const transientPeaks = opts && Array.isArray(opts.transientPeaks) ? opts.transientPeaks : [];
+    if (isAudio && transientPeaks.length > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(timelineX, rowY, timelineW, trackHeight);
+      ctx.clip();
+      for (const pk of transientPeaks) {
+        const txRaw = frameToX(pk.frame);
+        if (txRaw < timelineX || txRaw > timelineX + timelineW) continue;
+        const tx = Math.round(txRaw) + 0.5;
+        ctx.strokeStyle = "rgba(63, 185, 80, 0.28)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(tx, rowY);
+        ctx.lineTo(tx, rowY + trackHeight);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // Track tag
     const tagX = width < 480 ? 4 : 6;
     const tagW = width < 480 ? 21 : 23;
@@ -5191,6 +5213,24 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     drawIoBracket(ioOutX, false);
   }
 
+  // Detected Audio Transient Ticks on Ruler
+  const rulerTransients = opts && Array.isArray(opts.transientPeaks) ? opts.transientPeaks : [];
+  if (rulerTransients.length > 0) {
+    ctx.save();
+    for (const pk of rulerTransients) {
+      const tx = frameToX(pk.frame);
+      if (tx < timelineX || tx > timelineX + timelineW) continue;
+      ctx.fillStyle = "#3fb950";
+      ctx.beginPath();
+      ctx.moveTo(tx, rulerHeight - 1);
+      ctx.lineTo(tx - 3.5, rulerHeight - 7);
+      ctx.lineTo(tx + 3.5, rulerHeight - 7);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   // Markers
   (doc.markers || []).forEach((mk, mkIdx) => {
     const mx = frameToX(mk.frame);
@@ -5268,9 +5308,9 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     if (gxRaw >= timelineX && gxRaw <= timelineX + timelineW) {
       const gx = Math.round(gxRaw) + 0.5;
       const isBeatSnap = opts.snapGuideKind === "beat";
-      const isMarkerSnap = opts.snapGuideKind === "marker";
-      const guideCol = isBeatSnap ? "#e6b842" : "#39c5cf";
-      const textCol = isBeatSnap ? "#ffe394" : "#8de8ef";
+      const isTransientSnap = opts.snapGuideKind === "transient";
+      const guideCol = isBeatSnap ? "#e6b842" : isTransientSnap ? "#3fb950" : "#39c5cf";
+      const textCol = isBeatSnap ? "#ffe394" : isTransientSnap ? "#7ee787" : "#8de8ef";
       ctx.save();
       ctx.strokeStyle = guideCol;
       ctx.lineWidth = 1.5;
@@ -5499,6 +5539,24 @@ export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
       ctx.fillRect(drawX, ly, drawW, laneH);
     }
   });
+
+  // Detected Audio Transient Ticks on Ruler
+  const rulerTransients = opts && Array.isArray(opts.transientPeaks) ? opts.transientPeaks : [];
+  if (rulerTransients.length > 0) {
+    ctx.save();
+    for (const pk of rulerTransients) {
+      const tx = frameToX(pk.frame);
+      if (tx < timelineX || tx > timelineX + timelineW) continue;
+      ctx.fillStyle = "#3fb950";
+      ctx.beginPath();
+      ctx.moveTo(tx, rulerHeight - 1);
+      ctx.lineTo(tx - 3.5, rulerHeight - 7);
+      ctx.lineTo(tx + 3.5, rulerHeight - 7);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
 
   // Markers ticks
   for (const mk of doc.markers || []) {
@@ -7841,4 +7899,248 @@ export function clientPosToColorWarperOffset(canvas, clientX, clientY, hueIdx, r
     hue_offset: Math.round(hueOffset * 10) / 10,
     sat_offset: Math.round(satOffset * 1000) / 1000
   };
+}
+
+export function renderFairlightFftCanvas(canvas, spectrum, rawRackParams, options = {}) {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(240, Math.round(rect.width || canvas.clientWidth || 300));
+  const height = Math.max(138, Math.round(rect.height || canvas.clientHeight || 160));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const padL = 28;
+  const padR = 10;
+  const padT = 22;
+  const padB = 20;
+  const plotW = Math.max(80, width - padL - padR);
+  const plotH = Math.max(56, height - padT - padB);
+  const minDb = -72;
+  const maxDb = 0;
+  const dbToY = (db) => {
+    const clamped = Math.max(minDb, Math.min(maxDb, Number(db) || minDb));
+    return padT + ((maxDb - clamped) / (maxDb - minDb)) * plotH;
+  };
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#14161c";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  // Top Integrated Stereo Phase Correlation Meter (-1 .. 0 .. +1)
+  const corr = spectrum && Number.isFinite(Number(spectrum.correlation))
+    ? Math.max(-1, Math.min(1, Number(spectrum.correlation)))
+    : 1.0;
+  const corrY = 6;
+  const corrH = 8;
+  const corrW = Math.min(140, Math.max(72, Math.floor(plotW * 0.44)));
+  const corrX = padL;
+  ctx.fillStyle = "#1c1f27";
+  ctx.fillRect(corrX, corrY, corrW, corrH);
+  ctx.strokeStyle = "#2d3240";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(corrX + 0.5, corrY + 0.5, corrW - 1, corrH - 1);
+  const midX = corrX + corrW * 0.5;
+  ctx.fillStyle = "#4b5563";
+  ctx.fillRect(midX - 0.5, corrY + 1, 1, corrH - 2);
+  const corrFillCol = corr >= 0.25 ? "#3fb950" : corr >= -0.25 ? "#d29922" : "#e5534b";
+  const markerX = corrX + ((corr + 1) * 0.5) * corrW;
+  ctx.fillStyle = corrFillCol;
+  if (corr >= 0) {
+    ctx.fillRect(midX, corrY + 2, Math.max(2, markerX - midX), corrH - 4);
+  } else {
+    ctx.fillRect(markerX, corrY + 2, Math.max(2, midX - markerX), corrH - 4);
+  }
+  ctx.fillStyle = "#9ca3af";
+  ctx.font = "600 8.5px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`PHASE ${corr >= 0 ? "+" : ""}${corr.toFixed(2)}`, corrX + corrW + 6, corrY + corrH * 0.5);
+
+  // Focus band highlight region
+  const focusBand = options.focusBand || "full";
+  const [fLo, fHi] = TRANSIENT_FOCUS_FREQ_RANGES[focusBand] || [20, 20000];
+  const logMin = Math.log10(20);
+  const logMax = Math.log10(20000);
+  const freqToX = (hz) => {
+    const clamped = Math.max(20, Math.min(20000, hz));
+    return padL + ((Math.log10(clamped) - logMin) / (logMax - logMin)) * plotW;
+  };
+  if (focusBand !== "full") {
+    const fx0 = freqToX(fLo);
+    const fx1 = freqToX(fHi);
+    ctx.fillStyle = "rgba(63, 185, 80, 0.08)";
+    ctx.fillRect(fx0, padT, Math.max(2, fx1 - fx0), plotH);
+    ctx.strokeStyle = "rgba(63, 185, 80, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(fx0 + 0.5, padT + 0.5, Math.max(1, fx1 - fx0 - 1), plotH - 1);
+  }
+
+  // dB graticule
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (const db of [0, -12, -24, -36, -48, -60, -72]) {
+    const y = Math.round(dbToY(db)) + 0.5;
+    ctx.strokeStyle = db === -12 ? "#2f3848" : "#20232d";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + plotW, y);
+    ctx.stroke();
+    if (db === 0 || db === -24 || db === -48 || db === -72) {
+      ctx.fillStyle = "#7a808e";
+      ctx.fillText(String(db), padL - 4, y);
+    }
+  }
+
+  // Log frequency ticks
+  const freqTicks = [
+    { hz: 20, label: "20" },
+    { hz: 50, label: "50" },
+    { hz: 100, label: "100" },
+    { hz: 250, label: "250" },
+    { hz: 500, label: "500" },
+    { hz: 1000, label: "1k" },
+    { hz: 2000, label: "2k" },
+    { hz: 5000, label: "5k" },
+    { hz: 10000, label: "10k" },
+    { hz: 20000, label: "20k" }
+  ];
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const tick of freqTicks) {
+    const x = Math.round(freqToX(tick.hz)) + 0.5;
+    ctx.strokeStyle = tick.hz === 1000 ? "#303644" : "#1d2028";
+    ctx.beginPath();
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, padT + plotH);
+    ctx.stroke();
+    if (tick.hz !== 250 && tick.hz !== 2000 && tick.hz !== 20000) {
+      ctx.fillStyle = "#7a808e";
+      ctx.fillText(tick.label, x, padT + plotH + 4);
+    }
+  }
+
+  const bands = spectrum && Array.isArray(spectrum.bands) ? spectrum.bands : [];
+  const count = bands.length || FFT_BAND_FREQS_HZ.length;
+  const barSlotW = plotW / Math.max(1, count);
+  const barW = Math.max(2, Math.floor(barSlotW * 0.72));
+  const hoverIdx = Number.isInteger(options.hoverBandIdx) ? options.hoverBandIdx : -1;
+  const barBoxes = [];
+
+  const barGrad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+  barGrad.addColorStop(0.0, "#f85149");
+  barGrad.addColorStop(0.24, "#f0b429");
+  barGrad.addColorStop(0.55, "#39c5cf");
+  barGrad.addColorStop(1.0, "#2ea043");
+
+  for (let i = 0; i < count; i++) {
+    const b = bands[i] || {
+      freq_hz: FFT_BAND_FREQS_HZ[i],
+      label: String(Math.round(FFT_BAND_FREQS_HZ[i])),
+      pre_db: -90,
+      post_db: -90,
+      peak_hold_db: -90
+    };
+    const x = padL + i * barSlotW + (barSlotW - barW) * 0.5;
+    const postY = dbToY(b.post_db);
+    const preY = dbToY(b.pre_db);
+    const holdY = dbToY(b.peak_hold_db);
+    const barH = Math.max(0, padT + plotH - postY);
+
+    if (barH > 0.5) {
+      ctx.fillStyle = barGrad;
+      ctx.globalAlpha = i === hoverIdx ? 0.96 : 0.84;
+      ctx.fillRect(x, postY, barW, barH);
+      ctx.globalAlpha = 1;
+    }
+
+    // Pre-EQ ghost outline tick when EQ shifts band energy
+    if (b.pre_db > minDb + 0.5 && Math.abs(b.pre_db - b.post_db) > 0.8) {
+      ctx.fillStyle = "rgba(148, 163, 184, 0.55)";
+      ctx.fillRect(x, preY, barW, 1.5);
+    }
+
+    // Peak-hold cap
+    if (b.peak_hold_db > minDb + 0.5) {
+      ctx.fillStyle = i === hoverIdx ? "#ffffff" : "#e2e8f0";
+      ctx.fillRect(x, Math.max(padT, holdY - 1), barW, 2);
+    }
+
+    barBoxes.push({
+      index: i,
+      x: padL + i * barSlotW,
+      y: padT,
+      w: barSlotW,
+      h: plotH,
+      band: b
+    });
+  }
+
+  // Overlay Fairlight 4-Band EQ + HPF curve (relative to -24 dB baseline)
+  const rack = normalizeFairlightAudioRackParams(rawRackParams);
+  if (rack.eq_enabled) {
+    ctx.save();
+    ctx.beginPath();
+    const samples = 96;
+    for (let i = 0; i <= samples; i++) {
+      const logF = logMin + (i / samples) * (logMax - logMin);
+      const f = Math.pow(10, logF);
+      const eqDb = evaluateFairlightEqCurveDb(rack, f, 48000);
+      const y = dbToY(-24 + eqDb);
+      const x = padL + (i / samples) * plotW;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = "rgba(126, 232, 240, 0.85)";
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Hover readout chip in top-right header
+  if (hoverIdx >= 0 && hoverIdx < barBoxes.length) {
+    const hb = barBoxes[hoverIdx].band;
+    const tag = `${hb.label}Hz ${Number(hb.post_db).toFixed(1)}dB`;
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "600 8.5px ui-monospace, monospace";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText(tag, padL + plotW, corrY + corrH * 0.5);
+  } else if (spectrum && Number.isFinite(Number(spectrum.dominant_hz))) {
+    const dom = Number(spectrum.dominant_hz);
+    const domStr = dom >= 1000 ? `${(dom / 1000).toFixed(1)}kHz` : `${Math.round(dom)}Hz`;
+    ctx.fillStyle = "#7ee8f0";
+    ctx.font = "600 8.5px ui-monospace, monospace";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`DOM ${domStr}`, padL + plotW, corrY + corrH * 0.5);
+  }
+
+  const geom = { width, height, padL, padR, padT, padB, plotW, plotH, barBoxes };
+  canvas._fairlightFftGeom = geom;
+  return geom;
+}
+
+export function hitTestFairlightFftBand(canvas, clientX, clientY) {
+  const geom = canvas && canvas._fairlightFftGeom;
+  if (!geom) return -1;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return -1;
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  if (y < geom.padT || y > geom.padT + geom.plotH) return -1;
+  for (const box of geom.barBoxes) {
+    if (x >= box.x && x <= box.x + box.w) {
+      return box.index;
+    }
+  }
+  return -1;
 }

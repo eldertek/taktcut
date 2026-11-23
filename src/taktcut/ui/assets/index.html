@@ -801,6 +801,7 @@
                   <div id="fairlight-rack-subtabs" class="fairlight-rack-subtabs" role="tablist" aria-label="Fairlight Audio Rack Modules">
                     <button type="button" role="tab" id="fairlight-rack-tab-eq" class="fairlight-rack-tab-btn is-active" data-rack-tab="eq" aria-selected="true" aria-controls="fairlight-rack-panel-eq" tabindex="0" data-i18n="timeline.fairlightRack.tabEq">4-Band EQ</button>
                     <button type="button" role="tab" id="fairlight-rack-tab-dyn" class="fairlight-rack-tab-btn" data-rack-tab="dyn" aria-selected="false" aria-controls="fairlight-rack-panel-dyn" tabindex="-1" data-i18n="timeline.fairlightRack.tabDyn">Dynamics &amp; Limiter</button>
+                    <button type="button" role="tab" id="fairlight-rack-tab-fft" class="fairlight-rack-tab-btn" data-rack-tab="fft" aria-selected="false" aria-controls="fairlight-rack-panel-fft" tabindex="-1" data-i18n="timeline.fairlightRack.tabFft">FFT &amp; Transients</button>
                   </div>
 
                   <div id="fairlight-rack-panel-eq" class="fairlight-rack-panel mono" role="tabpanel" aria-labelledby="fairlight-rack-tab-eq">
@@ -894,6 +895,58 @@
                         <input type="number" id="fairlight-lim-ceiling-num" class="input-num" min="-12" max="-0.1" step="0.1" value="-1.0" aria-label="Limiter ceiling in dBTP">
                       </div>
                     </div>
+                  </div>
+
+                  <div id="fairlight-rack-panel-fft" class="fairlight-rack-panel mono is-hidden" role="tabpanel" aria-labelledby="fairlight-rack-tab-fft" hidden>
+                    <div class="fairlight-rack-canvas-well">
+                      <canvas id="fairlight-fft-canvas" class="fairlight-rack-canvas" aria-label="32-Band FFT Spectrum Analyzer and Stereo Phase Correlation"></canvas>
+                    </div>
+                    <div class="fairlight-fft-meta-row">
+                      <span id="fairlight-fft-telemetry" class="nle-tag mono" aria-live="polite">RMS -90.0 | DOM 1000Hz</span>
+                      <span id="fairlight-transient-bpm-badge" class="nle-tag mono" aria-live="polite">128 BPM | 0 PK</span>
+                    </div>
+                    <div class="fairlight-fft-select-grid">
+                      <div class="fairlight-fft-field">
+                        <label for="fairlight-transient-focus" data-i18n="timeline.fairlightRack.focusBand">Focus Band</label>
+                        <select id="fairlight-transient-focus" class="input-control mono" aria-label="Transient detection frequency focus">
+                          <option value="full" data-i18n="fairlightRack.focus.full">Full Mix (20Hz-20k)</option>
+                          <option value="kick_low" data-i18n="fairlightRack.focus.kick_low">Kick / Sub (28-180Hz)</option>
+                          <option value="snare_mid" data-i18n="fairlightRack.focus.snare_mid">Snare / Vox (180-3.2k)</option>
+                          <option value="hihat_high" data-i18n="fairlightRack.focus.hihat_high">Hi-Hat / Air (3.2k-18k)</option>
+                        </select>
+                      </div>
+                      <div class="fairlight-fft-field">
+                        <label for="fairlight-transient-color" data-i18n="timeline.fairlightRack.markerColor">Marker Color</label>
+                        <select id="fairlight-transient-color" class="input-control mono" aria-label="Auto-marker color">
+                          <option value="Cyan">Cyan</option>
+                          <option value="Gold">Gold</option>
+                          <option value="Red">Red</option>
+                          <option value="Green">Green</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="audio-ctrl-row">
+                      <label for="fairlight-transient-sens-range" data-i18n="timeline.fairlightRack.sensitivity">Sensitivity</label>
+                      <input type="range" id="fairlight-transient-sens-range" min="0.10" max="0.95" step="0.05" value="0.55">
+                      <input type="number" id="fairlight-transient-sens-num" class="input-num" min="0.10" max="0.95" step="0.05" value="0.55" aria-label="Transient sensitivity threshold">
+                    </div>
+                    <div class="audio-ctrl-row">
+                      <label for="fairlight-transient-interval-range" data-i18n="timeline.fairlightRack.minInterval">Min Gap (ms)</label>
+                      <input type="range" id="fairlight-transient-interval-range" min="80" max="1000" step="20" value="220">
+                      <input type="number" id="fairlight-transient-interval-num" class="input-num" min="80" max="1000" step="20" value="220" aria-label="Minimum transient interval in milliseconds">
+                    </div>
+                    <div class="fairlight-fft-actions">
+                      <button type="button" id="btn-fairlight-detect-transients" class="btn btn-primary btn-mini" data-i18n="timeline.fairlightRack.detectAutoMark">Detect &amp; Mark</button>
+                      <button type="button" id="btn-fairlight-transient-prev" class="btn btn-mini" disabled aria-label="Snap playhead to previous transient" data-i18n="timeline.fairlightRack.prevPeak">&lt; Peak</button>
+                      <button type="button" id="btn-fairlight-transient-next" class="btn btn-mini" disabled aria-label="Snap playhead to next transient" data-i18n="timeline.fairlightRack.nextPeak">Peak &gt;</button>
+                      <button type="button" id="btn-fairlight-sync-bpm" class="btn btn-mini" disabled title="Apply detected BPM to Beat Grid" data-i18n="timeline.fairlightRack.syncBpm">Sync BPM</button>
+                      <button type="button" id="btn-fairlight-transients-clear" class="btn btn-mini" disabled data-i18n="timeline.fairlightRack.clearPeaks">Clear</button>
+                    </div>
+                    <label class="check-label fairlight-snap-bpm-check">
+                      <input type="checkbox" id="fairlight-transient-snap-bpm">
+                      <span data-i18n="timeline.fairlightRack.snapToBpm">Snap detected peaks to BPM Beat Grid</span>
+                    </label>
+                    <div id="fairlight-transient-status" class="telemetry-note mono" aria-live="polite" data-i18n="timeline.fairlightRack.transientIdle">Click Detect &amp; Mark to scan audio onsets and place timeline beat markers.</div>
                   </div>
                   <div id="fairlight-rack-af-preview" class="telemetry-note mono" data-i18n="timeline.fairlightRack.bypassed">Fairlight Broadcast Audio Rack bypassed.</div>
                 </div>

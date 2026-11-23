@@ -21,8 +21,10 @@ import {
   findActiveSubtitleCue,
   framesToSmpte,
   hitTestColorWarperPoint,
+  hitTestFairlightFftBand,
   renderFairlightDynamicsCanvas,
   renderFairlightEqCurveCanvas,
+  renderFairlightFftCanvas,
   sampleColorViewerInputRgb,
   trackPointSequenceCanvas
 } from "./canvas.js";
@@ -127,6 +129,7 @@ import {
   addColorNodeToTree,
   addMarkerInDocument,
   addOutsideColorNodeInTree,
+  analyzeAudioSpectrumClient,
   appendClipToTrackInDocument,
   appendStillBounded,
   applyFairlightRackPresetClient,
@@ -160,6 +163,7 @@ import {
   createStillRecord,
   deleteMarkerInDocument,
   deserializeColorNodeFromApi,
+  detectAudioTransientsClient,
   estimateFairlightCompressorGrClient,
   estimateRenderFileSize,
   evaluateClipTransformAtTime,
@@ -235,6 +239,7 @@ import {
   normalizeQualifier,
   normalizeTransformHexColor,
   normalizeTimelineTool,
+  normalizeTransientDetectConfig,
   normalizeRetimeProcess,
   normalizeRetimeRampPoints,
   normalizeRetimeRampPreset,
@@ -480,6 +485,17 @@ const state = {
   fairlightRack: normalizeFairlightAudioRackParams(),
   fairlightRackTab: "eq",
   fairlightRackBandId: "low_mid",
+  fairlightAnalyzer: {
+    spectrum: null,
+    peakHoldPrev: null,
+    hoverBandIdx: -1,
+    transientConfig: normalizeTransientDetectConfig(),
+    transientPeaks: [],
+    estimatedBpm: 128,
+    spectralCentroidHz: 1000,
+    autoMarkerFrames: [],
+    lastResultStatus: null
+  },
   masterBus: {
     volume_db: 0.0,
     muted: false,
@@ -827,6 +843,7 @@ function setLanguage(lang) {
     indexClearBtn.setAttribute("aria-label", t("timeline.index.clearAria"));
   }
   updateTransportStatusUI();
+  renderFairlightAnalyzerReadout(state.fairlightAnalyzer.spectrum);
   updateIoRangeUI();
   renderShortcutsDialog();
   renderStillsGallery();
@@ -1169,6 +1186,7 @@ function redrawActiveCanvases() {
         snapGuideFrame: state.timelineActiveSnapFrame,
         snapGuideKind: state.timelineActiveSnapKind,
         bpmGrid: state.bpmGrid,
+        transientPeaks: state.fairlightAnalyzer.transientPeaks,
         bladePreview: state.timelineBladePreview,
         hoverTrim: state.timelineHoverTrim,
         activeTrim: state.timelineActiveTrim,
@@ -2266,6 +2284,61 @@ function renderFairlightAudioUI() {
   renderFairlightAudioRackUI();
 }
 
+function computeCurrentFairlightSpectrum() {
+  const doc = state.timelineDoc;
+  if (!doc) return null;
+  const fa = state.fairlightAnalyzer;
+  const spec = analyzeAudioSpectrumClient(doc, state.playheadFrame, {
+    fairlight_rack: state.fairlightRack,
+    master_gain_db: state.masterBus.muted ? -48 : state.masterBus.volume_db,
+    peak_hold_prev: fa.peakHoldPrev
+  });
+  fa.spectrum = spec;
+  fa.peakHoldPrev = spec.bands.map((b) => b.peak_hold_db);
+  return spec;
+}
+
+function renderFairlightAnalyzerReadout(spec) {
+  const fa = state.fairlightAnalyzer;
+  const telEl = byId("fairlight-fft-telemetry");
+  if (telEl && spec) {
+    const domStr = spec.dominant_hz >= 1000
+      ? `${(spec.dominant_hz / 1000).toFixed(1)}kHz`
+      : `${Math.round(spec.dominant_hz)}Hz`;
+    telEl.textContent = `RMS ${Number(spec.rms_db).toFixed(1)} | DOM ${domStr}`;
+  }
+  const bpmBadge = byId("fairlight-transient-bpm-badge");
+  if (bpmBadge) {
+    bpmBadge.textContent = `${Math.round(fa.estimatedBpm)} BPM | ${fa.transientPeaks.length} PK`;
+  }
+  const hasPeaks = fa.transientPeaks.length > 0;
+  const prevBtn = byId("btn-fairlight-transient-prev");
+  const nextBtn = byId("btn-fairlight-transient-next");
+  const syncBtn = byId("btn-fairlight-sync-bpm");
+  const clearBtn = byId("btn-fairlight-transients-clear");
+  if (prevBtn) prevBtn.disabled = !hasPeaks;
+  if (nextBtn) nextBtn.disabled = !hasPeaks;
+  if (syncBtn) syncBtn.disabled = !hasPeaks;
+  if (clearBtn) clearBtn.disabled = !hasPeaks;
+
+  const statusEl = byId("fairlight-transient-status");
+  if (statusEl) {
+    if (fa.lastResultStatus === "detected") {
+      statusEl.textContent = t("timeline.fairlightRack.transientDetected")
+        .replace("{count}", String(fa.transientPeaks.length))
+        .replace("{bpm}", String(Math.round(fa.estimatedBpm)))
+        .replace("{centroid}", String(Math.round(fa.spectralCentroidHz)));
+    } else if (fa.lastResultStatus === "cleared") {
+      statusEl.textContent = t("timeline.fairlightRack.transientCleared");
+    } else if (fa.lastResultStatus === "synced") {
+      statusEl.textContent = t("timeline.fairlightRack.bpmSynced")
+        .replace("{bpm}", String(Math.round(fa.estimatedBpm)));
+    } else {
+      statusEl.textContent = t("timeline.fairlightRack.transientIdle");
+    }
+  }
+}
+
 function renderFairlightRackCanvases() {
   if (state.activeTab !== "timeline") return;
   const eqCanvas = byId("fairlight-eq-canvas");
@@ -2275,35 +2348,39 @@ function renderFairlightRackCanvases() {
   const dynCanvas = byId("fairlight-dyn-canvas");
   if (dynCanvas && state.fairlightRackTab === "dyn") {
     const livePeak = Math.max(-48, Number(state.vuMeter.leftDb || -60), Number(state.vuMeter.rightDb || -60));
-    const inputProbe = state.playbackPlaying ? livePeak : -12.0;
+    const inputProbe = state.playbackSpeed !== 0 ? livePeak : -12.0;
     renderFairlightDynamicsCanvas(dynCanvas, state.fairlightRack, inputProbe);
+  }
+  const fftCanvas = byId("fairlight-fft-canvas");
+  if (fftCanvas && state.fairlightRackTab === "fft") {
+    const spec = computeCurrentFairlightSpectrum();
+    renderFairlightFftCanvas(fftCanvas, spec, state.fairlightRack, {
+      focusBand: state.fairlightAnalyzer.transientConfig.freq_focus,
+      hoverBandIdx: state.fairlightAnalyzer.hoverBandIdx
+    });
+    renderFairlightAnalyzerReadout(spec);
   }
 }
 
 function switchFairlightRackTab(tabId) {
-  const nextTab = tabId === "dyn" ? "dyn" : "eq";
+  const nextTab = tabId === "dyn" ? "dyn" : tabId === "fft" ? "fft" : "eq";
   state.fairlightRackTab = nextTab;
-  const eqTab = byId("fairlight-rack-tab-eq");
-  const dynTab = byId("fairlight-rack-tab-dyn");
-  const eqPanel = byId("fairlight-rack-panel-eq");
-  const dynPanel = byId("fairlight-rack-panel-dyn");
-  if (eqTab) {
-    eqTab.classList.toggle("is-active", nextTab === "eq");
-    eqTab.setAttribute("aria-selected", nextTab === "eq" ? "true" : "false");
-    eqTab.setAttribute("tabindex", nextTab === "eq" ? "0" : "-1");
-  }
-  if (dynTab) {
-    dynTab.classList.toggle("is-active", nextTab === "dyn");
-    dynTab.setAttribute("aria-selected", nextTab === "dyn" ? "true" : "false");
-    dynTab.setAttribute("tabindex", nextTab === "dyn" ? "0" : "-1");
-  }
-  if (eqPanel) {
-    eqPanel.classList.toggle("is-hidden", nextTab !== "eq");
-    eqPanel.hidden = nextTab !== "eq";
-  }
-  if (dynPanel) {
-    dynPanel.classList.toggle("is-hidden", nextTab !== "dyn");
-    dynPanel.hidden = nextTab !== "dyn";
+  const tabs = [
+    ["eq", byId("fairlight-rack-tab-eq"), byId("fairlight-rack-panel-eq")],
+    ["dyn", byId("fairlight-rack-tab-dyn"), byId("fairlight-rack-panel-dyn")],
+    ["fft", byId("fairlight-rack-tab-fft"), byId("fairlight-rack-panel-fft")]
+  ];
+  for (const [id, tabEl, panelEl] of tabs) {
+    const active = id === nextTab;
+    if (tabEl) {
+      tabEl.classList.toggle("is-active", active);
+      tabEl.setAttribute("aria-selected", active ? "true" : "false");
+      tabEl.setAttribute("tabindex", active ? "0" : "-1");
+    }
+    if (panelEl) {
+      panelEl.classList.toggle("is-hidden", !active);
+      panelEl.hidden = !active;
+    }
   }
   renderFairlightRackCanvases();
 }
@@ -2455,8 +2532,28 @@ function renderFairlightAudioRackUI() {
       : t("timeline.fairlightRack.bypassed");
   }
 
+  const cfg = normalizeTransientDetectConfig(state.fairlightAnalyzer.transientConfig);
+  state.fairlightAnalyzer.transientConfig = cfg;
+  const focusSel = byId("fairlight-transient-focus");
+  if (focusSel) focusSel.value = cfg.freq_focus;
+  const colSel = byId("fairlight-transient-color");
+  if (colSel) colSel.value = cfg.marker_color;
+  const sensRange = byId("fairlight-transient-sens-range");
+  const sensNum = byId("fairlight-transient-sens-num");
+  if (sensRange) sensRange.value = String(cfg.sensitivity);
+  if (sensNum && document.activeElement !== sensNum) sensNum.value = cfg.sensitivity.toFixed(2);
+  const intRange = byId("fairlight-transient-interval-range");
+  const intNum = byId("fairlight-transient-interval-num");
+  if (intRange) intRange.value = String(cfg.min_interval_ms);
+  if (intNum && document.activeElement !== intNum) intNum.value = String(cfg.min_interval_ms);
+  const snapBpmChk = byId("fairlight-transient-snap-bpm");
+  if (snapBpmChk) snapBpmChk.checked = Boolean(cfg.snap_to_bpm);
+
   syncDeliverTabIndicators();
   renderFairlightRackCanvases();
+  if (state.fairlightRackTab !== "fft") {
+    renderFairlightAnalyzerReadout(state.fairlightAnalyzer.spectrum);
+  }
 }
 
 function setFairlightState(patch, opts = {}) {
@@ -2620,6 +2717,9 @@ function updateVuMeterInstant(ts, isPlaying) {
   vm.holdAgeR = resR.age;
 
   renderVuMeterReadout();
+  if (state.activeTab === "timeline" && state.fairlightRackTab === "fft") {
+    renderFairlightRackCanvases();
+  }
 }
 
 function stopVuMeterDecay() {
@@ -10963,6 +11063,7 @@ function stopPlayback() {
   state.playbackLastTs = 0;
   state.playbackAccumFrames = 0;
   updateTransportStatusUI();
+  renderFairlightAnalyzerReadout(state.fairlightAnalyzer.spectrum);
   startVuMeterDecay();
 }
 
@@ -11031,6 +11132,7 @@ function startShuttle(speed) {
   state.playbackLastTs = 0;
   state.playbackAccumFrames = 0;
   updateTransportStatusUI();
+  renderFairlightAnalyzerReadout(state.fairlightAnalyzer.spectrum);
   updateVuMeterInstant(performance.now(), true);
   if (state.playbackRafId === null) {
     state.playbackRafId = window.requestAnimationFrame(playbackTick);
@@ -11576,6 +11678,7 @@ function resolvePointerFrame(x, opts = {}) {
       includePlayhead: Boolean(opts.includePlayhead),
       playheadFrame: state.playheadFrame,
       bpmGrid: state.bpmGrid,
+      transientPeaks: state.fairlightAnalyzer.transientPeaks,
       maxFrame
     });
     const snap = findMagneticSnap(
@@ -17397,9 +17500,12 @@ function wireFairlightAudioRackEvents() {
     tabBtn.addEventListener("keydown", (ev) => {
       if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
         ev.preventDefault();
-        const nextTab = state.fairlightRackTab === "eq" ? "dyn" : "eq";
+        const order = ["eq", "dyn", "fft"];
+        const curIdx = Math.max(0, order.indexOf(state.fairlightRackTab));
+        const delta = ev.key === "ArrowRight" ? 1 : -1;
+        const nextTab = order[(curIdx + delta + order.length) % order.length];
         switchFairlightRackTab(nextTab);
-        const focusEl = byId(nextTab === "eq" ? "fairlight-rack-tab-eq" : "fairlight-rack-tab-dyn");
+        const focusEl = byId(`fairlight-rack-tab-${nextTab}`);
         if (focusEl) focusEl.focus();
       }
     });
@@ -17581,6 +17687,182 @@ function wireFairlightAudioRackEvents() {
   };
   bindLimCeiling("fairlight-lim-ceiling-range");
   bindLimCeiling("fairlight-lim-ceiling-num");
+
+  // Fairlight FFT Spectrum Analyzer & Beat/Transient Auto-Marker Snapper
+  const runTransientDetectionAndAutoMark = async () => {
+    const doc = state.timelineDoc;
+    if (!doc) return;
+    const fa = state.fairlightAnalyzer;
+    const cfg = normalizeTransientDetectConfig({
+      ...fa.transientConfig,
+      bpm: state.bpmGrid && Number.isFinite(Number(state.bpmGrid.bpm)) ? Number(state.bpmGrid.bpm) : fa.transientConfig.bpm
+    });
+    fa.transientConfig = cfg;
+    let res;
+    try {
+      res = await api.detectFairlightTransients({
+        document: doc,
+        config: cfg,
+        fairlight_rack: state.fairlightRack
+      });
+    } catch {
+      res = detectAudioTransientsClient(doc, cfg, { fairlight_rack: state.fairlightRack });
+    }
+    fa.transientPeaks = Array.isArray(res.peaks) ? res.peaks : [];
+    fa.estimatedBpm = Number(res.estimated_bpm || 128);
+    fa.spectralCentroidHz = Number(res.spectral_centroid_hz || 1000);
+    fa.lastResultStatus = "detected";
+
+    // Merge auto-markers cleanly without duplicating existing frame markers
+    const nextDoc = cloneTimelineDoc(doc);
+    if (!Array.isArray(nextDoc.markers)) nextDoc.markers = [];
+    // Remove previous auto-transient markers before adding new ones
+    const prevSet = new Set(fa.autoMarkerFrames);
+    if (prevSet.size > 0) {
+      nextDoc.markers = nextDoc.markers.filter(
+        (m) => !(prevSet.has(m.frame) && /^(Beat|Transient) \d+$/.test(String(m.name || "")))
+      );
+    }
+    const existingFrames = new Set(nextDoc.markers.map((m) => m.frame));
+    const addedFrames = [];
+    for (const mk of res.markers || []) {
+      if (!existingFrames.has(mk.frame)) {
+        nextDoc.markers.push({ ...mk });
+        existingFrames.add(mk.frame);
+        addedFrames.push(mk.frame);
+      }
+    }
+    fa.autoMarkerFrames = addedFrames;
+    nextDoc.markers.sort((a, b) => a.frame - b.frame);
+    commitTimelineMutation(nextDoc, state.timelineSelected);
+    renderFairlightRackCanvases();
+  };
+
+  const jumpToAdjacentTransient = (dir) => {
+    const peaks = state.fairlightAnalyzer.transientPeaks;
+    if (!Array.isArray(peaks) || peaks.length === 0) return;
+    const cur = state.playheadFrame;
+    let target = null;
+    if (dir > 0) {
+      target = peaks.find((p) => p.frame > cur) || peaks[0];
+    } else {
+      for (let i = peaks.length - 1; i >= 0; i--) {
+        if (peaks[i].frame < cur) {
+          target = peaks[i];
+          break;
+        }
+      }
+      if (!target) target = peaks[peaks.length - 1];
+    }
+    if (target) {
+      stopPlayback();
+      setPlayhead(target.frame);
+    }
+  };
+
+  const syncBpmFromTransients = () => {
+    const fa = state.fairlightAnalyzer;
+    if (!fa.transientPeaks || fa.transientPeaks.length === 0) return;
+    const nextBpm = Math.max(60, Math.min(200, Math.round(fa.estimatedBpm)));
+    state.bpmGrid.enabled = true;
+    state.bpmGrid.bpm = nextBpm;
+    fa.transientConfig.bpm = nextBpm;
+    fa.lastResultStatus = "synced";
+    updateTimelineToolbarUI();
+    redrawActiveCanvases();
+    renderFairlightAnalyzerReadout(fa.spectrum);
+  };
+
+  const clearDetectedTransients = () => {
+    const fa = state.fairlightAnalyzer;
+    const prevSet = new Set(fa.autoMarkerFrames);
+    fa.transientPeaks = [];
+    fa.autoMarkerFrames = [];
+    fa.lastResultStatus = "cleared";
+    if (state.timelineDoc && prevSet.size > 0) {
+      const nextDoc = cloneTimelineDoc(state.timelineDoc);
+      nextDoc.markers = (nextDoc.markers || []).filter(
+        (m) => !(prevSet.has(m.frame) && /^(Beat|Transient) \d+$/.test(String(m.name || "")))
+      );
+      commitTimelineMutation(nextDoc, state.timelineSelected);
+    } else {
+      redrawActiveCanvases();
+    }
+    renderFairlightRackCanvases();
+  };
+
+  const updateTransientCfg = (mutator) => {
+    const next = normalizeTransientDetectConfig(state.fairlightAnalyzer.transientConfig);
+    mutator(next);
+    state.fairlightAnalyzer.transientConfig = normalizeTransientDetectConfig(next);
+    renderFairlightAudioRackUI();
+  };
+
+  byId("fairlight-transient-focus")?.addEventListener("change", (ev) => {
+    updateTransientCfg((c) => {
+      c.freq_focus = ev.target.value;
+    });
+  });
+  byId("fairlight-transient-color")?.addEventListener("change", (ev) => {
+    updateTransientCfg((c) => {
+      c.marker_color = ev.target.value;
+    });
+  });
+  for (const id of ["fairlight-transient-sens-range", "fairlight-transient-sens-num"]) {
+    byId(id)?.addEventListener("input", (ev) => {
+      const val = Number.parseFloat(ev.target.value);
+      if (!Number.isFinite(val)) return;
+      updateTransientCfg((c) => {
+        c.sensitivity = Math.max(0.1, Math.min(0.95, val));
+      });
+    });
+  }
+  for (const id of ["fairlight-transient-interval-range", "fairlight-transient-interval-num"]) {
+    byId(id)?.addEventListener("input", (ev) => {
+      const val = Number.parseFloat(ev.target.value);
+      if (!Number.isFinite(val)) return;
+      updateTransientCfg((c) => {
+        c.min_interval_ms = Math.round(Math.max(80, Math.min(1000, val)));
+      });
+    });
+  }
+  byId("fairlight-transient-snap-bpm")?.addEventListener("change", (ev) => {
+    updateTransientCfg((c) => {
+      c.snap_to_bpm = Boolean(ev.target.checked);
+    });
+  });
+  byId("btn-fairlight-detect-transients")?.addEventListener("click", () => {
+    void runTransientDetectionAndAutoMark();
+  });
+  byId("btn-fairlight-transient-prev")?.addEventListener("click", () => {
+    jumpToAdjacentTransient(-1);
+  });
+  byId("btn-fairlight-transient-next")?.addEventListener("click", () => {
+    jumpToAdjacentTransient(1);
+  });
+  byId("btn-fairlight-sync-bpm")?.addEventListener("click", () => {
+    syncBpmFromTransients();
+  });
+  byId("btn-fairlight-transients-clear")?.addEventListener("click", () => {
+    clearDetectedTransients();
+  });
+
+  const fftCanvas = byId("fairlight-fft-canvas");
+  if (fftCanvas) {
+    fftCanvas.addEventListener("pointermove", (ev) => {
+      const idx = hitTestFairlightFftBand(fftCanvas, ev.clientX, ev.clientY);
+      if (idx !== state.fairlightAnalyzer.hoverBandIdx) {
+        state.fairlightAnalyzer.hoverBandIdx = idx;
+        renderFairlightRackCanvases();
+      }
+    });
+    fftCanvas.addEventListener("pointerleave", () => {
+      if (state.fairlightAnalyzer.hoverBandIdx !== -1) {
+        state.fairlightAnalyzer.hoverBandIdx = -1;
+        renderFairlightRackCanvases();
+      }
+    });
+  }
 }
 
 async function loadFxCatalog() {

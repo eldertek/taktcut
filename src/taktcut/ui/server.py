@@ -24,6 +24,11 @@ from defusedxml.common import DefusedXmlException
 from pydantic import ValidationError
 
 from taktcut import __version__
+from taktcut.audio_analysis import (
+    TransientDetectConfig,
+    analyze_audio_spectrum,
+    detect_audio_transients,
+)
 from taktcut.color import (
     COLOR_BALANCE_MAX,
     COLOR_BALANCE_MIN,
@@ -2618,6 +2623,60 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             assert rack_obj is not None
             compiled_rack = compile_fairlight_audio_rack_filter_result(rack_obj)
             self._send_json(HTTPStatus.OK, compiled_rack.model_dump(mode="json"))
+            return
+
+        if route == "/api/fairlight/analyzer/spectrum":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_frame = payload.get("playhead_frame", 0)
+            if isinstance(raw_frame, bool) or not isinstance(raw_frame, int) or raw_frame < 0:
+                raise ValueError("playhead_frame must be a non-negative integer")
+            raw_master_gain = payload.get("master_gain_db", 0.0)
+            if isinstance(raw_master_gain, bool) or not isinstance(raw_master_gain, int | float):
+                raise ValueError("master_gain_db must be a finite number")
+            rack_obj = _build_fairlight_rack_from_payload(payload, allow_top_level=False)
+            raw_hold = payload.get("peak_hold_prev")
+            peak_hold_prev: list[float] | None = None
+            if raw_hold is not None:
+                if not isinstance(raw_hold, list):
+                    raise ValueError("peak_hold_prev must be a list of numbers")
+                peak_hold_prev = []
+                for item in raw_hold:
+                    if isinstance(item, bool) or not isinstance(item, int | float):
+                        raise ValueError("peak_hold_prev entries must be numeric")
+                    peak_hold_prev.append(float(item))
+            spectrum = analyze_audio_spectrum(
+                doc,
+                playhead_frame=raw_frame,
+                fairlight_rack=rack_obj,
+                master_gain_db=float(raw_master_gain),
+                peak_hold_prev=peak_hold_prev,
+            )
+            self._send_json(HTTPStatus.OK, spectrum.model_dump(mode="json"))
+            return
+
+        if route == "/api/fairlight/transients/detect":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_cfg = payload.get("config", payload)
+            if not isinstance(raw_cfg, dict):
+                raise ValueError("config must be a JSON object")
+            cfg_obj = TransientDetectConfig.model_validate(
+                {
+                    key: raw_cfg[key]
+                    for key in (
+                        "sensitivity",
+                        "min_interval_ms",
+                        "freq_focus",
+                        "marker_color",
+                        "max_markers",
+                        "snap_to_bpm",
+                        "bpm",
+                    )
+                    if key in raw_cfg
+                }
+            )
+            rack_obj = _build_fairlight_rack_from_payload(payload, allow_top_level=False)
+            transient_res = detect_audio_transients(doc, cfg_obj, fairlight_rack=rack_obj)
+            self._send_json(HTTPStatus.OK, transient_res.model_dump(mode="json"))
             return
 
         if route == "/api/transitions/compile":

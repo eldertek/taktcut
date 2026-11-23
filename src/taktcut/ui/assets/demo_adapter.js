@@ -29,6 +29,7 @@ import {
   TRANSITION_PRESETS,
   bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
+  analyzeAudioSpectrumClient,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileColorNodeChainClient,
@@ -48,6 +49,7 @@ import {
   countSyncLockedTracks,
   createColorNode,
   deserializeColorNodeFromApi,
+  detectAudioTransientsClient,
   getDeliveryPresetClient,
   normalizeFairlightAudioParams,
   normalizeRetimeProcess,
@@ -2525,6 +2527,31 @@ export function createApiClient() {
         );
       }
       return requestJson("/api/fairlight/rack/compile", { method: "POST", body: payload });
+    },
+    async analyzeFairlightSpectrum(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = (payload && payload.document) || buildDemoTimeline("clean");
+        return analyzeAudioSpectrumClient(
+          doc,
+          payload && Number.isFinite(Number(payload.playhead_frame)) ? Number(payload.playhead_frame) : 0,
+          {
+            fairlight_rack: payload && payload.fairlight_rack ? payload.fairlight_rack : null,
+            master_gain_db: payload && payload.master_gain_db !== undefined ? payload.master_gain_db : 0,
+            peak_hold_prev: payload && payload.peak_hold_prev ? payload.peak_hold_prev : null
+          }
+        );
+      }
+      return requestJson("/api/fairlight/analyzer/spectrum", { method: "POST", body: payload });
+    },
+    async detectFairlightTransients(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = (payload && payload.document) || buildDemoTimeline("clean");
+        const cfg = (payload && payload.config) || payload || {};
+        return detectAudioTransientsClient(doc, cfg, {
+          fairlight_rack: payload && payload.fairlight_rack ? payload.fairlight_rack : null
+        });
+      }
+      return requestJson("/api/fairlight/transients/detect", { method: "POST", body: payload });
     },
     async compileRetimeFilter(payload) {
       if (resolvedMode === "static-demo") {

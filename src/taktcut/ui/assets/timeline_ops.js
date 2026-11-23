@@ -2665,7 +2665,7 @@ export function collectSnapTargets(doc, opts = {}) {
   const bpmGrid = opts.bpmGrid || opts.beatGrid || null;
 
   const byFrame = new Map();
-  const priority = { playhead: 5, marker: 4, clip_edge: 3, beat: 2, timeline_start: 1 };
+  const priority = { playhead: 5, marker: 4, clip_edge: 3, transient: 2.5, beat: 2, timeline_start: 1 };
 
   const addTarget = (frame, kind) => {
     if (!Number.isFinite(frame)) return;
@@ -2710,6 +2710,14 @@ export function collectSnapTargets(doc, opts = {}) {
     const beats = computeBpmBeatFrames(doc, bpmGrid, minFrame, maxFrame);
     for (const b of beats) {
       addTarget(b.frame, "beat");
+    }
+  }
+
+  if (Array.isArray(opts.transientPeaks)) {
+    for (const pk of opts.transientPeaks) {
+      if (pk && Number.isFinite(Number(pk.frame))) {
+        addTarget(Number(pk.frame), "transient");
+      }
     }
   }
 
@@ -8497,4 +8505,413 @@ export function evaluateFairlightDynamicsTransferDb(rackParams, inputDb) {
     outDb = Math.min(outDb, params.limiter.ceiling_db);
   }
   return clampNum(outDb, -60, 0);
+}
+
+export const FFT_BAND_COUNT = 32;
+export const FFT_BAND_FREQS_HZ = Array.from({ length: FFT_BAND_COUNT }, (_, idx) =>
+  Number((20 * Math.pow(1000, idx / (FFT_BAND_COUNT - 1))).toFixed(1))
+);
+export const TRANSIENT_FOCUS_BANDS = ["full", "kick_low", "snare_mid", "hihat_high"];
+export const TRANSIENT_FOCUS_FREQ_RANGES = {
+  full: [20, 20000],
+  kick_low: [28, 180],
+  snare_mid: [180, 3200],
+  hihat_high: [3200, 18000]
+};
+const ALLOWED_TRANSIENT_MARKER_COLORS = ["Cyan", "Gold", "Red", "Green"];
+
+function formatFftFreqLabel(freqHz) {
+  if (freqHz >= 1000) {
+    const khz = freqHz / 1000;
+    if (Math.abs(khz - Math.round(khz)) < 0.08) {
+      return `${Math.round(khz)}k`;
+    }
+    return `${khz.toFixed(1)}k`;
+  }
+  return String(Math.round(freqHz));
+}
+
+function evaluateFairlightDynamicsSpectrumDb(rackParams, inputDb) {
+  const params = normalizeFairlightAudioRackParams(rackParams);
+  let outDb = clampNum(Number(inputDb), -90, 0);
+  if (params.compressor.enabled) {
+    const c = params.compressor;
+    const halfKnee = c.knee_db * 0.5;
+    if (2 * (outDb - c.threshold_db) < -c.knee_db) {
+      // 1:1 below knee
+    } else if (2 * Math.abs(outDb - c.threshold_db) <= c.knee_db && c.knee_db > 0.05) {
+      const diff = outDb - c.threshold_db + halfKnee;
+      outDb = outDb + ((1 / c.ratio - 1) * diff * diff) / (2 * c.knee_db);
+    } else {
+      outDb = c.threshold_db + (outDb - c.threshold_db) / c.ratio;
+    }
+    outDb += c.makeup_db;
+  }
+  if (params.limiter.enabled) {
+    outDb = Math.min(outDb, params.limiter.ceiling_db);
+  }
+  return clampNum(outDb, -90, 0);
+}
+
+export function normalizeTransientDetectConfig(raw = {}) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const sensRaw = Number(src.sensitivity);
+  const minIntRaw = Number(src.min_interval_ms);
+  const maxMkRaw = Number(src.max_markers);
+  const bpmRaw = Number(src.bpm);
+  const focusRaw = String(src.freq_focus || "full").trim().toLowerCase();
+  const focus = TRANSIENT_FOCUS_BANDS.includes(focusRaw) ? focusRaw : "full";
+  const colorRaw = String(src.marker_color || "Cyan").trim();
+  const colorTitle = colorRaw ? colorRaw.charAt(0).toUpperCase() + colorRaw.slice(1).toLowerCase() : "Cyan";
+  const markerColor = ALLOWED_TRANSIENT_MARKER_COLORS.includes(colorTitle) ? colorTitle : "Cyan";
+  return {
+    sensitivity: clampNum(Number.isFinite(sensRaw) ? sensRaw : 0.55, 0.1, 0.95),
+    min_interval_ms: Math.round(clampNum(Number.isFinite(minIntRaw) ? minIntRaw : 220, 80, 1000)),
+    freq_focus: focus,
+    marker_color: markerColor,
+    max_markers: Math.round(clampNum(Number.isFinite(maxMkRaw) ? maxMkRaw : 32, 1, 64)),
+    snap_to_bpm: Boolean(src.snap_to_bpm),
+    bpm: clampNum(Number.isFinite(bpmRaw) ? bpmRaw : 128, 60, 200)
+  };
+}
+
+function classifyAudioClipProfileClient(clip) {
+  const hay = `${clip && clip.name ? clip.name : ""} ${clip && clip.source_path ? clip.source_path : ""}`.toLowerCase();
+  if (/(vo|dialog|speech|voice|narr|interview)/.test(hay)) return "dialogue";
+  if (/(sfx|riser|hit|whoosh|fx|amb)/.test(hay)) return "sfx";
+  return "music";
+}
+
+function deterministicClipSpectrumBandDbClient(profile, freqHz, timeS, clipSeed) {
+  const logF = Math.log10(Math.max(20, freqHz));
+  const phaseMod = Math.sin(timeS * 5.2 + clipSeed * 0.7 + logF * 2.1);
+  const beatPulse = Math.pow(Math.max(0, Math.sin(timeS * Math.PI * (128 / 60) * 2)), 3);
+
+  if (profile === "dialogue") {
+    const fund = -12 * Math.pow(logF - Math.log10(210), 2);
+    const formant = 7.5 * Math.exp(-Math.pow(logF - Math.log10(1900), 2) / 0.14);
+    const airRoll = -14 * Math.max(0, logF - Math.log10(5500));
+    const subRoll = -22 * Math.max(0, Math.log10(95) - logF);
+    return clampNum(-21 + fund + formant + airRoll + subRoll + phaseMod * 3.4, -82, -3);
+  }
+  if (profile === "sfx") {
+    const sweepHz = 320 + 1800 * (0.5 + 0.5 * Math.sin(timeS * 2.7 + clipSeed));
+    const peak = 13 * Math.exp(-Math.pow(logF - Math.log10(sweepHz), 2) / 0.12);
+    return clampNum(-28 + peak - 5 * Math.abs(logF - Math.log10(1200)) + phaseMod * 4, -82, -4);
+  }
+  const kickBump = 11 * beatPulse * Math.exp(-Math.pow(logF - Math.log10(62), 2) / 0.08);
+  const snareBump = 7.5 * (1 - 0.4 * beatPulse) * Math.exp(-Math.pow(logF - Math.log10(2400), 2) / 0.16);
+  const hatBump = 6 * (0.5 + 0.5 * Math.sin(timeS * 16 + clipSeed)) * Math.exp(-Math.pow(logF - Math.log10(9500), 2) / 0.11);
+  const pinkTilt = -3.8 * (logF - Math.log10(120));
+  return clampNum(-18.5 + pinkTilt + kickBump + snareBump + hatBump + phaseMod * 2.6, -82, -2.5);
+}
+
+function clipFadeEnvelopeDbClient(clip, timeInClipS, clipDurS) {
+  let env = 1;
+  const fi = Number(clip.fade_in_s || 0);
+  const fo = Number(clip.fade_out_s || 0);
+  if (fi > 1e-4 && timeInClipS < fi) env *= clampNum(timeInClipS / fi, 0.02, 1);
+  if (fo > 1e-4 && clipDurS - timeInClipS < fo) env *= clampNum((clipDurS - timeInClipS) / fo, 0.02, 1);
+  return 20 * Math.log10(Math.max(0.02, env));
+}
+
+export function analyzeAudioSpectrumClient(doc, playheadFrame = 0, options = {}) {
+  const fps = doc && doc.fps ? Math.max(1, Number(doc.fps.num || 25) / Math.max(1, Number(doc.fps.den || 1))) : 25;
+  const frame = Math.max(0, Math.round(Number(playheadFrame) || 0));
+  const timeS = Number((frame / fps).toFixed(4));
+  const rack = normalizeFairlightAudioRackParams(options.fairlight_rack || options.fairlightRack);
+  const masterGain = clampNum(Number(options.master_gain_db ?? options.masterGainDb ?? 0) || 0, -48, 12);
+  const peakHoldPrev = Array.isArray(options.peak_hold_prev) ? options.peak_hold_prev : null;
+
+  const tracks = (doc && doc.tracks) || [];
+  const anySolo = tracks.some((t) => t && t.kind === "audio" && Boolean(t.solo));
+  const activeClips = [];
+  for (const trk of tracks) {
+    if (!trk || trk.kind !== "audio") continue;
+    if (trk.muted || (anySolo && !trk.solo)) continue;
+    for (const clip of trk.clips || []) {
+      if (clip && clip.enabled !== false && clip.duration_frames > 0) {
+        if (clip.start_frame <= frame && frame < clip.start_frame + clip.duration_frames) {
+          activeClips.push({ trk, clip });
+        }
+      }
+    }
+  }
+
+  let preDbs;
+  let correlation = 1.0;
+  if (activeClips.length === 0) {
+    preDbs = new Array(FFT_BAND_COUNT).fill(-90);
+  } else {
+    preDbs = FFT_BAND_FREQS_HZ.map((freqHz) => {
+      let energyLin = 0;
+      for (const { trk, clip } of activeClips) {
+        const clipRelS = (frame - clip.start_frame) / fps;
+        const clipDurS = clip.duration_frames / fps;
+        const gainDb =
+          Number(clip.audio_gain_db || 0) +
+          Number(trk.volume_db || 0) +
+          masterGain +
+          clipFadeEnvelopeDbClient(clip, clipRelS, clipDurS);
+        const profile = classifyAudioClipProfileClient(clip);
+        let seed = (Number(trk.index) || 1) * 17;
+        const cname = String(clip.name || "");
+        for (let k = 0; k < cname.length; k++) seed += cname.charCodeAt(k);
+        const binDb = deterministicClipSpectrumBandDbClient(profile, freqHz, timeS, seed);
+        const totalBinDb = clampNum(binDb + gainDb, -90, 0);
+        energyLin += Math.pow(10, totalBinDb / 10);
+      }
+      return Number(clampNum(10 * Math.log10(Math.max(1e-9, energyLin)), -90, 0).toFixed(2));
+    });
+    const panSpread = activeClips.reduce((acc, { trk }) => acc + Math.abs(Number(trk.pan || 0)), 0) / activeClips.length;
+    correlation = Number(clampNum(0.94 - panSpread * 0.35 + 0.04 * Math.sin(timeS * 3.1), -1, 1).toFixed(3));
+  }
+
+  const postDbs = [];
+  const bands = [];
+  let weightedLogF = 0;
+  let totalWeight = 0;
+  let bestIdx = 0;
+  let bestDb = -91;
+  let sumLin = 0;
+
+  for (let i = 0; i < FFT_BAND_COUNT; i++) {
+    const freqHz = FFT_BAND_FREQS_HZ[i];
+    const preVal = preDbs[i];
+    let postVal = -90;
+    if (preVal > -89.5) {
+      const eqDelta = evaluateFairlightEqCurveDb(rack, freqHz, 48000);
+      const shaped = clampNum(preVal + eqDelta, -90, 0);
+      postVal = evaluateFairlightDynamicsSpectrumDb(rack, shaped);
+    }
+    const prevHold = peakHoldPrev && i < peakHoldPrev.length && Number.isFinite(Number(peakHoldPrev[i]))
+      ? Number(peakHoldPrev[i])
+      : postVal;
+    const peakHold = clampNum(Math.max(postVal, prevHold - 0.6), -90, 0);
+    const postRound = Number(postVal.toFixed(2));
+    postDbs.push(postRound);
+    bands.push({
+      index: i,
+      freq_hz: freqHz,
+      label: formatFftFreqLabel(freqHz),
+      pre_db: preVal,
+      post_db: postRound,
+      peak_hold_db: Number(peakHold.toFixed(2))
+    });
+    if (postVal > bestDb) {
+      bestDb = postVal;
+      bestIdx = i;
+    }
+    const wLin = postVal > -89.5 ? Math.pow(10, postVal / 20) : 0;
+    sumLin += wLin * wLin;
+    weightedLogF += wLin * Math.log10(freqHz);
+    totalWeight += wLin;
+  }
+
+  let rmsDb = -90;
+  let peakDb = -90;
+  if (activeClips.length > 0) {
+    const avgLin = Math.sqrt(Math.max(1e-10, sumLin / FFT_BAND_COUNT));
+    rmsDb = Number(clampNum(20 * Math.log10(Math.max(1e-5, avgLin)) + 6, -90, 0).toFixed(2));
+    peakDb = Number(clampNum(Math.max(...postDbs), -90, 0).toFixed(2));
+  }
+  const centroidHz = totalWeight > 1e-6
+    ? Number(clampNum(Math.pow(10, weightedLogF / totalWeight), 20, 20000).toFixed(1))
+    : 1000;
+  const compiledRack = compileFairlightAudioRackClient(rack);
+  const prefix = compiledRack.filtergraph ? `${compiledRack.filtergraph},` : "";
+  return {
+    playhead_frame: frame,
+    time_s: timeS,
+    bands,
+    correlation,
+    rms_db: rmsDb,
+    peak_db: peakDb,
+    dominant_hz: FFT_BAND_FREQS_HZ[bestIdx],
+    centroid_hz: centroidHz,
+    active_audio_clips: activeClips.length,
+    ffmpeg_filter:
+      `${prefix}asplit=2[sp_a][sp_b];` +
+      "[sp_a]showspectrumpic=s=640x240:mode=combined:scale=log:color=intensity[v_spec];" +
+      "[sp_b]aphasemeter=s=320x48[v_phase]"
+  };
+}
+
+export function detectAudioTransientsClient(doc, rawConfig = {}, options = {}) {
+  const cfg = normalizeTransientDetectConfig(rawConfig);
+  const rack = normalizeFairlightAudioRackParams(options.fairlight_rack || options.fairlightRack);
+  const fps = doc && doc.fps ? Math.max(1, Number(doc.fps.num || 25) / Math.max(1, Number(doc.fps.den || 1))) : 25;
+  const startFrame = Math.max(0, (doc && doc.start_frame) || 0);
+  const maxFrame = Math.max(startFrame + 1, computeTimelineMaxFrame(doc || { tracks: [] }));
+  const totalFrames = Math.min(15000, maxFrame - startFrame);
+
+  const tracks = (doc && doc.tracks) || [];
+  const anySolo = tracks.some((t) => t && t.kind === "audio" && Boolean(t.solo));
+  const activeClips = [];
+  for (const trk of tracks) {
+    if (!trk || trk.kind !== "audio") continue;
+    if (trk.muted || (anySolo && !trk.solo)) continue;
+    for (const clip of trk.clips || []) {
+      if (clip && clip.enabled !== false && clip.duration_frames > 0) {
+        activeClips.push({ trk, clip });
+      }
+    }
+  }
+
+  const envelope = new Array(totalFrames).fill(0);
+  if (activeClips.length > 0) {
+    const beatPeriodS = 60 / cfg.bpm;
+    for (let relF = 0; relF < totalFrames; relF++) {
+      const absF = startFrame + relF;
+      const tS = absF / fps;
+      let frameEnergy = 0;
+      for (const { trk, clip } of activeClips) {
+        if (absF < clip.start_frame || absF >= clip.start_frame + clip.duration_frames) continue;
+        const profile = classifyAudioClipProfileClient(clip);
+        const gainDb = clampNum(Number(clip.audio_gain_db || 0) + Number(trk.volume_db || 0), -36, 12);
+        const gainLin = clampNum(Math.pow(10, gainDb / 20), 0.05, 2.5);
+        const beatPhase = (((tS / beatPeriodS) % 1) + 1) % 1;
+        const halfBeatPhase = (((tS / (beatPeriodS * 0.5)) % 1) + 1) % 1;
+        const kickHit = Math.exp(-Math.pow(beatPhase * 9, 2));
+        const snarePhase = ((((tS - beatPeriodS * 0.5) / (beatPeriodS * 2)) % 1) + 1) % 1;
+        const snareHit = Math.exp(-Math.pow(snarePhase * 14, 2)) * 0.92;
+        const hatHit = Math.exp(-Math.pow(halfBeatPhase * 16, 2)) * 0.68;
+        const clipEdge = absF === clip.start_frame ? 1 : 0;
+
+        let onset;
+        if (profile === "dialogue") {
+          const sylPhase = (((tS * 3.1 + 0.17 * (trk.index || 1)) % 1) + 1) % 1;
+          onset = Math.exp(-Math.pow(sylPhase * 10, 2)) * 0.72;
+        } else if (profile === "sfx") {
+          const sfxPhase = (((tS * 1.8) % 1) + 1) % 1;
+          onset = Math.max(clipEdge, Math.exp(-Math.pow(sfxPhase * 11, 2)) * 0.85);
+        } else if (cfg.freq_focus === "kick_low") {
+          onset = kickHit;
+        } else if (cfg.freq_focus === "snare_mid") {
+          onset = Math.max(snareHit, kickHit * 0.45);
+        } else if (cfg.freq_focus === "hihat_high") {
+          onset = Math.max(hatHit, snareHit * 0.55);
+        } else {
+          onset = Math.max(kickHit, snareHit * 0.9, hatHit * 0.75);
+        }
+        frameEnergy = Math.max(frameEnergy, clampNum(onset * gainLin, 0, 1));
+      }
+      envelope[relF] = frameEnergy;
+    }
+  }
+
+  const threshold = clampNum(1.02 - cfg.sensitivity * 0.85, 0.12, 0.92);
+  const minGapFrames = Math.max(1, Math.round((cfg.min_interval_ms / 1000) * fps));
+  const candidatePeaks = [];
+  let lastPeakF = -minGapFrames * 2;
+
+  for (let relF = 0; relF < totalFrames; relF++) {
+    const val = envelope[relF];
+    if (val < threshold) continue;
+    const prevV = relF > 0 ? envelope[relF - 1] : 0;
+    const nextV = relF + 1 < totalFrames ? envelope[relF + 1] : 0;
+    if (val >= prevV && val >= nextV) {
+      const absF = startFrame + relF;
+      if (absF - lastPeakF >= minGapFrames) {
+        candidatePeaks.push([absF, val]);
+        lastPeakF = absF;
+      } else if (candidatePeaks.length > 0 && val > candidatePeaks[candidatePeaks.length - 1][1]) {
+        candidatePeaks[candidatePeaks.length - 1] = [absF, val];
+        lastPeakF = absF;
+      }
+    }
+  }
+
+  const beatTicks = cfg.snap_to_bpm
+    ? computeBpmBeatFrames(doc, { enabled: true, bpm: cfg.bpm, offset_s: 0 }, startFrame, startFrame + totalFrames)
+    : [];
+  const beatFrames = beatTicks.map((b) => b.frame);
+
+  const peaks = [];
+  const markers = [];
+  const seenFrames = new Set();
+  for (const [rawFrame, strength] of candidatePeaks) {
+    let finalFrame = rawFrame;
+    if (beatFrames.length > 0) {
+      let nearest = beatFrames[0];
+      let bestDist = Math.abs(nearest - rawFrame);
+      for (const bf of beatFrames) {
+        const d = Math.abs(bf - rawFrame);
+        if (d < bestDist) {
+          bestDist = d;
+          nearest = bf;
+        }
+      }
+      if (bestDist <= Math.max(2, Math.round(fps * 0.08))) {
+        finalFrame = nearest;
+      }
+    }
+    if (seenFrames.has(finalFrame)) continue;
+    seenFrames.add(finalFrame);
+    const tS = Number((finalFrame / fps).toFixed(3));
+    const fluxDb = Number(clampNum(strength * 36, 0, 60).toFixed(2));
+    peaks.push({
+      frame: finalFrame,
+      time_s: tS,
+      strength: Number(strength.toFixed(3)),
+      flux_db: fluxDb,
+      band: cfg.freq_focus
+    });
+    const idx = peaks.length;
+    markers.push({
+      name: cfg.snap_to_bpm ? `Beat ${idx}` : `Transient ${idx}`,
+      frame: finalFrame,
+      duration_frames: 1,
+      color: cfg.marker_color,
+      note: `${cfg.freq_focus} | +${fluxDb.toFixed(1)} dB @ ${tS.toFixed(2)}s`
+    });
+    if (peaks.length >= cfg.max_markers) break;
+  }
+
+  // IOI BPM estimation
+  let estimatedBpm = 128;
+  if (peaks.length >= 2) {
+    const buckets = new Map();
+    for (let i = 0; i < peaks.length - 1; i++) {
+      const dt = (peaks[i + 1].frame - peaks[i].frame) / fps;
+      if (dt <= 0.05) continue;
+      let rawBpm = 60 / dt;
+      while (rawBpm < 60) rawBpm *= 2;
+      while (rawBpm > 200) rawBpm *= 0.5;
+      if (rawBpm >= 60 && rawBpm <= 200) {
+        const key = Math.round(rawBpm);
+        buckets.set(key, (buckets.get(key) || 0) + 1);
+      }
+    }
+    if (buckets.size > 0) {
+      let bestBpm = 128;
+      let bestScore = -1;
+      for (const [k, cnt] of buckets.entries()) {
+        if (cnt > bestScore || (cnt === bestScore && Math.abs(k - 128) < Math.abs(bestBpm - 128))) {
+          bestScore = cnt;
+          bestBpm = k;
+        }
+      }
+      estimatedBpm = clampNum(bestBpm, 60, 200);
+    }
+  }
+
+  const [loHz, hiHz] = TRANSIENT_FOCUS_FREQ_RANGES[cfg.freq_focus];
+  let centroidHz = Number(Math.sqrt(loHz * hiHz).toFixed(1));
+  const spec = analyzeAudioSpectrumClient(doc, peaks.length > 0 ? peaks[0].frame : startFrame, {
+    fairlight_rack: rack
+  });
+  if (spec.active_audio_clips > 0) centroidHz = spec.centroid_hz;
+  const compiledRack = compileFairlightAudioRackClient(rack);
+  const prefix = compiledRack.filtergraph ? `${compiledRack.filtergraph},` : "";
+
+  return {
+    peaks,
+    markers,
+    estimated_bpm: estimatedBpm,
+    spectral_centroid_hz: centroidHz,
+    peak_count: peaks.length,
+    config: cfg,
+    ffmpeg_filter: `${prefix}highpass=f=${loHz.toFixed(1)},lowpass=f=${hiHz.toFixed(1)},astats=metadata=1:reset=1,ebur128=metadata=1`
+  };
 }

@@ -9378,5 +9378,224 @@ def test_color_warper_spider_grid_playwright_responsive(
             browser.close()
 
 
+def test_fairlight_fft_analyzer_and_transient_marker_snapper_parity_and_ui(
+    tmp_path: Path,
+) -> None:
+    from taktcut.render import apply_fairlight_rack_preset
+    from taktcut.ui.samples import build_sample_timeline
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+    try:
+        doc = build_sample_timeline("clean")
+        doc_json = doc.model_dump(mode="json")
+        rack_bv = apply_fairlight_rack_preset("broadcast_voice").model_dump(mode="json")
+
+        # 1. /api/fairlight/analyzer/spectrum valid & invalid
+        status, _, raw = _http_call(
+            f"{base_url}/api/fairlight/analyzer/spectrum",
+            method="POST",
+            payload={
+                "document": doc_json,
+                "playhead_frame": 25,
+                "fairlight_rack": rack_bv,
+                "master_gain_db": 0.0,
+            },
+        )
+        assert status == 200
+        spec_data = json.loads(raw.decode("utf-8"))
+        assert len(spec_data["bands"]) == 32
+        assert spec_data["active_audio_clips"] >= 1
+        assert "showspectrumpic=" in spec_data["ffmpeg_filter"]
+
+        bad_spec_status, _, _ = _http_call(
+            f"{base_url}/api/fairlight/analyzer/spectrum",
+            method="POST",
+            payload={"document": doc_json, "playhead_frame": -5},
+        )
+        assert bad_spec_status == 400
+
+        # 2. /api/fairlight/transients/detect valid & invalid
+        status, _, raw = _http_call(
+            f"{base_url}/api/fairlight/transients/detect",
+            method="POST",
+            payload={
+                "document": doc_json,
+                "config": {
+                    "sensitivity": 0.70,
+                    "min_interval_ms": 220,
+                    "freq_focus": "kick_low",
+                    "marker_color": "Gold",
+                    "max_markers": 24,
+                    "snap_to_bpm": True,
+                    "bpm": 128.0,
+                },
+                "fairlight_rack": rack_bv,
+            },
+        )
+        assert status == 200
+        tr_data = json.loads(raw.decode("utf-8"))
+        assert tr_data["peak_count"] > 0
+        assert len(tr_data["markers"]) == tr_data["peak_count"]
+        assert all(m["color"] == "Gold" for m in tr_data["markers"])
+
+        bad_tr_status, _, _ = _http_call(
+            f"{base_url}/api/fairlight/transients/detect",
+            method="POST",
+            payload={"document": doc_json, "config": {"freq_focus": "invalid_band"}},
+        )
+        assert bad_tr_status == 400
+
+        # 3. Node.js demo_adapter.js static-demo parity
+        node_bin = shutil.which("node")
+        if node_bin:
+            assets_dir = (
+                Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+            )
+            demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+            script = (
+                f"import {{ createApiClient }} from {json.dumps(demo_uri)};\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const client = createApiClient();\n"
+                f"const doc = {json.dumps(doc_json)};\n"
+                f"const rack = {json.dumps(rack_bv)};\n"
+                "const sp = await client.analyzeFairlightSpectrum("
+                "{ document: doc, playhead_frame: 25, fairlight_rack: rack });\n"
+                "if (!Array.isArray(sp.bands) || sp.bands.length !== 32) "
+                "throw new Error('bands mismatch');\n"
+                "const tr = await client.detectFairlightTransients("
+                "{ document: doc, config: { sensitivity: 0.70, min_interval_ms: 220, "
+                "freq_focus: 'kick_low', marker_color: 'Gold', max_markers: 24, "
+                "snap_to_bpm: true, bpm: 128 }, fairlight_rack: rack });\n"
+                f"if (tr.peak_count !== {tr_data['peak_count']}) "
+                "throw new Error('peak_count mismatch: ' + tr.peak_count);\n"
+                "console.log('FAIRLIGHT_FFT_PARITY_OK');\n"
+            )
+            proc = subprocess.run(
+                [node_bin, "--input-type=module", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, proc.stderr
+            assert "FAIRLIGHT_FFT_PARITY_OK" in proc.stdout
+
+        # 4. Playwright live UI verification (1440x900 & 375x812, EN/FR, zero overflow)
+        sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_function(
+                    "() => document.getElementById('fairlight-rack-tab-fft') !== null"
+                )
+                page.click("#fairlight-rack-tab-fft")
+                assert (
+                    page.locator("#fairlight-rack-tab-fft").get_attribute("aria-selected")
+                    == "true"
+                )
+                fft_pixels = page.evaluate(
+                    "() => {"
+                    "  const c = document.getElementById('fairlight-fft-canvas');"
+                    "  const ctx = c.getContext('2d');"
+                    "  const d = ctx.getImageData(0, 0, c.width, c.height).data;"
+                    "  let nonBg = 0;"
+                    "  for (let i = 0; i < d.length; i += 16) {"
+                    "    if (d[i] > 35 || d[i+1] > 35 || d[i+2] > 45) nonBg++;"
+                    "  }"
+                    "  return nonBg;"
+                    "}"
+                )
+                assert fft_pixels > 50
+
+                initial_mkr_text = page.locator("#timeline-marker-count").text_content() or "0 MKR"
+                initial_mkr_count = int(initial_mkr_text.split()[0])
+
+                page.select_option("#fairlight-transient-focus", "kick_low")
+                page.select_option("#fairlight-transient-color", "Gold")
+                page.click("#btn-fairlight-detect-transients")
+                page.wait_for_function(
+                    "() => {"
+                    "  const txt = document.getElementById('fairlight-transient-bpm-badge')"
+                    "?.textContent || '';"
+                    "  const parts = txt.split('|');"
+                    "  return parts.length === 2 && parseInt(parts[1], 10) > 0;"
+                    "}"
+                )
+                after_mkr_text = page.locator("#timeline-marker-count").text_content() or "0 MKR"
+                after_mkr_count = int(after_mkr_text.split()[0])
+                assert after_mkr_count > initial_mkr_count
+
+                # Snap playhead to next transient and sync BPM grid
+                page.click("#btn-fairlight-transient-next")
+                page.click("#btn-fairlight-sync-bpm")
+                assert (
+                    page.locator("#btn-bpm-grid").get_attribute("aria-pressed") == "true"
+                )
+
+                # FR i18n check
+                page.click("#lang-fr")
+                assert "FFT & Transitoires" in (
+                    page.locator("#fairlight-rack-tab-fft").text_content() or ""
+                )
+                assert "Détecter & Marquer" in (
+                    page.locator("#btn-fairlight-detect-transients").text_content() or ""
+                )
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in (
+                    "fairlight-rack-tab-fft",
+                    "btn-fairlight-detect-transients",
+                    "btn-fairlight-transient-prev",
+                    "btn-fairlight-transient-next",
+                    "btn-fairlight-sync-bpm",
+                    "btn-fairlight-transients-clear",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}')"
+                        ".getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                page.click("#btn-fairlight-transients-clear")
+                page.wait_for_function(
+                    "() => (document.getElementById('fairlight-transient-bpm-badge')"
+                    "?.textContent || '').includes('| 0 PK')"
+                )
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+
 
 
