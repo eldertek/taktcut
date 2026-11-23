@@ -130,6 +130,8 @@ from taktcut.models import (
     MulticamSyncMode,
     PrecompBlendMode,
     RationalFrameRate,
+    ReelSlatePosition,
+    RenderPlan,
     RenderProfile,
     TimecodeBurnInPosition,
     TimelineDocument,
@@ -173,6 +175,7 @@ from taktcut.render import (
     RENDER_CRF_MAX,
     RENDER_CRF_MIN,
     AutoDuckParams,
+    BatchRenderQueue,
     ClipAudioParams,
     ClipRetimeParams,
     ClipVideoFadeParams,
@@ -201,6 +204,7 @@ from taktcut.render import (
     compile_video_fade_filter_result,
     compile_vignette_filter_result,
     compile_voice_cleanup_filter_result,
+    estimate_render_bytes,
     execute_render_plan,
     list_aspect_presets,
     list_delivery_presets,
@@ -211,6 +215,8 @@ from taktcut.render import (
     validate_dialogue_eq,
     validate_export_fps,
     validate_loudness_preset,
+    validate_reel_slate_position,
+    validate_reel_slate_text,
     validate_review_watermark_opacity,
     validate_review_watermark_text,
     validate_timecode_burnin,
@@ -345,6 +351,7 @@ class UiAppState:
     _cached_caps_verified: bool = False
     _remote_jobs_lock: threading.Lock = field(default_factory=threading.Lock)
     _remote_jobs: dict[str, _TrackedRemoteJob] = field(default_factory=dict)
+    render_queue: BatchRenderQueue = field(default_factory=BatchRenderQueue)
 
     def track_remote_job(
         self,
@@ -587,6 +594,14 @@ def _extract_timecode_burnin(payload: dict[str, Any]) -> TimecodeBurnInPosition:
     return validate_timecode_burnin(raw)
 
 
+def _extract_reel_slate(payload: dict[str, Any]) -> tuple[str, ReelSlatePosition]:
+    raw_text = payload.get("reel_slate_text")
+    text = validate_reel_slate_text(raw_text) if raw_text is not None else ""
+    raw_pos = payload.get("reel_slate_position")
+    pos = validate_reel_slate_position(raw_pos) if raw_pos not in (None, "") else "off"
+    return text, pos
+
+
 def _extract_export_fps(payload: dict[str, Any]) -> ExportFpsOption:
     raw = payload.get("export_fps")
     if raw is None or raw == "":
@@ -618,6 +633,263 @@ def _extract_review_watermark(payload: dict[str, Any]) -> tuple[str, float]:
         else REVIEW_WATERMARK_OPACITY_DEFAULT
     )
     return text, opacity
+
+
+def _compile_render_plan_from_payload(
+    app_state: UiAppState,
+    payload: dict[str, Any],
+    *,
+    execute: bool,
+) -> RenderPlan:
+    """Validate render request payload, confine paths, and build a deterministic RenderPlan."""
+    raw_in = payload.get("input_path")
+    raw_out = payload.get("output_path")
+    if not isinstance(raw_in, str) or not isinstance(raw_out, str):
+        raise ValueError("input_path and output_path strings are required")
+
+    in_file = confine_workspace_path(
+        app_state.workspace_root,
+        raw_in,
+        must_exist=execute,
+        allowed_suffixes=MEDIA_SUFFIXES,
+    )
+    out_file = confine_workspace_path(
+        app_state.workspace_root,
+        raw_out,
+        must_exist=False,
+        allowed_suffixes=MEDIA_SUFFIXES,
+    )
+
+    raw_preset = payload.get("delivery_preset")
+    delivery_preset: str | None = None
+    if raw_preset not in (None, ""):
+        if not isinstance(raw_preset, str):
+            raise ValueError("delivery_preset must be a string")
+        delivery_preset = raw_preset.strip()
+
+    raw_profile = payload.get("profile")
+    profile: RenderProfile | None = None
+    if raw_profile not in (None, ""):
+        profile = RenderProfile(str(raw_profile))
+    elif delivery_preset is None:
+        profile = RenderProfile.WEB_H264
+
+    raw_crf = payload.get("video_crf")
+    video_crf: int | None = None
+    if raw_crf not in (None, ""):
+        if isinstance(raw_crf, bool) or not isinstance(raw_crf, int):
+            raise ValueError("video_crf must be an integer")
+        video_crf = raw_crf
+
+    raw_audio_kbps = payload.get("audio_bitrate_kbps")
+    audio_bitrate_kbps: int | None = None
+    if raw_audio_kbps not in (None, ""):
+        if isinstance(raw_audio_kbps, bool) or not isinstance(raw_audio_kbps, int):
+            raise ValueError("audio_bitrate_kbps must be an integer")
+        audio_bitrate_kbps = raw_audio_kbps
+
+    raw_enc_preset = payload.get("encoder_preset")
+    encoder_preset: str | None = None
+    if raw_enc_preset not in (None, ""):
+        if not isinstance(raw_enc_preset, str):
+            raise ValueError("encoder_preset must be a string")
+        encoder_preset = raw_enc_preset
+
+    raw_fps = payload.get("fps")
+    fps = RationalFrameRate.from_str(str(raw_fps)) if raw_fps else None
+
+    raw_lufs = payload.get("target_lufs")
+    target_lufs = float(raw_lufs) if raw_lufs not in (None, "") else None
+
+    prefer_hw = bool(payload.get("prefer_hw", True))
+
+    lut_file: Path | None = None
+    color_grade_obj: ColorGradeParams | None = None
+    color_nodes_obj: list[ColorNodeParams] | None = None
+    raw_lut = payload.get("lut_path")
+    if isinstance(raw_lut, str) and raw_lut.strip():
+        lut_file = confine_workspace_path(
+            app_state.workspace_root,
+            raw_lut,
+            must_exist=True,
+            allowed_suffixes=LUT_SUFFIXES,
+        )
+    elif isinstance(payload.get("color_nodes"), list) and len(payload["color_nodes"]) > 0:
+        parsed_nodes = _build_color_nodes_from_payload(payload["color_nodes"])
+        if any(
+            n.enabled and n.lut_table is not None and n.lut_mix > 1e-6
+            for n in parsed_nodes
+        ):
+            lut_file = confine_workspace_path(
+                app_state.workspace_root,
+                ".taktcut-samples/studio_node_tree.cube",
+                must_exist=False,
+                allowed_suffixes=LUT_SUFFIXES,
+            )
+            bake_color_node_chain_to_cube(
+                parsed_nodes, lut_file, size=33, title="taktcut_studio_node_tree"
+            )
+        else:
+            color_nodes_obj = parsed_nodes
+    elif isinstance(payload.get("color_grade"), dict):
+        color_grade_obj = _build_color_grade_from_payload({"grade": payload["color_grade"]})
+    elif isinstance(payload.get("cdl"), dict):
+        cdl = _build_cdl_from_payload(payload["cdl"])
+        lut_file = confine_workspace_path(
+            app_state.workspace_root,
+            ".taktcut-samples/studio_grade.cube",
+            must_exist=False,
+            allowed_suffixes=LUT_SUFFIXES,
+        )
+        bake_cdl_to_cube(cdl, lut_file, size=33, title="taktcut_studio_grade")
+
+    caps, err = app_state.get_capabilities(verify_nvenc_runtime=prefer_hw)
+    if caps is None:
+        if execute:
+            raise RuntimeError(err or "ffmpeg unavailable")
+        caps = HardwareCapabilities(
+            ffmpeg_path="ffmpeg",
+            h264_nvenc=False,
+            hevc_nvenc=False,
+            libx264=True,
+            libx265=True,
+            prores_ks=True,
+        )
+
+    fx_filtergraph: str | None = None
+    raw_fx = payload.get("fx_stack")
+    if isinstance(raw_fx, list) and len(raw_fx) > 0:
+        effective_fx_profile = profile or RenderProfile.WEB_H264
+        if delivery_preset and profile is None:
+            from taktcut.render import get_delivery_preset
+
+            effective_fx_profile = get_delivery_preset(delivery_preset).profile
+        if effective_fx_profile == RenderProfile.PRORES_HQ:
+            fx_pix_fmt = "yuv422p10le"
+        elif effective_fx_profile == RenderProfile.DNXHR_HQ:
+            fx_pix_fmt = "yuv422p"
+        else:
+            fx_pix_fmt = "yuv420p"
+        compiled_fx = compile_fx_filtergraph(
+            raw_fx,
+            pix_fmt=fx_pix_fmt,
+            use_gpu=prefer_hw,
+        )
+        if compiled_fx.filtergraph:
+            fx_filtergraph = compiled_fx.filtergraph
+
+    chroma_key_obj: ChromaKeyParams | None = None
+    raw_chroma_key = payload.get("chroma_key")
+    if raw_chroma_key is not None:
+        if not isinstance(raw_chroma_key, dict):
+            raise ValueError("'chroma_key' must be a JSON object")
+        chroma_key_obj = _build_chroma_key_from_payload({"chroma_key": raw_chroma_key})
+
+    stabilizer_obj: StabilizerParams | None = None
+    raw_stabilizer = payload.get("stabilizer")
+    if raw_stabilizer is not None:
+        if not isinstance(raw_stabilizer, dict):
+            raise ValueError("'stabilizer' must be a JSON object")
+        stabilizer_obj = _build_stabilizer_from_payload({"stabilizer": raw_stabilizer})
+
+    planar_tracker_obj: PlanarTrackerParams | None = None
+    raw_planar_tracker = payload.get("planar_tracker")
+    if raw_planar_tracker is not None:
+        if not isinstance(raw_planar_tracker, dict):
+            raise ValueError("'planar_tracker' must be a JSON object")
+        planar_tracker_obj = _build_planar_tracker_from_payload(
+            {"planar_tracker": raw_planar_tracker}
+        )
+
+    audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+    video_fade = _build_video_fade_from_payload(
+        payload, allow_top_level=(audio_params is None)
+    )
+    loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
+    timecode_burnin = _extract_timecode_burnin(payload)
+    reel_slate_text, reel_slate_position = _extract_reel_slate(payload)
+    review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
+    export_fps = _extract_export_fps(payload)
+    deinterlace = _extract_deinterlace(payload)
+    audio_only_format = _extract_audio_only_format(payload)
+    out_file = resolve_audio_only_output_path(out_file, audio_only_format)
+    retime_obj = _build_retime_from_payload(payload)
+    retime_params = (
+        _build_retime_params_from_payload(payload) if retime_obj is None else None
+    )
+    transform_params = _build_transform_params_from_payload(payload)
+    framing_params = _build_framing_params_from_payload(payload)
+    reframe_obj = _build_reframe_from_payload(payload)
+    film_grain_obj = _build_film_grain_from_payload(payload)
+    vignette_obj = _build_vignette_from_payload(payload)
+    voice_cleanup_obj = _build_voice_cleanup_from_payload(payload)
+    fairlight_rack_obj = _build_fairlight_rack_from_payload(payload)
+
+    title_overlay_obj: TitleOverlayParams | None = None
+    raw_title_overlay = payload.get("title_overlay")
+    if raw_title_overlay is not None:
+        if not isinstance(raw_title_overlay, dict):
+            raise ValueError("'title_overlay' must be a JSON object")
+        title_overlay_obj = _build_title_overlay_from_payload(
+            {"title_overlay": raw_title_overlay}
+        )
+
+    subtitle_track_obj: SubtitleTrackParams | None = None
+    raw_subtitle_track = payload.get("subtitle_track")
+    if raw_subtitle_track is not None:
+        if not isinstance(raw_subtitle_track, dict):
+            raise ValueError("'subtitle_track' must be a JSON object")
+        subtitle_track_obj = _build_subtitle_track_from_payload(
+            {"subtitle_track": raw_subtitle_track}
+        )
+
+    lower_third_obj = _build_lower_third_from_payload(payload)
+
+    return build_render_plan(
+        input_path=in_file,
+        output_path=out_file,
+        profile=profile,
+        fps=fps,
+        lut_path=lut_file,
+        color_grade=color_grade_obj,
+        color_nodes=color_nodes_obj,
+        chroma_key=chroma_key_obj,
+        stabilizer=stabilizer_obj,
+        planar_tracker=planar_tracker_obj,
+        fx_filtergraph=fx_filtergraph,
+        title_overlay=title_overlay_obj,
+        lower_third=lower_third_obj,
+        subtitle_track=subtitle_track_obj,
+        audio_params=audio_params,
+        video_fade=video_fade,
+        retime=retime_obj,
+        retime_params=retime_params,
+        transform_params=transform_params,
+        framing=framing_params,
+        reframe=reframe_obj,
+        film_grain=film_grain_obj,
+        vignette=vignette_obj,
+        voice_cleanup=voice_cleanup_obj,
+        fairlight_rack=fairlight_rack_obj,
+        clip_duration_s=clip_duration_s,
+        target_lufs=target_lufs,
+        loudness_preset=loudness_preset,
+        dialogue_eq=dialogue_eq,
+        timecode_burnin=timecode_burnin,
+        reel_slate_text=reel_slate_text,
+        reel_slate_position=reel_slate_position,
+        review_watermark_text=review_watermark_text,
+        review_watermark_opacity=review_watermark_opacity,
+        export_fps=export_fps,
+        deinterlace=deinterlace,
+        audio_only_format=audio_only_format,
+        prefer_hw=prefer_hw,
+        caps=caps,
+        delivery_preset=delivery_preset,
+        video_crf=video_crf,
+        audio_bitrate_kbps=audio_bitrate_kbps,
+        encoder_preset=encoder_preset,
+    )
 
 
 def _build_retime_from_payload(
@@ -1389,6 +1661,19 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                             "max": RENDER_AUDIO_BITRATE_KBPS_MAX,
                         },
                     },
+                },
+            )
+            return
+
+        if route == "/api/render/queue":
+            queue_jobs = [
+                j.model_dump(mode="json") for j in self.app_state.render_queue.list_jobs()
+            ]
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "jobs": queue_jobs,
+                    "summary": self.app_state.render_queue.summary().model_dump(mode="json"),
                 },
             )
             return
@@ -2472,248 +2757,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/render/plan":
-            raw_in = payload.get("input_path")
-            raw_out = payload.get("output_path")
-            if not isinstance(raw_in, str) or not isinstance(raw_out, str):
-                raise ValueError("input_path and output_path strings are required")
-
             execute = bool(payload.get("execute", False))
-            in_file = confine_workspace_path(
-                self.app_state.workspace_root,
-                raw_in,
-                must_exist=execute,
-                allowed_suffixes=MEDIA_SUFFIXES,
-            )
-            out_file = confine_workspace_path(
-                self.app_state.workspace_root,
-                raw_out,
-                must_exist=False,
-                allowed_suffixes=MEDIA_SUFFIXES,
-            )
-
-            raw_preset = payload.get("delivery_preset")
-            delivery_preset: str | None = None
-            if raw_preset not in (None, ""):
-                if not isinstance(raw_preset, str):
-                    raise ValueError("delivery_preset must be a string")
-                delivery_preset = raw_preset.strip()
-
-            raw_profile = payload.get("profile")
-            profile: RenderProfile | None = None
-            if raw_profile not in (None, ""):
-                profile = RenderProfile(str(raw_profile))
-            elif delivery_preset is None:
-                profile = RenderProfile.WEB_H264
-
-            raw_crf = payload.get("video_crf")
-            video_crf: int | None = None
-            if raw_crf not in (None, ""):
-                if isinstance(raw_crf, bool) or not isinstance(raw_crf, int):
-                    raise ValueError("video_crf must be an integer")
-                video_crf = raw_crf
-
-            raw_audio_kbps = payload.get("audio_bitrate_kbps")
-            audio_bitrate_kbps: int | None = None
-            if raw_audio_kbps not in (None, ""):
-                if isinstance(raw_audio_kbps, bool) or not isinstance(raw_audio_kbps, int):
-                    raise ValueError("audio_bitrate_kbps must be an integer")
-                audio_bitrate_kbps = raw_audio_kbps
-
-            raw_enc_preset = payload.get("encoder_preset")
-            encoder_preset: str | None = None
-            if raw_enc_preset not in (None, ""):
-                if not isinstance(raw_enc_preset, str):
-                    raise ValueError("encoder_preset must be a string")
-                encoder_preset = raw_enc_preset
-
-            raw_fps = payload.get("fps")
-            fps = RationalFrameRate.from_str(str(raw_fps)) if raw_fps else None
-
-            raw_lufs = payload.get("target_lufs")
-            target_lufs = float(raw_lufs) if raw_lufs not in (None, "") else None
-
-            prefer_hw = bool(payload.get("prefer_hw", True))
-
-            lut_file: Path | None = None
-            color_grade_obj: ColorGradeParams | None = None
-            color_nodes_obj: list[ColorNodeParams] | None = None
-            raw_lut = payload.get("lut_path")
-            if isinstance(raw_lut, str) and raw_lut.strip():
-                lut_file = confine_workspace_path(
-                    self.app_state.workspace_root,
-                    raw_lut,
-                    must_exist=True,
-                    allowed_suffixes=LUT_SUFFIXES,
-                )
-            elif isinstance(payload.get("color_nodes"), list) and len(payload["color_nodes"]) > 0:
-                parsed_nodes = _build_color_nodes_from_payload(payload["color_nodes"])
-                if any(
-                    n.enabled and n.lut_table is not None and n.lut_mix > 1e-6
-                    for n in parsed_nodes
-                ):
-                    lut_file = confine_workspace_path(
-                        self.app_state.workspace_root,
-                        ".taktcut-samples/studio_node_tree.cube",
-                        must_exist=False,
-                        allowed_suffixes=LUT_SUFFIXES,
-                    )
-                    bake_color_node_chain_to_cube(
-                        parsed_nodes, lut_file, size=33, title="taktcut_studio_node_tree"
-                    )
-                else:
-                    color_nodes_obj = parsed_nodes
-            elif isinstance(payload.get("color_grade"), dict):
-                color_grade_obj = _build_color_grade_from_payload({"grade": payload["color_grade"]})
-            elif isinstance(payload.get("cdl"), dict):
-                cdl = _build_cdl_from_payload(payload["cdl"])
-                lut_file = confine_workspace_path(
-                    self.app_state.workspace_root,
-                    ".taktcut-samples/studio_grade.cube",
-                    must_exist=False,
-                    allowed_suffixes=LUT_SUFFIXES,
-                )
-                bake_cdl_to_cube(cdl, lut_file, size=33, title="taktcut_studio_grade")
-
-            caps, err = self.app_state.get_capabilities(verify_nvenc_runtime=prefer_hw)
-            if caps is None:
-                if execute:
-                    raise RuntimeError(err or "ffmpeg unavailable")
-                # Dry-run planning stays deterministic even when ffmpeg is absent from PATH.
-                caps = HardwareCapabilities(
-                    ffmpeg_path="ffmpeg",
-                    h264_nvenc=False,
-                    hevc_nvenc=False,
-                    libx264=True,
-                    libx265=True,
-                    prores_ks=True,
-                )
-
-            fx_filtergraph: str | None = None
-            raw_fx = payload.get("fx_stack")
-            if isinstance(raw_fx, list) and len(raw_fx) > 0:
-                effective_fx_profile = profile or RenderProfile.WEB_H264
-                if delivery_preset and profile is None:
-                    from taktcut.render import get_delivery_preset
-
-                    effective_fx_profile = get_delivery_preset(delivery_preset).profile
-                is_prores = effective_fx_profile == RenderProfile.PRORES_HQ
-                fx_pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
-                compiled_fx = compile_fx_filtergraph(
-                    raw_fx,
-                    pix_fmt=fx_pix_fmt,
-                    use_gpu=prefer_hw,
-                )
-                if compiled_fx.filtergraph:
-                    fx_filtergraph = compiled_fx.filtergraph
-
-            chroma_key_obj: ChromaKeyParams | None = None
-            raw_chroma_key = payload.get("chroma_key")
-            if raw_chroma_key is not None:
-                if not isinstance(raw_chroma_key, dict):
-                    raise ValueError("'chroma_key' must be a JSON object")
-                chroma_key_obj = _build_chroma_key_from_payload({"chroma_key": raw_chroma_key})
-
-            stabilizer_obj: StabilizerParams | None = None
-            raw_stabilizer = payload.get("stabilizer")
-            if raw_stabilizer is not None:
-                if not isinstance(raw_stabilizer, dict):
-                    raise ValueError("'stabilizer' must be a JSON object")
-                stabilizer_obj = _build_stabilizer_from_payload({"stabilizer": raw_stabilizer})
-
-            planar_tracker_obj: PlanarTrackerParams | None = None
-            raw_planar_tracker = payload.get("planar_tracker")
-            if raw_planar_tracker is not None:
-                if not isinstance(raw_planar_tracker, dict):
-                    raise ValueError("'planar_tracker' must be a JSON object")
-                planar_tracker_obj = _build_planar_tracker_from_payload(
-                    {"planar_tracker": raw_planar_tracker}
-                )
-
-            audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
-            video_fade = _build_video_fade_from_payload(
-                payload, allow_top_level=(audio_params is None)
-            )
-            loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
-            timecode_burnin = _extract_timecode_burnin(payload)
-            review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
-            export_fps = _extract_export_fps(payload)
-            deinterlace = _extract_deinterlace(payload)
-            audio_only_format = _extract_audio_only_format(payload)
-            out_file = resolve_audio_only_output_path(out_file, audio_only_format)
-            retime_obj = _build_retime_from_payload(payload)
-            retime_params = (
-                _build_retime_params_from_payload(payload) if retime_obj is None else None
-            )
-            transform_params = _build_transform_params_from_payload(payload)
-            framing_params = _build_framing_params_from_payload(payload)
-            reframe_obj = _build_reframe_from_payload(payload)
-            film_grain_obj = _build_film_grain_from_payload(payload)
-            vignette_obj = _build_vignette_from_payload(payload)
-            voice_cleanup_obj = _build_voice_cleanup_from_payload(payload)
-            fairlight_rack_obj = _build_fairlight_rack_from_payload(payload)
-
-            title_overlay_obj: TitleOverlayParams | None = None
-            raw_title_overlay = payload.get("title_overlay")
-            if raw_title_overlay is not None:
-                if not isinstance(raw_title_overlay, dict):
-                    raise ValueError("'title_overlay' must be a JSON object")
-                title_overlay_obj = _build_title_overlay_from_payload(
-                    {"title_overlay": raw_title_overlay}
-                )
-
-            subtitle_track_obj: SubtitleTrackParams | None = None
-            raw_subtitle_track = payload.get("subtitle_track")
-            if raw_subtitle_track is not None:
-                if not isinstance(raw_subtitle_track, dict):
-                    raise ValueError("'subtitle_track' must be a JSON object")
-                subtitle_track_obj = _build_subtitle_track_from_payload(
-                    {"subtitle_track": raw_subtitle_track}
-                )
-
-            lower_third_obj = _build_lower_third_from_payload(payload)
-
-            plan = build_render_plan(
-                input_path=in_file,
-                output_path=out_file,
-                profile=profile,
-                fps=fps,
-                lut_path=lut_file,
-                color_grade=color_grade_obj,
-                color_nodes=color_nodes_obj,
-                chroma_key=chroma_key_obj,
-                stabilizer=stabilizer_obj,
-                planar_tracker=planar_tracker_obj,
-                fx_filtergraph=fx_filtergraph,
-                title_overlay=title_overlay_obj,
-                lower_third=lower_third_obj,
-                subtitle_track=subtitle_track_obj,
-                audio_params=audio_params,
-                video_fade=video_fade,
-                retime=retime_obj,
-                retime_params=retime_params,
-                transform_params=transform_params,
-                framing=framing_params,
-                reframe=reframe_obj,
-                film_grain=film_grain_obj,
-                vignette=vignette_obj,
-                voice_cleanup=voice_cleanup_obj,
-                fairlight_rack=fairlight_rack_obj,
-                clip_duration_s=clip_duration_s,
-                target_lufs=target_lufs,
-                loudness_preset=loudness_preset,
-                dialogue_eq=dialogue_eq,
-                timecode_burnin=timecode_burnin,
-                review_watermark_text=review_watermark_text,
-                review_watermark_opacity=review_watermark_opacity,
-                export_fps=export_fps,
-                deinterlace=deinterlace,
-                audio_only_format=audio_only_format,
-                prefer_hw=prefer_hw,
-                caps=caps,
-                delivery_preset=delivery_preset,
-                video_crf=video_crf,
-                audio_bitrate_kbps=audio_bitrate_kbps,
-                encoder_preset=encoder_preset,
+            plan = _compile_render_plan_from_payload(
+                self.app_state, payload, execute=execute
             )
             response: dict[str, Any] = {
                 "plan": plan.model_dump(mode="json"),
@@ -2724,6 +2770,137 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 result = execute_render_plan(plan)
                 response["result"] = result.model_dump(mode="json")
             self._send_json(HTTPStatus.OK, response)
+            return
+
+        if route == "/api/render/queue/add":
+            raw_job_obj = payload.get("job_payload")
+            job_payload: dict[str, Any] = (
+                raw_job_obj if isinstance(raw_job_obj, dict) else payload
+            )
+            plan = _compile_render_plan_from_payload(
+                self.app_state, job_payload, execute=False
+            )
+            raw_label = payload.get("label")
+            label = (
+                raw_label.strip()
+                if isinstance(raw_label, str) and raw_label.strip()
+                else Path(plan.output_path).name
+            )
+            raw_dur = payload.get("duration_s", 10.0)
+            dur_s = (
+                float(raw_dur)
+                if isinstance(raw_dur, (int, float))
+                and not isinstance(raw_dur, bool)
+                and raw_dur > 0
+                else 10.0
+            )
+            est_w = plan.target_width or 1920
+            est_h = plan.target_height or 1080
+            raw_est_bytes = payload.get("estimated_bytes")
+            est_bytes = (
+                int(raw_est_bytes)
+                if isinstance(raw_est_bytes, int)
+                and not isinstance(raw_est_bytes, bool)
+                and raw_est_bytes >= 0
+                else estimate_render_bytes(
+                    dur_s,
+                    plan.profile,
+                    width=est_w,
+                    height=est_h,
+                    fps=plan.fps.as_float,
+                    crf=plan.video_crf,
+                    audio_bitrate_kbps=plan.audio_bitrate_kbps,
+                    audio_only_format=plan.audio_only_format,
+                )
+            )
+            queued_job = self.app_state.render_queue.add_job(
+                label=label,
+                payload=dict(job_payload),
+                plan=plan,
+                estimated_bytes=est_bytes,
+            )
+            all_jobs = [
+                j.model_dump(mode="json") for j in self.app_state.render_queue.list_jobs()
+            ]
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "job": queued_job.model_dump(mode="json"),
+                    "jobs": all_jobs,
+                    "summary": self.app_state.render_queue.summary().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/render/queue/action":
+            action = str(payload.get("action", "")).strip().lower()
+            job_id = str(payload.get("job_id", "")).strip()
+            affected_job = None
+            if action in {"move_up", "move_down"}:
+                if not job_id:
+                    raise ValueError("job_id is required")
+                self.app_state.render_queue.move_job(
+                    job_id, "up" if action == "move_up" else "down"
+                )
+            elif action == "duplicate":
+                if not job_id:
+                    raise ValueError("job_id is required")
+                affected_job = self.app_state.render_queue.duplicate_job(job_id)
+            elif action == "remove":
+                if not job_id:
+                    raise ValueError("job_id is required")
+                affected_job = self.app_state.render_queue.remove_job(job_id)
+            elif action == "enable":
+                if not job_id:
+                    raise ValueError("job_id is required")
+                affected_job = self.app_state.render_queue.set_job_enabled(job_id, True)
+            elif action == "disable":
+                if not job_id:
+                    raise ValueError("job_id is required")
+                affected_job = self.app_state.render_queue.set_job_enabled(job_id, False)
+            elif action == "requeue":
+                if not job_id:
+                    raise ValueError("job_id is required")
+                affected_job = self.app_state.render_queue.requeue_job(job_id)
+            elif action == "clear_completed":
+                self.app_state.render_queue.clear_completed()
+            elif action == "clear_all":
+                self.app_state.render_queue.clear_all()
+            else:
+                raise ValueError(f"Unsupported render queue action {action!r}")
+
+            all_jobs = [
+                j.model_dump(mode="json") for j in self.app_state.render_queue.list_jobs()
+            ]
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "job": affected_job.model_dump(mode="json") if affected_job else None,
+                    "jobs": all_jobs,
+                    "summary": self.app_state.render_queue.summary().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/render/queue/run":
+            dry_run = bool(payload.get("dry_run", False))
+            jobs, summary = self.app_state.render_queue.run_queue(
+                dry_run=dry_run,
+                executor=execute_render_plan,
+                plan_resolver=lambda job_payload: _compile_render_plan_from_payload(
+                    self.app_state,
+                    job_payload,
+                    execute=not dry_run,
+                ),
+            )
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "dry_run": dry_run,
+                    "jobs": [j.model_dump(mode="json") for j in jobs],
+                    "summary": summary.model_dump(mode="json"),
+                },
+            )
             return
 
         if route == "/api/titles/compile":
@@ -3315,7 +3492,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             raw_fps = payload.get("fps")
             fps_str = RationalFrameRate.from_str(str(raw_fps)).ffmpeg_rate if raw_fps else None
             raw_lufs = payload.get("target_lufs")
-            target_lufs = float(raw_lufs) if raw_lufs not in (None, "") else None
+            remote_target_lufs: float | None = (
+                float(raw_lufs) if raw_lufs not in (None, "") else None
+            )
             prefer_hw = bool(payload.get("prefer_hw", True))
 
             lut_cube_text: str | None = None
@@ -3389,7 +3568,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 output_filename=out_file.name,
                 profile=profile,
                 fps=fps_str,
-                target_lufs=target_lufs,
+                target_lufs=remote_target_lufs,
                 prefer_hw=prefer_hw,
                 fx_stack=fx_nodes,
                 cdl=cdl_params,
@@ -3421,10 +3600,10 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 audio_only_format=audio_only_format,
             )
             client = RemoteRenderClient(remote_url, bearer_token, timeout=30.0)
-            job = client.submit_job(job_req)
+            remote_job = client.submit_job(job_req)
             rel_out = out_file.relative_to(self.app_state.workspace_root).as_posix()
             self.app_state.track_remote_job(
-                job_id=job.job_id,
+                job_id=remote_job.job_id,
                 remote_url=client.base_url,
                 bearer_token=bearer_token.strip(),
                 local_output_path=out_file,
@@ -3433,7 +3612,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             self._send_json(
                 HTTPStatus.ACCEPTED,
                 {
-                    "job": job.model_dump(mode="json"),
+                    "job": remote_job.model_dump(mode="json"),
                     "remote_url": client.base_url,
                     "local_output_path": rel_out,
                     "downloaded": False,

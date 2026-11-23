@@ -6728,6 +6728,157 @@ input[type="range"] {
   max-width: 100%;
 }
 
+/* DELIVER REEL / SLATE PRESETS & BATCH RENDER QUEUE */
+.slate-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.slate-preset-btn {
+  background: var(--bg-well);
+  color: var(--text-muted);
+  border: 1px solid var(--bg-hairline);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.slate-preset-btn:hover {
+  border-color: var(--accent-blue);
+  color: var(--text-main);
+}
+
+.slate-preset-btn.is-active {
+  background: rgba(74, 158, 255, 0.16);
+  border-color: var(--accent-blue);
+  color: var(--text-bright);
+}
+
+.deliver-queue-pane .pane-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.deliver-queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.queue-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.queue-progress-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-well);
+  border: 1px solid var(--bg-hairline);
+  overflow: hidden;
+}
+
+.queue-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), #3fb950);
+  transition: width 0.2s ease;
+}
+
+.render-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.queue-job-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  background: var(--bg-well);
+  border: 1px solid var(--bg-hairline);
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.queue-job-card.is-rendering {
+  border-color: var(--accent-amber);
+}
+
+.queue-job-card.is-completed {
+  border-color: rgba(63, 185, 80, 0.45);
+}
+
+.queue-job-card.is-failed {
+  border-color: rgba(248, 81, 73, 0.55);
+}
+
+.queue-job-card.is-disabled {
+  opacity: 0.65;
+}
+
+.queue-job-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.queue-job-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.queue-job-id {
+  font-size: 11px;
+  color: var(--accent-blue);
+  flex-shrink: 0;
+}
+
+.queue-job-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-job-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.queue-job-error {
+  font-size: 11px;
+  color: #f85149;
+  overflow-wrap: anywhere;
+}
+
+.queue-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.queue-action-btn {
+  font-size: 11px;
+}
+
 /* RESPONSIVE BREAKPOINTS */
 @media (max-width: 1180px) {
   .deliver-top-ribbon,
@@ -6912,6 +7063,8 @@ input[type="range"] {
   #panel-render .engine-btn,
   #panel-render .check-label,
   #panel-render .watermark-preset-btn,
+  #panel-render .slate-preset-btn,
+  #panel-render .queue-action-btn,
   #panel-render .watermark-opacity-slider,
   #panel-render .lower-third-preset-btn,
   #panel-render .retime-deliver-preset-btn,
@@ -7096,7 +7249,9 @@ input[type="range"] {
   .fairlight-dock .btn-mini,
   .fairlight-rack-dock .btn-mini,
   .fairlight-rack-tab-btn,
-  .audio-inspector-dock .btn-mini {
+  .audio-inspector-dock .btn-mini,
+  .queue-action-btn,
+  .slate-preset-btn {
     min-width: 44px;
     min-height: 45px;
   }

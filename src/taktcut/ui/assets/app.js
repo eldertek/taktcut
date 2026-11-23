@@ -754,6 +754,11 @@ const state = {
     targetHeight: 1080,
     encoderPreset: "medium"
   },
+  renderQueue: {
+    jobs: [],
+    summary: null,
+    busy: false
+  },
   renderEngine: "local",
   remotePollTimer: null,
   deliverSettingsTab: "video",
@@ -885,6 +890,7 @@ function setLanguage(lang) {
   renderFxStack();
   renderDeliveryPresetStrip();
   updateDeliverSizeEstimate();
+  renderQueueListUI();
   updateTitleTimingBadges();
   updateSubtitleTimingBadges();
   if (state.fxLastCompile) renderFxCompileResult(state.fxLastCompile);
@@ -4377,15 +4383,15 @@ function serializeFullProjectState() {
   }
   const profileEl = byId("render-profile");
   const profile = profileEl ? profileEl.value : "web_h264";
-  const isProres = profile === "prores_hq";
+  const isMezzanine = profile === "prores_hq" || profile === "dnxhr_hq";
   const containerEl = byId("render-container");
   const container = containerEl && containerEl.value === "mov" ? "mov" : "mp4";
   const crfEl = byId("render-crf");
   const crfRaw = crfEl ? crfEl.value.trim() : "";
-  const videoCrf = !isProres && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
+  const videoCrf = !isMezzanine && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
   const audioEl = byId("render-audio-bitrate");
   const audioRaw = audioEl ? audioEl.value : "192";
-  const audioBitrateKbps = !isProres && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
+  const audioBitrateKbps = !isMezzanine && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
   const fpsEl = byId("render-fps");
   const fpsStr = (fpsEl && fpsEl.value.trim()) || "25";
   const lufsEl = byId("render-lufs");
@@ -4491,12 +4497,14 @@ function serializeFullProjectState() {
       container,
       video_crf: videoCrf,
       audio_bitrate_kbps: audioBitrateKbps,
-      encoder_preset: !isProres ? state.renderConfig.encoderPreset || "medium" : null,
+      encoder_preset: !isMezzanine ? state.renderConfig.encoderPreset || "medium" : null,
       fps: fpsStr,
       target_lufs: targetLufs,
       loudness_preset: normalizeFairlightAudioParams(state.fairlight).loudness_preset,
       dialogue_eq: normalizeFairlightAudioParams(state.fairlight).dialogue_eq,
       timecode_burnin: txt("render-timecode-burnin", "off") || "off",
+      reel_slate_text: txt("render-reel-slate-text", ""),
+      reel_slate_position: txt("render-reel-slate-position", "off") || "off",
       review_watermark_text: txt("render-watermark-text", ""),
       review_watermark_opacity: Number(byId("render-watermark-opacity")?.value ?? 0.35),
       lower_third: { ...state.lowerThird },
@@ -4678,11 +4686,12 @@ function applyFullProjectState(project, validation) {
   setVal("render-profile", del.profile || "web_h264");
   setVal("render-audio-only-format", del.audio_only_format || "off");
   syncDeliverProfileControlsState();
-  setVal("render-container", del.container || (del.profile === "prores_hq" ? "mov" : "mp4"));
-  if (del.profile !== "prores_hq" && del.video_crf !== null && del.video_crf !== undefined) {
+  const isLoadedMezzanine = del.profile === "prores_hq" || del.profile === "dnxhr_hq";
+  setVal("render-container", del.container || (isLoadedMezzanine ? "mov" : "mp4"));
+  if (!isLoadedMezzanine && del.video_crf !== null && del.video_crf !== undefined) {
     setVal("render-crf", del.video_crf);
   }
-  if (del.profile !== "prores_hq" && del.audio_bitrate_kbps) {
+  if (!isLoadedMezzanine && del.audio_bitrate_kbps) {
     setVal("render-audio-bitrate", del.audio_bitrate_kbps);
   }
   if (del.audio_only_format && del.audio_only_format !== "off") {
@@ -4696,6 +4705,9 @@ function applyFullProjectState(project, validation) {
   });
   setVal("render-lut-path", del.lut_path || "");
   setVal("render-timecode-burnin", del.timecode_burnin || "off");
+  setVal("render-reel-slate-text", del.reel_slate_text || "");
+  setVal("render-reel-slate-position", del.reel_slate_position || "off");
+  syncReelSlateControlsUI();
   setVal("render-export-fps", del.export_fps || "source");
   setChk("render-deinterlace", Boolean(del.deinterlace));
   setVal("render-watermark-text", del.review_watermark_text || "");
@@ -8883,21 +8895,23 @@ function syncDeliverProfileControlsState() {
   const audioOnlyFmt = audioOnlyEl ? audioOnlyEl.value : "off";
   const isAudioOnly = audioOnlyFmt !== "off";
   const isProres = prof === "prores_hq";
+  const isDnxhr = prof === "dnxhr_hq";
+  const isMezzanine = isProres || isDnxhr;
 
   profileEl.disabled = isAudioOnly;
   if (containerEl) {
     containerEl.disabled = isAudioOnly;
     if (!isAudioOnly) {
-      containerEl.value = isProres ? "mov" : "mp4";
+      containerEl.value = isMezzanine ? "mov" : "mp4";
     }
   }
   if (crfEl) {
-    crfEl.disabled = isProres || isAudioOnly;
+    crfEl.disabled = isMezzanine || isAudioOnly;
     if (isAudioOnly) {
       crfEl.placeholder = "N/A (Audio-Only)";
-    } else if (isProres) {
+    } else if (isMezzanine) {
       crfEl.value = "";
-      crfEl.placeholder = "N/A (ProRes)";
+      crfEl.placeholder = isDnxhr ? "N/A (DNxHR)" : "N/A (ProRes)";
     } else {
       crfEl.placeholder = prof === "master_hevc" ? "20" : "18";
       if (!crfEl.value.trim()) {
@@ -8906,14 +8920,14 @@ function syncDeliverProfileControlsState() {
     }
   }
   if (audioEl) {
-    audioEl.disabled = isProres || isAudioOnly;
+    audioEl.disabled = isMezzanine || isAudioOnly;
     if (audioOnlyFmt === "wav24") {
       audioEl.value = "pcm_s24le";
     } else if (audioOnlyFmt === "mp3_320") {
       audioEl.value = "320";
     } else if (audioOnlyFmt === "aac_256") {
       audioEl.value = "256";
-    } else if (isProres) {
+    } else if (isMezzanine) {
       audioEl.value = "pcm_s24le";
     } else if (audioEl.value === "pcm_s24le") {
       audioEl.value = "192";
@@ -8936,7 +8950,8 @@ function syncAudioOnlyOutputPath() {
   } else if (fmt === "aac_256") {
     outEl.value = `${stem}.aac`;
   } else {
-    const ext = profileEl && profileEl.value === "prores_hq" ? "mov" : "mp4";
+    const profVal = profileEl ? profileEl.value : "web_h264";
+    const ext = profVal === "prores_hq" || profVal === "dnxhr_hq" ? "mov" : "mp4";
     outEl.value = `${stem}.${ext}`;
   }
 }
@@ -9067,8 +9082,15 @@ function updateDeliverSizeEstimate() {
 
   const profileEl = byId("render-profile");
   const profile = profileEl ? profileEl.value : "web_h264";
+  const isMezzanine = profile === "prores_hq" || profile === "dnxhr_hq";
   const codecLabel =
-    profile === "prores_hq" ? "ProRes 422 HQ" : profile === "master_hevc" ? "HEVC" : "H.264";
+    profile === "prores_hq"
+      ? "ProRes 422 HQ"
+      : profile === "dnxhr_hq"
+        ? "DNxHR HQ"
+        : profile === "master_hevc"
+          ? "HEVC"
+          : "H.264";
 
   const useFramingEl = byId("render-use-framing");
   const useFraming = useFramingEl ? Boolean(useFramingEl.checked) : false;
@@ -9095,12 +9117,12 @@ function updateDeliverSizeEstimate() {
   const crfEl = byId("render-crf");
   const crfRaw = crfEl ? crfEl.value.trim() : "";
   const crf =
-    profile !== "prores_hq" && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
+    !isMezzanine && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
 
   const audioEl = byId("render-audio-bitrate");
   const audioRaw = audioEl ? audioEl.value : "192";
   const audioBitrateKbps =
-    profile !== "prores_hq" && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
+    !isMezzanine && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
 
   const audioOnlyEl = byId("render-audio-only-format");
   const audioOnlyFormat = audioOnlyEl ? audioOnlyEl.value : "off";
@@ -9148,7 +9170,7 @@ function updateDeliverSizeEstimate() {
         scope === "io" ? t("render.estimate.scopeIo") : t("render.estimate.scopeTimeline");
       const videoMbps = (est.videoBitrateKbps / 1000).toFixed(1);
       const audioLabel =
-        profile === "prores_hq" ? "PCM 24b" : `AAC ${est.audioBitrateKbps} kbps`;
+        isMezzanine ? "PCM 24b" : `AAC ${est.audioBitrateKbps} kbps`;
       const fpsDisplay =
         typeof effectiveFps === "number" ? Number(effectiveFps.toFixed(2)) : effectiveFps;
       const parts = [
@@ -9178,6 +9200,20 @@ function syncReviewWatermarkControlsUI() {
   if (opSlider && opLabel) {
     const num = Number(opSlider.value);
     opLabel.textContent = Number.isFinite(num) ? num.toFixed(2) : "0.35";
+  }
+}
+
+function syncReelSlateControlsUI() {
+  const slateInput = byId("render-reel-slate-text");
+  const slatePosEl = byId("render-reel-slate-position");
+  const slateText = slateInput ? slateInput.value.trim() : "";
+  const slatePos = slatePosEl ? slatePosEl.value : "off";
+  for (const btn of document.querySelectorAll(".slate-preset-btn[data-slate-preset]")) {
+    const presetVal = btn.getAttribute("data-slate-preset") || "";
+    const presetPos = btn.getAttribute("data-slate-pos") || "off";
+    const active = slateText === presetVal && slatePos === presetPos;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
   }
 }
 
@@ -10029,175 +10065,195 @@ function exportFcpxmlTimeline() {
   showBanner(msg, "success");
 }
 
+function collectRenderRequestPayload(execute) {
+  const inputPath = byId("render-input-path").value.trim();
+  const outputPath = byId("render-output-path").value.trim();
+  const profile = byId("render-profile").value;
+  const isMezzanine = profile === "prores_hq" || profile === "dnxhr_hq";
+  const crfRaw = byId("render-crf") ? byId("render-crf").value.trim() : "";
+  const parsedCrf =
+    !isMezzanine && crfRaw !== "" && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
+  if (!isMezzanine && crfRaw !== "" && (parsedCrf === null || parsedCrf < 0 || parsedCrf > 51)) {
+    throw new Error("Video CRF must be an integer between 0 and 51.");
+  }
+  const audioRaw = byId("render-audio-bitrate") ? byId("render-audio-bitrate").value : "192";
+  const parsedAudioKbps =
+    !isMezzanine && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
+  const fps = byId("render-fps").value.trim() || null;
+  const lutPath = byId("render-lut-path").value.trim() || null;
+  const lufsRaw = byId("render-lufs").value.trim();
+  const targetLufs = lufsRaw !== "" ? Number.parseFloat(lufsRaw) : null;
+  const useStudioCdl = byId("render-use-studio-cdl").checked;
+  const useStudioFxEl = byId("render-use-studio-fx");
+  const useStudioFx = useStudioFxEl ? useStudioFxEl.checked : false;
+  const useStudioTitleEl = byId("render-use-studio-title");
+  const useStudioTitle = useStudioTitleEl ? useStudioTitleEl.checked : false;
+  const useStudioSubsEl = byId("render-use-studio-subtitles");
+  const useStudioSubs = useStudioSubsEl ? useStudioSubsEl.checked : false;
+  const preferHw = byId("render-prefer-hw").checked;
+
+  const fxPayload =
+    useStudioFx && !state.fxBypassAll && state.fxStack.length > 0
+      ? serializeFxStackForApi(false)
+      : null;
+  const chromaKeyPayload =
+    useStudioFx && !state.fxBypassAll && state.chromaKey.enabled
+      ? serializeChromaKeyForApi(false)
+      : null;
+  const stabilizerPayload =
+    useStudioFx && !state.fxBypassAll && state.stabilizer.enabled
+      ? serializeStabilizerForApi(false)
+      : null;
+  const planarTrackerPayload =
+    useStudioFx && !state.fxBypassAll && state.planarTracker.enabled
+      ? serializePlanarTrackerForApi(false)
+      : null;
+  const titlePayload =
+    useStudioTitle &&
+    state.titleOverlay.enabled &&
+    (state.titleOverlay.title.trim() || state.titleOverlay.subtitle.trim())
+      ? state.titleOverlay
+      : null;
+  const activeValidCues = state.subtitleTrack.cues.filter(
+    (c) => String(c.text || "").trim().length > 0 && c.end_s > c.start_s
+  );
+  const subtitlePayload =
+    useStudioSubs && state.subtitleTrack.enabled && activeValidCues.length > 0
+      ? { ...state.subtitleTrack, cues: activeValidCues }
+      : null;
+
+  const useClipAudioEl = byId("render-use-clip-audio");
+  const clipAudioInfo =
+    useClipAudioEl && useClipAudioEl.checked ? getSelectedClipAudioPayload() : null;
+  const audioParamsPayload =
+    clipAudioInfo && !clipAudioInfo.isIdentity ? clipAudioInfo.audio_params : null;
+  const clipFadeInfo =
+    useClipAudioEl && useClipAudioEl.checked ? getSelectedClipFadePayload() : null;
+  const videoFadePayload = clipFadeInfo ? clipFadeInfo.video_fade : null;
+  const clipDurationPayload =
+    (audioParamsPayload && clipAudioInfo) || (videoFadePayload && (videoFadePayload.fade_in_s > 0 || videoFadePayload.fade_out_s > 0))
+      ? (clipAudioInfo ? clipAudioInfo.clipDurationS : clipFadeInfo ? clipFadeInfo.clipDurationS : null)
+      : null;
+
+  const useClipRetimeEl = byId("render-use-clip-retime");
+  const clipRetimeInfo =
+    useClipRetimeEl && useClipRetimeEl.checked ? getSelectedClipRetimePayload() : null;
+  const retimeParamsPayload =
+    clipRetimeInfo && !clipRetimeInfo.isIdentity ? clipRetimeInfo.retime_params : null;
+
+  const useClipTransformEl = byId("render-use-clip-transform");
+  const clipTransformInfo =
+    useClipTransformEl && useClipTransformEl.checked ? getSelectedClipTransformPayload() : null;
+  const transformParamsPayload =
+    clipTransformInfo && !clipTransformInfo.isIdentity ? clipTransformInfo.transform_params : null;
+
+  const useFramingEl = byId("render-use-framing");
+  const framingPayload =
+    useFramingEl && useFramingEl.checked
+      ? {
+          preset: state.framing.preset,
+          mode: state.framing.mode,
+          target_width: state.renderConfig.targetWidth,
+          target_height: state.renderConfig.targetHeight,
+          enabled: true
+        }
+      : null;
+
+  const fairlightPayload = normalizeFairlightAudioParams(state.fairlight);
+  const tcBurnInEl = byId("render-timecode-burnin");
+  const timecodeBurnin = tcBurnInEl ? tcBurnInEl.value : "off";
+  const slateTextEl = byId("render-reel-slate-text");
+  const reelSlateText = slateTextEl ? slateTextEl.value.trim() : "";
+  const slatePosEl = byId("render-reel-slate-position");
+  const reelSlatePosition = slatePosEl ? slatePosEl.value : "off";
+  const wmTextEl = byId("render-watermark-text");
+  const reviewWatermarkText = wmTextEl ? wmTextEl.value.trim() : "";
+  const wmOpacityEl = byId("render-watermark-opacity");
+  const reviewWatermarkOpacity = wmOpacityEl ? Number(wmOpacityEl.value) : 0.35;
+  const lowerThirdPayload = getNormalizedLowerThirdPayload();
+  const deliverRetimePayload = getNormalizedDeliverRetimePayload();
+  const reframePayload = getNormalizedReframePayload();
+  const reframeActivePayload =
+    reframePayload.enabled && reframePayload.aspect_ratio !== "source" ? reframePayload : null;
+  const filmGrainPayload = getNormalizedFilmGrainPayload();
+  const filmGrainActivePayload =
+    filmGrainPayload.enabled && filmGrainPayload.strength > 0 ? filmGrainPayload : null;
+  const vignettePayload = getNormalizedVignettePayload();
+  const vignetteActivePayload = vignettePayload.enabled ? vignettePayload : null;
+  const voiceCleanupPayload = getNormalizedVoiceCleanupPayload();
+  const voiceCleanupActivePayload = voiceCleanupPayload.enabled ? voiceCleanupPayload : null;
+  const fairlightRackCompiled = compileFairlightAudioRackClient(state.fairlightRack);
+  const fairlightRackActivePayload = !fairlightRackCompiled.is_identity
+    ? fairlightRackCompiled.params
+    : null;
+  const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
+  const exportFpsEl = byId("render-export-fps");
+  const exportFps = exportFpsEl ? exportFpsEl.value : "source";
+  const deinterlaceEl = byId("render-deinterlace");
+  const deinterlace = deinterlaceEl ? Boolean(deinterlaceEl.checked) : false;
+  const audioOnlyEl = byId("render-audio-only-format");
+  const audioOnlyFormat = audioOnlyEl ? audioOnlyEl.value : "off";
+
+  return {
+    input_path: inputPath,
+    output_path: outputPath,
+    profile,
+    delivery_preset: state.activeDeliveryPresetId || null,
+    video_crf: parsedCrf,
+    audio_bitrate_kbps: parsedAudioKbps,
+    encoder_preset: !isMezzanine ? state.renderConfig.encoderPreset || "medium" : null,
+    fps,
+    lut_path: lutPath,
+    color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
+    color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
+    chroma_key: chromaKeyPayload,
+    stabilizer: stabilizerPayload,
+    planar_tracker: planarTrackerPayload,
+    fx_stack: fxPayload,
+    title_overlay: titlePayload,
+    lower_third: lowerThirdPayload.enabled ? lowerThirdPayload : null,
+    subtitle_track: subtitlePayload,
+    audio_params: audioParamsPayload,
+    video_fade: videoFadePayload,
+    retime: deliverRetimePayload.enabled ? deliverRetimePayload : null,
+    retime_params: effectiveRetimeParamsPayload,
+    transform_params: transformParamsPayload,
+    framing: framingPayload,
+    reframe: reframeActivePayload,
+    film_grain: filmGrainActivePayload,
+    vignette: vignetteActivePayload,
+    voice_cleanup: voiceCleanupActivePayload,
+    fairlight_rack: fairlightRackActivePayload,
+    clip_duration_s: clipDurationPayload,
+    target_lufs: targetLufs,
+    loudness_preset: fairlightPayload.loudness_preset,
+    dialogue_eq: fairlightPayload.dialogue_eq,
+    timecode_burnin: timecodeBurnin,
+    reel_slate_text: reelSlateText,
+    reel_slate_position: reelSlatePosition,
+    review_watermark_text: reviewWatermarkText,
+    review_watermark_opacity: reviewWatermarkOpacity,
+    export_fps: exportFps,
+    deinterlace,
+    audio_only_format: audioOnlyFormat,
+    prefer_hw: preferHw,
+    execute: Boolean(execute)
+  };
+}
+
 async function buildOrExecuteRender(execute) {
   try {
     stopRemotePoll();
-    const inputPath = byId("render-input-path").value.trim();
-    const outputPath = byId("render-output-path").value.trim();
-    const profile = byId("render-profile").value;
-    const isProres = profile === "prores_hq";
-    const crfRaw = byId("render-crf") ? byId("render-crf").value.trim() : "";
-    const parsedCrf =
-      !isProres && crfRaw !== "" && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
-    if (!isProres && crfRaw !== "" && (parsedCrf === null || parsedCrf < 0 || parsedCrf > 51)) {
-      throw new Error("Video CRF must be an integer between 0 and 51.");
-    }
-    const audioRaw = byId("render-audio-bitrate") ? byId("render-audio-bitrate").value : "192";
-    const parsedAudioKbps =
-      !isProres && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
-    const fps = byId("render-fps").value.trim() || null;
-    const lutPath = byId("render-lut-path").value.trim() || null;
-    const lufsRaw = byId("render-lufs").value.trim();
-    const targetLufs = lufsRaw !== "" ? Number.parseFloat(lufsRaw) : null;
-    const useStudioCdl = byId("render-use-studio-cdl").checked;
-    const useStudioFxEl = byId("render-use-studio-fx");
-    const useStudioFx = useStudioFxEl ? useStudioFxEl.checked : false;
-    const useStudioTitleEl = byId("render-use-studio-title");
-    const useStudioTitle = useStudioTitleEl ? useStudioTitleEl.checked : false;
-    const useStudioSubsEl = byId("render-use-studio-subtitles");
-    const useStudioSubs = useStudioSubsEl ? useStudioSubsEl.checked : false;
-    const preferHw = byId("render-prefer-hw").checked;
-
-    const fxPayload =
-      useStudioFx && !state.fxBypassAll && state.fxStack.length > 0
-        ? serializeFxStackForApi(false)
-        : null;
-    const chromaKeyPayload =
-      useStudioFx && !state.fxBypassAll && state.chromaKey.enabled
-        ? serializeChromaKeyForApi(false)
-        : null;
-    const stabilizerPayload =
-      useStudioFx && !state.fxBypassAll && state.stabilizer.enabled
-        ? serializeStabilizerForApi(false)
-        : null;
-    const planarTrackerPayload =
-      useStudioFx && !state.fxBypassAll && state.planarTracker.enabled
-        ? serializePlanarTrackerForApi(false)
-        : null;
-    const titlePayload =
-      useStudioTitle &&
-      state.titleOverlay.enabled &&
-      (state.titleOverlay.title.trim() || state.titleOverlay.subtitle.trim())
-        ? state.titleOverlay
-        : null;
-    const activeValidCues = state.subtitleTrack.cues.filter(
-      (c) => String(c.text || "").trim().length > 0 && c.end_s > c.start_s
-    );
-    const subtitlePayload =
-      useStudioSubs && state.subtitleTrack.enabled && activeValidCues.length > 0
-        ? { ...state.subtitleTrack, cues: activeValidCues }
-        : null;
-
-    const useClipAudioEl = byId("render-use-clip-audio");
-    const clipAudioInfo =
-      useClipAudioEl && useClipAudioEl.checked ? getSelectedClipAudioPayload() : null;
-    const audioParamsPayload =
-      clipAudioInfo && !clipAudioInfo.isIdentity ? clipAudioInfo.audio_params : null;
-    const clipFadeInfo =
-      useClipAudioEl && useClipAudioEl.checked ? getSelectedClipFadePayload() : null;
-    const videoFadePayload = clipFadeInfo ? clipFadeInfo.video_fade : null;
-    const clipDurationPayload =
-      (audioParamsPayload && clipAudioInfo) || (videoFadePayload && (videoFadePayload.fade_in_s > 0 || videoFadePayload.fade_out_s > 0))
-        ? (clipAudioInfo ? clipAudioInfo.clipDurationS : clipFadeInfo ? clipFadeInfo.clipDurationS : null)
-        : null;
-
-    const useClipRetimeEl = byId("render-use-clip-retime");
-    const clipRetimeInfo =
-      useClipRetimeEl && useClipRetimeEl.checked ? getSelectedClipRetimePayload() : null;
-    const retimeParamsPayload =
-      clipRetimeInfo && !clipRetimeInfo.isIdentity ? clipRetimeInfo.retime_params : null;
-
-    const useClipTransformEl = byId("render-use-clip-transform");
-    const clipTransformInfo =
-      useClipTransformEl && useClipTransformEl.checked ? getSelectedClipTransformPayload() : null;
-    const transformParamsPayload =
-      clipTransformInfo && !clipTransformInfo.isIdentity ? clipTransformInfo.transform_params : null;
-
-    const useFramingEl = byId("render-use-framing");
-    const framingPayload =
-      useFramingEl && useFramingEl.checked
-        ? {
-            preset: state.framing.preset,
-            mode: state.framing.mode,
-            target_width: state.renderConfig.targetWidth,
-            target_height: state.renderConfig.targetHeight,
-            enabled: true
-          }
-        : null;
-
-    const fairlightPayload = normalizeFairlightAudioParams(state.fairlight);
-    const tcBurnInEl = byId("render-timecode-burnin");
-    const timecodeBurnin = tcBurnInEl ? tcBurnInEl.value : "off";
-    const wmTextEl = byId("render-watermark-text");
-    const reviewWatermarkText = wmTextEl ? wmTextEl.value.trim() : "";
-    const wmOpacityEl = byId("render-watermark-opacity");
-    const reviewWatermarkOpacity = wmOpacityEl ? Number(wmOpacityEl.value) : 0.35;
-    const lowerThirdPayload = getNormalizedLowerThirdPayload();
-    const deliverRetimePayload = getNormalizedDeliverRetimePayload();
-    const reframePayload = getNormalizedReframePayload();
-    const reframeActivePayload =
-      reframePayload.enabled && reframePayload.aspect_ratio !== "source" ? reframePayload : null;
-    const filmGrainPayload = getNormalizedFilmGrainPayload();
-    const filmGrainActivePayload =
-      filmGrainPayload.enabled && filmGrainPayload.strength > 0 ? filmGrainPayload : null;
-    const vignettePayload = getNormalizedVignettePayload();
-    const vignetteActivePayload = vignettePayload.enabled ? vignettePayload : null;
-    const voiceCleanupPayload = getNormalizedVoiceCleanupPayload();
-    const voiceCleanupActivePayload = voiceCleanupPayload.enabled ? voiceCleanupPayload : null;
-    const fairlightRackCompiled = compileFairlightAudioRackClient(state.fairlightRack);
-    const fairlightRackActivePayload = !fairlightRackCompiled.is_identity
-      ? fairlightRackCompiled.params
-      : null;
-    const effectiveRetimeParamsPayload = deliverRetimePayload.enabled ? null : retimeParamsPayload;
-    const exportFpsEl = byId("render-export-fps");
-    const exportFps = exportFpsEl ? exportFpsEl.value : "source";
-    const deinterlaceEl = byId("render-deinterlace");
-    const deinterlace = deinterlaceEl ? Boolean(deinterlaceEl.checked) : false;
-    const audioOnlyEl = byId("render-audio-only-format");
-    const audioOnlyFormat = audioOnlyEl ? audioOnlyEl.value : "off";
+    const body = collectRenderRequestPayload(execute);
+    const outputPath = body.output_path;
 
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
       const bearer_token = byId("remote-bearer-token").value.trim();
       const submitData = await api.submitRemoteJob({
+        ...body,
         remote_url,
-        bearer_token,
-        input_path: inputPath,
-        output_path: outputPath,
-        profile,
-        fps,
-        lut_path: lutPath,
-        color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
-        color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
-        chroma_key: chromaKeyPayload,
-        stabilizer: stabilizerPayload,
-        planar_tracker: planarTrackerPayload,
-        fx_stack: fxPayload,
-        title_overlay: titlePayload,
-        lower_third: lowerThirdPayload.enabled ? lowerThirdPayload : null,
-        subtitle_track: subtitlePayload,
-        audio_params: audioParamsPayload,
-        video_fade: videoFadePayload,
-        retime: deliverRetimePayload.enabled ? deliverRetimePayload : null,
-        retime_params: effectiveRetimeParamsPayload,
-        transform_params: transformParamsPayload,
-        framing: framingPayload,
-        reframe: reframeActivePayload,
-        film_grain: filmGrainActivePayload,
-        vignette: vignetteActivePayload,
-        voice_cleanup: voiceCleanupActivePayload,
-        fairlight_rack: fairlightRackActivePayload,
-        clip_duration_s: clipDurationPayload,
-        target_lufs: targetLufs,
-        loudness_preset: fairlightPayload.loudness_preset,
-        dialogue_eq: fairlightPayload.dialogue_eq,
-        timecode_burnin: timecodeBurnin,
-        review_watermark_text: reviewWatermarkText,
-        review_watermark_opacity: reviewWatermarkOpacity,
-        export_fps: exportFps,
-        deinterlace,
-        audio_only_format: audioOnlyFormat,
-        prefer_hw: preferHw
+        bearer_token
       });
       renderRemoteJobTelemetry(submitData);
       showBanner(`Submitted remote render job ${submitData.job.job_id}`, "info");
@@ -10228,49 +10284,6 @@ async function buildOrExecuteRender(execute) {
       return;
     }
 
-    const body = {
-      input_path: inputPath,
-      output_path: outputPath,
-      profile,
-      delivery_preset: state.activeDeliveryPresetId || null,
-      video_crf: parsedCrf,
-      audio_bitrate_kbps: parsedAudioKbps,
-      encoder_preset: !isProres ? state.renderConfig.encoderPreset || "medium" : null,
-      fps,
-      lut_path: lutPath,
-      color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
-      color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
-      chroma_key: chromaKeyPayload,
-      stabilizer: stabilizerPayload,
-      planar_tracker: planarTrackerPayload,
-      fx_stack: fxPayload,
-      title_overlay: titlePayload,
-      lower_third: lowerThirdPayload.enabled ? lowerThirdPayload : null,
-      subtitle_track: subtitlePayload,
-      audio_params: audioParamsPayload,
-      video_fade: videoFadePayload,
-      retime: deliverRetimePayload.enabled ? deliverRetimePayload : null,
-      retime_params: effectiveRetimeParamsPayload,
-      transform_params: transformParamsPayload,
-      framing: framingPayload,
-      reframe: reframeActivePayload,
-      film_grain: filmGrainActivePayload,
-      vignette: vignetteActivePayload,
-      voice_cleanup: voiceCleanupActivePayload,
-      fairlight_rack: fairlightRackActivePayload,
-      clip_duration_s: clipDurationPayload,
-      target_lufs: targetLufs,
-      loudness_preset: fairlightPayload.loudness_preset,
-      dialogue_eq: fairlightPayload.dialogue_eq,
-      timecode_burnin: timecodeBurnin,
-      review_watermark_text: reviewWatermarkText,
-      review_watermark_opacity: reviewWatermarkOpacity,
-      export_fps: exportFps,
-      deinterlace,
-      audio_only_format: audioOnlyFormat,
-      prefer_hw: preferHw,
-      execute
-    };
     const data = await api.buildOrExecuteRender(body);
     const plan = data.plan;
     state.lastRenderCommand = data.shell_command || plan.argv.join(" ");
@@ -10291,7 +10304,9 @@ async function buildOrExecuteRender(execute) {
       ? "Audio-Only (-vn)"
       : plan.video_crf !== null && plan.video_crf !== undefined
         ? `CRF ${plan.video_crf} (${plan.encoder_preset || "medium"})`
-        : "ProRes 422 HQ (10-bit)";
+        : plan.profile === "dnxhr_hq"
+          ? "DNxHR HQ (8-bit 4:2:2)"
+          : "ProRes 422 HQ (10-bit)";
     const audioBitrateLabel =
       plan.audio_only_format === "wav24"
         ? "WAV PCM 24-bit 48 kHz"
@@ -10328,6 +10343,12 @@ async function buildOrExecuteRender(execute) {
       ["Pixel Format", plan.pix_fmt],
       ["MP4 Faststart", String(plan.faststart)],
       [t("render.plan.timecodeBurnin"), plan.timecode_burnin || "off"],
+      [
+        t("render.plan.reelSlate"),
+        plan.reel_slate_position && plan.reel_slate_position !== "off" && plan.reel_slate_text
+          ? `${plan.reel_slate_text} (${plan.reel_slate_position})`
+          : "off"
+      ],
       [
         t("render.plan.reviewWatermark"),
         plan.review_watermark_text
@@ -10407,6 +10428,318 @@ async function buildOrExecuteRender(execute) {
     }
   } catch (err) {
     showBanner(err.message, "error");
+  }
+}
+
+function formatQueueByteSize(bytes) {
+  const num = Number(bytes || 0);
+  if (!Number.isFinite(num) || num <= 0) return "0 MB";
+  const mb = num / 1_000_000;
+  if (mb >= 1000) return `${(mb / 1000).toFixed(2)} GB`;
+  if (mb >= 10) return `${mb.toFixed(1)} MB`;
+  return `${Math.max(0.1, mb).toFixed(1)} MB`;
+}
+
+function renderQueueListUI() {
+  const listEl = byId("render-queue-list");
+  const badgeEl = byId("render-queue-badge");
+  const runAllBtn = byId("btn-queue-run-all");
+  const dryRunBtn = byId("btn-queue-dry-run");
+  const clearDoneBtn = byId("btn-queue-clear-done");
+  const progressFill = byId("render-queue-progress-fill");
+  const progressTrack = progressFill ? progressFill.parentElement : null;
+  const telemetryEl = byId("render-queue-telemetry");
+  if (!listEl) return;
+
+  const jobs = Array.isArray(state.renderQueue.jobs) ? state.renderQueue.jobs : [];
+  const summary = state.renderQueue.summary || {
+    total_jobs: jobs.length,
+    queued_count: jobs.filter((j) => j.status === "queued").length,
+    completed_count: jobs.filter((j) => j.status === "completed").length,
+    failed_count: jobs.filter((j) => j.status === "failed").length,
+    skipped_count: jobs.filter((j) => j.status === "skipped").length,
+    total_estimated_bytes: jobs.reduce((acc, j) => acc + (j.enabled ? Number(j.estimated_bytes || 0) : 0), 0),
+    total_bytes_written: jobs.reduce((acc, j) => acc + Number(j.bytes_written || 0), 0),
+    is_running: state.renderQueue.busy
+  };
+
+  const runnableCount = jobs.filter((j) => j.enabled && j.status === "queued").length;
+  const doneCount = Number(summary.completed_count || 0);
+  const failedCount = Number(summary.failed_count || 0);
+  const totalCount = jobs.length;
+
+  if (badgeEl) {
+    badgeEl.textContent = state.renderQueue.busy
+      ? `${totalCount} JOBS | RUNNING`
+      : `${totalCount} JOBS | ${runnableCount} QUEUED`;
+    badgeEl.className = `nle-tag mono${runnableCount > 0 ? " is-active" : ""}`;
+  }
+  if (runAllBtn) {
+    runAllBtn.textContent = t("render.queue.runAll").replace("{count}", String(runnableCount));
+    runAllBtn.disabled = state.renderQueue.busy || runnableCount === 0;
+  }
+  if (dryRunBtn) {
+    dryRunBtn.disabled = state.renderQueue.busy || runnableCount === 0;
+  }
+  if (clearDoneBtn) {
+    clearDoneBtn.disabled = state.renderQueue.busy || doneCount === 0;
+  }
+
+  const pct =
+    totalCount > 0 ? Math.min(100, Math.round(((doneCount + failedCount) / totalCount) * 100)) : 0;
+  if (progressFill) progressFill.style.width = `${pct}%`;
+  if (progressTrack) progressTrack.setAttribute("aria-valuenow", String(pct));
+  if (telemetryEl) {
+    if (totalCount === 0) {
+      telemetryEl.textContent = t("render.queue.emptyHint");
+    } else {
+      telemetryEl.textContent = t("render.queue.telemetry")
+        .replace("{done}", String(doneCount))
+        .replace("{total}", String(totalCount))
+        .replace("{failed}", String(failedCount))
+        .replace("{est}", formatQueueByteSize(summary.total_estimated_bytes));
+    }
+  }
+
+  if (jobs.length === 0) {
+    listEl.replaceChildren();
+    return;
+  }
+
+  const cards = jobs.map((job, idx) => {
+    const card = dom("div", `queue-job-card is-${job.status || "queued"}${job.enabled ? "" : " is-disabled"}`);
+    card.setAttribute("role", "listitem");
+    card.setAttribute("data-queue-job-id", job.job_id);
+
+    const head = dom("div", "queue-job-head");
+    const titleWrap = dom("div", "queue-job-title-wrap");
+    titleWrap.appendChild(dom("span", "queue-job-id mono", job.job_id));
+    titleWrap.appendChild(dom("span", "queue-job-label", job.label || job.plan?.output_path || job.job_id));
+
+    const statusKey = `render.queue.status.${job.status || "queued"}`;
+    const statusCls =
+      job.status === "completed"
+        ? "is-pass"
+        : job.status === "failed"
+          ? "is-fail"
+          : job.status === "queued"
+            ? "is-blue"
+            : "";
+    const statusPill = dom("span", `nle-tag mono ${statusCls}`, t(statusKey));
+    head.appendChild(titleWrap);
+    head.appendChild(statusPill);
+
+    const p = job.plan || {};
+    const raster = p.target_width && p.target_height ? `${p.target_width}x${p.target_height}` : "Source";
+    const lufsTxt = p.target_lufs !== null && p.target_lufs !== undefined ? `${Number(p.target_lufs).toFixed(1)} LUFS` : "No LUFS";
+    const metaText = `${p.encoder || p.profile || "h264"} | ${raster} | ${lufsTxt} | ${formatQueueByteSize(job.estimated_bytes)} | ${p.output_path || ""}`;
+    const meta = dom("div", "queue-job-meta mono", metaText);
+
+    const actions = dom("div", "queue-job-actions");
+    const mkBtn = (text, actionCls, onClick, disabled = false, ariaLabel = text) => {
+      const btn = dom("button", `btn btn-mini queue-action-btn ${actionCls}`.trim(), text);
+      btn.type = "button";
+      btn.disabled = state.renderQueue.busy || disabled;
+      btn.setAttribute("aria-label", ariaLabel);
+      btn.addEventListener("click", onClick);
+      return btn;
+    };
+
+    actions.appendChild(
+      mkBtn(t("render.queue.btn.load"), "", () => loadQueueJobIntoSettings(job), false, `${t("render.queue.btn.load")} ${job.label}`)
+    );
+    actions.appendChild(
+      mkBtn("^", "", () => handleQueueJobAction(job.job_id, "move_up"), idx === 0, `Move up ${job.label}`)
+    );
+    actions.appendChild(
+      mkBtn("v", "", () => handleQueueJobAction(job.job_id, "move_down"), idx === jobs.length - 1, `Move down ${job.label}`)
+    );
+    actions.appendChild(
+      mkBtn(t("render.queue.btn.dup"), "", () => handleQueueJobAction(job.job_id, "duplicate"), false, `${t("render.queue.btn.dup")} ${job.label}`)
+    );
+    if (job.status === "completed" || job.status === "failed") {
+      actions.appendChild(
+        mkBtn(t("render.queue.btn.requeue"), "", () => handleQueueJobAction(job.job_id, "requeue"), false, `${t("render.queue.btn.requeue")} ${job.label}`)
+      );
+    } else {
+      const toggleAction = job.enabled ? "disable" : "enable";
+      const toggleLabel = job.enabled ? t("render.queue.btn.skip") : t("render.queue.btn.enable");
+      actions.appendChild(
+        mkBtn(toggleLabel, "", () => handleQueueJobAction(job.job_id, toggleAction), false, `${toggleLabel} ${job.label}`)
+      );
+    }
+    actions.appendChild(
+      mkBtn(t("render.queue.btn.remove"), "btn-danger-mini", () => handleQueueJobAction(job.job_id, "remove"), false, `${t("render.queue.btn.remove")} ${job.label}`)
+    );
+
+    card.appendChild(head);
+    card.appendChild(meta);
+    if (job.error) {
+      card.appendChild(dom("div", "queue-job-error mono", job.error));
+    }
+    card.appendChild(actions);
+    return card;
+  });
+  listEl.replaceChildren(...cards);
+}
+
+async function refreshRenderQueue() {
+  try {
+    const data = await api.getRenderQueue();
+    state.renderQueue.jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+    state.renderQueue.summary = data?.summary || null;
+    renderQueueListUI();
+  } catch {
+    // Keep current queue state on initial probe failure
+  }
+}
+
+async function addCurrentToRenderQueue() {
+  try {
+    const jobPayload = collectRenderRequestPayload(false);
+    const { durationS } = computeDeliverBaseDurationInfo();
+    const safeDur = durationS > 0 ? durationS : 10.0;
+    const presetObj = state.activeDeliveryPresetId
+      ? getDeliveryPresetsList().find((p) => p.id === state.activeDeliveryPresetId)
+      : null;
+    const outLeaf = String(jobPayload.output_path || "render.mp4").split(/[\\/]/).pop() || "render.mp4";
+    const label = presetObj ? `${getDeliveryPresetLabel(presetObj)} (${outLeaf})` : outLeaf;
+    const data = await api.addRenderQueueJob({
+      label,
+      duration_s: safeDur,
+      job_payload: jobPayload
+    });
+    state.renderQueue.jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    state.renderQueue.summary = data.summary || null;
+    renderQueueListUI();
+    showBanner(
+      t("render.queue.added")
+        .replace("{label}", data.job?.label || label)
+        .replace("{count}", String(state.renderQueue.jobs.length)),
+      "success"
+    );
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+async function queueMultiPlatformPack() {
+  try {
+    const baseInput = byId("render-input-path").value.trim() || ".taktcut-samples/sample_rec709.mp4";
+    const { durationS } = computeDeliverBaseDurationInfo();
+    const safeDur = durationS > 0 ? durationS : 10.0;
+    const packDefs = [
+      {
+        label: "YouTube 1080p H.264",
+        job_payload: {
+          input_path: baseInput,
+          output_path: "renders/pack_youtube_1080p.mp4",
+          delivery_preset: "youtube_1080p_h264",
+          profile: "web_h264",
+          loudness_preset: "youtube_14",
+          prefer_hw: true
+        }
+      },
+      {
+        label: "Reels / TikTok 9:16",
+        job_payload: {
+          input_path: baseInput,
+          output_path: "renders/pack_reels_9_16.mp4",
+          delivery_preset: "reels_tiktok_9_16",
+          profile: "web_h264",
+          loudness_preset: "reels_16",
+          prefer_hw: true
+        }
+      },
+      {
+        label: "Avid DNxHR HQ Master",
+        job_payload: {
+          input_path: baseInput,
+          output_path: "renders/pack_master_dnxhr_hq.mov",
+          profile: "dnxhr_hq",
+          loudness_preset: "broadcast_23",
+          framing: { preset: "16:9", mode: "fill", target_width: 1920, target_height: 1080, enabled: true },
+          prefer_hw: true
+        }
+      }
+    ];
+    let lastData = null;
+    for (const item of packDefs) {
+      lastData = await api.addRenderQueueJob({
+        label: item.label,
+        duration_s: safeDur,
+        job_payload: item.job_payload
+      });
+    }
+    if (lastData) {
+      state.renderQueue.jobs = Array.isArray(lastData.jobs) ? lastData.jobs : [];
+      state.renderQueue.summary = lastData.summary || null;
+      renderQueueListUI();
+    }
+    showBanner(t("render.queue.packAdded"), "success");
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+async function handleQueueJobAction(jobId, action) {
+  try {
+    const data = await api.renderQueueAction({ job_id: jobId, action });
+    state.renderQueue.jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    state.renderQueue.summary = data.summary || null;
+    renderQueueListUI();
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+function loadQueueJobIntoSettings(job) {
+  if (!job || !job.payload) return;
+  const p = job.payload;
+  if (p.delivery_preset) {
+    applyDeliveryPreset(p.delivery_preset);
+  }
+  const setIf = (id, val) => {
+    const el = byId(id);
+    if (el && val !== undefined && val !== null) el.value = String(val);
+  };
+  setIf("render-input-path", p.input_path);
+  setIf("render-output-path", p.output_path);
+  setIf("render-profile", p.profile);
+  syncDeliverProfileControlsState();
+  if (p.video_crf !== null && p.video_crf !== undefined) setIf("render-crf", p.video_crf);
+  if (p.audio_bitrate_kbps) setIf("render-audio-bitrate", p.audio_bitrate_kbps);
+  setIf("render-timecode-burnin", p.timecode_burnin || "off");
+  setIf("render-reel-slate-text", p.reel_slate_text || "");
+  setIf("render-reel-slate-position", p.reel_slate_position || "off");
+  syncReelSlateControlsUI();
+  setIf("render-watermark-text", p.review_watermark_text || "");
+  syncReviewWatermarkControlsUI();
+  updateDeliverSizeEstimate();
+  showBanner(`Loaded job '${job.label}' into Deliver settings.`, "info");
+}
+
+async function runBatchRenderQueue(dryRun) {
+  try {
+    state.renderQueue.busy = true;
+    renderQueueListUI();
+    const data = await api.runRenderQueue({ dry_run: Boolean(dryRun) });
+    state.renderQueue.jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    state.renderQueue.summary = data.summary || null;
+    const sum = state.renderQueue.summary || {};
+    const msg = t("render.queue.finished")
+      .replace("{done}", String(sum.completed_count || 0))
+      .replace("{failed}", String(sum.failed_count || 0))
+      .replace("{queued}", String(sum.queued_count || 0));
+    showBanner(msg, Number(sum.failed_count || 0) > 0 ? "error" : "success");
+    if (!dryRun) {
+      await refreshWorkspaceFiles();
+    }
+  } catch (err) {
+    showBanner(err.message, "error");
+  } finally {
+    state.renderQueue.busy = false;
+    renderQueueListUI();
   }
 }
 
@@ -17049,7 +17382,8 @@ function wireEvents() {
     const prof = byId("render-profile").value;
     const cur = byId("render-output-path").value.trim() || "renders/delivery.mp4";
     const stem = cur.replace(/\.(mp4|mov)$/i, "");
-    byId("render-output-path").value = prof === "prores_hq" ? `${stem}.mov` : `${stem}.mp4`;
+    const ext = prof === "prores_hq" || prof === "dnxhr_hq" ? "mov" : "mp4";
+    byId("render-output-path").value = `${stem}.${ext}`;
     state.renderConfig.encoderPreset = "medium";
     syncDeliverProfileControlsState();
     markDeliverPresetCustom();
@@ -17198,6 +17532,24 @@ function wireEvents() {
     });
   }
   syncReviewWatermarkControlsUI();
+  const slateTextInput = byId("render-reel-slate-text");
+  const slatePosSelect = byId("render-reel-slate-position");
+  if (slateTextInput) {
+    slateTextInput.addEventListener("input", syncReelSlateControlsUI);
+  }
+  if (slatePosSelect) {
+    slatePosSelect.addEventListener("change", syncReelSlateControlsUI);
+  }
+  for (const btn of document.querySelectorAll(".slate-preset-btn[data-slate-preset]")) {
+    btn.addEventListener("click", () => {
+      const presetVal = btn.getAttribute("data-slate-preset") || "";
+      const presetPos = btn.getAttribute("data-slate-pos") || "off";
+      if (slateTextInput) slateTextInput.value = presetVal;
+      if (slatePosSelect) slatePosSelect.value = presetPos;
+      syncReelSlateControlsUI();
+    });
+  }
+  syncReelSlateControlsUI();
   const ltEnabledEl = byId("render-lower-third-enabled");
   if (ltEnabledEl) {
     ltEnabledEl.addEventListener("change", () => {
@@ -17608,6 +17960,18 @@ function wireEvents() {
   }
   syncVoiceCleanupControlsUI({ syncInputs: true });
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
+  const addQueueBtn = byId("btn-add-render-queue");
+  if (addQueueBtn) addQueueBtn.addEventListener("click", addCurrentToRenderQueue);
+  const queuePackBtn = byId("btn-queue-pack");
+  if (queuePackBtn) queuePackBtn.addEventListener("click", queueMultiPlatformPack);
+  const queueRunAllBtn = byId("btn-queue-run-all");
+  if (queueRunAllBtn) queueRunAllBtn.addEventListener("click", () => runBatchRenderQueue(false));
+  const queueDryRunBtn = byId("btn-queue-dry-run");
+  if (queueDryRunBtn) queueDryRunBtn.addEventListener("click", () => runBatchRenderQueue(true));
+  const queueClearDoneBtn = byId("btn-queue-clear-done");
+  if (queueClearDoneBtn) {
+    queueClearDoneBtn.addEventListener("click", () => handleQueueJobAction("", "clear_completed"));
+  }
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {
     if (!state.lastRenderCommand) return;
@@ -18140,6 +18504,7 @@ async function bootstrap() {
 
   await Promise.allSettled([
     refreshWorkspaceFiles(),
+    refreshRenderQueue(),
     loadSampleTimeline("clean"),
     checkForStudioUpdate(),
     loadFxCatalog(),

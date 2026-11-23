@@ -15,7 +15,9 @@ from taktcut.models import (
     ClipTransformParams,
     HardwareCapabilities,
     RationalFrameRate,
+    RenderPlan,
     RenderProfile,
+    RenderResult,
     RetimeSpeedPoint,
     TimelineClip,
     TimelineTrack,
@@ -25,6 +27,7 @@ from taktcut.models import (
 from taktcut.qa import audit_loudness, check_mp4_faststart, probe_media, run_qa_gate
 from taktcut.render import (
     AutoDuckParams,
+    BatchRenderQueue,
     ClipAudioParams,
     ClipRetimeParams,
     ClipVideoFadeParams,
@@ -62,6 +65,7 @@ from taktcut.render import (
     compile_loudness_preset_filter,
     compile_lower_third_filter,
     compile_lower_third_filter_result,
+    compile_reel_slate_filter,
     compile_reframe_filter,
     compile_reframe_filter_result,
     compile_retime_filter,
@@ -76,6 +80,7 @@ from taktcut.render import (
     compile_vignette_filter_result,
     compile_voice_cleanup_filter,
     compile_voice_cleanup_filter_result,
+    estimate_render_bytes,
     execute_render_plan,
     get_delivery_preset,
     list_aspect_presets,
@@ -2478,3 +2483,139 @@ def test_fairlight_broadcast_audio_rack_compile_and_ffmpeg_execution(tmp_path: P
     probe = probe_media(out)
     assert probe.audio_codec == "aac"
     assert probe.video_codec == "h264"
+
+
+def test_render_plan_dry_run_dnxhr_hq_and_reel_slate(tmp_path: Path) -> None:
+    caps = HardwareCapabilities(
+        ffmpeg_path="ffmpeg",
+        h264_nvenc=False,
+        hevc_nvenc=False,
+        libx264=True,
+        libx265=True,
+        prores_ks=True,
+    )
+    src = tmp_path / "in.mov"
+    out = tmp_path / "out_dnxhr.mov"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.DNXHR_HQ,
+        fps=RationalFrameRate(num=25, den=1),
+        reel_slate_text="REEL A01 | MASTER",
+        reel_slate_position="top_right",
+        timecode_burnin="top_left",
+        caps=caps,
+        prefer_hw=False,
+    )
+    assert plan.profile == RenderProfile.DNXHR_HQ
+    assert plan.encoder == "dnxhd"
+    assert plan.pix_fmt == "yuv422p"
+    assert plan.faststart is False
+    assert plan.video_crf is None
+    assert plan.audio_bitrate_kbps is None
+    assert plan.reel_slate_text == "REEL A01 | MASTER"
+    assert plan.reel_slate_position == "top_right"
+    assert "-profile:v" in plan.argv and "dnxhr_hq" in plan.argv
+    assert "pcm_s24le" in plan.argv
+    assert "+faststart" not in plan.argv
+    assert plan.video_filter is not None
+    assert "REEL A01" in plan.video_filter
+    assert "timecode=" in plan.video_filter
+
+    slate_off = compile_reel_slate_filter("REEL A01", "off")
+    assert slate_off is None
+    with pytest.raises(ValueError, match="Unsupported reel_slate_position"):
+        compile_reel_slate_filter("REEL A01", "center")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="exceeds maximum length"):
+        compile_reel_slate_filter("X" * 49, "top_right")
+
+
+def test_batch_render_queue_lifecycle_and_error_isolation(tmp_path: Path) -> None:
+    caps = HardwareCapabilities(
+        ffmpeg_path="ffmpeg",
+        h264_nvenc=False,
+        hevc_nvenc=False,
+        libx264=True,
+        libx265=True,
+        prores_ks=True,
+    )
+    src = tmp_path / "in.mp4"
+    plan_ok = build_render_plan(
+        input_path=src,
+        output_path=tmp_path / "out_web.mp4",
+        profile=RenderProfile.WEB_H264,
+        caps=caps,
+        prefer_hw=False,
+    )
+    plan_dnx = build_render_plan(
+        input_path=src,
+        output_path=tmp_path / "out_dnx.mov",
+        profile=RenderProfile.DNXHR_HQ,
+        caps=caps,
+        prefer_hw=False,
+    )
+
+    queue = BatchRenderQueue()
+    j1 = queue.add_job(
+        label="Web 1080p",
+        payload={"input_path": str(src), "output_path": str(tmp_path / "out_web.mp4")},
+        plan=plan_ok,
+        estimated_bytes=estimate_render_bytes(10.0, RenderProfile.WEB_H264),
+    )
+    j2 = queue.add_job(
+        label="DNxHR Master",
+        payload={"input_path": str(src), "output_path": str(tmp_path / "out_dnx.mov")},
+        plan=plan_dnx,
+        estimated_bytes=estimate_render_bytes(10.0, RenderProfile.DNXHR_HQ),
+    )
+    assert j1.job_id == "rq-001"
+    assert j2.job_id == "rq-002"
+    assert j2.estimated_bytes > j1.estimated_bytes
+
+    moved = queue.move_job(j2.job_id, "up")
+    assert [j.job_id for j in moved] == [j2.job_id, j1.job_id]
+
+    dup = queue.duplicate_job(j1.job_id)
+    assert "_copy" in dup.plan.output_path
+    queue.set_job_enabled(dup.job_id, False)
+    assert queue.get_job(dup.job_id).status == "skipped"
+
+    def _mock_exec(plan: RenderPlan) -> RenderResult:
+        if plan.profile == RenderProfile.DNXHR_HQ:
+            return RenderResult(
+                success=False,
+                output_path=plan.output_path,
+                encoder=plan.encoder,
+                bytes_written=0,
+                returncode=1,
+                stderr_tail="Simulated DNxHR failure",
+            )
+        return RenderResult(
+            success=True,
+            output_path=plan.output_path,
+            encoder=plan.encoder,
+            bytes_written=4096,
+            returncode=0,
+        )
+
+    jobs_after, summary = queue.run_queue(dry_run=False, executor=_mock_exec)
+    by_id = {j.job_id: j for j in jobs_after}
+    assert by_id[j2.job_id].status == "failed"
+    assert "Simulated DNxHR failure" in by_id[j2.job_id].error
+    assert by_id[j1.job_id].status == "completed"
+    assert by_id[j1.job_id].bytes_written == 4096
+    assert by_id[dup.job_id].status == "skipped"
+    assert summary.completed_count == 1
+    assert summary.failed_count == 1
+    assert summary.skipped_count == 1
+    assert summary.total_bytes_written == 4096
+
+    requeued = queue.requeue_job(j2.job_id)
+    assert requeued.status == "queued"
+    dry_jobs, dry_summary = queue.run_queue(dry_run=True)
+    assert dry_summary.completed_count == 2
+    assert any(j.job_id == j2.job_id and j.status == "completed" for j in dry_jobs)
+    assert queue.clear_completed() == 2
+    assert len(queue.list_jobs()) == 1
+    assert queue.clear_all() == 1
+

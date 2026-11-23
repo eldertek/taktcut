@@ -8,7 +8,10 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -37,6 +40,7 @@ from taktcut.models import (
     ALLOWED_EXPORT_FPS,
     ALLOWED_FILM_GRAIN_PRESETS,
     ALLOWED_LOWER_THIRD_POSITIONS,
+    ALLOWED_REEL_SLATE_POSITIONS,
     ALLOWED_REFRAME_ASPECT_RATIOS,
     ALLOWED_RETIME_PROCESS_MODES,
     ALLOWED_RETIME_RAMP_PRESETS,
@@ -56,6 +60,8 @@ from taktcut.models import (
     LOWER_THIRD_FONT_SIZE_MIN,
     LOWER_THIRD_TEXT_MAX_LEN,
     LOWER_THIRD_TIME_MAX_S,
+    MAX_RENDER_QUEUE_JOBS,
+    REEL_SLATE_MAX_LEN,
     RETIME_RAMP_PRESET_POINTS,
     REVIEW_WATERMARK_MAX_LEN,
     REVIEW_WATERMARK_OPACITY_DEFAULT,
@@ -88,9 +94,12 @@ from taktcut.models import (
     LoudnessPresetId,
     LowerThirdPosition,
     RationalFrameRate,
+    ReelSlatePosition,
     ReframeAspectRatio,
     RenderPlan,
     RenderProfile,
+    RenderQueueJob,
+    RenderQueueSummary,
     RenderResult,
     RetimeProcessMode,
     RetimeRampPresetId,
@@ -167,6 +176,10 @@ TIMECODE_BURNIN_POSITIONS: dict[str, str] = {
     "top_left": "x=24:y=24",
     "bottom_center": "x=(w-tw)/2:y=h-th-24",
     "bottom_right": "x=w-tw-24:y=h-th-24",
+}
+REEL_SLATE_POSITIONS: dict[str, str] = {
+    "top_right": "x=w-tw-24:y=24",
+    "bottom_left": "x=24:y=h-th-24",
 }
 _TIMECODE_MONO_FONTS_WIN: tuple[str, ...] = (
     "C:/Windows/Fonts/consola.ttf",
@@ -325,6 +338,61 @@ def compile_timecode_burnin_filter(
 
 
 _REVIEW_WATERMARK_RE = re.compile(r"^[A-Za-z0-9 _.,-]+$")
+_REEL_SLATE_RE = re.compile(r"^[A-Za-z0-9 _.,:/|#()-]+$")
+
+
+def validate_reel_slate_position(raw: Any) -> ReelSlatePosition:
+    """Validate and normalize a Reel/Slate burn-in overlay position."""
+    if not isinstance(raw, str):
+        raise ValueError(f"reel_slate_position must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned not in ALLOWED_REEL_SLATE_POSITIONS:
+        allowed = ", ".join(ALLOWED_REEL_SLATE_POSITIONS)
+        raise ValueError(f"Unsupported reel_slate_position {raw!r}; expected one of: {allowed}")
+    return cleaned
+
+
+def validate_reel_slate_text(raw: Any) -> str:
+    """Validate and sanitize a Reel/Slate burn-in overlay text (max 48 safe chars)."""
+    if not isinstance(raw, str):
+        raise ValueError(f"reel_slate_text must be a string, got {raw!r}")
+    if any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise ValueError("reel_slate_text contains forbidden control characters")
+    cleaned = raw.strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > REEL_SLATE_MAX_LEN:
+        raise ValueError(
+            f"reel_slate_text exceeds maximum length of {REEL_SLATE_MAX_LEN} characters"
+        )
+    if not _REEL_SLATE_RE.fullmatch(cleaned):
+        raise ValueError(
+            "reel_slate_text may only contain alphanumeric characters, spaces, "
+            "and - _ . , : / | # ( )"
+        )
+    return cleaned
+
+
+def compile_reel_slate_filter(
+    reel_slate_text: str,
+    reel_slate_position: ReelSlatePosition = "top_right",
+    *,
+    fontfile: Path | str | None = None,
+) -> str | None:
+    """Compile a validated Reel/Slate burn-in text into an FFmpeg drawtext filter."""
+    pos = validate_reel_slate_position(reel_slate_position)
+    cleaned = validate_reel_slate_text(reel_slate_text)
+    if pos == "off" or not cleaned:
+        return None
+
+    resolved_font = _resolve_burnin_fontfile(fontfile, resolve_timecode_fontfile)
+    font_opt = f"fontfile='{escape_ffmpeg_filter_path(resolved_font)}':" if resolved_font else ""
+    coords = REEL_SLATE_POSITIONS[pos]
+    escaped_text = escape_ffmpeg_drawtext_text(cleaned)
+    return (
+        f"drawtext={font_opt}text='{escaped_text}':fontsize=24"
+        f":fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=6:{coords}"
+    )
 
 
 def validate_review_watermark_text(raw: Any) -> str:
@@ -3557,6 +3625,9 @@ def select_encoder(
             return "libx265"
         raise RuntimeError("Neither hevc_nvenc nor libx265 is available in FFmpeg")
 
+    if profile == RenderProfile.DNXHR_HQ:
+        return "dnxhd"
+
     if caps.prores_ks:
         return "prores_ks"
     return "prores"
@@ -3602,6 +3673,8 @@ def build_render_plan(
     loudness_preset: LoudnessPresetId | None = None,
     dialogue_eq: DialogueEqPresetId | None = None,
     timecode_burnin: TimecodeBurnInPosition | None = None,
+    reel_slate_text: str | None = None,
+    reel_slate_position: ReelSlatePosition | None = None,
     review_watermark_text: str | None = None,
     review_watermark_opacity: float | None = None,
     export_fps: ExportFpsOption | None = None,
@@ -3629,6 +3702,14 @@ def build_render_plan(
     )
     resolved_timecode_burnin: TimecodeBurnInPosition = (
         validate_timecode_burnin(timecode_burnin) if timecode_burnin is not None else "off"
+    )
+    resolved_reel_slate_text: str = (
+        validate_reel_slate_text(reel_slate_text) if reel_slate_text is not None else ""
+    )
+    resolved_reel_slate_position: ReelSlatePosition = (
+        validate_reel_slate_position(reel_slate_position)
+        if reel_slate_position is not None
+        else "off"
     )
     resolved_watermark_text: str = (
         validate_review_watermark_text(review_watermark_text)
@@ -3689,13 +3770,15 @@ def build_render_plan(
     gop = max(2, round(2 * target_fps.as_float))
 
     is_prores = resolved_profile == RenderProfile.PRORES_HQ
-    pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
-    faststart = not is_prores
+    is_dnxhr = resolved_profile == RenderProfile.DNXHR_HQ
+    is_mezzanine = is_prores or is_dnxhr
+    pix_fmt = "yuv422p10le" if is_prores else ("yuv422p" if is_dnxhr else "yuv420p")
+    faststart = not is_mezzanine
 
     effective_crf: int | None = None
     effective_audio_kbps: int | None = None
     effective_enc_preset: str | None = None
-    if not is_prores:
+    if not is_mezzanine:
         default_crf = 20 if resolved_profile == RenderProfile.MASTER_HEVC else 18
         effective_crf = (
             validated_crf
@@ -3958,6 +4041,9 @@ def build_render_plan(
     tc_vf = compile_timecode_burnin_filter(resolved_timecode_burnin, target_fps)
     if tc_vf is not None:
         vf_parts.append(tc_vf)
+    slate_vf = compile_reel_slate_filter(resolved_reel_slate_text, resolved_reel_slate_position)
+    if slate_vf is not None:
+        vf_parts.append(slate_vf)
     wm_vf = compile_review_watermark_filter(
         resolved_watermark_text,
         resolved_watermark_opacity,
@@ -4038,6 +4124,8 @@ def build_render_plan(
             loudness_preset=resolved_loudness_preset,
             dialogue_eq=resolved_dialogue_eq,
             timecode_burnin=resolved_timecode_burnin,
+            reel_slate_text=resolved_reel_slate_text,
+            reel_slate_position=resolved_reel_slate_position,
             review_watermark_text=resolved_watermark_text,
             review_watermark_opacity=resolved_watermark_opacity,
             lower_third_enabled=False,
@@ -4115,6 +4203,8 @@ def build_render_plan(
         argv.extend(["-preset", x26x_preset, "-crf", str(crf_hevc)])
     elif encoder == "prores_ks":
         argv.extend(["-profile:v", "3"])
+    elif encoder == "dnxhd":
+        argv.extend(["-profile:v", "dnxhr_hq"])
 
     argv.extend(["-pix_fmt", pix_fmt, "-g", str(gop)])
     argv.extend(REC709_FFMPEG_FLAGS)
@@ -4122,7 +4212,7 @@ def build_render_plan(
     if audio_filter is not None:
         argv.extend(["-af", audio_filter])
 
-    if is_prores:
+    if is_mezzanine:
         argv.extend(["-c:a", "pcm_s24le", "-ar", "48000"])
     else:
         argv.extend(
@@ -4160,6 +4250,8 @@ def build_render_plan(
         loudness_preset=resolved_loudness_preset,
         dialogue_eq=resolved_dialogue_eq,
         timecode_burnin=resolved_timecode_burnin,
+        reel_slate_text=resolved_reel_slate_text,
+        reel_slate_position=resolved_reel_slate_position,
         review_watermark_text=resolved_watermark_text,
         review_watermark_opacity=resolved_watermark_opacity,
         lower_third_enabled=bool(lt_vf is not None),
@@ -4223,3 +4315,309 @@ def execute_render_plan(plan: RenderPlan) -> RenderResult:
         returncode=proc.returncode,
         stderr_tail=tail,
     )
+
+
+def estimate_render_bytes(
+    duration_s: float,
+    profile: RenderProfile,
+    width: int = 1920,
+    height: int = 1080,
+    fps: float = 25.0,
+    crf: int | None = None,
+    audio_bitrate_kbps: int | None = None,
+    audio_only_format: AudioOnlyFormatId = "off",
+) -> int:
+    """Estimate deterministic output file size in bytes for a render configuration."""
+    if not math.isfinite(duration_s) or duration_s <= 0.0:
+        return 0
+    if audio_only_format != "off":
+        audio_kbps = (
+            2304
+            if audio_only_format == "wav24"
+            else (320 if audio_only_format == "mp3_320" else 256)
+        )
+        return max(0, round(((audio_kbps * 1000) / 8) * duration_s))
+
+    safe_w = max(64, min(15360, int(width)))
+    safe_h = max(64, min(15360, int(height)))
+    safe_fps = max(1.0, float(fps))
+    res_scale = max(0.05, (safe_w * safe_h) / (1920 * 1080))
+    fps_pow = (safe_fps / 25.0) ** 0.65
+
+    if profile == RenderProfile.PRORES_HQ:
+        video_kbps = max(1000.0, 184000.0 * res_scale * (safe_fps / 25.0))
+        audio_kbps_val = 2304.0
+    elif profile == RenderProfile.DNXHR_HQ:
+        video_kbps = max(1000.0, 145000.0 * res_scale * (safe_fps / 25.0))
+        audio_kbps_val = 2304.0
+    elif profile == RenderProfile.MASTER_HEVC:
+        eff_crf = 20 if crf is None else max(0, min(51, crf))
+        video_kbps = max(
+            120.0, 4800.0 * res_scale * fps_pow * (2.0 ** ((20 - eff_crf) / 6.0))
+        )
+        audio_kbps_val = float(audio_bitrate_kbps if audio_bitrate_kbps is not None else 192)
+    else:
+        eff_crf = 18 if crf is None else max(0, min(51, crf))
+        video_kbps = max(
+            150.0, 7168.0 * res_scale * fps_pow * (2.0 ** ((18 - eff_crf) / 6.0))
+        )
+        audio_kbps_val = float(audio_bitrate_kbps if audio_bitrate_kbps is not None else 192)
+
+    total_kbps = video_kbps + audio_kbps_val
+    return max(0, round(((total_kbps * 1000.0) / 8.0) * duration_s))
+
+
+def _suffix_duplicate_output_path(output_path: str, copy_index: int) -> str:
+    p = Path(output_path)
+    stem = p.stem
+    suffix = p.suffix or ".mp4"
+    parent = p.parent
+    new_name = f"{stem}_copy{copy_index}{suffix}"
+    return str(parent / new_name) if str(parent) != "." else new_name
+
+
+class BatchRenderQueue:
+    """Thread-safe sequential Batch Render Queue inspired by DaVinci Resolve Deliver."""
+
+    def __init__(self, *, max_jobs: int = MAX_RENDER_QUEUE_JOBS) -> None:
+        self._lock = threading.RLock()
+        self._jobs: list[RenderQueueJob] = []
+        self._counter: int = 0
+        self._is_running: bool = False
+        self._max_jobs = max(1, int(max_jobs))
+
+    def _find_index(self, job_id: str) -> int:
+        for idx, job in enumerate(self._jobs):
+            if job.job_id == job_id:
+                return idx
+        raise KeyError(f"Unknown render queue job_id {job_id!r}")
+
+    def list_jobs(self) -> list[RenderQueueJob]:
+        """Return shallow copies of all queued/processed jobs in deterministic order."""
+        with self._lock:
+            return [job.model_copy(deep=True) for job in self._jobs]
+
+    def get_job(self, job_id: str) -> RenderQueueJob:
+        """Return a single render queue job by id."""
+        with self._lock:
+            idx = self._find_index(job_id)
+            return self._jobs[idx].model_copy(deep=True)
+
+    def summary(self) -> RenderQueueSummary:
+        """Compute aggregate counts and byte totals for the render queue."""
+        with self._lock:
+            queued = sum(1 for j in self._jobs if j.status == "queued")
+            rendering = sum(1 for j in self._jobs if j.status == "rendering")
+            completed = sum(1 for j in self._jobs if j.status == "completed")
+            failed = sum(1 for j in self._jobs if j.status == "failed")
+            skipped = sum(1 for j in self._jobs if j.status == "skipped")
+            est_bytes = sum(max(0, j.estimated_bytes) for j in self._jobs if j.enabled)
+            written_bytes = sum(max(0, j.bytes_written) for j in self._jobs)
+            return RenderQueueSummary(
+                total_jobs=len(self._jobs),
+                queued_count=queued,
+                rendering_count=rendering,
+                completed_count=completed,
+                failed_count=failed,
+                skipped_count=skipped,
+                total_estimated_bytes=est_bytes,
+                total_bytes_written=written_bytes,
+                is_running=self._is_running,
+            )
+
+    def add_job(
+        self,
+        *,
+        label: str,
+        payload: dict[str, Any],
+        plan: RenderPlan,
+        estimated_bytes: int = 0,
+    ) -> RenderQueueJob:
+        """Append a validated render job to the queue."""
+        with self._lock:
+            if len(self._jobs) >= self._max_jobs:
+                raise ValueError(f"Render queue limit reached ({self._max_jobs} jobs max)")
+            self._counter += 1
+            job_id = f"rq-{self._counter:03d}"
+            cleaned_label = label.strip()[:80] or Path(plan.output_path).name or job_id
+            now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            job = RenderQueueJob(
+                job_id=job_id,
+                label=cleaned_label,
+                status="queued",
+                enabled=True,
+                payload=dict(payload),
+                plan=plan.model_copy(deep=True),
+                estimated_bytes=max(0, int(estimated_bytes)),
+                bytes_written=0,
+                elapsed_ms=0,
+                error="",
+                created_at_iso=now_iso,
+            )
+            self._jobs.append(job)
+            return job.model_copy(deep=True)
+
+    def remove_job(self, job_id: str) -> RenderQueueJob:
+        """Remove a job from the queue by id."""
+        with self._lock:
+            idx = self._find_index(job_id)
+            if self._jobs[idx].status == "rendering":
+                raise ValueError("Cannot remove a job while it is actively rendering")
+            removed = self._jobs.pop(idx)
+            return removed.model_copy(deep=True)
+
+    def move_job(self, job_id: str, direction: Literal["up", "down"]) -> list[RenderQueueJob]:
+        """Move a job one slot up or down in queue execution order."""
+        if direction not in ("up", "down"):
+            raise ValueError(f"Unsupported move direction {direction!r}")
+        with self._lock:
+            idx = self._find_index(job_id)
+            target = idx - 1 if direction == "up" else idx + 1
+            if 0 <= target < len(self._jobs):
+                self._jobs[idx], self._jobs[target] = self._jobs[target], self._jobs[idx]
+            return self.list_jobs()
+
+    def duplicate_job(self, job_id: str) -> RenderQueueJob:
+        """Duplicate an existing job with a unique output filename stem."""
+        with self._lock:
+            idx = self._find_index(job_id)
+            src = self._jobs[idx]
+            dup_index = sum(1 for j in self._jobs if j.label.startswith(src.label)) + 1
+            new_payload = dict(src.payload)
+            orig_out = str(new_payload.get("output_path") or src.plan.output_path)
+            new_out = _suffix_duplicate_output_path(orig_out, dup_index)
+            new_payload["output_path"] = new_out
+            new_plan = src.plan.model_copy(deep=True)
+            new_plan.output_path = new_out
+            if new_plan.argv:
+                new_plan.argv = [*new_plan.argv[:-1], new_out]
+            return self.add_job(
+                label=f"{src.label} (Copy)",
+                payload=new_payload,
+                plan=new_plan,
+                estimated_bytes=src.estimated_bytes,
+            )
+
+    def set_job_enabled(self, job_id: str, enabled: bool) -> RenderQueueJob:
+        """Enable or skip a non-running job."""
+        with self._lock:
+            idx = self._find_index(job_id)
+            job = self._jobs[idx]
+            if job.status == "rendering":
+                raise ValueError("Cannot toggle a job while rendering")
+            job.enabled = bool(enabled)
+            if not job.enabled and job.status == "queued":
+                job.status = "skipped"
+            elif job.enabled and job.status == "skipped":
+                job.status = "queued"
+            return job.model_copy(deep=True)
+
+    def requeue_job(self, job_id: str) -> RenderQueueJob:
+        """Reset a completed/failed/skipped job back to queued status."""
+        with self._lock:
+            idx = self._find_index(job_id)
+            job = self._jobs[idx]
+            if job.status == "rendering":
+                raise ValueError("Cannot requeue a job while rendering")
+            job.enabled = True
+            job.status = "queued"
+            job.bytes_written = 0
+            job.elapsed_ms = 0
+            job.error = ""
+            return job.model_copy(deep=True)
+
+    def clear_completed(self) -> int:
+        """Remove all completed jobs and return the number removed."""
+        with self._lock:
+            before = len(self._jobs)
+            self._jobs = [j for j in self._jobs if j.status != "completed"]
+            return before - len(self._jobs)
+
+    def clear_all(self) -> int:
+        """Remove all non-rendering jobs and return the number removed."""
+        with self._lock:
+            if self._is_running:
+                raise ValueError("Cannot clear render queue while batch execution is running")
+            before = len(self._jobs)
+            self._jobs.clear()
+            return before
+
+    def run_queue(
+        self,
+        *,
+        dry_run: bool = False,
+        executor: Callable[[RenderPlan], RenderResult] | None = None,
+        plan_resolver: Callable[[dict[str, Any]], RenderPlan] | None = None,
+    ) -> tuple[list[RenderQueueJob], RenderQueueSummary]:
+        """Execute all enabled queued jobs sequentially with isolated per-job error handling."""
+        run_executor = executor or execute_render_plan
+        with self._lock:
+            if self._is_running:
+                raise RuntimeError("Batch render queue is already running")
+            self._is_running = True
+            target_ids = [
+                j.job_id for j in self._jobs if j.enabled and j.status == "queued"
+            ]
+
+        try:
+            for job_id in target_ids:
+                with self._lock:
+                    try:
+                        idx = self._find_index(job_id)
+                    except KeyError:
+                        continue
+                    job = self._jobs[idx]
+                    if not job.enabled:
+                        job.status = "skipped"
+                        continue
+                    job.status = "rendering"
+                    job.error = ""
+                    job_payload = dict(job.payload)
+                    job_plan = job.plan.model_copy(deep=True)
+
+                started = time.monotonic()
+                try:
+                    resolved_plan = (
+                        plan_resolver(job_payload) if plan_resolver is not None else job_plan
+                    )
+                    if dry_run:
+                        elapsed = max(1, round((time.monotonic() - started) * 1000))
+                        with self._lock:
+                            idx = self._find_index(job_id)
+                            self._jobs[idx].plan = resolved_plan
+                            self._jobs[idx].status = "completed"
+                            self._jobs[idx].elapsed_ms = elapsed
+                            self._jobs[idx].bytes_written = 0
+                            self._jobs[idx].error = ""
+                    else:
+                        result = run_executor(resolved_plan)
+                        elapsed = max(1, round((time.monotonic() - started) * 1000))
+                        with self._lock:
+                            idx = self._find_index(job_id)
+                            self._jobs[idx].plan = resolved_plan
+                            self._jobs[idx].elapsed_ms = elapsed
+                            self._jobs[idx].bytes_written = result.bytes_written
+                            if result.success:
+                                self._jobs[idx].status = "completed"
+                                self._jobs[idx].error = ""
+                            else:
+                                self._jobs[idx].status = "failed"
+                                self._jobs[idx].error = (
+                                    result.stderr_tail
+                                    or f"FFmpeg exited with code {result.returncode}"
+                                )
+                except Exception as exc:
+                    elapsed = max(1, round((time.monotonic() - started) * 1000))
+                    with self._lock:
+                        try:
+                            idx = self._find_index(job_id)
+                            self._jobs[idx].status = "failed"
+                            self._jobs[idx].elapsed_ms = elapsed
+                            self._jobs[idx].error = str(exc)
+                        except KeyError:
+                            pass
+        finally:
+            with self._lock:
+                self._is_running = False
+
+        return self.list_jobs(), self.summary()

@@ -188,6 +188,8 @@ TransitionPresetId = Literal["fade", "fadeblack", "wipeleft", "slideright", "zoo
 LoudnessPresetId = Literal["off", "youtube_14", "reels_16", "broadcast_23"]
 DialogueEqPresetId = Literal["off", "voice_clarity", "podcast_warm", "derumble"]
 TimecodeBurnInPosition = Literal["off", "top_left", "bottom_center", "bottom_right"]
+ReelSlatePosition = Literal["off", "top_right", "bottom_left"]
+RenderQueueJobStatus = Literal["queued", "rendering", "completed", "failed", "skipped"]
 LowerThirdPosition = Literal["bottom_left", "bottom_center", "top_left"]
 ReframeAspectRatio = Literal["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]
 FilmGrainPresetId = Literal["35mm_fine", "16mm_organic", "super8_heavy", "custom"]
@@ -237,6 +239,20 @@ ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "bottom_center",
     "bottom_right",
 )
+ALLOWED_REEL_SLATE_POSITIONS: tuple[ReelSlatePosition, ...] = (
+    "off",
+    "top_right",
+    "bottom_left",
+)
+REEL_SLATE_MAX_LEN: int = 48
+ALLOWED_RENDER_QUEUE_STATUSES: tuple[RenderQueueJobStatus, ...] = (
+    "queued",
+    "rendering",
+    "completed",
+    "failed",
+    "skipped",
+)
+MAX_RENDER_QUEUE_JOBS: int = 64
 ALLOWED_LOWER_THIRD_POSITIONS: tuple[LowerThirdPosition, ...] = (
     "bottom_left",
     "bottom_center",
@@ -1685,6 +1701,7 @@ class RenderProfile(str, Enum):
     WEB_H264 = "web_h264"
     MASTER_HEVC = "master_hevc"
     PRORES_HQ = "prores_hq"
+    DNXHR_HQ = "dnxhr_hq"
 
 
 class HardwareCapabilities(BaseModel):
@@ -1717,6 +1734,8 @@ class RenderPlan(BaseModel):
     loudness_preset: LoudnessPresetId = "off"
     dialogue_eq: DialogueEqPresetId = "off"
     timecode_burnin: TimecodeBurnInPosition = "off"
+    reel_slate_text: str = ""
+    reel_slate_position: ReelSlatePosition = "off"
     review_watermark_text: str = ""
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
     lower_third_enabled: bool = False
@@ -1801,6 +1820,36 @@ class RenderResult(BaseModel):
     bytes_written: int = 0
     returncode: int = 0
     stderr_tail: str = ""
+
+
+class RenderQueueJob(BaseModel):
+    """Single deterministic batch delivery job in the Deliver Render Queue."""
+
+    job_id: str
+    label: str
+    status: RenderQueueJobStatus = "queued"
+    enabled: bool = True
+    payload: dict[str, Any] = Field(default_factory=dict)
+    plan: RenderPlan
+    estimated_bytes: int = 0
+    bytes_written: int = 0
+    elapsed_ms: int = 0
+    error: str = ""
+    created_at_iso: str
+
+
+class RenderQueueSummary(BaseModel):
+    """Aggregate telemetry for the Deliver Batch Render Queue."""
+
+    total_jobs: int = 0
+    queued_count: int = 0
+    rendering_count: int = 0
+    completed_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
+    total_estimated_bytes: int = 0
+    total_bytes_written: int = 0
+    is_running: bool = False
 
 
 class StreamProbe(BaseModel):

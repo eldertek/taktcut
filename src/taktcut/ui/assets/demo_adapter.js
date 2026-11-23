@@ -57,6 +57,7 @@ import {
   deleteMulticamCutInDocument,
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
+  estimateRenderFileSize,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
   getDeliveryPresetClient,
@@ -1646,6 +1647,38 @@ export function createApiClient() {
     };
   }
 
+  const demoRenderQueue = [];
+  let demoQueueCounter = 0;
+  function getDemoQueueSummary() {
+    let queued = 0;
+    let rendering = 0;
+    let completed = 0;
+    let failed = 0;
+    let skipped = 0;
+    let estBytes = 0;
+    let writtenBytes = 0;
+    for (const j of demoRenderQueue) {
+      if (j.status === "queued") queued += 1;
+      else if (j.status === "rendering") rendering += 1;
+      else if (j.status === "completed") completed += 1;
+      else if (j.status === "failed") failed += 1;
+      else if (j.status === "skipped") skipped += 1;
+      if (j.enabled) estBytes += Math.max(0, Number(j.estimated_bytes || 0));
+      writtenBytes += Math.max(0, Number(j.bytes_written || 0));
+    }
+    return {
+      total_jobs: demoRenderQueue.length,
+      queued_count: queued,
+      rendering_count: rendering,
+      completed_count: completed,
+      failed_count: failed,
+      skipped_count: skipped,
+      total_estimated_bytes: estBytes,
+      total_bytes_written: writtenBytes,
+      is_running: false
+    };
+  }
+
   return {
     isStaticDemo: () => resolvedMode === "static-demo",
     initHealth,
@@ -1902,10 +1935,18 @@ export function createApiClient() {
         const fpsNum = rawExportFps !== "source" ? Number.parseInt(rawExportFps, 10) : baseFpsNum;
         const fpsDen = rawExportFps !== "source" ? 1 : baseFpsDen;
         const isProres = resolvedProfile === "prores_hq";
-        const encoder = isProres ? "prores_ks" : resolvedProfile === "master_hevc" ? "libx265" : "libx264";
-        const pixFmt = isProres ? "yuv422p10le" : "yuv420p";
+        const isDnxhr = resolvedProfile === "dnxhr_hq";
+        const isMezzanine = isProres || isDnxhr;
+        const encoder = isProres
+          ? "prores_ks"
+          : isDnxhr
+            ? "dnxhd"
+            : resolvedProfile === "master_hevc"
+              ? "libx265"
+              : "libx264";
+        const pixFmt = isProres ? "yuv422p10le" : isDnxhr ? "yuv422p" : "yuv420p";
         const gop = Math.max(2, Math.round((2 * fpsNum) / fpsDen));
-        const effectiveCrf = isProres
+        const effectiveCrf = isMezzanine
           ? null
           : Number.isInteger(body.video_crf)
             ? body.video_crf
@@ -1914,14 +1955,14 @@ export function createApiClient() {
               : resolvedProfile === "master_hevc"
                 ? 20
                 : 18;
-        const effectiveAudioKbps = isProres
+        const effectiveAudioKbps = isMezzanine
           ? null
           : Number.isInteger(body.audio_bitrate_kbps)
             ? body.audio_bitrate_kbps
             : presetObj && presetObj.audio_bitrate_kbps !== null
               ? presetObj.audio_bitrate_kbps
               : 192;
-        const effectiveEncPreset = isProres
+        const effectiveEncPreset = isMezzanine
           ? null
           : body.encoder_preset || (presetObj && presetObj.encoder_preset) || "medium";
         const x26xPreset = effectiveEncPreset === "fast" ? "veryfast" : effectiveEncPreset === "slow" ? "slow" : "medium";
@@ -2148,6 +2189,30 @@ export function createApiClient() {
             `drawtext=timecode='00\\:00\\:00\\:00':rate=${rateStr}:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.65:${tcPos}`
           );
         }
+        const rawSlatePos =
+          typeof body.reel_slate_position === "string" && body.reel_slate_position.trim() !== ""
+            ? body.reel_slate_position.trim().toLowerCase()
+            : "off";
+        const slateCoords = {
+          top_right: "x=w-tw-24:y=24",
+          bottom_left: "x=24:y=h-th-24"
+        };
+        if (rawSlatePos !== "off" && !Object.prototype.hasOwnProperty.call(slateCoords, rawSlatePos)) {
+          throw new Error(`Unsupported reel_slate_position '${body.reel_slate_position}'`);
+        }
+        const rawSlateText = typeof body.reel_slate_text === "string" ? body.reel_slate_text.trim() : "";
+        if (rawSlateText.length > 48) {
+          throw new Error("reel_slate_text exceeds maximum length of 48 characters");
+        }
+        if (rawSlateText && !/^[A-Za-z0-9 _.,:/|#()-]+$/.test(rawSlateText)) {
+          throw new Error("reel_slate_text contains unsupported characters");
+        }
+        if (rawSlatePos !== "off" && rawSlateText) {
+          const escSlate = escapeDrawtextClient(rawSlateText);
+          vfParts.push(
+            `drawtext=text='${escSlate}':fontsize=24:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=6:${slateCoords[rawSlatePos]}`
+          );
+        }
         const rawWmText = typeof body.review_watermark_text === "string" ? body.review_watermark_text.trim() : "";
         if (rawWmText.length > 40) {
           throw new Error("review_watermark_text exceeds maximum length of 40 characters");
@@ -2275,6 +2340,8 @@ export function createApiClient() {
               loudness_preset: fairlight.loudness_preset,
               dialogue_eq: fairlight.dialogue_eq,
               timecode_burnin: tcModeRaw,
+              reel_slate_text: rawSlateText,
+              reel_slate_position: rawSlatePos,
               review_watermark_text: rawWmText,
               review_watermark_opacity: rawWmOpacity,
               lower_third_enabled: false,
@@ -2334,18 +2401,20 @@ export function createApiClient() {
         ];
         if (isProres) {
           argv.push("-profile:v", "3");
+        } else if (isDnxhr) {
+          argv.push("-profile:v", "dnxhr_hq");
         } else {
           argv.push("-preset", x26xPreset, "-crf", String(effectiveCrf));
         }
         argv.push("-pix_fmt", pixFmt, "-g", String(gop));
         if (vf) argv.push("-vf", vf);
         if (af) argv.push("-af", af);
-        if (isProres) {
+        if (isMezzanine) {
           argv.push("-c:a", "pcm_s24le", "-ar", "48000");
         } else {
           argv.push("-c:a", "aac", "-b:a", `${effectiveAudioKbps}k`, "-ar", "48000", "-ac", "2");
         }
-        if (!isProres) argv.push("-movflags", "+faststart");
+        if (!isMezzanine) argv.push("-movflags", "+faststart");
         argv.push(body.output_path);
         return {
           plan: {
@@ -2356,7 +2425,7 @@ export function createApiClient() {
             fps: { num: fpsNum, den: fpsDen },
             gop_frames: gop,
             pix_fmt: pixFmt,
-            faststart: !isProres,
+            faststart: !isMezzanine,
             delivery_preset: presetObj ? presetObj.id : null,
             video_crf: effectiveCrf,
             audio_bitrate_kbps: effectiveAudioKbps,
@@ -2365,6 +2434,8 @@ export function createApiClient() {
             loudness_preset: fairlight.loudness_preset,
             dialogue_eq: fairlight.dialogue_eq,
             timecode_burnin: tcModeRaw,
+            reel_slate_text: rawSlateText,
+            reel_slate_position: rawSlatePos,
             review_watermark_text: rawWmText,
             review_watermark_opacity: rawWmOpacity,
             lower_third_enabled: Boolean(compiledLowerThird && compiledLowerThird.is_active),
@@ -2411,6 +2482,152 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/render/plan", { method: "POST", body });
+    },
+    async getRenderQueue() {
+      if (resolvedMode === "static-demo") {
+        return {
+          jobs: demoRenderQueue.map((j) => structuredClone(j)),
+          summary: getDemoQueueSummary()
+        };
+      }
+      return requestJson("/api/render/queue");
+    },
+    async addRenderQueueJob(body) {
+      if (resolvedMode === "static-demo") {
+        if (demoRenderQueue.length >= 64) {
+          throw new Error("Render queue limit reached (64 jobs max)");
+        }
+        const jobPayload =
+          body && typeof body.job_payload === "object" && body.job_payload !== null
+            ? body.job_payload
+            : body || {};
+        const compiled = await this.buildOrExecuteRender({ ...jobPayload, execute: false });
+        const plan = compiled.plan;
+        demoQueueCounter += 1;
+        const jobId = `rq-${String(demoQueueCounter).padStart(3, "0")}`;
+        const rawLabel = typeof body?.label === "string" ? body.label.trim() : "";
+        const outBase = String(plan.output_path || "").split("/").pop() || jobId;
+        const durS = Number.isFinite(Number(body?.duration_s)) && Number(body.duration_s) > 0 ? Number(body.duration_s) : 10.0;
+        const est = estimateRenderFileSize({
+          durationS: durS,
+          codec: plan.profile,
+          width: plan.target_width || 1920,
+          height: plan.target_height || 1080,
+          fps: plan.fps ? plan.fps.num / Math.max(1, plan.fps.den) : 25,
+          crf: plan.video_crf,
+          audioBitrateKbps: plan.audio_bitrate_kbps,
+          audioOnlyFormat: plan.audio_only_format || "off"
+        });
+        const job = {
+          job_id: jobId,
+          label: rawLabel || outBase,
+          status: "queued",
+          enabled: true,
+          payload: structuredClone(jobPayload),
+          plan,
+          estimated_bytes: Number.isInteger(body?.estimated_bytes) ? body.estimated_bytes : est.estimatedBytes,
+          bytes_written: 0,
+          elapsed_ms: 0,
+          error: "",
+          created_at_iso: new Date().toISOString().slice(0, 19) + "Z"
+        };
+        demoRenderQueue.push(job);
+        return {
+          job: structuredClone(job),
+          jobs: demoRenderQueue.map((j) => structuredClone(j)),
+          summary: getDemoQueueSummary()
+        };
+      }
+      return requestJson("/api/render/queue/add", { method: "POST", body });
+    },
+    async renderQueueAction(body) {
+      if (resolvedMode === "static-demo") {
+        const action = String(body?.action || "").trim().toLowerCase();
+        const jobId = String(body?.job_id || "").trim();
+        const idx = jobId ? demoRenderQueue.findIndex((j) => j.job_id === jobId) : -1;
+        let affected = null;
+        if (action === "clear_completed") {
+          for (let i = demoRenderQueue.length - 1; i >= 0; i -= 1) {
+            if (demoRenderQueue[i].status === "completed") demoRenderQueue.splice(i, 1);
+          }
+        } else if (action === "clear_all") {
+          demoRenderQueue.length = 0;
+        } else {
+          if (idx < 0) throw new Error(`Unknown render queue job_id '${jobId}'`);
+          if (action === "move_up" && idx > 0) {
+            const tmp = demoRenderQueue[idx - 1];
+            demoRenderQueue[idx - 1] = demoRenderQueue[idx];
+            demoRenderQueue[idx] = tmp;
+          } else if (action === "move_down" && idx < demoRenderQueue.length - 1) {
+            const tmp = demoRenderQueue[idx + 1];
+            demoRenderQueue[idx + 1] = demoRenderQueue[idx];
+            demoRenderQueue[idx] = tmp;
+          } else if (action === "remove") {
+            affected = demoRenderQueue.splice(idx, 1)[0];
+          } else if (action === "enable") {
+            demoRenderQueue[idx].enabled = true;
+            if (demoRenderQueue[idx].status === "skipped") demoRenderQueue[idx].status = "queued";
+            affected = demoRenderQueue[idx];
+          } else if (action === "disable") {
+            demoRenderQueue[idx].enabled = false;
+            if (demoRenderQueue[idx].status === "queued") demoRenderQueue[idx].status = "skipped";
+            affected = demoRenderQueue[idx];
+          } else if (action === "requeue") {
+            demoRenderQueue[idx].enabled = true;
+            demoRenderQueue[idx].status = "queued";
+            demoRenderQueue[idx].bytes_written = 0;
+            demoRenderQueue[idx].elapsed_ms = 0;
+            demoRenderQueue[idx].error = "";
+            affected = demoRenderQueue[idx];
+          } else if (action === "duplicate") {
+            const src = demoRenderQueue[idx];
+            const copyIdx = demoRenderQueue.filter((j) => j.label.startsWith(src.label)).length + 1;
+            const newPayload = structuredClone(src.payload);
+            const origOut = String(newPayload.output_path || src.plan.output_path || "renders/output.mp4");
+            const dot = origOut.lastIndexOf(".");
+            const newOut = dot > 0
+              ? `${origOut.slice(0, dot)}_copy${copyIdx}${origOut.slice(dot)}`
+              : `${origOut}_copy${copyIdx}.mp4`;
+            newPayload.output_path = newOut;
+            const res = await this.addRenderQueueJob({
+              label: `${src.label} (Copy)`,
+              job_payload: newPayload,
+              estimated_bytes: src.estimated_bytes
+            });
+            affected = res.job;
+          } else if (action !== "move_up" && action !== "move_down") {
+            throw new Error(`Unsupported render queue action '${action}'`);
+          }
+        }
+        return {
+          job: affected ? structuredClone(affected) : null,
+          jobs: demoRenderQueue.map((j) => structuredClone(j)),
+          summary: getDemoQueueSummary()
+        };
+      }
+      return requestJson("/api/render/queue/action", { method: "POST", body });
+    },
+    async runRenderQueue(body) {
+      if (resolvedMode === "static-demo") {
+        const dryRun = Boolean(body?.dry_run);
+        if (!dryRun) {
+          throw new Error("FFmpeg execution requires running `taktcut ui` locally on your machine.");
+        }
+        for (const j of demoRenderQueue) {
+          if (j.enabled && j.status === "queued") {
+            j.status = "completed";
+            j.elapsed_ms = 12;
+            j.bytes_written = 0;
+            j.error = "";
+          }
+        }
+        return {
+          dry_run: true,
+          jobs: demoRenderQueue.map((j) => structuredClone(j)),
+          summary: getDemoQueueSummary()
+        };
+      }
+      return requestJson("/api/render/queue/run", { method: "POST", body });
     },
     async generateSampleClip() {
       if (resolvedMode === "static-demo") {

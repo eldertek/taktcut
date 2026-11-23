@@ -491,7 +491,9 @@ def build_transition_render_argv(
     target_fps = fps or RationalFrameRate(num=25, den=1)
     gop = max(2, round(2 * target_fps.as_float))
     is_prores = profile == RenderProfile.PRORES_HQ
-    pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
+    is_dnxhr = profile == RenderProfile.DNXHR_HQ
+    is_mezzanine = is_prores or is_dnxhr
+    pix_fmt = "yuv422p10le" if is_prores else ("yuv422p" if is_dnxhr else "yuv420p")
 
     compiled = compile_transition_filter_result(
         params,
@@ -526,17 +528,19 @@ def build_transition_render_argv(
         argv.extend(["-preset", "medium", "-crf", "20"])
     elif encoder == "prores_ks":
         argv.extend(["-profile:v", "3"])
+    elif encoder == "dnxhd":
+        argv.extend(["-profile:v", "dnxhr_hq"])
 
     argv.extend(["-pix_fmt", pix_fmt, "-g", str(gop)])
     argv.extend(REC709_FFMPEG_FLAGS)
 
     if compiled.include_audio:
-        if is_prores:
+        if is_mezzanine:
             argv.extend(["-c:a", "pcm_s24le", "-ar", "48000"])
         else:
             argv.extend(["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"])
 
-    if not is_prores:
+    if not is_mezzanine:
         argv.extend(["-movflags", "+faststart"])
 
     argv.append(str(output_path))

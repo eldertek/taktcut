@@ -10185,6 +10185,280 @@ def test_multicam_sync_bank_api_demo_parity_and_playwright_ui(tmp_path: Path) ->
         thread.join(timeout=5)
 
 
+def test_deliver_batch_render_queue_dnxhr_and_reel_slate_api(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+    # 1. Dry-run /api/render/plan with DNxHR HQ + Reel/Slate Burn-In
+    status, _, raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/master_dnxhr.mov",
+            "profile": "dnxhr_hq",
+            "reel_slate_text": "REEL A01 | MASTER",
+            "reel_slate_position": "top_right",
+            "timecode_burnin": "top_left",
+            "execute": False,
+        },
+    )
+    assert status == 200
+    body = json.loads(raw)
+    plan = body["plan"]
+    assert plan["profile"] == "dnxhr_hq"
+    assert plan["encoder"] == "dnxhd"
+    assert plan["pix_fmt"] == "yuv422p"
+    assert plan["faststart"] is False
+    assert plan["reel_slate_text"] == "REEL A01 | MASTER"
+    assert plan["reel_slate_position"] == "top_right"
+    assert "dnxhr_hq" in plan["argv"]
+    assert "REEL A01" in (plan["video_filter"] or "")
+
+    # 2. Batch Render Queue endpoints
+    q_status, _, q_raw = _http_call(f"{base_url}/api/render/queue")
+    assert q_status == 200
+    assert json.loads(q_raw)["summary"]["total_jobs"] == 0
+
+    add_status_1, _, add_raw_1 = _http_call(
+        f"{base_url}/api/render/queue/add",
+        method="POST",
+        payload={
+            "label": "YouTube 1080p",
+            "duration_s": 12.0,
+            "job_payload": {
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": "renders/yt_1080p.mp4",
+                "delivery_preset": "youtube_1080p_h264",
+                "profile": "web_h264",
+            },
+        },
+    )
+    assert add_status_1 == 200
+    j1_id = json.loads(add_raw_1)["job"]["job_id"]
+
+    add_status_2, _, add_raw_2 = _http_call(
+        f"{base_url}/api/render/queue/add",
+        method="POST",
+        payload={
+            "label": "DNxHR Master",
+            "duration_s": 12.0,
+            "job_payload": {
+                "input_path": ".taktcut-samples/sample_rec709.mp4",
+                "output_path": "renders/master_dnx.mov",
+                "profile": "dnxhr_hq",
+                "reel_slate_text": "REEL A01 | MASTER",
+                "reel_slate_position": "top_right",
+            },
+        },
+    )
+    assert add_status_2 == 200
+    j2_data = json.loads(add_raw_2)
+    j2_id = j2_data["job"]["job_id"]
+    assert j2_data["summary"]["total_jobs"] == 2
+    assert j2_data["summary"]["queued_count"] == 2
+
+    # Move job 2 up, duplicate job 1, disable duplicate, dry-run queue
+    mv_status, _, mv_raw = _http_call(
+        f"{base_url}/api/render/queue/action",
+        method="POST",
+        payload={"action": "move_up", "job_id": j2_id},
+    )
+    assert mv_status == 200
+    assert [j["job_id"] for j in json.loads(mv_raw)["jobs"]] == [j2_id, j1_id]
+
+    dup_status, _, dup_raw = _http_call(
+        f"{base_url}/api/render/queue/action",
+        method="POST",
+        payload={"action": "duplicate", "job_id": j1_id},
+    )
+    assert dup_status == 200
+    j3_id = json.loads(dup_raw)["job"]["job_id"]
+
+    dis_status, _, _ = _http_call(
+        f"{base_url}/api/render/queue/action",
+        method="POST",
+        payload={"action": "disable", "job_id": j3_id},
+    )
+    assert dis_status == 200
+
+    run_status, _, run_raw = _http_call(
+        f"{base_url}/api/render/queue/run",
+        method="POST",
+        payload={"dry_run": True},
+    )
+    assert run_status == 200
+    run_data = json.loads(run_raw)
+    assert run_data["summary"]["completed_count"] == 2
+    assert run_data["summary"]["skipped_count"] == 1
+
+    clr_status, _, clr_raw = _http_call(
+        f"{base_url}/api/render/queue/action",
+        method="POST",
+        payload={"action": "clear_completed"},
+    )
+    assert clr_status == 200
+    assert json.loads(clr_raw)["summary"]["total_jobs"] == 1
+
+
+def test_deliver_batch_render_queue_demo_parity_node() -> None:
+    node_bin = shutil.which("node")
+    if not node_bin:
+        pytest.skip("Node.js unavailable")
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    ops_uri = (assets_dir / "timeline_ops.js").as_uri()
+    script = f"""
+import assert from "node:assert/strict";
+import {{ createApiClient }} from {demo_uri!r};
+import {{ estimateRenderFileSize }} from {ops_uri!r};
+
+globalThis.window = {{ location: {{ protocol: "https:", search: "?demo=1" }} }};
+const api = createApiClient({{ mode: "static-demo" }});
+await api.initHealth();
+assert.equal(api.isStaticDemo(), true);
+
+const dnxEst = estimateRenderFileSize({{
+  durationS: 10,
+  codec: "dnxhr_hq",
+  width: 1920,
+  height: 1080,
+  fps: 25
+}});
+assert.ok(dnxEst.estimatedBytes > 100_000_000);
+
+const planRes = await api.buildOrExecuteRender({{
+  input_path: ".taktcut-samples/sample_rec709.mp4",
+  output_path: "renders/master_dnx.mov",
+  profile: "dnxhr_hq",
+  reel_slate_text: "REEL A01 | MASTER",
+  reel_slate_position: "top_right",
+  execute: false
+}});
+assert.equal(planRes.plan.encoder, "dnxhd");
+assert.equal(planRes.plan.pix_fmt, "yuv422p");
+assert.equal(planRes.plan.faststart, false);
+assert.ok(planRes.plan.video_filter.includes("REEL A01"));
+
+const added = await api.addRenderQueueJob({{
+  label: "DNxHR Master",
+  duration_s: 10,
+  job_payload: {{
+    input_path: ".taktcut-samples/sample_rec709.mp4",
+    output_path: "renders/master_dnx.mov",
+    profile: "dnxhr_hq"
+  }}
+}});
+assert.equal(added.summary.total_jobs, 1);
+const ran = await api.runRenderQueue({{ dry_run: true }});
+assert.equal(ran.summary.completed_count, 1);
+"""
+    proc = subprocess.run(
+        [node_bin, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node parity failed: {proc.stderr}"
+
+
+def test_deliver_batch_render_queue_playwright_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            page.goto(base_url, wait_until="networkidle")
+            page.click("#tab-render")
+            page.wait_for_selector("#deliver-queue-pane", state="visible")
+
+            # Select DNxHR HQ profile & configure Reel/Slate Burn-In
+            page.select_option("#render-profile", "dnxhr_hq")
+            assert page.locator("#render-container").input_value() == "mov"
+            page.click("#render-tab-looks")
+            page.click("[data-slate-preset='REEL A01 | MASTER']")
+            assert page.locator("#render-reel-slate-position").input_value() == "top_right"
+
+            # Build plan and verify DNxHR + Slate in compiled plan
+            page.click("#btn-build-render-plan")
+            page.wait_for_function(
+                "() => (document.getElementById('render-argv-output')"
+                "?.textContent || '').includes('dnxhr_hq')"
+            )
+            assert "REEL A01" in (
+                page.locator("#render-argv-output").text_content() or ""
+            )
+
+            # Add current job + Multi-Platform Pack and run dry-run batch queue
+            page.click("#btn-add-render-queue")
+            page.wait_for_function(
+                "() => document.querySelectorAll("
+                "'#render-queue-list .queue-job-card').length === 1"
+            )
+            page.click("#btn-queue-pack")
+            page.wait_for_function(
+                "() => document.querySelectorAll("
+                "'#render-queue-list .queue-job-card').length === 4"
+            )
+            page.click("#btn-queue-dry-run")
+            page.wait_for_function(
+                "() => (document.getElementById('render-queue-telemetry')"
+                "?.textContent || '').includes('4/4 done')"
+            )
+
+            # Verify FR i18n cleanly switches without U+2013 / U+2014
+            page.click("#lang-fr")
+            q_fr = page.locator("#deliver-queue-pane").text_content() or ""
+            assert "File de Rendu Batch" in q_fr
+            assert "\u2013" not in q_fr and "\u2014" not in q_fr
+            page.click("#lang-en")
+
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            for btn_id in (
+                "btn-add-render-queue",
+                "btn-queue-pack",
+                "btn-queue-run-all",
+                "btn-queue-dry-run",
+                "btn-queue-clear-done",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()
+
+
+
 
 
 

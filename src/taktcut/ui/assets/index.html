@@ -2720,6 +2720,7 @@
                         <option value="web_h264">web_h264 (H.264 + AAC + faststart)</option>
                         <option value="master_hevc">master_hevc (HEVC + AAC + faststart)</option>
                         <option value="prores_hq">prores_hq (ProRes 422 HQ + 24-bit PCM)</option>
+                        <option value="dnxhr_hq">dnxhr_hq (Avid DNxHR HQ + 24-bit PCM)</option>
                       </select>
                     </div>
                     <div class="form-row">
@@ -3035,6 +3036,25 @@
                       </div>
                     </div>
                   </div>
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="render-reel-slate-text" data-i18n="render.label.reelSlateText">Reel / Slate Burn-In</label>
+                      <input type="text" id="render-reel-slate-text" class="input-control mono" maxlength="48" placeholder="Off (e.g. REEL A01 | MASTER)">
+                      <div class="slate-preset-row" role="group" aria-label="Reel Slate Presets">
+                        <button type="button" class="slate-preset-btn is-active" data-slate-preset="" data-slate-pos="off" aria-pressed="true" data-i18n="render.slate.preset.off">Off</button>
+                        <button type="button" class="slate-preset-btn" data-slate-preset="REEL A01 | MASTER" data-slate-pos="top_right" aria-pressed="false" data-i18n="render.slate.preset.master">REEL A01 | MASTER</button>
+                        <button type="button" class="slate-preset-btn" data-slate-preset="WIP | STUDIO REVIEW" data-slate-pos="bottom_left" aria-pressed="false" data-i18n="render.slate.preset.review">WIP | STUDIO REVIEW</button>
+                      </div>
+                    </div>
+                    <div class="form-row">
+                      <label for="render-reel-slate-position" data-i18n="render.label.reelSlatePos">Reel / Slate Position</label>
+                      <select id="render-reel-slate-position" class="input-control mono">
+                        <option value="off" data-i18n="render.slate.pos.off" selected>Off</option>
+                        <option value="top_right" data-i18n="render.slate.pos.topRight">Top Right</option>
+                        <option value="bottom_left" data-i18n="render.slate.pos.bottomLeft">Bottom Left</option>
+                      </select>
+                    </div>
+                  </div>
                   <div id="deliver-lower-third-card" class="lower-third-card">
                     <div class="lower-third-head">
                       <span class="lower-third-title" data-i18n="render.lowerThird.title">Lower-Third / Title Overlay</span>
@@ -3232,6 +3252,7 @@
                 </div>
                 <div class="btn-row">
                   <button type="button" id="btn-build-render-plan" class="btn btn-primary" data-i18n="render.btn.buildPlan">Build Plan (Dry-Run)</button>
+                  <button type="button" id="btn-add-render-queue" class="btn btn-secondary" data-i18n="render.btn.addToQueue">+ Add to Queue</button>
                   <button type="button" id="btn-execute-render" class="btn btn-secondary" data-i18n="render.btn.execute">Execute Render</button>
                   <button type="button" id="btn-copy-ffmpeg-cmd" class="btn btn-secondary" data-i18n="render.btn.copyCmd">Copy Command</button>
                 </div>
@@ -3256,6 +3277,30 @@
                   </div>
                   <pre id="render-exec-output" class="code-box mono"></pre>
                 </div>
+              </div>
+            </section>
+
+            <section id="deliver-queue-pane" class="nle-pane deliver-queue-pane" aria-labelledby="deliver-queue-title">
+              <div class="pane-header">
+                <h2 id="deliver-queue-title" data-i18n="render.queue.title">Batch Render Queue</h2>
+                <div class="viewer-controls">
+                  <span id="render-queue-badge" class="nle-tag mono">0 JOBS</span>
+                  <button type="button" id="btn-queue-pack" class="btn btn-mini" data-i18n="render.queue.pack">+ Multi-Platform Pack</button>
+                </div>
+              </div>
+              <div class="pane-body">
+                <div class="btn-row deliver-queue-actions">
+                  <button type="button" id="btn-queue-run-all" class="btn btn-primary" data-i18n="render.queue.runAll" disabled>Render All (0)</button>
+                  <button type="button" id="btn-queue-dry-run" class="btn btn-secondary" data-i18n="render.queue.dryRun" disabled>Dry-Run Queue</button>
+                  <button type="button" id="btn-queue-clear-done" class="btn btn-secondary" data-i18n="render.queue.clearDone" disabled>Clear Done</button>
+                </div>
+                <div id="render-queue-progress-wrap" class="queue-progress-wrap">
+                  <div class="queue-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Batch render queue progress">
+                    <div id="render-queue-progress-fill" class="queue-progress-fill"></div>
+                  </div>
+                  <div id="render-queue-telemetry" class="telemetry-note mono" aria-live="polite" data-i18n="render.queue.emptyHint">Queue is empty. Click "+ Add to Queue" or "+ Multi-Platform Pack".</div>
+                </div>
+                <div id="render-queue-list" class="render-queue-list" role="list"></div>
               </div>
             </section>
 

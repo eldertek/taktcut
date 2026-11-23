@@ -4765,6 +4765,8 @@ export function estimateRenderFileSize(params = {}) {
   let codecKind = "h264";
   if (/prores/.test(rawCodec)) {
     codecKind = "prores";
+  } else if (/dnxhr|dnxhd/.test(rawCodec)) {
+    codecKind = "dnxhr";
   } else if (/hevc|h\.?265|x265/.test(rawCodec)) {
     codecKind = "hevc";
   }
@@ -4784,10 +4786,10 @@ export function estimateRenderFileSize(params = {}) {
   let videoBitrateKbps = 0;
   let audioBitrateKbps = 0;
 
-  if (codecKind === "prores") {
+  if (codecKind === "prores" || codecKind === "dnxhr") {
     const isHq = /hq/.test(rawCodec);
-    const baseProresKbps = isHq ? 184000 : 113696;
-    videoBitrateKbps = Math.max(1000, Math.round(baseProresKbps * resScale * (fpsVal / 25)));
+    const baseMezzanineKbps = codecKind === "dnxhr" ? 145000 : isHq ? 184000 : 113696;
+    videoBitrateKbps = Math.max(1000, Math.round(baseMezzanineKbps * resScale * (fpsVal / 25)));
     audioBitrateKbps = hasExplicitAudio ? Math.round(parsedAudio) : 2304;
   } else {
     const rawCrf = src.crf;

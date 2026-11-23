@@ -537,7 +537,8 @@ class RemoteRenderState:
         out_file = resolve_audio_only_output_path(out_file, req.audio_only_format)
 
         is_prores = req.profile == RenderProfile.PRORES_HQ
-        pix_fmt = "yuv422p10le" if is_prores else "yuv420p"
+        is_dnxhr = req.profile == RenderProfile.DNXHR_HQ
+        pix_fmt = "yuv422p10le" if is_prores else ("yuv422p" if is_dnxhr else "yuv420p")
 
         lut_file: Path | None = None
         if req.lut_cube_text is not None and req.lut_cube_text.strip():
