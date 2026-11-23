@@ -54,64 +54,141 @@
       <!-- PAGE 1: TIMELINE (CUT / EDIT) -->
       <section id="panel-timeline" class="workspace-panel" role="tabpanel" aria-labelledby="tab-timeline">
         <div class="nle-edit-top">
-          <!-- LEFT DOCK: MEDIA POOL & OTIO EXPORT -->
-          <aside class="nle-pane">
+          <!-- LEFT DOCK: MEDIA POOL, EDIT INDEX & PROJECT I/O -->
+          <aside class="nle-pane nle-left-dock">
             <div class="pane-header">
-              <h2 data-i18n="timeline.source.title">Media Pool &amp; Source</h2>
-              <span class="nle-tag mono">.drp/.drt/.fcpxml/.otio</span>
+              <h2 data-i18n="timeline.source.title">Media Pool &amp; Index</h2>
+              <span id="timeline-validation-pill" class="nle-tag mono">--</span>
             </div>
-            <div class="pane-body">
-              <div class="btn-row">
-                <button type="button" id="btn-load-sample-clean" class="btn btn-primary" data-i18n="timeline.btn.sampleClean">Sample Timeline</button>
-                <button type="button" id="btn-load-sample-issues" class="btn btn-secondary" data-i18n="timeline.btn.sampleIssues">Diag. Issues</button>
-              </div>
-              <div class="form-row">
-                <label for="timeline-workspace-select" data-i18n="timeline.label.workspaceFile">Workspace Timeline</label>
-                <div class="input-group">
-                  <select id="timeline-workspace-select" class="input-control mono"></select>
-                  <button type="button" id="btn-refresh-workspace" class="btn btn-secondary" data-i18n="common.refresh">Refresh</button>
-                  <button type="button" id="btn-inspect-workspace" class="btn btn-secondary" data-i18n="timeline.btn.inspect">Inspect</button>
+            <div class="pane-body pane-scroll-dock">
+              <section id="media-pool-section" class="media-pool-section" aria-label="Media Pool Master Bin">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.mediapool.title">Master Bin</span>
+                  <span id="media-pool-count" class="nle-tag mono">0 CLIPS</span>
                 </div>
-              </div>
-              <div class="form-row">
-                <label for="timeline-file-input" data-i18n="timeline.label.upload">Import Local File</label>
-                <input type="file" id="timeline-file-input" class="input-control file-input" accept=".drp,.drt,.fcpxml,.xml,.otio,.otioz">
-              </div>
-              <div class="form-row">
-                <label for="timeline-name-filter" data-i18n="timeline.label.seqName">Sequence (.drp)</label>
-                <input type="text" id="timeline-name-filter" class="input-control mono" placeholder="Main Cut">
-              </div>
+                <div id="media-pool-list" class="media-pool-grid" role="list"></div>
+              </section>
 
               <div class="pane-divider"></div>
 
-              <div class="pane-subheader">
-                <span data-i18n="timeline.export.title">OTIO Export</span>
-                <span id="timeline-validation-pill" class="nle-tag mono">--</span>
-              </div>
-              <div class="form-row-two">
-                <div class="form-row">
-                  <label for="otio-format-select" data-i18n="timeline.label.exportFormat">Format</label>
-                  <select id="otio-format-select" class="input-control mono">
-                    <option value="otio">.otio (JSON)</option>
-                    <option value="otioz">.otioz (Bundle)</option>
-                  </select>
+              <!-- TIMELINE INDEX: CLIP SEARCH & COLOR LABEL FILTER -->
+              <section id="timeline-index-panel" class="timeline-index-panel" aria-labelledby="timeline-index-heading">
+                <div class="pane-subheader timeline-index-header">
+                  <span id="timeline-index-heading" data-i18n="timeline.index.title">Timeline Index</span>
+                  <span id="timeline-index-count" class="nle-tag mono" aria-live="polite">0 / 0</span>
+                </div>
+                <div class="timeline-index-body">
+                  <div class="timeline-index-search-row">
+                    <input
+                      type="search"
+                      id="timeline-index-search"
+                      class="input-control mono"
+                      placeholder="Search clips..."
+                      aria-label="Search timeline clips by name"
+                      autocomplete="off"
+                      spellcheck="false"
+                    >
+                    <button
+                      type="button"
+                      id="btn-timeline-index-clear"
+                      class="btn btn-mini timeline-index-clear-btn"
+                      aria-label="Clear timeline index search and color filter"
+                      data-i18n="timeline.index.clear"
+                      disabled
+                    >Clear</button>
+                  </div>
+                  <div
+                    id="timeline-index-color-filter"
+                    class="timeline-index-color-filter"
+                    role="group"
+                    aria-label="Filter timeline clips by color label"
+                  >
+                    <button type="button" class="btn btn-mini timeline-index-filter-pill is-active" data-index-color="all" aria-pressed="true">
+                      <span data-i18n="timeline.index.all">All</span>
+                    </button>
+                    <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="blue" aria-pressed="false">
+                      <span class="clip-label-swatch is-blue" aria-hidden="true"></span>
+                      <span data-i18n="timeline.clipLabel.blue">A-Roll</span>
+                    </button>
+                    <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="teal" aria-pressed="false">
+                      <span class="clip-label-swatch is-teal" aria-hidden="true"></span>
+                      <span data-i18n="timeline.clipLabel.teal">B-Roll</span>
+                    </button>
+                    <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="amber" aria-pressed="false">
+                      <span class="clip-label-swatch is-amber" aria-hidden="true"></span>
+                      <span data-i18n="timeline.clipLabel.amber">VFX/GFX</span>
+                    </button>
+                    <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="rose" aria-pressed="false">
+                      <span class="clip-label-swatch is-rose" aria-hidden="true"></span>
+                      <span data-i18n="timeline.clipLabel.rose">Review</span>
+                    </button>
+                    <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="emerald" aria-pressed="false">
+                      <span class="clip-label-swatch is-emerald" aria-hidden="true"></span>
+                      <span data-i18n="timeline.clipLabel.emerald">Audio</span>
+                    </button>
+                    <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="default" aria-pressed="false">
+                      <span class="clip-label-swatch is-default" aria-hidden="true"></span>
+                      <span data-i18n="timeline.clipLabel.default">Default</span>
+                    </button>
+                  </div>
+                  <div id="timeline-index-list" class="timeline-index-list" role="list"></div>
+                </div>
+              </section>
+
+              <div class="pane-divider"></div>
+
+              <section class="source-io-section" aria-label="Sequence Import and OTIO Export">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.export.title">Sequence &amp; OTIO Interchange</span>
+                  <span class="nle-tag mono">.drp/.fcpxml/.otio</span>
+                </div>
+                <div class="btn-row">
+                  <button type="button" id="btn-load-sample-clean" class="btn btn-primary" data-i18n="timeline.btn.sampleClean">Sample Timeline</button>
+                  <button type="button" id="btn-load-sample-issues" class="btn btn-secondary" data-i18n="timeline.btn.sampleIssues">Diag. Issues</button>
                 </div>
                 <div class="form-row">
-                  <label for="otio-workspace-out" data-i18n="timeline.label.savePath">Output Path</label>
-                  <input type="text" id="otio-workspace-out" class="input-control mono" value="exports/timeline.otio">
+                  <label for="timeline-workspace-select" data-i18n="timeline.label.workspaceFile">Workspace Timeline</label>
+                  <div class="input-group">
+                    <select id="timeline-workspace-select" class="input-control mono"></select>
+                    <button type="button" id="btn-refresh-workspace" class="btn btn-secondary" data-i18n="common.refresh">Refresh</button>
+                    <button type="button" id="btn-inspect-workspace" class="btn btn-secondary" data-i18n="timeline.btn.inspect">Inspect</button>
+                  </div>
                 </div>
-              </div>
-              <div class="btn-row">
-                <button type="button" id="btn-timeline-validate" class="btn btn-secondary" data-i18n="timeline.btn.validate">Validate</button>
-                <button type="button" id="btn-timeline-download" class="btn btn-primary" data-i18n="timeline.btn.downloadOtio">Download OTIO</button>
-                <button type="button" id="btn-timeline-save" class="btn btn-secondary" data-i18n="timeline.btn.saveWorkspace">Save WS</button>
-              </div>
-              <div id="timeline-export-feedback" class="telemetry-note mono"></div>
+                <div class="form-row-two">
+                  <div class="form-row">
+                    <label for="timeline-file-input" data-i18n="timeline.label.upload">Import Local File</label>
+                    <input type="file" id="timeline-file-input" class="input-control file-input" accept=".drp,.drt,.fcpxml,.xml,.otio,.otioz">
+                  </div>
+                  <div class="form-row">
+                    <label for="timeline-name-filter" data-i18n="timeline.label.seqName">Sequence (.drp)</label>
+                    <input type="text" id="timeline-name-filter" class="input-control mono" placeholder="Main Cut">
+                  </div>
+                </div>
+                <div class="form-row-two">
+                  <div class="form-row">
+                    <label for="otio-format-select" data-i18n="timeline.label.exportFormat">Format</label>
+                    <select id="otio-format-select" class="input-control mono">
+                      <option value="otio">.otio (JSON)</option>
+                      <option value="otioz">.otioz (Bundle)</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label for="otio-workspace-out" data-i18n="timeline.label.savePath">Output Path</label>
+                    <input type="text" id="otio-workspace-out" class="input-control mono" value="exports/timeline.otio">
+                  </div>
+                </div>
+                <div class="btn-row">
+                  <button type="button" id="btn-timeline-validate" class="btn btn-secondary" data-i18n="timeline.btn.validate">Validate</button>
+                  <button type="button" id="btn-timeline-download" class="btn btn-primary" data-i18n="timeline.btn.downloadOtio">Download OTIO</button>
+                  <button type="button" id="btn-timeline-save" class="btn btn-secondary" data-i18n="timeline.btn.saveWorkspace">Save WS</button>
+                </div>
+                <div id="timeline-export-feedback" class="telemetry-note mono"></div>
+              </section>
             </div>
           </aside>
 
-          <!-- CENTER DOCK: PROGRAM MONITOR & CLIP TELEMETRY -->
-          <section class="nle-pane">
+          <!-- CENTER DOCK: PURE PROGRAM MONITOR & TRANSPORT -->
+          <section class="nle-pane nle-viewer-dock">
             <div class="pane-header">
               <h2 data-i18n="timeline.monitor.title">Program Monitor</h2>
               <div class="tc-group mono">
@@ -119,7 +196,7 @@
                 <span id="program-frame-counter" class="nle-tag">0f / 500f</span>
               </div>
             </div>
-            <div class="pane-body">
+            <div class="pane-body viewer-pane-body">
               <div class="program-framing-bar" role="toolbar" aria-label="Aspect Ratio and Broadcast Safe Guides">
                 <div class="framing-select-group">
                   <label class="inline-label" for="program-aspect-select" data-i18n="timeline.framing.aspect">Aspect</label>
@@ -187,17 +264,23 @@
                 <div class="nle-kv-chip"><span class="k" data-i18n="timeline.metric.duration">DUR</span><span id="tl-meta-dur" class="v mono">--</span></div>
                 <div class="nle-kv-chip"><span class="k" data-i18n="timeline.metric.counts">T/C</span><span id="tl-meta-counts" class="v mono">--</span></div>
               </div>
+            </div>
+          </section>
 
+          <!-- RIGHT DOCK: DAVINCI CLIP INSPECTOR & CONTINUITY -->
+          <aside class="nle-pane nle-right-inspector">
+            <div class="pane-header">
+              <h2 data-i18n="timeline.inspector.title">Inspector &amp; Markers</h2>
+              <div class="viewer-controls">
+                <span id="timeline-marker-count" class="nle-tag mono">0 MKR</span>
+                <button type="button" id="btn-clip-ripple-delete" class="btn btn-mini btn-danger-mini" disabled title="Ripple Delete Selected Clip (Shift+Backspace)">
+                  <span data-i18n="timeline.inspector.rippleDelete">Ripple Delete</span>
+                  <span class="kbd-chip mono">Shift+Bksp</span>
+                </button>
+              </div>
+            </div>
+            <div class="pane-body pane-scroll-dock">
               <div class="inspector-scroll">
-                <div class="pane-subheader">
-                  <span data-i18n="timeline.inspector.title">Selected Clip / Marker Inspector</span>
-                  <div class="viewer-controls">
-                    <button type="button" id="btn-clip-ripple-delete" class="btn btn-mini btn-danger-mini" disabled title="Ripple Delete Selected Clip (Shift+Backspace)">
-                      <span data-i18n="timeline.inspector.rippleDelete">Ripple Delete</span>
-                      <span class="kbd-chip mono">Shift+Bksp</span>
-                    </button>
-                  </div>
-                </div>
                 <div id="timeline-selection-detail" class="kv-grid mono"></div>
 
               <div id="timeline-clip-label-inspector" class="clip-label-inspector-dock">
@@ -527,102 +610,34 @@
                 </div>
               </div>
               </div>
-            </div>
-          </section>
-
-          <!-- RIGHT DOCK: CONTINUITY & MARKERS INSPECTOR -->
-          <aside class="nle-pane">
-            <div class="pane-header">
-              <h2 data-i18n="timeline.issues.title">Continuity &amp; Markers</h2>
-              <span id="timeline-marker-count" class="nle-tag mono">0 MKR</span>
-            </div>
-            <div class="pane-body pane-scroll continuity-pane-scroll">
-              <div class="marker-quickbar" role="group" aria-label="Drop marker controls">
-                <div class="marker-color-strip" role="group" aria-label="Default marker color">
-                  <button type="button" class="btn btn-mini marker-color-chip is-active" data-marker-new-color="Cyan" aria-pressed="true" title="Cyan">
-                    <span class="marker-dot is-cyan" aria-hidden="true"></span><span>Cyan</span>
-                  </button>
-                  <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Gold" aria-pressed="false" title="Gold">
-                    <span class="marker-dot is-gold" aria-hidden="true"></span><span>Gold</span>
-                  </button>
-                  <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Red" aria-pressed="false" title="Red">
-                    <span class="marker-dot is-red" aria-hidden="true"></span><span>Red</span>
-                  </button>
-                  <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Green" aria-pressed="false" title="Green">
-                    <span class="marker-dot is-green" aria-hidden="true"></span><span>Green</span>
+              <div class="pane-divider"></div>
+              <div class="continuity-dock">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.issues.title">Continuity &amp; Markers</span>
+                  <button type="button" id="btn-inspector-add-marker" class="btn btn-mini tl-marker-btn" title="Drop Marker at Playhead (M)">
+                    <span data-i18n="timeline.tool.addMarker">+ Marker</span>
+                    <span class="kbd-chip mono">M</span>
                   </button>
                 </div>
-                <button type="button" id="btn-inspector-add-marker" class="btn btn-mini tl-marker-btn" title="Drop Marker at Playhead (M)">
-                  <span data-i18n="timeline.tool.addMarker">+ Marker</span>
-                  <span class="kbd-chip mono">M</span>
-                </button>
+                <div class="marker-quickbar" role="group" aria-label="Drop marker controls">
+                  <div class="marker-color-strip" role="group" aria-label="Default marker color">
+                    <button type="button" class="btn btn-mini marker-color-chip is-active" data-marker-new-color="Cyan" aria-pressed="true" title="Cyan">
+                      <span class="marker-dot is-cyan" aria-hidden="true"></span><span>Cyan</span>
+                    </button>
+                    <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Gold" aria-pressed="false" title="Gold">
+                      <span class="marker-dot is-gold" aria-hidden="true"></span><span>Gold</span>
+                    </button>
+                    <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Red" aria-pressed="false" title="Red">
+                      <span class="marker-dot is-red" aria-hidden="true"></span><span>Red</span>
+                    </button>
+                    <button type="button" class="btn btn-mini marker-color-chip" data-marker-new-color="Green" aria-pressed="false" title="Green">
+                      <span class="marker-dot is-green" aria-hidden="true"></span><span>Green</span>
+                    </button>
+                  </div>
+                </div>
+                <div id="timeline-issues-list" class="issue-list"></div>
               </div>
-              <div id="timeline-issues-list" class="issue-list"></div>
             </div>
-
-            <!-- TIMELINE INDEX: CLIP SEARCH & COLOR LABEL FILTER -->
-            <section id="timeline-index-panel" class="timeline-index-panel" aria-labelledby="timeline-index-heading">
-              <div class="pane-header timeline-index-header">
-                <h2 id="timeline-index-heading" data-i18n="timeline.index.title">Timeline Index</h2>
-                <span id="timeline-index-count" class="nle-tag mono" aria-live="polite">0 / 0</span>
-              </div>
-              <div class="pane-body timeline-index-body">
-                <div class="timeline-index-search-row">
-                  <input
-                    type="search"
-                    id="timeline-index-search"
-                    class="input-control mono"
-                    placeholder="Search clips..."
-                    aria-label="Search timeline clips by name"
-                    autocomplete="off"
-                    spellcheck="false"
-                  >
-                  <button
-                    type="button"
-                    id="btn-timeline-index-clear"
-                    class="btn btn-mini timeline-index-clear-btn"
-                    aria-label="Clear timeline index search and color filter"
-                    data-i18n="timeline.index.clear"
-                    disabled
-                  >Clear</button>
-                </div>
-                <div
-                  id="timeline-index-color-filter"
-                  class="timeline-index-color-filter"
-                  role="group"
-                  aria-label="Filter timeline clips by color label"
-                >
-                  <button type="button" class="btn btn-mini timeline-index-filter-pill is-active" data-index-color="all" aria-pressed="true">
-                    <span data-i18n="timeline.index.all">All</span>
-                  </button>
-                  <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="blue" aria-pressed="false">
-                    <span class="clip-label-swatch is-blue" aria-hidden="true"></span>
-                    <span data-i18n="timeline.clipLabel.blue">A-Roll</span>
-                  </button>
-                  <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="teal" aria-pressed="false">
-                    <span class="clip-label-swatch is-teal" aria-hidden="true"></span>
-                    <span data-i18n="timeline.clipLabel.teal">B-Roll</span>
-                  </button>
-                  <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="amber" aria-pressed="false">
-                    <span class="clip-label-swatch is-amber" aria-hidden="true"></span>
-                    <span data-i18n="timeline.clipLabel.amber">VFX/GFX</span>
-                  </button>
-                  <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="rose" aria-pressed="false">
-                    <span class="clip-label-swatch is-rose" aria-hidden="true"></span>
-                    <span data-i18n="timeline.clipLabel.rose">Review</span>
-                  </button>
-                  <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="emerald" aria-pressed="false">
-                    <span class="clip-label-swatch is-emerald" aria-hidden="true"></span>
-                    <span data-i18n="timeline.clipLabel.emerald">Audio</span>
-                  </button>
-                  <button type="button" class="btn btn-mini timeline-index-filter-pill" data-index-color="default" aria-pressed="false">
-                    <span class="clip-label-swatch is-default" aria-hidden="true"></span>
-                    <span data-i18n="timeline.clipLabel.default">Default</span>
-                  </button>
-                </div>
-                <div id="timeline-index-list" class="timeline-index-list" role="list"></div>
-              </div>
-            </section>
           </aside>
         </div>
 
@@ -729,7 +744,7 @@
             </div>
             <div class="pane-body">
               <div class="pane-subheader">
-                <span data-i18n="fx.library.presets">1-Click Presets (iMovie Simplicity)</span>
+                <span data-i18n="fx.library.presets">Studio Looks &amp; 1-Click Presets</span>
               </div>
               <div id="fx-preset-grid" class="fx-preset-grid">
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="dreamy_glow">
@@ -1422,29 +1437,31 @@
         </div>
       </section>
 
-      <!-- PAGE 3: DELIVER / RENDER -->
+      <!-- PAGE 5: DELIVER / RENDER -->
       <section id="panel-render" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-render">
-        <section class="nle-pane">
-          <div class="pane-header">
-            <h2 data-i18n="render.caps.title">Host FFmpeg &amp; Hardware Encoder Probe</h2>
-            <button type="button" id="btn-verify-nvenc" class="btn btn-secondary" data-i18n="render.btn.verifyGpu">Verify GPU Runtime</button>
-          </div>
-          <div class="pane-body">
-            <div id="render-caps-strip" class="badge-strip mono"></div>
-          </div>
-        </section>
+        <div class="deliver-top-ribbon">
+          <section class="nle-pane deliver-presets-pane">
+            <div class="pane-header">
+              <h2 data-i18n="render.presets.title">Quick-Export Presets (DaVinci Deliver)</h2>
+              <span id="render-active-preset-badge" class="nle-tag mono" data-i18n="render.presets.custom">Custom</span>
+            </div>
+            <div class="pane-body">
+              <div id="render-preset-strip" class="deliver-preset-strip" role="group" aria-label="Quick-Export Delivery Presets"></div>
+            </div>
+          </section>
 
-        <section class="nle-pane deliver-presets-pane">
-          <div class="pane-header">
-            <h2 data-i18n="render.presets.title">Quick-Export Presets (DaVinci Deliver)</h2>
-            <span id="render-active-preset-badge" class="nle-tag mono" data-i18n="render.presets.custom">Custom</span>
-          </div>
-          <div class="pane-body">
-            <div id="render-preset-strip" class="deliver-preset-strip" role="group" aria-label="Quick-Export Delivery Presets"></div>
-          </div>
-        </section>
+          <section class="nle-pane deliver-caps-pane">
+            <div class="pane-header">
+              <h2 data-i18n="render.caps.title">Host FFmpeg &amp; Hardware Encoder Probe</h2>
+              <button type="button" id="btn-verify-nvenc" class="btn btn-secondary" data-i18n="render.btn.verifyGpu">Verify GPU Runtime</button>
+            </div>
+            <div class="pane-body">
+              <div id="render-caps-strip" class="badge-strip mono"></div>
+            </div>
+          </section>
+        </div>
 
-        <div class="nle-two-col">
+        <div class="nle-two-col nle-deliver-grid">
           <section class="nle-pane">
             <div class="pane-header">
               <h2 data-i18n="render.config.title">Deliver Render Settings</h2>
@@ -2111,7 +2128,7 @@
         <span id="transport-state-pill" class="statusbar-state">STOP</span>
         <span class="statusbar-keys" data-i18n="statusbar.shortcuts">Space: Play/Pause | J/K/L: Shuttle | I/O: In/Out | Alt+X: Clear I/O | A/B: Select/Blade | N: Snap | M: Marker | ?: Shortcuts</span>
       </span>
-      <span id="version-badge">v0.1.23</span>
+      <span id="version-badge">v0.1.24</span>
     </footer>
   </div>
 

@@ -949,6 +949,7 @@ function renderTimelineUI() {
     const rippleBtn = byId("btn-clip-ripple-delete");
     if (rippleBtn) rippleBtn.disabled = true;
     byId("timeline-issues-list").replaceChildren();
+    renderMediaPool();
     renderTimelineIndex();
     renderDeliverChaptersPreview();
     updateDeliverSizeEstimate();
@@ -991,6 +992,7 @@ function renderTimelineUI() {
   updateTimelineToolbarUI();
   renderTimelineSelection();
   renderTimelineIssues();
+  renderMediaPool();
   renderTimelineIndex();
   renderDeliverChaptersPreview();
   updateDeliverSizeEstimate();
@@ -2031,6 +2033,54 @@ function syncTimelineIndexSelection() {
       row.removeAttribute("aria-current");
     }
   }
+  const pool = byId("media-pool-list");
+  if (pool) {
+    for (const card of pool.querySelectorAll("[data-pool-clip-id]")) {
+      const isSel = Boolean(selectedId && card.getAttribute("data-pool-clip-id") === selectedId);
+      card.classList.toggle("is-selected", isSel);
+    }
+  }
+}
+
+function renderMediaPool() {
+  const list = byId("media-pool-list");
+  if (!list) return;
+  const countEl = byId("media-pool-count");
+  const doc = state.timelineDoc;
+  if (!doc) {
+    if (countEl) countEl.textContent = "0 CLIPS";
+    list.replaceChildren(dom("div", "timeline-index-empty mono", t("timeline.mediapool.empty")));
+    return;
+  }
+  const entries = filterTimelineClips(doc);
+  if (countEl) {
+    countEl.textContent = `${entries.length} ${entries.length === 1 ? "CLIP" : "CLIPS"}`;
+  }
+  if (entries.length === 0) {
+    list.replaceChildren(dom("div", "timeline-index-empty mono", t("timeline.mediapool.empty")));
+    return;
+  }
+  const fpsFloat = Math.max(1, doc.fps.num / Math.max(1, doc.fps.den));
+  const selectedId = getSelectedTimelineClipId();
+  const cards = entries.map((entry) => {
+    const isSel = Boolean(selectedId && entry.id === selectedId);
+    const isAudio = entry.trackKind === "audio";
+    const durSec = (entry.durationFrames / fpsFloat).toFixed(1);
+    const card = dom("button", `media-pool-card${isAudio ? " is-audio" : " is-video"}${isSel ? " is-selected" : ""}`);
+    card.type = "button";
+    card.setAttribute("role", "listitem");
+    card.setAttribute("data-pool-clip-id", entry.id);
+    card.title = `${entry.label} (${entry.trackId} | ${durSec}s)`;
+
+    const thumb = dom("div", "media-pool-thumb");
+    thumb.appendChild(dom("span", "media-pool-track mono", entry.trackId));
+    thumb.appendChild(dom("span", "media-pool-dur mono", `${durSec}s`));
+    const nameEl = dom("span", "media-pool-name mono", entry.label);
+    card.replaceChildren(thumb, nameEl);
+    card.addEventListener("click", () => selectClipFromTimelineIndex(entry));
+    return card;
+  });
+  list.replaceChildren(...cards);
 }
 
 function selectClipFromTimelineIndex(entry) {

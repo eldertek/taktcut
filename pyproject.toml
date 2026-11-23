@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "taktcut"
-version = "0.1.23"
+version = "0.1.24"
 description = "Clean-room OpenTimelineIO, DaVinci Resolve project/timeline interchange, ASC CDL/.cube color, and deterministic FFmpeg/NVENC broadcast QA toolkit with MCP server."
 readme = "README.md"
 license = { text = "MIT" }

@@ -99,7 +99,7 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.23"
+    assert health["version"] == "0.1.24"
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")
@@ -950,7 +950,7 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "fx-stills-gallery",
     ):
         assert elem_id in html_text
-    assert "v0.1.23" in html_text
+    assert "v0.1.24" in html_text
 
     css_status, _, css_raw = _http_call(f"{base_url}/styles.css")
     assert css_status == 200

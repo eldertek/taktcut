@@ -486,25 +486,8 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   ctx.arc(keyX, keyY, keyR, 0, Math.PI * 2);
   ctx.fill();
 
-  // Subtle SMPTE top swatch strip inside frame
-  const chipCols = [
-    [0.72, 0.72, 0.72],
-    [0.72, 0.72, 0.08],
-    [0.08, 0.72, 0.72],
-    [0.08, 0.72, 0.08],
-    [0.72, 0.08, 0.72],
-    [0.72, 0.08, 0.08],
-    [0.08, 0.08, 0.72]
-  ];
-  const cw = w / chipCols.length;
-  chipCols.forEach((col, i) => {
-    const [r, g, b] = applyGradeOrCdlRgb(col[0], col[1], col[2], cdl);
-    ctx.fillStyle = toCssRgb(r, g, b);
-    ctx.fillRect(i * cw, 0, Math.ceil(cw), 12);
-  });
-
-  // Center crosshair
-  ctx.strokeStyle = "rgba(216, 216, 222, 0.22)";
+  // Subtle optical framing reticule & cinematic horizon marks (no SMPTE bars on editorial picture)
+  ctx.strokeStyle = "rgba(216, 216, 222, 0.16)";
   ctx.lineWidth = 1;
   const cx = w / 2;
   const cy = h / 2;
@@ -515,17 +498,11 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   ctx.lineTo(cx, cy + 8);
   ctx.stroke();
 
-  // Active clip slate info
-  const slatePad = Math.min(14, Math.max(6, Math.floor(w * 0.05)));
-  const slateW = Math.max(40, w - slatePad * 2);
-  const slateX = slatePad;
-  const slateY = Math.max(16, h - 46);
-  ctx.fillStyle = "rgba(20, 20, 22, 0.76)";
-  ctx.fillRect(slateX, slateY, slateW, 34);
-  ctx.strokeStyle = "#34343a";
-  ctx.strokeRect(slateX, slateY, slateW, 34);
-
-  const textMaxW = Math.max(24, slateW - 14);
+  // Compact top-right clip HUD pill (kept clear of bottom-left lower-thirds & bottom-center subtitles)
+  const hudPad = Math.min(10, Math.max(5, Math.floor(w * 0.02)));
+  ctx.save();
+  ctx.font = "600 9.5px ui-monospace, monospace";
+  let hudText = "BLACK / NO VIDEO AT PLAYHEAD";
   if (activeClips.length > 0) {
     const top = activeClips[activeClips.length - 1];
     const retimeNorm = normalizeClipRetime(top.clip);
@@ -542,25 +519,21 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
     const transformSlateTag = !isClipTransformIdentity(transformNorm)
       ? ` | XF ${formatTransformBadgeText(transformNorm)}`
       : "";
-    ctx.fillStyle = "#d8d8de";
-    ctx.font = "600 11px ui-monospace, monospace";
-    ctx.fillText(fitCanvasText(ctx, `${top.track}: ${top.clip.name}`, textMaxW), slateX + 7, slateY + 14);
-    ctx.fillStyle = "#8e8e98";
-    ctx.font = "10px ui-monospace, monospace";
-    ctx.fillText(
-      fitCanvasText(
-        ctx,
-        `SRC+${relOffset}f${retimeSlateTag}${transformSlateTag} | ${doc.width}x${doc.height} | ${activeClips.length} active layer(s)`,
-        textMaxW
-      ),
-      slateX + 7,
-      slateY + 27
-    );
-  } else {
-    ctx.fillStyle = "#8e8e98";
-    ctx.font = "11px ui-monospace, monospace";
-    ctx.fillText(fitCanvasText(ctx, "BLACK / NO VIDEO AT PLAYHEAD", textMaxW), slateX + 7, slateY + 21);
+    hudText = `${top.track}: ${top.clip.name} | +${relOffset}f${retimeSlateTag}${transformSlateTag}`;
   }
+  const clippedHud = fitCanvasText(ctx, hudText, Math.max(40, w - hudPad * 2 - 14));
+  const pillW = Math.min(w - hudPad * 2, Math.ceil(ctx.measureText(clippedHud).width) + 14);
+  const pillX = w - hudPad - pillW;
+  const pillY = hudPad;
+  roundRectPath(ctx, pillX, pillY, pillW, 18, 2);
+  ctx.fillStyle = "rgba(17, 17, 20, 0.68)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = activeClips.length > 0 ? "#d8d8de" : "#8e8e98";
+  ctx.fillText(clippedHud, pillX + 7, pillY + 12);
+  ctx.restore();
 }
 
 function fitCanvasText(ctx, text, maxWidth) {
@@ -1499,7 +1472,14 @@ export function drawProgramMonitorCanvas(
 ) {
   const explicitW =
     renderOpts && Number(renderOpts.explicitWidth) > 0 ? Number(renderOpts.explicitWidth) : null;
-  const { ctx, width, height } = setupCanvas(canvas, 244, explicitW);
+  let targetCssH = 244;
+  if (!explicitW && canvas && typeof canvas.closest === "function" && canvas.closest(".nle-viewer-dock")) {
+    const parentH = canvas.parentElement ? canvas.parentElement.getBoundingClientRect().height : 0;
+    if (parentH > 260) {
+      targetCssH = Math.min(440, Math.floor(parentH) - 2);
+    }
+  }
+  const { ctx, width, height } = setupCanvas(canvas, targetCssH, explicitW);
   ctx.fillStyle = "#141416";
   ctx.fillRect(0, 0, width, height);
 
@@ -2915,15 +2895,15 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         fadeTarget.clipIndex === clipIndex;
 
       const baseFill = trackAudiblyMuted
-        ? (isAudio ? "#1b2b27" : "#1e2736")
+        ? (isAudio ? "#1a2925" : "#1c2533")
         : isAudio
-          ? clip.enabled ? "#214f44" : "#252529"
-          : clip.enabled ? "#294670" : "#252529";
+          ? clip.enabled ? "#1d4a40" : "#252529"
+          : clip.enabled ? "#264066" : "#252529";
       const borderCol = isSelected
-        ? "#e07b39"
+        ? "#e68442"
         : trackAudiblyMuted
           ? "#3b3b44"
-          : isAudio ? "#3d8c78" : "#4e78b0";
+          : isAudio ? "#347867" : "#446a9c";
 
       ctx.fillStyle = baseFill;
       roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
@@ -3184,36 +3164,72 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       }
 
       if (drawW > 34) {
+        // Reserve horizontal inset where bowtie transition badges straddle incoming/outgoing cuts
+        let leftTransInset = 0;
+        let rightTransInset = 0;
+        for (const other of clipList) {
+          if (!other || other === clip || other.duration_frames <= 0) continue;
+          const otherEnd = other.start_frame + other.duration_frames;
+          if (otherEnd === clip.start_frame) {
+            const inTrans = normalizeClipTransition(other);
+            if (inTrans) {
+              const spanPx = Math.max(18, Math.min(inTrans.duration_s * fpsFloat * pxPerFrame, Math.min(other.duration_frames, clip.duration_frames) * pxPerFrame * 1.8));
+              leftTransInset = Math.max(leftTransInset, Math.ceil(spanPx / 2) + 4);
+            }
+          }
+        }
+        if (clip.duration_frames > 0) {
+          const outTrans = normalizeClipTransition(clip);
+          if (outTrans) {
+            const nextClip = clipList.find((o) => o && o !== clip && o.duration_frames > 0 && o.start_frame === clip.start_frame + clip.duration_frames);
+            if (nextClip) {
+              const spanPx = Math.max(18, Math.min(outTrans.duration_s * fpsFloat * pxPerFrame, Math.min(clip.duration_frames, nextClip.duration_frames) * pxPerFrame * 1.8));
+              rightTransInset = Math.max(rightTransInset, Math.ceil(spanPx / 2) + 4);
+            }
+          }
+        }
         const badgesOffset = speedBadgeW + transformBadgeW + fadeBadgeW;
-        const textClipW = Math.max(8, drawW - 8 - (badgesOffset > 0 ? badgesOffset + 10 : 0));
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(drawX + 4, clipY, textClipW, clipH);
-        ctx.clip();
-        ctx.fillStyle = trackAudiblyMuted ? "#9696a0" : "#e6e6eb";
-        ctx.font = "600 11px system-ui, sans-serif";
-        ctx.fillText(clip.name, drawX + 6, rowY + 19);
-        ctx.restore();
+        const textStartX = drawX + 5 + leftTransInset;
+        const textMaxRight = drawX + drawW - 5 - rightTransInset - (badgesOffset > 0 ? badgesOffset + 8 : 0);
+        const textClipW = Math.max(0, textMaxRight - textStartX);
+        // Subtle DaVinci clip title header band
+        if (clipH >= 28 && drawW > 8) {
+          ctx.fillStyle = "rgba(10, 11, 15, 0.28)";
+          ctx.fillRect(drawX + 1, clipY + 4, Math.max(0, drawW - 2), 14);
+        }
+        if (textClipW > 14) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(textStartX, clipY, textClipW, clipH);
+          ctx.clip();
+          ctx.fillStyle = trackAudiblyMuted ? "#9696a0" : "#ebebf0";
+          ctx.font = "600 10.5px system-ui, sans-serif";
+          ctx.fillText(clip.name, textStartX + 2, rowY + 17);
+          ctx.restore();
+        }
 
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(drawX + 4, clipY + 20, drawW - 8, clipH - 20);
-        ctx.clip();
-        ctx.fillStyle = "#a2a2ad";
-        ctx.font = "10px ui-monospace, monospace";
-        const gainTag = Math.abs(gainDb) >= 0.05
-          ? ` | ${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)}dB`
-          : "";
-        const muteTag = trackAudiblyMuted ? " | MUTED" : "";
-        const retimeTag = hasRetime && speedBadgeW === 0
-          ? ` | ${formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse)}`
-          : "";
-        ctx.fillText(
-          `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${gainTag}${muteTag}${retimeTag}`,
-          drawX + 6,
-          rowY + 32
-        );
-        ctx.restore();
+        const subClipW = Math.max(0, drawX + drawW - 6 - rightTransInset - textStartX);
+        if (subClipW > 24) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(textStartX, clipY + 19, subClipW, clipH - 19);
+          ctx.clip();
+          ctx.fillStyle = "#a2a2ad";
+          ctx.font = "9.5px ui-monospace, monospace";
+          const gainTag = Math.abs(gainDb) >= 0.05
+            ? ` | ${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)}dB`
+            : "";
+          const muteTag = trackAudiblyMuted ? " | MUTED" : "";
+          const retimeTag = hasRetime && speedBadgeW === 0
+            ? ` | ${formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse)}`
+            : "";
+          ctx.fillText(
+            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${gainTag}${muteTag}${retimeTag}`,
+            textStartX + 2,
+            rowY + 32
+          );
+          ctx.restore();
+        }
       }
 
       hitboxes.push({
