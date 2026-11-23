@@ -570,6 +570,105 @@ def compile_audio_filter_result(
     )
 
 
+class ClipVideoFadeParams(BaseModel):
+    """Per-clip video dip-to-black fade-in/out parameters with strict numeric bounds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fade_in_s: float = 0.0
+    fade_out_s: float = 0.0
+
+    @field_validator("fade_in_s", mode="before")
+    @classmethod
+    def _validate_fade_in_s(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "fade_in_s", AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+
+    @field_validator("fade_out_s", mode="before")
+    @classmethod
+    def _validate_fade_out_s(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "fade_out_s", AUDIO_FADE_S_MIN, AUDIO_FADE_S_MAX)
+
+    def is_identity(self) -> bool:
+        """Return True when both fade_in_s and fade_out_s are 0."""
+        return (
+            math.isclose(self.fade_in_s, 0.0, abs_tol=1e-6)
+            and math.isclose(self.fade_out_s, 0.0, abs_tol=1e-6)
+        )
+
+
+class VideoFadeCompileResult(BaseModel):
+    """Compiled FFmpeg video fade (Dip to Black) filtergraph and validated parameters."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_identity: bool
+    params: ClipVideoFadeParams
+
+
+def compile_video_fade_filter(
+    params: ClipVideoFadeParams,
+    *,
+    clip_duration_s: float | None = None,
+) -> str | None:
+    """Compile validated clip fade-in/out durations into FFmpeg Dip to Black -vf filters."""
+    validated_dur: float | None = None
+    if clip_duration_s is not None:
+        validated_dur = _validate_bounded_float(
+            clip_duration_s,
+            "clip_duration_s",
+            0.0,
+            CLIP_DURATION_MAX_S,
+            strict_gt_min=True,
+        )
+
+    if params.fade_out_s > 1e-6 and validated_dur is None:
+        raise ValueError("clip_duration_s must be provided when fade_out_s > 0")
+
+    fade_in_d = (
+        min(params.fade_in_s, validated_dur)
+        if validated_dur is not None and params.fade_in_s > 1e-6
+        else (params.fade_in_s if params.fade_in_s > 1e-6 else 0.0)
+    )
+    fade_out_d = (
+        min(params.fade_out_s, validated_dur)
+        if validated_dur is not None and params.fade_out_s > 1e-6
+        else 0.0
+    )
+
+    if (
+        validated_dur is not None
+        and fade_in_d + fade_out_d > validated_dur
+        and (fade_in_d + fade_out_d) > 1e-6
+    ):
+        scale = validated_dur / (fade_in_d + fade_out_d)
+        fade_in_d *= scale
+        fade_out_d *= scale
+
+    parts: list[str] = []
+    if fade_in_d > 1e-6:
+        parts.append(f"fade=t=in:st=0.000:d={fade_in_d:.3f}")
+    if fade_out_d > 1e-6 and validated_dur is not None:
+        fade_out_st = max(0.0, validated_dur - fade_out_d)
+        parts.append(f"fade=t=out:st={fade_out_st:.3f}:d={fade_out_d:.3f}")
+
+    return ",".join(parts) if parts else None
+
+
+def compile_video_fade_filter_result(
+    params: ClipVideoFadeParams,
+    *,
+    clip_duration_s: float | None = None,
+) -> VideoFadeCompileResult:
+    """Compile video fade parameters into structured filtergraph and argv slice."""
+    fg = compile_video_fade_filter(params, clip_duration_s=clip_duration_s) or ""
+    return VideoFadeCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_identity=(fg == ""),
+        params=params,
+    )
+
+
 _AUDIO_PAD_LABEL_RE = re.compile(r"^[A-Za-z0-9_:]{1,32}$")
 
 
@@ -1469,6 +1568,7 @@ def build_render_plan(
     export_fps: ExportFpsOption | None = None,
     deinterlace: bool = False,
     audio_only_format: AudioOnlyFormatId | None = None,
+    video_fade: ClipVideoFadeParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1620,6 +1720,34 @@ def build_render_plan(
             clip_duration_s=clip_duration_s,
         )
 
+    effective_video_fade: ClipVideoFadeParams | None = video_fade
+    if effective_video_fade is None and audio_params is not None and (
+        audio_params.fade_in_s > 1e-6 or audio_params.fade_out_s > 1e-6
+    ):
+        effective_video_fade = ClipVideoFadeParams(
+            fade_in_s=audio_params.fade_in_s,
+            fade_out_s=audio_params.fade_out_s,
+        )
+
+    resolved_clip_dur = clip_duration_s
+    needs_duration_probe = resolved_clip_dur is None and (
+        (
+            audio_params is not None
+            and not audio_params.muted
+            and audio_params.fade_out_s > 1e-6
+        )
+        or (
+            not is_audio_only
+            and effective_video_fade is not None
+            and effective_video_fade.fade_out_s > 1e-6
+        )
+    )
+    if needs_duration_probe:
+        probed_dur = _probe_media_duration_s(input_path)
+        if probed_dur is not None:
+            rate = retime_params.speed_rate if retime_params is not None else 1.0
+            resolved_clip_dur = probed_dur / rate
+
     vf_parts: list[str] = []
     deint_vf = compile_deinterlace_filter(resolved_deinterlace)
     if deint_vf is not None:
@@ -1643,6 +1771,17 @@ def build_render_plan(
         vf_parts.append(compile_color_grade_filter(color_grade, pix_fmt=pix_fmt))
     if lut_path is not None:
         vf_parts.append(build_rec709_lut_filter(lut_path, target_pix_fmt=pix_fmt))
+    if (
+        not is_audio_only
+        and effective_video_fade is not None
+        and not effective_video_fade.is_identity()
+    ):
+        video_fade_vf = compile_video_fade_filter(
+            effective_video_fade,
+            clip_duration_s=resolved_clip_dur,
+        )
+        if video_fade_vf is not None:
+            vf_parts.append(video_fade_vf)
     if title_overlay is not None and title_overlay.is_active():
         title_fg = compile_title_filter(title_overlay, pix_fmt=pix_fmt)
         if title_fg:
@@ -1661,18 +1800,6 @@ def build_render_plan(
     if wm_vf is not None:
         vf_parts.append(wm_vf)
     video_filter = ",".join(vf_parts) if vf_parts else None
-
-    resolved_clip_dur = clip_duration_s
-    if (
-        resolved_clip_dur is None
-        and audio_params is not None
-        and not audio_params.muted
-        and audio_params.fade_out_s > 1e-6
-    ):
-        probed_dur = _probe_media_duration_s(input_path)
-        if probed_dur is not None:
-            rate = retime_params.speed_rate if retime_params is not None else 1.0
-            resolved_clip_dur = probed_dur / rate
 
     af_parts: list[str] = []
     if retime_af is not None:

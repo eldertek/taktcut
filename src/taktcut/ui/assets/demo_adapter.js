@@ -11,6 +11,7 @@ import {
   compileRetimeFilterClient,
   compileTransformFilterClient,
   compileTransitionFilterClient,
+  compileVideoFadeFilterClient,
   getDeliveryPresetClient,
   normalizeFairlightAudioParams,
   validateTimelineClient
@@ -1092,6 +1093,28 @@ export function createApiClient() {
         if (body.lut_path || body.cdl) {
           vfParts.push(`lut3d=file='${body.lut_path || "studio_grade.cube"}':interp=tetrahedral,format=${pixFmt}`);
         }
+        const effectiveVideoFade = body.video_fade
+          ? body.video_fade
+          : body.audio_params
+            ? {
+                fade_in_s: body.audio_params.fade_in_s || 0,
+                fade_out_s: body.audio_params.fade_out_s || 0
+              }
+            : body.fade_in_s !== undefined || body.fade_out_s !== undefined || body.fade_in_sec !== undefined || body.fade_out_sec !== undefined
+              ? {
+                  fade_in_s: body.fade_in_s ?? body.fade_in_sec ?? 0,
+                  fade_out_s: body.fade_out_s ?? body.fade_out_sec ?? 0
+                }
+              : null;
+        if (!isAudioOnly && effectiveVideoFade) {
+          const compiledVideoFade = compileVideoFadeFilterClient(
+            effectiveVideoFade,
+            body.clip_duration_s ?? null
+          );
+          if (!compiledVideoFade.is_identity && compiledVideoFade.filtergraph) {
+            vfParts.push(compiledVideoFade.filtergraph);
+          }
+        }
         if (body.title_overlay) {
           const compiledTitle = compileTitleClient(body.title_overlay, { pix_fmt: pixFmt });
           if (compiledTitle.is_active && compiledTitle.filtergraph) {
@@ -1381,6 +1404,31 @@ export function createApiClient() {
         );
       }
       return requestJson("/api/audio/compile", { method: "POST", body: payload });
+    },
+    async compileFadeFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        const src = payload.video_fade || payload;
+        const vf = compileVideoFadeFilterClient(src, payload.clip_duration_s ?? null);
+        const af = compileAudioFilterClient(
+          {
+            gain_db: 0,
+            fade_in_s: vf.params.fade_in_s,
+            fade_out_s: vf.params.fade_out_s,
+            muted: Boolean(payload.muted)
+          },
+          payload.clip_duration_s ?? null,
+          null
+        );
+        return {
+          video_filtergraph: vf.filtergraph,
+          audio_filtergraph: payload.muted ? "" : af.filtergraph,
+          ffmpeg_vf_args: vf.ffmpeg_vf_args,
+          ffmpeg_af_args: payload.muted ? [] : af.ffmpeg_af_args,
+          is_identity: vf.is_identity && (Boolean(payload.muted) || af.is_identity),
+          params: vf.params
+        };
+      }
+      return requestJson("/api/fade/compile", { method: "POST", body: payload });
     },
     async compileAutoDuckFilter(payload) {
       if (resolvedMode === "static-demo") {

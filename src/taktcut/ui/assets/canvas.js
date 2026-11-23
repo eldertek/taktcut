@@ -5,6 +5,7 @@ import {
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
+  evaluateClipFadeEnvelope,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
   formatTransformBadgeText,
@@ -1140,11 +1141,14 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
   targetCtx.fillStyle = "#000000";
   targetCtx.fillRect(0, 0, bufW, bufH);
 
+  const fpsRate = doc && doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
   for (let idx = 0; idx < clips.length; idx += 1) {
     const layer = clips[idx];
     const isTop = idx === clips.length - 1;
     const tf = normalizeClipTransform(layer && layer.clip ? layer.clip : null);
-    const alpha = clamp01(tf.opacity_pct / 100.0);
+    const fadeEnv =
+      layer && layer.clip ? evaluateClipFadeEnvelope(layer.clip, playheadFrame, fpsRate) : 1.0;
+    const alpha = clamp01((tf.opacity_pct / 100.0) * fadeEnv);
     if (alpha <= 0.0001) {
       continue;
     }
@@ -2791,9 +2795,59 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           ctx.fillText(tfText, badgeX + 4, badgeY + 10);
         }
       }
+      const hasFadeIn = fadeInS > 0.005;
+      const hasFadeOut = fadeOutS > 0.005;
+      let fadeBadgeW = 0;
+      if ((hasFadeIn || hasFadeOut) && drawW >= 12) {
+        const bevel = Math.min(8, Math.max(5, Math.floor(drawW * 0.14)));
+        ctx.save();
+        ctx.fillStyle = isAudio ? "rgba(94, 234, 212, 0.34)" : "rgba(255, 209, 102, 0.34)";
+        if (hasFadeIn) {
+          ctx.beginPath();
+          ctx.moveTo(drawX + 1, clipY + 1);
+          ctx.lineTo(drawX + 1 + bevel, clipY + 1);
+          ctx.lineTo(drawX + 1, clipY + 1 + bevel);
+          ctx.closePath();
+          ctx.fill();
+        }
+        if (hasFadeOut) {
+          ctx.beginPath();
+          ctx.moveTo(drawX + drawW - 1, clipY + 1);
+          ctx.lineTo(drawX + drawW - 1 - bevel, clipY + 1);
+          ctx.lineTo(drawX + drawW - 1, clipY + 1 + bevel);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+      if ((hasFadeIn || hasFadeOut) && drawW >= 54) {
+        const fadeBadgeText =
+          hasFadeIn && hasFadeOut
+            ? `FADE ${fadeInS.toFixed(1)}/${fadeOutS.toFixed(1)}s`
+            : hasFadeIn
+              ? `FI ${fadeInS.toFixed(1)}s`
+              : `FO ${fadeOutS.toFixed(1)}s`;
+        ctx.font = "700 9px ui-monospace, monospace";
+        const measuredFadeW = Math.ceil(ctx.measureText(fadeBadgeText).width) + 8;
+        const usedRight = rightReserve + (speedBadgeW > 0 ? speedBadgeW + 4 : 0) + transformBadgeW;
+        if (measuredFadeW + usedRight + 24 <= drawW) {
+          fadeBadgeW = measuredFadeW + (speedBadgeW > 0 || transformBadgeW > 0 ? 4 : 0);
+          const badgeX = drawX + drawW - usedRight - measuredFadeW;
+          const badgeY = clipY + 3;
+          const badgeH = 14;
+          ctx.fillStyle = isAudio ? "rgba(45, 212, 191, 0.18)" : "rgba(255, 209, 102, 0.18)";
+          roundRectPath(ctx, badgeX, badgeY, measuredFadeW, badgeH, 2);
+          ctx.fill();
+          ctx.strokeStyle = isAudio ? "#5eead4" : "#ffd166";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = isAudio ? "#99f6e4" : "#ffe69c";
+          ctx.fillText(fadeBadgeText, badgeX + 4, badgeY + 10);
+        }
+      }
 
       if (drawW > 34) {
-        const badgesOffset = speedBadgeW + transformBadgeW;
+        const badgesOffset = speedBadgeW + transformBadgeW + fadeBadgeW;
         const textClipW = Math.max(8, drawW - 8 - (badgesOffset > 0 ? badgesOffset + 10 : 0));
         ctx.save();
         ctx.beginPath();

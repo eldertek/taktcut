@@ -102,6 +102,7 @@ from taktcut.render import (
     AutoDuckParams,
     ClipAudioParams,
     ClipRetimeParams,
+    ClipVideoFadeParams,
     FairlightAudioParams,
     FramingParams,
     build_render_plan,
@@ -110,6 +111,7 @@ from taktcut.render import (
     compile_framing_filter_result,
     compile_retime_filter_result,
     compile_transform_filter_result,
+    compile_video_fade_filter_result,
     execute_render_plan,
     list_aspect_presets,
     list_delivery_presets,
@@ -384,6 +386,36 @@ def _build_audio_params_from_payload(
             clip_duration_s,
         )
     return None, clip_duration_s
+
+
+def _build_video_fade_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> ClipVideoFadeParams | None:
+    raw_fade = payload.get("video_fade")
+    if raw_fade is not None:
+        if not isinstance(raw_fade, dict):
+            raise ValueError("'video_fade' must be a JSON object")
+        return ClipVideoFadeParams.model_validate(
+            {
+                "fade_in_s": raw_fade.get("fade_in_s", raw_fade.get("fade_in_sec", 0.0)),
+                "fade_out_s": raw_fade.get("fade_out_s", raw_fade.get("fade_out_sec", 0.0)),
+            }
+        )
+
+    has_top_level_fade = any(
+        key in payload and payload[key] is not None
+        for key in ("fade_in_s", "fade_out_s", "fade_in_sec", "fade_out_sec")
+    )
+    if allow_top_level or has_top_level_fade:
+        return ClipVideoFadeParams.model_validate(
+            {
+                "fade_in_s": payload.get("fade_in_s", payload.get("fade_in_sec", 0.0)),
+                "fade_out_s": payload.get("fade_out_s", payload.get("fade_out_sec", 0.0)),
+            }
+        )
+    return None
 
 
 def _build_auto_duck_params_from_payload(
@@ -1558,6 +1590,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 chroma_key_obj = _build_chroma_key_from_payload({"chroma_key": raw_chroma_key})
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+            video_fade = _build_video_fade_from_payload(
+                payload, allow_top_level=(audio_params is None)
+            )
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             timecode_burnin = _extract_timecode_burnin(payload)
             review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
@@ -1599,6 +1634,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 title_overlay=title_overlay_obj,
                 subtitle_track=subtitle_track_obj,
                 audio_params=audio_params,
+                video_fade=video_fade,
                 retime_params=retime_params,
                 transform_params=transform_params,
                 framing=framing_params,
@@ -1741,6 +1777,40 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 dialogue_eq=dialogue_eq,
             )
             self._send_json(HTTPStatus.OK, compiled_audio.model_dump(mode="json"))
+            return
+
+        if route == "/api/fade/compile":
+            video_fade = _build_video_fade_from_payload(payload, allow_top_level=True)
+            assert video_fade is not None
+            audio_params, clip_duration_s = _build_audio_params_from_payload(
+                payload, allow_top_level=True
+            )
+            assert audio_params is not None
+            compiled_vf = compile_video_fade_filter_result(
+                video_fade, clip_duration_s=clip_duration_s
+            )
+            fade_only_audio = ClipAudioParams(
+                gain_db=0.0,
+                fade_in_s=video_fade.fade_in_s,
+                fade_out_s=video_fade.fade_out_s,
+                muted=audio_params.muted,
+            )
+            compiled_af = compile_audio_filter_result(
+                fade_only_audio, clip_duration_s=clip_duration_s
+            )
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "video_filtergraph": compiled_vf.filtergraph,
+                    "audio_filtergraph": "" if audio_params.muted else compiled_af.filtergraph,
+                    "ffmpeg_vf_args": compiled_vf.ffmpeg_vf_args,
+                    "ffmpeg_af_args": [] if audio_params.muted else compiled_af.ffmpeg_af_args,
+                    "is_identity": compiled_vf.is_identity and (
+                        audio_params.muted or compiled_af.is_identity
+                    ),
+                    "params": video_fade.model_dump(mode="json"),
+                },
+            )
             return
 
         if route == "/api/audio/duck/compile":
@@ -1993,6 +2063,9 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 )
 
             audio_params, clip_duration_s = _build_audio_params_from_payload(payload)
+            video_fade = _build_video_fade_from_payload(
+                payload, allow_top_level=(audio_params is None)
+            )
             loudness_preset, dialogue_eq = _build_fairlight_params_from_payload(payload)
             timecode_burnin = _extract_timecode_burnin(payload)
             review_watermark_text, review_watermark_opacity = _extract_review_watermark(payload)
@@ -2030,6 +2103,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 title_overlay=title_overlay_remote,
                 subtitle_track=subtitle_track_remote,
                 audio_params=audio_params,
+                video_fade=video_fade,
                 retime_params=retime_params,
                 transform_params=transform_params,
                 framing=framing_params,

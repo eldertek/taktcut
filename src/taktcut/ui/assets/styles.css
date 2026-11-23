@@ -2204,6 +2204,31 @@ input[type="range"] {
   letter-spacing: 0.03em;
 }
 
+.fade-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fade-quick-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.fade-quick-btn {
+  min-width: 0;
+  justify-content: center;
+}
+
+.fade-quick-btn.is-active {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue-soft);
+  color: var(--text-primary);
+}
+
 .track-mixer-strip {
   display: flex;
   flex-wrap: wrap;
@@ -3593,6 +3618,8 @@ input[type="range"] {
   .btn-shortcuts-help,
   .still-delete-btn,
   .audio-ctrl-row .btn-mini,
+  .fade-quick-btn,
+  .fade-inspector-dock .btn-mini,
   .fairlight-dock .btn-mini {
     min-width: 44px;
     min-height: 44px;

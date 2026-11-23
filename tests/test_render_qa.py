@@ -24,6 +24,7 @@ from taktcut.render import (
     AutoDuckParams,
     ClipAudioParams,
     ClipRetimeParams,
+    ClipVideoFadeParams,
     FairlightAudioParams,
     FramingParams,
     build_atempo_stages,
@@ -47,6 +48,8 @@ from taktcut.render import (
     compile_timecode_burnin_filter,
     compile_transform_filter,
     compile_transform_filter_result,
+    compile_video_fade_filter,
+    compile_video_fade_filter_result,
     execute_render_plan,
     get_delivery_preset,
     list_aspect_presets,
@@ -1449,3 +1452,76 @@ def test_audio_only_format_validation_compile_and_real_ffmpeg_render(
         assert probe.height == 0
         assert probe.audio_codec == expected_probe_codec
         assert probe.audio_sample_rate == 48000
+
+
+def test_compile_video_fade_filter_and_clamping() -> None:
+    identity = ClipVideoFadeParams()
+    assert identity.is_identity() is True
+    assert compile_video_fade_filter(identity) is None
+    identity_res = compile_video_fade_filter_result(identity)
+    assert identity_res.is_identity is True
+    assert identity_res.filtergraph == ""
+    assert identity_res.ffmpeg_vf_args == []
+
+    both = ClipVideoFadeParams(fade_in_s=0.5, fade_out_s=1.0)
+    assert both.is_identity() is False
+    both_res = compile_video_fade_filter_result(both, clip_duration_s=5.0)
+    expected_both = "fade=t=in:st=0.000:d=0.500,fade=t=out:st=4.000:d=1.000"
+    assert both_res.filtergraph == expected_both
+    assert both_res.ffmpeg_vf_args == ["-vf", expected_both]
+
+    # Overlapping fades are proportionally clamped so fade-in and fade-out never collide in FFmpeg
+    clamped = ClipVideoFadeParams(fade_in_s=3.0, fade_out_s=3.0)
+    assert compile_video_fade_filter(clamped, clip_duration_s=2.0) == (
+        "fade=t=in:st=0.000:d=1.000,fade=t=out:st=1.000:d=1.000"
+    )
+
+    single_clamped = ClipVideoFadeParams(fade_in_s=4.0, fade_out_s=0.0)
+    assert (
+        compile_video_fade_filter(single_clamped, clip_duration_s=2.0)
+        == "fade=t=in:st=0.000:d=2.000"
+    )
+
+    with pytest.raises(ValueError, match="clip_duration_s"):
+        compile_video_fade_filter(ClipVideoFadeParams(fade_out_s=1.0))
+
+    for bad_fade in (-0.1, 5.1, math.nan, math.inf, True):
+        with pytest.raises((ValidationError, ValueError)):
+            ClipVideoFadeParams(fade_in_s=bad_fade)  # type: ignore[arg-type]
+        with pytest.raises((ValidationError, ValueError)):
+            ClipVideoFadeParams(fade_out_s=bad_fade)  # type: ignore[arg-type]
+
+
+def test_real_render_with_video_and_audio_fades(tmp_path: Path) -> None:
+    src = tmp_path / "fade_source.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "fade_dip_black.mp4"
+
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        audio_params=ClipAudioParams(fade_in_s=0.5, fade_out_s=0.5),
+        video_fade=ClipVideoFadeParams(fade_in_s=0.5, fade_out_s=0.5),
+        clip_duration_s=2.0,
+        prefer_hw=False,
+    )
+    assert plan.video_filter == "fade=t=in:st=0.000:d=0.500,fade=t=out:st=1.500:d=0.500"
+    assert plan.audio_filter == "afade=t=in:st=0.000:d=0.500,afade=t=out:st=1.500:d=0.500"
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0
+
+    muted_plan = build_render_plan(
+        input_path=src,
+        output_path=tmp_path / "fade_muted.mp4",
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        audio_params=ClipAudioParams(fade_in_s=0.5, fade_out_s=0.5, muted=True),
+        video_fade=ClipVideoFadeParams(fade_in_s=0.5, fade_out_s=0.5),
+        clip_duration_s=2.0,
+        prefer_hw=False,
+    )
+    assert muted_plan.video_filter == "fade=t=in:st=0.000:d=0.500,fade=t=out:st=1.500:d=0.500"
+    assert muted_plan.audio_filter == "volume=0"

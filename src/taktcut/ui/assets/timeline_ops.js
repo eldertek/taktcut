@@ -755,6 +755,53 @@ export function compileAudioFilterClient(
   };
 }
 
+export function compileVideoFadeFilterClient(params, clipDurationS = null) {
+  const p = params && typeof params === "object" ? params : {};
+  const rawIn = Number(p.fade_in_s ?? p.fade_in_sec ?? 0);
+  const rawOut = Number(p.fade_out_s ?? p.fade_out_sec ?? 0);
+  const fadeInS = clampNum(
+    Number.isFinite(rawIn) ? rawIn : 0,
+    AUDIO_FADE_S_MIN,
+    AUDIO_FADE_S_MAX
+  );
+  const fadeOutS = clampNum(
+    Number.isFinite(rawOut) ? rawOut : 0,
+    AUDIO_FADE_S_MIN,
+    AUDIO_FADE_S_MAX
+  );
+  const dur =
+    clipDurationS !== null &&
+    clipDurationS !== undefined &&
+    Number.isFinite(Number(clipDurationS)) &&
+    Number(clipDurationS) > 0
+      ? Number(clipDurationS)
+      : null;
+
+  let fadeInD = dur !== null && fadeInS > 1e-6 ? Math.min(fadeInS, dur) : fadeInS > 1e-6 ? fadeInS : 0;
+  let fadeOutD = dur !== null && fadeOutS > 1e-6 ? Math.min(fadeOutS, dur) : 0;
+  if (dur !== null && fadeInD + fadeOutD > dur && fadeInD + fadeOutD > 1e-6) {
+    const scale = dur / (fadeInD + fadeOutD);
+    fadeInD *= scale;
+    fadeOutD *= scale;
+  }
+
+  const parts = [];
+  if (fadeInD > 1e-6) {
+    parts.push(`fade=t=in:st=0.000:d=${fadeInD.toFixed(3)}`);
+  }
+  if (fadeOutD > 1e-6 && dur !== null) {
+    const fadeOutSt = Math.max(0, dur - fadeOutD);
+    parts.push(`fade=t=out:st=${fadeOutSt.toFixed(3)}:d=${fadeOutD.toFixed(3)}`);
+  }
+  const filtergraph = parts.join(",");
+  return {
+    filtergraph,
+    ffmpeg_vf_args: filtergraph ? ["-vf", filtergraph] : [],
+    is_identity: filtergraph === "",
+    params: { fade_in_s: fadeInS, fade_out_s: fadeOutS }
+  };
+}
+
 export function normalizeAutoDuckParams(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
   const enabled = Boolean(src.enabled);

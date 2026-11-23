@@ -392,6 +392,91 @@ def test_ui_audio_compile_and_render_plan_audio_filters(ui_server: tuple[str, Pa
         "volume=3.00dB,afade=t=in:st=0.000:d=0.250,"
         "afade=t=out:st=3.250:d=0.750,loudnorm=I=-14.0:TP=-1.0:LRA=11.0"
     )
+    assert plan_data["plan"]["video_filter"] == (
+        "fade=t=in:st=0.000:d=0.250,fade=t=out:st=3.250:d=0.750"
+    )
+
+
+def test_ui_fade_compile_and_render_plan_video_audio_fades(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    ok_status, _, ok_raw = _http_call(
+        f"{base_url}/api/fade/compile",
+        method="POST",
+        payload={"fade_in_s": 0.5, "fade_out_s": 1.0, "clip_duration_s": 5.0},
+    )
+    assert ok_status == 200
+    ok_data = json.loads(ok_raw.decode("utf-8"))
+    assert ok_data["is_identity"] is False
+    assert ok_data["video_filtergraph"] == (
+        "fade=t=in:st=0.000:d=0.500,fade=t=out:st=4.000:d=1.000"
+    )
+    assert ok_data["audio_filtergraph"] == (
+        "afade=t=in:st=0.000:d=0.500,afade=t=out:st=4.000:d=1.000"
+    )
+
+    muted_status, _, muted_raw = _http_call(
+        f"{base_url}/api/fade/compile",
+        method="POST",
+        payload={"fade_in_s": 0.5, "fade_out_s": 1.0, "muted": True, "clip_duration_s": 4.0},
+    )
+    assert muted_status == 200
+    muted_data = json.loads(muted_raw.decode("utf-8"))
+    assert muted_data["video_filtergraph"] == (
+        "fade=t=in:st=0.000:d=0.500,fade=t=out:st=3.000:d=1.000"
+    )
+    assert muted_data["audio_filtergraph"] == ""
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/fade/compile",
+        method="POST",
+        payload={"fade_in_s": 5.5, "clip_duration_s": 6.0},
+    )
+    assert bad_status == 400
+
+    # Dry-run /api/render/plan with top-level fade_in_s / fade_out_s (and muted audio opt-out)
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/fade_dip.mp4",
+            "profile": "web_h264",
+            "video_fade": {"fade_in_s": 0.5, "fade_out_s": 1.0},
+            "audio_params": {"gain_db": 0.0, "fade_in_s": 0.5, "fade_out_s": 1.0, "muted": True},
+            "clip_duration_s": 6.0,
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert plan_status == 200
+    plan_data = json.loads(plan_raw.decode("utf-8"))
+    assert plan_data["plan"]["video_filter"] == (
+        "fade=t=in:st=0.000:d=0.500,fade=t=out:st=5.000:d=1.000"
+    )
+    assert plan_data["plan"]["audio_filter"] == "volume=0"
+
+    # Audio-only clip opt-out of video dip-to-black while preserving afade
+    ao_clip_status, _, ao_clip_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/fade_audio_clip_only.mp4",
+            "profile": "web_h264",
+            "video_fade": {"fade_in_s": 0.0, "fade_out_s": 0.0},
+            "audio_params": {"gain_db": 0.0, "fade_in_s": 0.5, "fade_out_s": 1.0, "muted": False},
+            "clip_duration_s": 6.0,
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert ao_clip_status == 200
+    ao_clip_data = json.loads(ao_clip_raw.decode("utf-8"))
+    assert ao_clip_data["plan"]["video_filter"] is None
+    assert ao_clip_data["plan"]["audio_filter"] == (
+        "afade=t=in:st=0.000:d=0.500,afade=t=out:st=5.000:d=1.000"
+    )
 
 
 def test_ui_retime_compile_and_render_plan(ui_server: tuple[str, Path]) -> None:
@@ -955,6 +1040,7 @@ import {{
   compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
+  compileVideoFadeFilterClient,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
@@ -1135,6 +1221,18 @@ const compiledAfFairlight = compileAudioFilterClient(
 assert.equal(
   compiledAfFairlight.filtergraph,
   "volume=-2.00dB,highpass=f=100,loudnorm=I=-23.0:TP=-1.0:LRA=11"
+);
+
+const compiledVf = compileVideoFadeFilterClient({{ fade_in_s: 0.5, fade_out_s: 1.0 }}, 5.0);
+assert.equal(compiledVf.is_identity, false);
+assert.equal(
+  compiledVf.filtergraph,
+  "fade=t=in:st=0.000:d=0.500,fade=t=out:st=4.000:d=1.000"
+);
+const compiledVfClamped = compileVideoFadeFilterClient({{ fade_in_s: 3.0, fade_out_s: 3.0 }}, 2.0);
+assert.equal(
+  compiledVfClamped.filtergraph,
+  "fade=t=in:st=0.000:d=1.000,fade=t=out:st=1.000:d=1.000"
 );
 
 const retimeNormDefault = normalizeClipRetime(doc.tracks[0].clips[0]);
@@ -2761,6 +2859,17 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert page.locator("#clip-label-color-badge").text_content() == "B-Roll"
 
                     # Verify Clip Audio Gain / Fade Controls & Track Mute/Solo Mixer
+                    page.locator('[data-fade-quick="in"][data-fade-val="0.5"]').click()
+                    page.locator('[data-fade-quick="out"][data-fade-val="1"]').click()
+                    assert page.locator("#clip-fade-badge").text_content() == "IN 0.5s | OUT 1.0s"
+                    fade_fg = page.locator("#clip-fade-fg-preview").text_content() or ""
+                    assert "fade=t=in:st=0.000:d=0.500" in fade_fg
+                    assert "fade=t=out:" in fade_fg
+                    assert "afade=t=in:st=0.000:d=0.500" in fade_fg
+                    assert "afade=t=out:" in fade_fg
+                    page.locator("#btn-clip-fade-reset-all").click()
+                    assert page.locator("#clip-fade-badge").text_content() == "OFF"
+
                     page.locator("#clip-audio-gain-num").fill("-6.0")
                     page.locator("#clip-audio-gain-num").press("Enter")
                     page.locator("#clip-fade-in-num").fill("1.25")
@@ -2889,6 +2998,8 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                         "#btn-timeline-index-clear",
                         '#timeline-index-color-filter [data-index-color="blue"]',
                         "#timeline-index-list .timeline-index-row",
+                        '[data-fade-quick="in"][data-fade-val="0.5"]',
+                        "#btn-clip-fade-reset-all",
                     ):
                         box = page.locator(idx_selector).first.bounding_box()
                         assert box is not None and box["height"] >= 44, (

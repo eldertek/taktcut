@@ -329,6 +329,41 @@
                 </div>
               </div>
 
+              <div id="timeline-fade-inspector" class="fade-inspector-dock">
+                <div class="pane-subheader">
+                  <span data-i18n="timeline.fade.title">Fades (Dip to Black &amp; Audio)</span>
+                  <div class="viewer-controls">
+                    <span id="clip-fade-badge" class="nle-tag mono">OFF</span>
+                    <button type="button" id="btn-clip-fade-reset-all" class="btn btn-mini" data-i18n="timeline.fade.resetAll" aria-label="Reset clip fades">Reset</button>
+                  </div>
+                </div>
+                <div id="clip-fade-controls" class="audio-ctrl-grid mono">
+                  <div class="audio-ctrl-row">
+                    <label for="clip-fade-in-range" data-i18n="timeline.audio.fadeIn">Fade In (s)</label>
+                    <input type="range" id="clip-fade-in-range" min="0" max="5" step="0.1" value="0">
+                    <input type="number" id="clip-fade-in-num" class="input-num" min="0" max="5" step="0.1" value="0.00" aria-label="Clip fade in seconds">
+                    <button type="button" id="btn-clip-fade-in-reset" class="btn btn-mini" aria-label="Reset clip fade in">Rst</button>
+                  </div>
+                  <div class="fade-quick-strip" role="group" aria-label="Fade In quick presets">
+                    <button type="button" class="btn btn-mini fade-quick-btn" data-fade-quick="in" data-fade-val="0" aria-pressed="false">0s</button>
+                    <button type="button" class="btn btn-mini fade-quick-btn" data-fade-quick="in" data-fade-val="0.5" aria-pressed="false">0.5s</button>
+                    <button type="button" class="btn btn-mini fade-quick-btn" data-fade-quick="in" data-fade-val="1" aria-pressed="false">1.0s</button>
+                  </div>
+                  <div class="audio-ctrl-row">
+                    <label for="clip-fade-out-range" data-i18n="timeline.audio.fadeOut">Fade Out (s)</label>
+                    <input type="range" id="clip-fade-out-range" min="0" max="5" step="0.1" value="0">
+                    <input type="number" id="clip-fade-out-num" class="input-num" min="0" max="5" step="0.1" value="0.00" aria-label="Clip fade out seconds">
+                    <button type="button" id="btn-clip-fade-out-reset" class="btn btn-mini" aria-label="Reset clip fade out">Rst</button>
+                  </div>
+                  <div class="fade-quick-strip" role="group" aria-label="Fade Out quick presets">
+                    <button type="button" class="btn btn-mini fade-quick-btn" data-fade-quick="out" data-fade-val="0" aria-pressed="false">0s</button>
+                    <button type="button" class="btn btn-mini fade-quick-btn" data-fade-quick="out" data-fade-val="0.5" aria-pressed="false">0.5s</button>
+                    <button type="button" class="btn btn-mini fade-quick-btn" data-fade-quick="out" data-fade-val="1" aria-pressed="false">1.0s</button>
+                  </div>
+                  <div id="clip-fade-fg-preview" class="telemetry-note mono" data-i18n="timeline.fade.bypassed">Dip to Black &amp; audio ramp bypassed.</div>
+                </div>
+              </div>
+
               <div id="timeline-audio-inspector" class="audio-inspector-dock">
                 <div class="pane-subheader">
                   <span data-i18n="timeline.audio.title">Clip Audio &amp; Track Mixer</span>
@@ -343,18 +378,6 @@
                     <input type="range" id="clip-audio-gain-range" min="-24" max="12" step="0.5" value="0">
                     <input type="number" id="clip-audio-gain-num" class="input-num" min="-24" max="12" step="0.5" value="0.0" aria-label="Clip audio gain in dB">
                     <button type="button" id="btn-clip-gain-reset" class="btn btn-mini" aria-label="Reset clip audio gain">Rst</button>
-                  </div>
-                  <div class="audio-ctrl-row">
-                    <label for="clip-fade-in-range" data-i18n="timeline.audio.fadeIn">Fade In (s)</label>
-                    <input type="range" id="clip-fade-in-range" min="0" max="5" step="0.05" value="0">
-                    <input type="number" id="clip-fade-in-num" class="input-num" min="0" max="5" step="0.05" value="0.00" aria-label="Clip fade in seconds">
-                    <button type="button" id="btn-clip-fade-in-reset" class="btn btn-mini" aria-label="Reset clip fade in">Rst</button>
-                  </div>
-                  <div class="audio-ctrl-row">
-                    <label for="clip-fade-out-range" data-i18n="timeline.audio.fadeOut">Fade Out (s)</label>
-                    <input type="range" id="clip-fade-out-range" min="0" max="5" step="0.05" value="0">
-                    <input type="number" id="clip-fade-out-num" class="input-num" min="0" max="5" step="0.05" value="0.00" aria-label="Clip fade out seconds">
-                    <button type="button" id="btn-clip-fade-out-reset" class="btn btn-mini" aria-label="Reset clip fade out">Rst</button>
                   </div>
                 </div>
                 <div class="pane-subheader">

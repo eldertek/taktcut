@@ -72,6 +72,7 @@ import {
   compileFairlightAudioFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
+  compileVideoFadeFilterClient,
   computeInOutRangeMetrics,
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
@@ -981,6 +982,27 @@ function getSelectedClipAudioPayload() {
   };
 }
 
+function getSelectedClipFadePayload() {
+  const doc = state.timelineDoc;
+  const info = getSelectedClipTrack();
+  if (!doc || !info) return null;
+  const norm = normalizeClipAudio(info.clip);
+  const fpsRate = doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+  const clipDurationS = Math.max(0.04, info.clip.duration_frames / fpsRate);
+  const isVideoClip = info.clip.media_type !== "audio";
+  const fadeInS = isVideoClip ? norm.fadeInS : 0;
+  const fadeOutS = isVideoClip ? norm.fadeOutS : 0;
+  return {
+    isIdentity: fadeInS < 1e-6 && fadeOutS < 1e-6,
+    isVideoClip,
+    clipDurationS,
+    video_fade: {
+      fade_in_s: fadeInS,
+      fade_out_s: fadeOutS
+    }
+  };
+}
+
 function getSelectedClipRetimePayload() {
   const doc = state.timelineDoc;
   const info = getSelectedClipTrack();
@@ -1038,6 +1060,107 @@ function toggleTrackSoloAction(trackKind, trackIndex) {
   commitTimelineMutation(res.doc, nextSel);
 }
 
+function renderTimelineFadeInspector() {
+  const fadeCtrl = byId("clip-fade-controls");
+  const fadeBadge = byId("clip-fade-badge");
+  const fadePreview = byId("clip-fade-fg-preview");
+  const fadeResetAll = byId("btn-clip-fade-reset-all");
+  const fadeInRange = byId("clip-fade-in-range");
+  const fadeInNum = byId("clip-fade-in-num");
+  const fadeOutRange = byId("clip-fade-out-range");
+  const fadeOutNum = byId("clip-fade-out-num");
+  const rstIn = byId("btn-clip-fade-in-reset");
+  const rstOut = byId("btn-clip-fade-out-reset");
+  const quickBtns = document.querySelectorAll(".fade-quick-btn");
+
+  const info = getSelectedClipTrack();
+  const hasClip = Boolean(info);
+  if (fadeCtrl) fadeCtrl.classList.toggle("is-disabled", !hasClip);
+  for (const el of [
+    fadeInRange,
+    fadeInNum,
+    fadeOutRange,
+    fadeOutNum,
+    rstIn,
+    rstOut,
+    fadeResetAll,
+    ...quickBtns
+  ]) {
+    if (el) el.disabled = !hasClip;
+  }
+
+  if (!info) {
+    if (fadeInRange) fadeInRange.value = "0";
+    if (fadeInNum && document.activeElement !== fadeInNum) fadeInNum.value = "0.00";
+    if (fadeOutRange) fadeOutRange.value = "0";
+    if (fadeOutNum && document.activeElement !== fadeOutNum) fadeOutNum.value = "0.00";
+    for (const btn of quickBtns) {
+      btn.classList.remove("is-active");
+      btn.setAttribute("aria-pressed", "false");
+    }
+    if (fadeBadge) {
+      fadeBadge.textContent = "NO CLIP";
+      fadeBadge.className = "nle-tag mono";
+    }
+    if (fadePreview) fadePreview.textContent = t("timeline.fade.bypassed");
+    return;
+  }
+
+  const norm = normalizeClipAudio(info.clip);
+  if (fadeInRange) fadeInRange.value = String(norm.fadeInS);
+  if (fadeInNum && document.activeElement !== fadeInNum) fadeInNum.value = norm.fadeInS.toFixed(2);
+  if (fadeOutRange) fadeOutRange.value = String(norm.fadeOutS);
+  if (fadeOutNum && document.activeElement !== fadeOutNum) fadeOutNum.value = norm.fadeOutS.toFixed(2);
+
+  for (const btn of quickBtns) {
+    const edge = btn.getAttribute("data-fade-quick");
+    const targetVal = Number.parseFloat(btn.getAttribute("data-fade-val") || "0");
+    const currentVal = edge === "out" ? norm.fadeOutS : norm.fadeInS;
+    const isMatch = Math.abs(currentVal - targetVal) < 0.01;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+
+  const hasAnyFade = norm.fadeInS > 1e-6 || norm.fadeOutS > 1e-6;
+  if (fadeBadge) {
+    if (!hasAnyFade) {
+      fadeBadge.textContent = "OFF";
+      fadeBadge.className = "nle-tag mono";
+    } else {
+      const parts = [];
+      if (norm.fadeInS > 1e-6) parts.push(`IN ${norm.fadeInS.toFixed(1)}s`);
+      if (norm.fadeOutS > 1e-6) parts.push(`OUT ${norm.fadeOutS.toFixed(1)}s`);
+      fadeBadge.textContent = parts.join(" | ");
+      fadeBadge.className = "nle-tag mono is-pass";
+    }
+  }
+
+  if (fadePreview) {
+    if (!hasAnyFade) {
+      fadePreview.textContent = t("timeline.fade.bypassed");
+    } else {
+      const audioPayload = getSelectedClipAudioPayload();
+      const fadePayload = getSelectedClipFadePayload();
+      const clipDur = audioPayload ? audioPayload.clipDurationS : null;
+      const previewParts = [];
+      if (fadePayload && fadePayload.isVideoClip) {
+        const compiledVf = compileVideoFadeFilterClient(fadePayload.video_fade, clipDur);
+        if (compiledVf.filtergraph) previewParts.push(`-vf ${compiledVf.filtergraph}`);
+      }
+      if (audioPayload && !audioPayload.audio_params.muted) {
+        const compiledAf = compileAudioFilterClient(
+          { gain_db: 0, fade_in_s: norm.fadeInS, fade_out_s: norm.fadeOutS, muted: false },
+          clipDur,
+          null
+        );
+        if (compiledAf.filtergraph) previewParts.push(`-af ${compiledAf.filtergraph}`);
+      }
+      fadePreview.textContent =
+        previewParts.length > 0 ? previewParts.join(" | ") : t("timeline.fade.bypassed");
+    }
+  }
+}
+
 function renderTimelineAudioInspector() {
   const ctrlGrid = byId("clip-audio-controls");
   const afBadge = byId("clip-audio-af-preview");
@@ -1046,14 +1169,9 @@ function renderTimelineAudioInspector() {
   const mixerSummary = byId("track-mixer-summary");
   const gainRange = byId("clip-audio-gain-range");
   const gainNum = byId("clip-audio-gain-num");
-  const fadeInRange = byId("clip-fade-in-range");
-  const fadeInNum = byId("clip-fade-in-num");
-  const fadeOutRange = byId("clip-fade-out-range");
-  const fadeOutNum = byId("clip-fade-out-num");
   const rstGain = byId("btn-clip-gain-reset");
-  const rstIn = byId("btn-clip-fade-in-reset");
-  const rstOut = byId("btn-clip-fade-out-reset");
 
+  renderTimelineFadeInspector();
   if (!ctrlGrid || !mixerStrip) return;
 
   const doc = state.timelineDoc;
@@ -1102,17 +1220,13 @@ function renderTimelineAudioInspector() {
   const info = getSelectedClipTrack();
   const hasClip = Boolean(info);
   ctrlGrid.classList.toggle("is-disabled", !hasClip);
-  for (const el of [gainRange, gainNum, fadeInRange, fadeInNum, fadeOutRange, fadeOutNum, rstGain, rstIn, rstOut, sendBtn]) {
+  for (const el of [gainRange, gainNum, rstGain, sendBtn]) {
     if (el) el.disabled = !hasClip;
   }
 
   if (!info) {
     if (gainRange) gainRange.value = "0";
     if (gainNum && document.activeElement !== gainNum) gainNum.value = "0.0";
-    if (fadeInRange) fadeInRange.value = "0";
-    if (fadeInNum && document.activeElement !== fadeInNum) fadeInNum.value = "0.00";
-    if (fadeOutRange) fadeOutRange.value = "0";
-    if (fadeOutNum && document.activeElement !== fadeOutNum) fadeOutNum.value = "0.00";
     if (afBadge) {
       afBadge.textContent = "NO CLIP";
       afBadge.className = "nle-tag mono";
@@ -1125,10 +1239,6 @@ function renderTimelineAudioInspector() {
   const norm = normalizeClipAudio(info.clip);
   if (gainRange) gainRange.value = String(norm.gainDb);
   if (gainNum && document.activeElement !== gainNum) gainNum.value = norm.gainDb.toFixed(1);
-  if (fadeInRange) fadeInRange.value = String(norm.fadeInS);
-  if (fadeInNum && document.activeElement !== fadeInNum) fadeInNum.value = norm.fadeInS.toFixed(2);
-  if (fadeOutRange) fadeOutRange.value = String(norm.fadeOutS);
-  if (fadeOutNum && document.activeElement !== fadeOutNum) fadeOutNum.value = norm.fadeOutS.toFixed(2);
 
   const payload = getSelectedClipAudioPayload();
   if (afBadge && payload) {
@@ -5086,8 +5196,13 @@ async function buildOrExecuteRender(execute) {
       useClipAudioEl && useClipAudioEl.checked ? getSelectedClipAudioPayload() : null;
     const audioParamsPayload =
       clipAudioInfo && !clipAudioInfo.isIdentity ? clipAudioInfo.audio_params : null;
+    const clipFadeInfo =
+      useClipAudioEl && useClipAudioEl.checked ? getSelectedClipFadePayload() : null;
+    const videoFadePayload = clipFadeInfo ? clipFadeInfo.video_fade : null;
     const clipDurationPayload =
-      audioParamsPayload && clipAudioInfo ? clipAudioInfo.clipDurationS : null;
+      (audioParamsPayload && clipAudioInfo) || (videoFadePayload && (videoFadePayload.fade_in_s > 0 || videoFadePayload.fade_out_s > 0))
+        ? (clipAudioInfo ? clipAudioInfo.clipDurationS : clipFadeInfo ? clipFadeInfo.clipDurationS : null)
+        : null;
 
     const useClipRetimeEl = byId("render-use-clip-retime");
     const clipRetimeInfo =
@@ -5144,6 +5259,7 @@ async function buildOrExecuteRender(execute) {
         title_overlay: titlePayload,
         subtitle_track: subtitlePayload,
         audio_params: audioParamsPayload,
+        video_fade: videoFadePayload,
         retime_params: retimeParamsPayload,
         transform_params: transformParamsPayload,
         framing: framingPayload,
@@ -5204,6 +5320,7 @@ async function buildOrExecuteRender(execute) {
       title_overlay: titlePayload,
       subtitle_track: subtitlePayload,
       audio_params: audioParamsPayload,
+      video_fade: videoFadePayload,
       retime_params: retimeParamsPayload,
       transform_params: transformParamsPayload,
       framing: framingPayload,
@@ -7177,6 +7294,45 @@ function wireClipAudioInspector() {
         }
       });
     }
+  }
+
+  for (const btn of document.querySelectorAll(".fade-quick-btn")) {
+    btn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const edge = btn.getAttribute("data-fade-quick");
+      const val = Number.parseFloat(btn.getAttribute("data-fade-val") || "0");
+      if (!Number.isFinite(val)) return;
+      const patch = edge === "out" ? { fade_out_s: val } : { fade_in_s: val };
+      const res = updateClipAudioInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        patch
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  const fadeResetAllBtn = byId("btn-clip-fade-reset-all");
+  if (fadeResetAllBtn) {
+    fadeResetAllBtn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const res = updateClipAudioInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { fade_in_s: 0, fade_out_s: 0 }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
   }
 
   const sendBtn = byId("btn-clip-audio-to-deliver");

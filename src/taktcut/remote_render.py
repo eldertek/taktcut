@@ -49,6 +49,7 @@ from taktcut.models import (
 from taktcut.render import (
     ClipAudioParams,
     ClipRetimeParams,
+    ClipVideoFadeParams,
     FramingParams,
     build_render_plan,
     execute_render_plan,
@@ -251,6 +252,7 @@ class RemoteRenderJobRequest(BaseModel):
     title_overlay: TitleOverlayParams | None = None
     subtitle_track: SubtitleTrackParams | None = None
     audio_params: ClipAudioParams | None = None
+    video_fade: ClipVideoFadeParams | None = None
     retime_params: ClipRetimeParams | None = None
     transform_params: ClipTransformParams | None = None
     framing: FramingParams | None = None
@@ -569,6 +571,7 @@ class RemoteRenderState:
             title_overlay=req.title_overlay,
             subtitle_track=req.subtitle_track,
             audio_params=req.audio_params,
+            video_fade=req.video_fade,
             retime_params=req.retime_params,
             transform_params=req.transform_params,
             framing=req.framing,
