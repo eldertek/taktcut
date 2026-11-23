@@ -3100,6 +3100,49 @@ input[type="range"] {
   color: var(--text-primary);
 }
 
+/* DELIVER ESTIMATED EXPORT FILE SIZE READOUT */
+.deliver-estimate-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 7px 10px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+}
+
+.deliver-estimate-main {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.deliver-estimate-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.deliver-estimate-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+.deliver-estimate-detail {
+  font-size: 10px;
+  color: var(--text-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* DELIVER TIMELINE CHAPTERS & FFMETADATA EXPORT */
 .deliver-side-stack {
   display: flex;

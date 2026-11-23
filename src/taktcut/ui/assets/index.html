@@ -1552,6 +1552,13 @@
                   <span data-i18n="render.check.preferHw">Prefer GPU NVENC encoder (fallback to CPU libx264/libx265)</span>
                 </label>
               </div>
+              <div class="deliver-estimate-bar" role="status" aria-live="polite">
+                <div class="deliver-estimate-main">
+                  <span class="deliver-estimate-label" data-i18n="render.estimate.label">Estimated Export Size</span>
+                  <span id="deliver-size-estimate" class="nle-tag is-blue mono deliver-estimate-badge">0 MB</span>
+                </div>
+                <span id="deliver-size-detail" class="deliver-estimate-detail mono"></span>
+              </div>
               <div class="btn-row">
                 <button type="button" id="btn-build-render-plan" class="btn btn-primary" data-i18n="render.btn.buildPlan">Build Plan (Dry-Run)</button>
                 <button type="button" id="btn-execute-render" class="btn btn-secondary" data-i18n="render.btn.execute">Execute Render</button>

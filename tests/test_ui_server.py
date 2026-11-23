@@ -960,6 +960,7 @@ import {{
   createStillRecord,
   deleteMarkerInDocument,
   escapeFfmetadataValue,
+  estimateRenderFileSize,
   findActiveTransitionAtFrame,
   findAdjacentCutForClip,
   findAllCutJunctions,
@@ -1629,6 +1630,159 @@ assert.equal(
   formatYoutubeChaptersFromMarkers(chapterDocInputs.markers),
   "00:00 Intro\\n00:01 Intro Title Cue\\n00:09 Grade Reference"
 );
+
+// estimateRenderFileSize unit tests
+for (const badDur of [0, -5, NaN, null, undefined]) {{
+  const res = estimateRenderFileSize({{
+    durationS: badDur,
+    codec: "web_h264",
+    width: 1920,
+    height: 1080,
+    fps: 25,
+    crf: 18,
+    audioBitrateKbps: 192
+  }});
+  assert.equal(res.estimatedBytes, 0);
+  assert.equal(res.estimatedMb, 0);
+  assert.equal(res.formattedSize, "0 MB");
+  assert.equal(res.videoBitrateKbps, 0);
+  assert.equal(res.audioBitrateKbps, 0);
+  assert.equal(res.warning, "invalid_duration");
+}}
+
+const h264_1080p = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "web_h264",
+  width: 1920,
+  height: 1080,
+  fps: 25,
+  crf: 18,
+  audioBitrateKbps: 192
+}});
+assert.equal(h264_1080p.formattedSize, "~18.4 MB");
+assert.equal(h264_1080p.warning, null);
+assert.equal(h264_1080p.audioBitrateKbps, 192);
+assert.ok(h264_1080p.videoBitrateKbps > 5000);
+
+const prores422_10s = estimateRenderFileSize({{
+  durationS: 10,
+  codec: "prores_422",
+  width: 1920,
+  height: 1080,
+  fps: 25
+}});
+assert.equal(prores422_10s.formattedSize, "~145 MB");
+assert.equal(prores422_10s.audioBitrateKbps, 2304);
+assert.equal(prores422_10s.warning, null);
+
+const proresHq_20s = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "prores_hq",
+  width: 1920,
+  height: 1080,
+  fps: 25,
+  crf: 18,
+  audioBitrateKbps: null
+}});
+assert.ok(proresHq_20s.estimatedBytes > prores422_10s.estimatedBytes);
+assert.equal(proresHq_20s.audioBitrateKbps, 2304);
+
+const hevc_1080p = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "master_hevc",
+  width: 1920,
+  height: 1080,
+  fps: 25,
+  crf: 20,
+  audioBitrateKbps: 192
+}});
+assert.ok(hevc_1080p.estimatedBytes < h264_1080p.estimatedBytes);
+
+const uhd4k_hevc = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "master_hevc",
+  width: 3840,
+  height: 2160,
+  fps: 25,
+  crf: 20,
+  audioBitrateKbps: 320
+}});
+assert.ok(uhd4k_hevc.estimatedBytes > hevc_1080p.estimatedBytes * 3);
+
+const hd720_h264 = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "web_h264",
+  width: 1280,
+  height: 720,
+  fps: 25,
+  crf: 18,
+  audioBitrateKbps: 128
+}});
+assert.ok(hd720_h264.estimatedBytes < h264_1080p.estimatedBytes);
+
+const fps60_h264 = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "web_h264",
+  width: 1920,
+  height: 1080,
+  fps: 60,
+  crf: 18,
+  audioBitrateKbps: 192
+}});
+assert.ok(fps60_h264.estimatedBytes > h264_1080p.estimatedBytes);
+
+const ntsc_h264 = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "web_h264",
+  width: 1920,
+  height: 1080,
+  fps: "24000/1001",
+  crf: 18,
+  audioBitrateKbps: 192
+}});
+assert.ok(ntsc_h264.estimatedBytes < h264_1080p.estimatedBytes);
+
+const crf14_h264 = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "web_h264",
+  width: 1920,
+  height: 1080,
+  fps: 25,
+  crf: 14,
+  audioBitrateKbps: 192
+}});
+const crf26_h264 = estimateRenderFileSize({{
+  durationS: 20,
+  codec: "web_h264",
+  width: 1920,
+  height: 1080,
+  fps: 25,
+  crf: 26,
+  audioBitrateKbps: 192
+}});
+assert.ok(crf14_h264.estimatedBytes > h264_1080p.estimatedBytes);
+assert.ok(crf26_h264.estimatedBytes < h264_1080p.estimatedBytes);
+
+const tinyClip = estimateRenderFileSize({{
+  durationS: 0.5,
+  codec: "web_h264",
+  width: 1280,
+  height: 720,
+  fps: 25,
+  crf: 26,
+  audioBitrateKbps: 128
+}});
+assert.ok(tinyClip.formattedSize.endsWith(" KB"));
+
+const hugeProres = estimateRenderFileSize({{
+  durationS: 300,
+  codec: "prores_hq",
+  width: 3840,
+  height: 2160,
+  fps: 25
+}});
+assert.equal(hugeProres.warning, "large_file");
+assert.ok(hugeProres.formattedSize.endsWith(" GB"));
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -3830,6 +3984,35 @@ def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
         "render.chapters.exportedFfmeta",
     ):
         assert i18n_text.count(f'"{key}"') == 2
+
+    for asset_file in assets_dir.iterdir():
+        if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:
+            content = asset_file.read_text(encoding="utf-8")
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_file.name}"
+            assert "\u2013" not in content and "\u2014" not in content, (
+                f"En/em dash found in {asset_file.name}"
+            )
+
+
+def test_ui_deliver_size_estimate_assets() -> None:
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="deliver-size-estimate"' in html_text
+    assert 'id="deliver-size-detail"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.estimate.label",
+        "render.estimate.scopeTimeline",
+        "render.estimate.scopeIo",
+        "render.estimate.invalidDuration",
+        "render.estimate.largeFile",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    css_text = (assets_dir / "styles.css").read_text(encoding="utf-8")
+    assert ".deliver-estimate-bar" in css_text
+    assert ".deliver-estimate-badge" in css_text
 
     for asset_file in assets_dir.iterdir():
         if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:

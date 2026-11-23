@@ -77,6 +77,7 @@ import {
   computeTimelineMaxFrame,
   createStillRecord,
   deleteMarkerInDocument,
+  estimateRenderFileSize,
   evaluateTimelineAudioLevels,
   findAdjacentCutForClip,
   findClipIndex,
@@ -501,6 +502,7 @@ function setLanguage(lang) {
   renderFairlightAudioUI();
   renderFxStack();
   renderDeliveryPresetStrip();
+  updateDeliverSizeEstimate();
   updateTitleTimingBadges();
   updateSubtitleTimingBadges();
   if (state.fxLastCompile) renderFxCompileResult(state.fxLastCompile);
@@ -861,6 +863,7 @@ function renderTimelineUI() {
     if (rippleBtn) rippleBtn.disabled = true;
     byId("timeline-issues-list").replaceChildren();
     renderDeliverChaptersPreview();
+    updateDeliverSizeEstimate();
     return;
   }
 
@@ -901,6 +904,7 @@ function renderTimelineUI() {
   renderTimelineSelection();
   renderTimelineIssues();
   renderDeliverChaptersPreview();
+  updateDeliverSizeEstimate();
   if (state.activeTab === "timeline") {
     redrawActiveCanvases();
   }
@@ -4486,6 +4490,110 @@ function markDeliverPresetCustom() {
   }
 }
 
+function updateDeliverSizeEstimate() {
+  const badgeEl = byId("deliver-size-estimate");
+  const detailEl = byId("deliver-size-detail");
+  if (!badgeEl) return;
+
+  const doc = state.timelineDoc;
+  const fpsObj = doc && doc.fps ? doc.fps : { num: 25, den: 1 };
+  const timelineFps = Math.max(1, Number(fpsObj.num || 25) / Math.max(1, Number(fpsObj.den || 1)));
+  const minF = doc ? doc.start_frame || 0 : 0;
+  const maxF = doc ? Math.max(minF, state.timelineMaxFrame || minF) : 0;
+  const metrics = computeInOutRangeMetrics(state.ioRange, timelineFps, minF, maxF);
+
+  let durationS = 0;
+  let scope = "timeline";
+  if (doc) {
+    if (metrics.isComplete) {
+      durationS = Math.max(0, metrics.durationFrames / timelineFps);
+      scope = "io";
+    } else if (metrics.isActive) {
+      durationS = Math.max(0, metrics.effectiveDurationFrames / timelineFps);
+      scope = "io";
+    } else {
+      durationS = Math.max(0, (maxF - minF) / timelineFps);
+      scope = "timeline";
+    }
+  }
+
+  const profileEl = byId("render-profile");
+  const profile = profileEl ? profileEl.value : "web_h264";
+  const codecLabel =
+    profile === "prores_hq" ? "ProRes 422 HQ" : profile === "master_hevc" ? "HEVC" : "H.264";
+
+  const useFramingEl = byId("render-use-framing");
+  const useFraming = useFramingEl ? Boolean(useFramingEl.checked) : false;
+  const resEl = byId("render-resolution");
+  let targetW = state.renderConfig.targetWidth || 1920;
+  let targetH = state.renderConfig.targetHeight || 1080;
+  if (resEl && resEl.value && /^\d+x\d+$/.test(resEl.value)) {
+    const [rw, rh] = resEl.value.split("x").map((n) => Number.parseInt(n, 10));
+    if (Number.isInteger(rw) && Number.isInteger(rh) && rw > 0 && rh > 0) {
+      targetW = rw;
+      targetH = rh;
+    }
+  }
+  const width = !useFraming && doc && doc.width ? doc.width : targetW;
+  const height = !useFraming && doc && doc.height ? doc.height : targetH;
+
+  const exportFpsEl = byId("render-export-fps");
+  const exportFpsRaw = exportFpsEl ? exportFpsEl.value : "source";
+  const fpsEl = byId("render-fps");
+  const fpsInputRaw = fpsEl ? fpsEl.value.trim() : "";
+  const effectiveFps =
+    exportFpsRaw && exportFpsRaw !== "source" ? exportFpsRaw : fpsInputRaw || timelineFps;
+
+  const crfEl = byId("render-crf");
+  const crfRaw = crfEl ? crfEl.value.trim() : "";
+  const crf =
+    profile !== "prores_hq" && /^-?\d+$/.test(crfRaw) ? Number.parseInt(crfRaw, 10) : null;
+
+  const audioEl = byId("render-audio-bitrate");
+  const audioRaw = audioEl ? audioEl.value : "192";
+  const audioBitrateKbps =
+    profile !== "prores_hq" && /^\d+$/.test(audioRaw) ? Number.parseInt(audioRaw, 10) : null;
+
+  const est = estimateRenderFileSize({
+    durationS,
+    codec: profile,
+    width,
+    height,
+    fps: effectiveFps,
+    crf,
+    audioBitrateKbps
+  });
+
+  badgeEl.textContent = est.formattedSize;
+  badgeEl.className =
+    est.warning === "invalid_duration" || est.warning === "large_file"
+      ? "nle-tag is-warn mono deliver-estimate-badge"
+      : "nle-tag is-blue mono deliver-estimate-badge";
+
+  if (detailEl) {
+    if (est.warning === "invalid_duration") {
+      detailEl.textContent = t("render.estimate.invalidDuration");
+    } else {
+      const scopeLabel =
+        scope === "io" ? t("render.estimate.scopeIo") : t("render.estimate.scopeTimeline");
+      const videoMbps = (est.videoBitrateKbps / 1000).toFixed(1);
+      const audioLabel =
+        profile === "prores_hq" ? "PCM 24b" : `AAC ${est.audioBitrateKbps} kbps`;
+      const fpsDisplay =
+        typeof effectiveFps === "number" ? Number(effectiveFps.toFixed(2)) : effectiveFps;
+      const parts = [
+        `${durationS.toFixed(1)}s (${scopeLabel})`,
+        `${width}x${height} @ ${fpsDisplay} fps`,
+        `${codecLabel} ~${videoMbps} Mbps + ${audioLabel}`
+      ];
+      if (est.warning === "large_file") {
+        parts.push(t("render.estimate.largeFile"));
+      }
+      detailEl.textContent = parts.join(" | ");
+    }
+  }
+}
+
 function syncReviewWatermarkControlsUI() {
   const wmInput = byId("render-watermark-text");
   const wmText = wmInput ? wmInput.value.trim() : "";
@@ -4556,6 +4664,7 @@ function applyDeliveryPreset(presetId) {
   syncFramingControlsUI();
   renderFairlightAudioUI();
   renderDeliveryPresetStrip();
+  updateDeliverSizeEstimate();
   redrawActiveCanvases();
   showBanner(`${getDeliveryPresetLabel(preset)} (${preset.width}x${preset.height}, ${preset.container.toUpperCase()})`, "info");
 }
@@ -5502,6 +5611,7 @@ function updateIoRangeUI() {
       pill.className = "nle-tag mono io-range-pill is-active";
     }
   }
+  updateDeliverSizeEstimate();
 }
 
 function setInPointAction() {
@@ -8423,6 +8533,7 @@ function wireEvents() {
     state.renderConfig.encoderPreset = "medium";
     syncDeliverProfileControlsState();
     markDeliverPresetCustom();
+    updateDeliverSizeEstimate();
   });
   const renderContainerEl = byId("render-container");
   if (renderContainerEl) {
@@ -8432,15 +8543,36 @@ function wireEvents() {
       const stem = cur.replace(/\.(mp4|mov)$/i, "");
       byId("render-output-path").value = `${stem}.${ext}`;
       markDeliverPresetCustom();
+      updateDeliverSizeEstimate();
     });
   }
   const renderCrfEl = byId("render-crf");
   if (renderCrfEl) {
-    renderCrfEl.addEventListener("input", markDeliverPresetCustom);
+    renderCrfEl.addEventListener("input", () => {
+      markDeliverPresetCustom();
+      updateDeliverSizeEstimate();
+    });
+    renderCrfEl.addEventListener("change", updateDeliverSizeEstimate);
   }
   const renderAudioBitrateEl = byId("render-audio-bitrate");
   if (renderAudioBitrateEl) {
-    renderAudioBitrateEl.addEventListener("change", markDeliverPresetCustom);
+    renderAudioBitrateEl.addEventListener("change", () => {
+      markDeliverPresetCustom();
+      updateDeliverSizeEstimate();
+    });
+  }
+  const renderFpsEl = byId("render-fps");
+  if (renderFpsEl) {
+    renderFpsEl.addEventListener("input", updateDeliverSizeEstimate);
+    renderFpsEl.addEventListener("change", updateDeliverSizeEstimate);
+  }
+  const renderExportFpsEl = byId("render-export-fps");
+  if (renderExportFpsEl) {
+    renderExportFpsEl.addEventListener("change", updateDeliverSizeEstimate);
+  }
+  const renderUseFramingEl = byId("render-use-framing");
+  if (renderUseFramingEl) {
+    renderUseFramingEl.addEventListener("change", updateDeliverSizeEstimate);
   }
   const renderLufsEl = byId("render-lufs");
   if (renderLufsEl) {
@@ -8477,6 +8609,7 @@ function wireEvents() {
         syncFramingControlsUI();
         redrawActiveCanvases();
         markDeliverPresetCustom();
+        updateDeliverSizeEstimate();
       }
     });
   }
@@ -8493,6 +8626,7 @@ function wireEvents() {
       syncFramingControlsUI();
       redrawActiveCanvases();
       markDeliverPresetCustom();
+      updateDeliverSizeEstimate();
     });
   }
   const renderMode = byId("render-framing-mode");
@@ -8638,6 +8772,7 @@ async function bootstrap() {
   syncDeliverProfileControlsState();
   renderFairlightAudioUI();
   renderDeliveryPresetStrip();
+  updateDeliverSizeEstimate();
   syncColorInputsFromState();
   syncSplitWipeControls("color");
   syncSplitWipeControls("fx");

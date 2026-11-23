@@ -2304,3 +2304,131 @@ export function timelineDocToChapterInputs(doc) {
   }));
   return { markers, totalDurationS };
 }
+
+function parseRenderFpsValue(rawFps, fallback = 25) {
+  if (rawFps && typeof rawFps === "object") {
+    const num = Number(rawFps.num);
+    const den = Number(rawFps.den || 1);
+    if (Number.isFinite(num) && num > 0 && Number.isFinite(den) && den > 0) {
+      return clampNum(num / den, 1, 240);
+    }
+    return fallback;
+  }
+  if (typeof rawFps === "string") {
+    const trimmed = rawFps.trim();
+    if (!trimmed || trimmed.toLowerCase() === "source") return fallback;
+    if (trimmed.includes("/")) {
+      const [numStr, denStr] = trimmed.split("/");
+      const num = Number(numStr);
+      const den = Number(denStr);
+      if (Number.isFinite(num) && num > 0 && Number.isFinite(den) && den > 0) {
+        return clampNum(num / den, 1, 240);
+      }
+      return fallback;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) && parsed > 0 ? clampNum(parsed, 1, 240) : fallback;
+  }
+  const numVal = Number(rawFps);
+  return Number.isFinite(numVal) && numVal > 0 ? clampNum(numVal, 1, 240) : fallback;
+}
+
+function formatEstimatedByteSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  if (bytes < 1_000_000) {
+    return `~${Math.max(1, Math.round(bytes / 1000))} KB`;
+  }
+  const mb = bytes / 1_000_000;
+  if (mb >= 1000) {
+    return `~${(bytes / 1_000_000_000).toFixed(2)} GB`;
+  }
+  if (mb >= 100) {
+    return `~${Math.round(mb)} MB`;
+  }
+  return `~${mb.toFixed(1)} MB`;
+}
+
+export function estimateRenderFileSize(params = {}) {
+  const src = params && typeof params === "object" ? params : {};
+  const rawDuration = src.durationS;
+  const dur =
+    rawDuration !== null && rawDuration !== undefined && rawDuration !== ""
+      ? Number(rawDuration)
+      : NaN;
+
+  if (!Number.isFinite(dur) || dur <= 0) {
+    return {
+      estimatedBytes: 0,
+      estimatedMb: 0,
+      formattedSize: "0 MB",
+      videoBitrateKbps: 0,
+      audioBitrateKbps: 0,
+      warning: "invalid_duration"
+    };
+  }
+
+  const rawCodec = typeof src.codec === "string" ? src.codec.trim().toLowerCase() : "h264";
+  let codecKind = "h264";
+  if (/prores/.test(rawCodec)) {
+    codecKind = "prores";
+  } else if (/hevc|h\.?265|x265/.test(rawCodec)) {
+    codecKind = "hevc";
+  }
+
+  const rawWidth = Number(src.width);
+  const rawHeight = Number(src.height);
+  const width = Number.isFinite(rawWidth) && rawWidth > 0 ? clampNum(Math.round(rawWidth), 64, 15360) : 1920;
+  const height = Number.isFinite(rawHeight) && rawHeight > 0 ? clampNum(Math.round(rawHeight), 64, 15360) : 1080;
+  const resScale = Math.max(0.05, (width * height) / (1920 * 1080));
+  const fpsVal = parseRenderFpsValue(src.fps, 25);
+
+  const rawAudio = src.audioBitrateKbps;
+  const parsedAudio =
+    rawAudio !== null && rawAudio !== undefined && rawAudio !== "" ? Number(rawAudio) : NaN;
+  const hasExplicitAudio = Number.isFinite(parsedAudio) && parsedAudio >= 0;
+
+  let videoBitrateKbps = 0;
+  let audioBitrateKbps = 0;
+
+  if (codecKind === "prores") {
+    const isHq = /hq/.test(rawCodec);
+    const baseProresKbps = isHq ? 184000 : 113696;
+    videoBitrateKbps = Math.max(1000, Math.round(baseProresKbps * resScale * (fpsVal / 25)));
+    audioBitrateKbps = hasExplicitAudio ? Math.round(parsedAudio) : 2304;
+  } else {
+    const rawCrf = src.crf;
+    const parsedCrf =
+      rawCrf !== null && rawCrf !== undefined && rawCrf !== "" ? Number(rawCrf) : NaN;
+    const fpsFactor = Math.pow(fpsVal / 25, 0.65);
+
+    if (codecKind === "hevc") {
+      const crf = Number.isFinite(parsedCrf) ? clampNum(parsedCrf, 0, 51) : 20;
+      const crfFactor = Math.pow(2, (20 - crf) / 6);
+      videoBitrateKbps = Math.max(120, Math.round(4800 * resScale * fpsFactor * crfFactor));
+    } else {
+      const crf = Number.isFinite(parsedCrf) ? clampNum(parsedCrf, 0, 51) : 18;
+      const crfFactor = Math.pow(2, (18 - crf) / 6);
+      videoBitrateKbps = Math.max(150, Math.round(7168 * resScale * fpsFactor * crfFactor));
+    }
+    audioBitrateKbps = hasExplicitAudio ? Math.round(parsedAudio) : 192;
+  }
+
+  const totalBitrateKbps = videoBitrateKbps + audioBitrateKbps;
+  const estimatedBytes = Math.round(((totalBitrateKbps * 1000) / 8) * dur);
+  const estimatedMb = Number((estimatedBytes / 1_000_000).toFixed(2));
+  const formattedSize = formatEstimatedByteSize(estimatedBytes);
+
+  let warning = null;
+  if (estimatedMb >= 4000) {
+    warning = "large_file";
+  }
+
+  return {
+    estimatedBytes,
+    estimatedMb,
+    formattedSize,
+    videoBitrateKbps,
+    audioBitrateKbps,
+    warning
+  };
+}
