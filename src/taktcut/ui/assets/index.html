@@ -1470,7 +1470,8 @@
           <section class="nle-pane">
             <div class="pane-header">
               <h2 data-i18n="titles.monitor.title">Program Monitor (Live Title Preview)</h2>
-              <div class="tc-group mono">
+              <div class="viewer-controls tc-group mono">
+                <button type="button" id="btn-titles-safe-guides" class="btn btn-mini" aria-pressed="false" data-i18n="timeline.framing.safeGuides">Safe Guides</button>
                 <span id="titles-program-tc" class="tc-readout">00:00:01:00</span>
                 <span id="titles-window-badge" class="nle-tag mono">0.50s - 5.50s</span>
               </div>
@@ -1493,19 +1494,20 @@
         </div>
 
         <div class="nle-titles-bottom">
-        <!-- CAPTIONS & SUBTITLES TRACK (.SRT / .VTT) -->
+        <!-- CAPTIONS & SUBTITLES TRACK (.SRT / .VTT / .ASS KARAOKE) -->
         <section id="subtitles-workbench-pane" class="nle-pane">
           <div class="pane-header">
-            <h2 data-i18n="subtitles.panel.title">Captions &amp; Subtitles Track (.srt / .vtt)</h2>
+            <h2 data-i18n="subtitles.panel.title">Captions &amp; Karaoke Track (.srt / .vtt / .ass)</h2>
             <div class="viewer-controls">
               <span id="subtitle-onair-badge" class="nle-tag is-blue mono">STANDBY</span>
+              <span id="subtitle-karaoke-badge" class="nle-tag mono">KARAOKE OFF</span>
               <span id="subtitle-cue-count-badge" class="nle-tag mono">3 CUES</span>
               <button type="button" id="btn-subtitle-toggle" class="btn btn-mini is-active" aria-pressed="true" data-i18n="subtitles.btn.enabled">Enabled</button>
             </div>
           </div>
           <div class="pane-body">
             <div class="nle-subtitles-grid">
-              <!-- LEFT: CAPTION STYLE + SRT/VTT IMPORT/EXPORT -->
+              <!-- LEFT: CAPTION STYLE + KARAOKE + SAFE MARGINS + SRT/VTT/ASS I/O -->
               <div class="subtitle-left-col">
                 <div class="pane-subheader">
                   <span data-i18n="subtitles.styles.title">Burn-In Caption Style</span>
@@ -1523,6 +1525,66 @@
                     <span class="fx-preset-name" data-i18n="subtitles.style.boxedSocial">Boxed Social</span>
                     <span class="fx-preset-meta mono">#ffffff | dark social pill</span>
                   </button>
+                  <button type="button" class="btn subtitle-style-btn" data-subtitle-style="netflix_clean" aria-pressed="false">
+                    <span class="fx-preset-name" data-i18n="subtitles.style.netflixClean">Netflix Clean</span>
+                    <span class="fx-preset-meta mono">#ffffff | 10% cinema safe</span>
+                  </button>
+                  <button type="button" class="btn subtitle-style-btn" data-subtitle-style="social_karaoke" aria-pressed="false">
+                    <span class="fx-preset-name" data-i18n="subtitles.style.socialKaraoke">Social Karaoke Pop</span>
+                    <span class="fx-preset-meta mono">#ffe047 pop | 24% Reels safe</span>
+                  </button>
+                  <button type="button" class="btn subtitle-style-btn" data-subtitle-style="broadcast_gold" aria-pressed="false">
+                    <span class="fx-preset-name" data-i18n="subtitles.style.broadcastGold">Broadcast Gold Safe</span>
+                    <span class="fx-preset-meta mono">#ffd54f | EBU title safe</span>
+                  </button>
+                </div>
+
+                <div class="subtitle-karaoke-panel">
+                  <div class="pane-subheader">
+                    <span data-i18n="subtitles.karaoke.title">Word-Level Karaoke &amp; Safe Margins</span>
+                  </div>
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="subtitle-karaoke-mode" data-i18n="subtitles.karaoke.mode">Highlight Mode</label>
+                      <select id="subtitle-karaoke-mode" class="input-control mono" aria-label="Word-level karaoke highlight mode">
+                        <option value="off" selected data-i18n="subtitles.karaoke.off">Off (Static Cue)</option>
+                        <option value="color_pop" data-i18n="subtitles.karaoke.colorPop">Word Color Pop</option>
+                        <option value="pill_box" data-i18n="subtitles.karaoke.pillBox">Active Word Pill</option>
+                        <option value="progressive_fill" data-i18n="subtitles.karaoke.progressiveFill">Progressive Word Fill</option>
+                      </select>
+                    </div>
+                    <div class="form-row">
+                      <label for="subtitle-highlight-color" data-i18n="subtitles.karaoke.hlColor">Active Word Color</label>
+                      <div class="subtitle-hl-row">
+                        <input type="color" id="subtitle-highlight-color" class="title-color-picker" value="#ffe047" aria-label="Active karaoke word highlight color">
+                        <div class="subtitle-hl-swatches" role="group" aria-label="Karaoke highlight color presets">
+                          <button type="button" class="btn btn-mini subtitle-hl-swatch is-active" data-hl-color="#ffe047" aria-label="Gold #ffe047" title="#ffe047"></button>
+                          <button type="button" class="btn btn-mini subtitle-hl-swatch" data-hl-color="#00e5ff" aria-label="Cyan #00e5ff" title="#00e5ff"></button>
+                          <button type="button" class="btn btn-mini subtitle-hl-swatch" data-hl-color="#ff6b35" aria-label="Orange #ff6b35" title="#ff6b35"></button>
+                          <button type="button" class="btn btn-mini subtitle-hl-swatch" data-hl-color="#38e08d" aria-label="Emerald #38e08d" title="#38e08d"></button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-row-two">
+                    <div class="form-row">
+                      <label for="subtitle-safe-margin-preset" data-i18n="subtitles.margin.preset">Safe Margin Zone</label>
+                      <select id="subtitle-safe-margin-preset" class="input-control mono" aria-label="Caption safe margin preset">
+                        <option value="standard" selected data-i18n="subtitles.margin.standard">Standard (8%)</option>
+                        <option value="broadcast_action" data-i18n="subtitles.margin.action">Action Safe (5%)</option>
+                        <option value="broadcast_title" data-i18n="subtitles.margin.title">Title Safe (10%)</option>
+                        <option value="reels_tiktok" data-i18n="subtitles.margin.reels">Reels / TikTok Safe (24%)</option>
+                        <option value="upper_third" data-i18n="subtitles.margin.upper">Upper Center (42%)</option>
+                        <option value="custom" data-i18n="subtitles.margin.custom">Custom (%)</option>
+                      </select>
+                    </div>
+                    <div class="form-row subtitle-uppercase-wrap">
+                      <label class="check-label">
+                        <input type="checkbox" id="subtitle-uppercase">
+                        <span data-i18n="subtitles.karaoke.uppercase">ALL CAPS (Social Punch)</span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="title-param-grid mono">
@@ -1531,30 +1593,44 @@
                     <input type="range" id="subtitle-font-size-range" min="14" max="72" step="1" value="34">
                     <input type="number" id="subtitle-font-size-num" class="input-num" min="14" max="72" step="1" value="34" aria-label="Caption font size">
                   </div>
+                  <div class="title-param-row">
+                    <label for="subtitle-margin-range" data-i18n="subtitles.label.marginBottom">Bottom Margin (%)</label>
+                    <input type="range" id="subtitle-margin-range" min="2" max="45" step="1" value="8">
+                    <input type="number" id="subtitle-margin-num" class="input-num" min="2" max="45" step="1" value="8" aria-label="Caption bottom safe margin percentage">
+                  </div>
                 </div>
 
                 <div class="form-row">
                   <div class="subtitle-import-header">
-                    <label for="subtitle-raw-input" data-i18n="subtitles.label.rawInput">Paste .srt or .vtt Captions</label>
+                    <label for="subtitle-raw-input" data-i18n="subtitles.label.rawInput">Paste .srt, .vtt or .ass Captions</label>
                     <label for="subtitle-file-input" class="btn btn-mini file-btn" data-i18n="subtitles.btn.importFile">Import File</label>
-                    <input type="file" id="subtitle-file-input" class="is-hidden" accept=".srt,.vtt">
+                    <input type="file" id="subtitle-file-input" class="is-hidden" accept=".srt,.vtt,.ass">
                   </div>
                   <textarea id="subtitle-raw-input" class="input-control mono subtitle-textarea" rows="5" spellcheck="false" placeholder="1&#10;00:00:00,500 --> 00:00:03,000&#10;Welcome to taktcut Studio."></textarea>
                 </div>
 
                 <div class="btn-row">
-                  <button type="button" id="btn-subtitle-parse" class="btn btn-primary" data-i18n="subtitles.btn.parse">Parse SRT / VTT</button>
+                  <button type="button" id="btn-subtitle-parse" class="btn btn-primary" data-i18n="subtitles.btn.parse">Parse SRT / VTT / ASS</button>
                   <button type="button" id="btn-subtitle-sample" class="btn btn-secondary" data-i18n="subtitles.btn.loadSample">Load Sample SRT</button>
+                  <div class="subtitle-chunk-group" role="group" aria-label="Auto-chunk cues into short social lines">
+                    <select id="subtitle-chunk-words" class="input-control input-compact mono" aria-label="Max words per chunk">
+                      <option value="3">3w</option>
+                      <option value="4" selected>4w</option>
+                      <option value="6">6w</option>
+                    </select>
+                    <button type="button" id="btn-subtitle-auto-chunk" class="btn btn-secondary" data-i18n="subtitles.btn.autoChunk">Auto-Chunk</button>
+                  </div>
                   <button type="button" id="btn-subtitle-export-srt" class="btn btn-secondary" data-i18n="subtitles.btn.exportSrt">Export .srt</button>
                   <button type="button" id="btn-subtitle-export-vtt" class="btn btn-secondary" data-i18n="subtitles.btn.exportVtt">Export .vtt</button>
+                  <button type="button" id="btn-subtitle-export-ass" class="btn btn-secondary" data-i18n="subtitles.btn.exportAss">Export .ass</button>
                   <button type="button" id="btn-subtitle-clear" class="btn btn-secondary" data-i18n="subtitles.btn.clear">Clear</button>
                 </div>
               </div>
 
-              <!-- RIGHT: CUE TRACK EDITOR + FFMPEG SUBTITLE COMPILER -->
+              <!-- RIGHT: CUE TRACK & WORD TIMING EDITOR + FFMPEG/ASS COMPILER -->
               <div class="subtitle-right-col">
                 <div class="pane-subheader">
-                  <span data-i18n="subtitles.cues.title">Cue Track Editor</span>
+                  <span data-i18n="subtitles.cues.title">Cue &amp; Word Timing Editor</span>
                   <div class="btn-row">
                     <button type="button" id="btn-subtitle-add-cue" class="btn btn-mini" data-i18n="subtitles.btn.addCue">+ Add Cue @ Playhead</button>
                     <button type="button" id="btn-subtitle-send-render" class="btn btn-mini" data-i18n="subtitles.btn.deliver">Use in Deliver</button>
@@ -1562,16 +1638,18 @@
                 </div>
                 <div id="subtitle-cue-list" class="subtitle-cue-list" role="list" aria-label="Subtitle cues"></div>
                 <div class="pane-subheader">
-                  <span data-i18n="subtitles.compiler.title">Safe FFmpeg Subtitles drawtext Filtergraph</span>
+                  <span data-i18n="subtitles.compiler.title">Safe FFmpeg drawtext + ASS Karaoke Compiler</span>
                   <div class="btn-row">
                     <span id="subtitle-compile-badge" class="nle-tag is-active mono">ACTIVE</span>
+                    <button type="button" id="btn-subtitle-view-fg" class="btn btn-mini is-active" aria-pressed="true">FFmpeg</button>
+                    <button type="button" id="btn-subtitle-view-ass" class="btn btn-mini" aria-pressed="false">.ASS</button>
                     <button type="button" id="btn-subtitle-compile" class="btn btn-mini" data-i18n="subtitles.btn.compile">Compile</button>
                     <button type="button" id="btn-subtitle-copy-fg" class="btn btn-mini" data-i18n="subtitles.btn.copyFg">Copy</button>
                   </div>
                 </div>
                 <details id="subtitle-filtergraph-drawer" class="fg-drawer">
                   <summary class="fg-drawer-summary">
-                    <span class="fg-drawer-label" data-i18n="subtitles.compiler.drawerTitle">FFmpeg Subtitles Filtergraph (CLI)</span>
+                    <span class="fg-drawer-label" data-i18n="subtitles.compiler.drawerTitle">FFmpeg Subtitles Filtergraph / ASS (CLI)</span>
                     <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
                   </summary>
                   <div class="fg-drawer-body">

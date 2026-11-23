@@ -1069,6 +1069,40 @@ function sanitizeCanvasCaptionText(raw) {
     .filter(Boolean);
 }
 
+export function computeCueWordTimingsCanvas(cue, uppercase = false) {
+  if (!cue) return [];
+  if (Array.isArray(cue.words) && cue.words.length > 0) {
+    return cue.words.map((w) => ({
+      text: uppercase ? String(w.text || "").toUpperCase() : String(w.text || ""),
+      start_s: Number(w.start_s ?? cue.start_s ?? 0),
+      end_s: Number(w.end_s ?? cue.end_s ?? 1)
+    }));
+  }
+  const cleanLines = sanitizeCanvasCaptionText(cue.text);
+  const tokens = cleanLines.join(" ").split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+  const startS = Math.max(0, Number(cue.start_s ?? 0));
+  const endS = Math.max(startS + 0.01, Number(cue.end_s ?? startS + 2));
+  const totalSpan = endS - startS;
+  const weights = tokens.map((tok) => Math.max(1, tok.replace(/[^\w]/g, "").length || tok.length));
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  let cursor = startS;
+  return tokens.map((tok, idx) => {
+    const label = uppercase ? tok.toUpperCase() : tok;
+    let endT;
+    if (idx === tokens.length - 1) {
+      endT = Math.max(cursor + 0.005, endS);
+    } else {
+      const share = totalSpan * (weights[idx] / weightSum);
+      endT = Math.min(endS - 0.005 * (tokens.length - 1 - idx), cursor + share);
+      endT = Math.max(cursor + 0.005, Number(endT.toFixed(3)));
+    }
+    const item = { text: label, start_s: Number(cursor.toFixed(3)), end_s: Number(endT.toFixed(3)) };
+    cursor = endT;
+    return item;
+  });
+}
+
 export function findActiveSubtitleCue(subtitleState, tSec) {
   if (!subtitleState || subtitleState.enabled === false) return null;
   const cues = Array.isArray(subtitleState.cues) ? subtitleState.cues : [];
@@ -1085,14 +1119,30 @@ export function findActiveSubtitleCue(subtitleState, tSec) {
   return matched;
 }
 
+const CAPTION_CANVAS_STYLES = {
+  clean_white: { fontColor: "#ffffff", boxColor: "rgba(0,0,0,0)", boxOpacity: 0, borderW: 2, weight: "600" },
+  yellow_broadcast: { fontColor: "#ffe047", boxColor: "rgba(12, 12, 14, 0.55)", boxOpacity: 0.55, borderW: 2, weight: "700" },
+  boxed_social: { fontColor: "#ffffff", boxColor: "rgba(20, 20, 22, 0.86)", boxOpacity: 0.86, borderW: 0, weight: "700" },
+  netflix_clean: { fontColor: "#ffffff", boxColor: "rgba(0,0,0,0)", boxOpacity: 0, borderW: 1, weight: "500" },
+  social_karaoke: { fontColor: "#ffffff", boxColor: "rgba(20, 20, 22, 0.86)", boxOpacity: 0.86, borderW: 2, weight: "800" },
+  broadcast_gold: { fontColor: "#ffd54f", boxColor: "rgba(12, 12, 14, 0.72)", boxOpacity: 0.72, borderW: 2, weight: "700" }
+};
+
 export function drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitleState, tSec) {
   const cue = findActiveSubtitleCue(subtitleState, tSec);
   if (!cue) return null;
 
-  const lines = sanitizeCanvasCaptionText(cue.text).slice(0, 3);
+  const uppercase = Boolean(subtitleState.uppercase);
+  const rawLines = sanitizeCanvasCaptionText(cue.text).slice(0, 3);
+  const lines = uppercase ? rawLines.map((l) => l.toUpperCase()) : rawLines;
   if (lines.length === 0) return null;
 
   const styleId = subtitleState.style || "clean_white";
+  const spec = CAPTION_CANVAS_STYLES[styleId] || CAPTION_CANVAS_STYLES.clean_white;
+  const karaokeMode = subtitleState.karaoke_mode || "off";
+  const hlColor = /^#[0-9a-fA-F]{6}$/.test(String(subtitleState.highlight_color || ""))
+    ? subtitleState.highlight_color
+    : "#ffe047";
   const refFontSize = Math.max(
     14,
     Math.min(72, Number.isFinite(Number(subtitleState.font_size)) ? Number(subtitleState.font_size) : 34)
@@ -1104,16 +1154,30 @@ export function drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitle
   );
   const lineH = Math.round(px * 1.38);
   const maxTextW = Math.max(60, frameW * 0.86);
-  const weight = styleId === "clean_white" ? "600" : "700";
 
   ctx.save();
-  ctx.font = `${weight} ${px}px system-ui, -apple-system, sans-serif`;
-  ctx.textAlign = "center";
+  ctx.font = `${spec.weight} ${px}px system-ui, -apple-system, sans-serif`;
   ctx.textBaseline = "middle";
 
   const fittedLines = lines.map((line) => fitCanvasText(ctx, line, maxTextW));
   const cx = fx + frameW * 0.5;
   const bottomY = fy + frameH * (1.0 - marginBottomPct);
+
+  const wordTimings = karaokeMode !== "off" ? computeCueWordTimingsCanvas(cue, uppercase) : [];
+  let activeWordIdx = -1;
+  if (wordTimings.length > 0) {
+    for (let wi = 0; wi < wordTimings.length; wi += 1) {
+      if (tSec >= wordTimings[wi].start_s && tSec <= wordTimings[wi].end_s) {
+        activeWordIdx = wi;
+        break;
+      }
+    }
+    if (activeWordIdx < 0 && tSec >= cue.start_s) {
+      activeWordIdx = wordTimings.length - 1;
+    }
+  }
+
+  let runningWordCursor = 0;
 
   for (let i = 0; i < fittedLines.length; i += 1) {
     const lineText = fittedLines[i];
@@ -1121,45 +1185,80 @@ export function drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, subtitle
     const lineY = bottomY - distFromBottom * lineH - lineH * 0.45;
     const measuredW = Math.min(maxTextW, ctx.measureText(lineText).width);
 
-    if (styleId === "boxed_social") {
-      const padX = Math.max(8, Math.round(px * 0.48));
-      const padY = Math.max(4, Math.round(px * 0.22));
+    if (spec.boxOpacity > 0) {
+      const padX = Math.max(6, Math.round(px * (styleId === "boxed_social" || styleId === "social_karaoke" ? 0.48 : 0.34)));
+      const padY = Math.max(3, Math.round(px * (styleId === "boxed_social" || styleId === "social_karaoke" ? 0.22 : 0.16)));
       const boxW = measuredW + padX * 2;
       const boxH = px + padY * 2;
-      ctx.fillStyle = "rgba(20, 20, 22, 0.86)";
+      ctx.fillStyle = spec.boxColor;
       ctx.fillRect(cx - boxW / 2, lineY - boxH / 2, boxW, boxH);
-      ctx.fillStyle = "#ffffff";
-      ctx.shadowColor = "rgba(0, 0, 0, 0.65)";
+    }
+
+    if (karaokeMode === "off" || wordTimings.length === 0) {
+      ctx.textAlign = "center";
+      if (spec.borderW > 0) {
+        ctx.lineWidth = Math.max(1.5, Math.round(px * (spec.borderW >= 2 ? 0.14 : 0.09)));
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.84)";
+        ctx.strokeText(lineText, cx, lineY);
+      }
+      ctx.fillStyle = spec.fontColor;
+      ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
       ctx.shadowBlur = 2;
       ctx.shadowOffsetX = 1;
       ctx.shadowOffsetY = 1;
       ctx.fillText(lineText, cx, lineY);
-    } else if (styleId === "yellow_broadcast") {
-      const padX = Math.max(6, Math.round(px * 0.34));
-      const padY = Math.max(3, Math.round(px * 0.16));
-      const boxW = measuredW + padX * 2;
-      const boxH = px + padY * 2;
-      ctx.fillStyle = "rgba(12, 12, 14, 0.55)";
-      ctx.fillRect(cx - boxW / 2, lineY - boxH / 2, boxW, boxH);
-      ctx.lineWidth = Math.max(2, Math.round(px * 0.14));
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
-      ctx.strokeText(lineText, cx, lineY);
-      ctx.fillStyle = "#ffe047";
-      ctx.shadowColor = "rgba(0, 0, 0, 0.88)";
-      ctx.shadowBlur = 2;
-      ctx.shadowOffsetX = 1;
-      ctx.shadowOffsetY = 1;
-      ctx.fillText(lineText, cx, lineY);
-    } else {
-      ctx.lineWidth = Math.max(2, Math.round(px * 0.14));
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.82)";
-      ctx.strokeText(lineText, cx, lineY);
-      ctx.fillStyle = "#ffffff";
-      ctx.shadowColor = "rgba(0, 0, 0, 0.88)";
-      ctx.shadowBlur = 2;
-      ctx.shadowOffsetX = 1;
-      ctx.shadowOffsetY = 1;
-      ctx.fillText(lineText, cx, lineY);
+      continue;
+    }
+
+    const lineWords = lineText.split(/\s+/).filter(Boolean);
+    const spaceW = ctx.measureText(" ").width;
+    const wordWidths = lineWords.map((w) => ctx.measureText(w).width);
+    const totalLineW = wordWidths.reduce((a, b) => a + b, 0) + Math.max(0, lineWords.length - 1) * spaceW;
+    let drawX = cx - totalLineW / 2;
+    ctx.textAlign = "left";
+
+    for (let wi = 0; wi < lineWords.length; wi += 1) {
+      const wText = lineWords[wi];
+      const wW = wordWidths[wi];
+      const globalIdx = runningWordCursor;
+      runningWordCursor += 1;
+
+      const isActive = globalIdx === activeWordIdx;
+      const isSpoken = karaokeMode === "progressive_fill" && globalIdx <= activeWordIdx;
+      const drawY = karaokeMode === "color_pop" && isActive ? lineY - Math.max(1.5, px * 0.08) : lineY;
+
+      if (karaokeMode === "pill_box" && isActive) {
+        const pPadX = Math.max(4, Math.round(px * 0.22));
+        const pPadY = Math.max(2, Math.round(px * 0.12));
+        ctx.fillStyle = hlColor;
+        ctx.fillRect(drawX - pPadX, drawY - px / 2 - pPadY, wW + pPadX * 2, px + pPadY * 2);
+      }
+
+      if (spec.borderW > 0 && !(karaokeMode === "pill_box" && isActive)) {
+        ctx.lineWidth = Math.max(1.5, Math.round(px * (spec.borderW >= 2 ? 0.14 : 0.09)));
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+        ctx.strokeText(wText, drawX, drawY);
+      }
+
+      if (karaokeMode === "pill_box" && isActive) {
+        ctx.fillStyle = "#141416";
+        ctx.shadowColor = "transparent";
+      } else if (isActive || isSpoken) {
+        ctx.fillStyle = hlColor;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.88)";
+        ctx.shadowBlur = 3;
+        ctx.shadowOffsetX = 1;
+        ctx.shadowOffsetY = 1;
+      } else {
+        ctx.fillStyle = spec.fontColor;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.82)";
+        ctx.shadowBlur = 2;
+        ctx.shadowOffsetX = 1;
+        ctx.shadowOffsetY = 1;
+      }
+
+      ctx.fillText(wText, drawX, drawY);
+      drawX += wW + spaceW;
     }
   }
 
@@ -1284,6 +1383,21 @@ export function drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState) {
       ctx.fillStyle = "#f4a46b";
       ctx.fillText("TITLE 80%", tx + 4, ty + 3);
     }
+  }
+
+  if (Number.isFinite(Number(guides.captionMarginPct))) {
+    const mPct = Math.max(0.02, Math.min(0.45, Number(guides.captionMarginPct)));
+    const capY = fy + frameH * (1 - mPct);
+    ctx.strokeStyle = "rgba(0, 229, 255, 0.86)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.moveTo(fx + frameW * 0.08, capY);
+    ctx.lineTo(fx + frameW * 0.92, capY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#7cecff";
+    ctx.fillText(`CAPTION BASELINE ${Math.round(mPct * 100)}%`, fx + frameW * 0.08, Math.max(fy + 4, capY - 11));
   }
 
   ctx.restore();

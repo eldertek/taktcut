@@ -1,6 +1,7 @@
 import {
   captureCleanColorStill,
   captureCleanFxStill,
+  computeCueWordTimingsCanvas,
   drawColorCurvesCanvas,
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
@@ -580,6 +581,11 @@ const state = {
     style: "clean_white",
     font_size: 34,
     margin_bottom_pct: 0.08,
+    karaoke_mode: "off",
+    highlight_color: "#ffe047",
+    uppercase: false,
+    safe_margin_preset: "standard",
+    max_words_per_cue: 0,
     cues: [
       { index: 1, start_s: 0.5, end_s: 2.8, text: "Clean-room OpenTimelineIO interchange" },
       { index: 2, start_s: 3.2, end_s: 6.4, text: "Rec.709 color science and broadcast QA" },
@@ -588,6 +594,8 @@ const state = {
   },
   subtitleLastCompile: null,
   subtitleCompileTimer: null,
+  subtitleOutputView: "fg",
+  titlesSafeGuides: false,
   transitionPresetsCatalog: null,
   framing: {
     preset: "16:9",
@@ -922,15 +930,18 @@ function getEffectiveSubtitleState(showBadge = false) {
   };
 }
 
-function getEffectiveFramingState() {
+function getEffectiveFramingState(includeTitlesSafe = false) {
+  const showTitlesGuides = includeTitlesSafe && Boolean(state.titlesSafeGuides);
+  const guidesEnabled = Boolean(state.framing.safeGuides) || showTitlesGuides;
   return {
     aspectPreset: state.framing.preset,
     framingMode: state.framing.mode,
     guides: {
-      enabled: state.framing.safeGuides,
-      actionSafe: state.framing.guides.actionSafe,
-      titleSafe: state.framing.guides.titleSafe,
-      socialHud: state.framing.guides.socialHud
+      enabled: guidesEnabled,
+      actionSafe: state.framing.guides.actionSafe || showTitlesGuides,
+      titleSafe: state.framing.guides.titleSafe || showTitlesGuides,
+      socialHud: state.framing.guides.socialHud || showTitlesGuides,
+      captionMarginPct: showTitlesGuides ? state.subtitleTrack.margin_bottom_pct : null
     }
   };
 }
@@ -1121,7 +1132,7 @@ function redrawActiveCanvases() {
       activeColorChain,
       getEffectiveFxState(),
       getEffectiveTitleState(true),
-      getEffectiveFramingState(),
+      getEffectiveFramingState(true),
       getEffectiveSubtitleState(true),
       null,
       null,
@@ -3784,7 +3795,8 @@ function serializeFullProjectState() {
       index: idx + 1,
       start_s: Number(c.start_s),
       end_s: Number(c.end_s),
-      text: String(c.text)
+      text: String(c.text),
+      words: Array.isArray(c.words) ? c.words : []
     }));
 
   const chk = (id, fallback = false) => {
@@ -3836,6 +3848,11 @@ function serializeFullProjectState() {
       style: state.subtitleTrack.style || "clean_white",
       font_size: Number(state.subtitleTrack.font_size ?? 34),
       margin_bottom_pct: Number(state.subtitleTrack.margin_bottom_pct ?? 0.08),
+      karaoke_mode: state.subtitleTrack.karaoke_mode || "off",
+      highlight_color: state.subtitleTrack.highlight_color || "#ffe047",
+      uppercase: Boolean(state.subtitleTrack.uppercase),
+      safe_margin_preset: state.subtitleTrack.safe_margin_preset || "standard",
+      max_words_per_cue: Number(state.subtitleTrack.max_words_per_cue ?? 0),
       cues: validSubCues
     },
     framing: {
@@ -3985,12 +4002,18 @@ function applyFullProjectState(project, validation) {
     style: sub.style || "clean_white",
     font_size: Number(sub.font_size ?? 34),
     margin_bottom_pct: Number(sub.margin_bottom_pct ?? 0.08),
+    karaoke_mode: sub.karaoke_mode || "off",
+    highlight_color: sub.highlight_color || "#ffe047",
+    uppercase: Boolean(sub.uppercase),
+    safe_margin_preset: sub.safe_margin_preset || "standard",
+    max_words_per_cue: Number(sub.max_words_per_cue ?? 0),
     cues: Array.isArray(sub.cues)
       ? sub.cues.map((c, idx) => ({
           index: idx + 1,
           start_s: Number(c.start_s),
           end_s: Number(c.end_s),
-          text: String(c.text || "")
+          text: String(c.text || ""),
+          words: Array.isArray(c.words) ? c.words : []
         }))
       : []
   };
@@ -5639,12 +5662,35 @@ function formatCuesAsSrtLocal(cues) {
     .join("\n\n");
 }
 
+const SUBTITLE_STYLE_DEFAULTS = {
+  clean_white: { font_size: 34, margin_bottom_pct: 0.08, safe_margin_preset: "standard", karaoke_mode: "off", highlight_color: "#ffe047", uppercase: false },
+  yellow_broadcast: { font_size: 34, margin_bottom_pct: 0.08, safe_margin_preset: "standard", karaoke_mode: "off", highlight_color: "#00e5ff", uppercase: false },
+  boxed_social: { font_size: 38, margin_bottom_pct: 0.08, safe_margin_preset: "standard", karaoke_mode: "off", highlight_color: "#ffe047", uppercase: false },
+  netflix_clean: { font_size: 32, margin_bottom_pct: 0.1, safe_margin_preset: "broadcast_title", karaoke_mode: "off", highlight_color: "#ffe047", uppercase: false },
+  social_karaoke: { font_size: 42, margin_bottom_pct: 0.24, safe_margin_preset: "reels_tiktok", karaoke_mode: "color_pop", highlight_color: "#ffe047", uppercase: true },
+  broadcast_gold: { font_size: 34, margin_bottom_pct: 0.1, safe_margin_preset: "broadcast_title", karaoke_mode: "off", highlight_color: "#00e5ff", uppercase: false }
+};
+
+const SUBTITLE_SAFE_MARGIN_MAP = {
+  standard: 0.08,
+  broadcast_action: 0.05,
+  broadcast_title: 0.1,
+  reels_tiktok: 0.24,
+  upper_third: 0.42
+};
+
 function updateSubtitleStyleButtons() {
   for (const btn of document.querySelectorAll("[data-subtitle-style]")) {
     const sid = btn.getAttribute("data-subtitle-style");
     const isMatch = sid === state.subtitleTrack.style;
     btn.classList.toggle("is-active", isMatch);
     btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+  const hlHex = String(state.subtitleTrack.highlight_color || "#ffe047").toLowerCase();
+  for (const sw of document.querySelectorAll("[data-hl-color]")) {
+    const isMatch = String(sw.getAttribute("data-hl-color") || "").toLowerCase() === hlHex;
+    sw.classList.toggle("is-active", isMatch);
+    sw.setAttribute("aria-pressed", isMatch ? "true" : "false");
   }
 }
 
@@ -5671,6 +5717,19 @@ function updateSubtitleTimingBadges() {
     }
   }
 
+  const karaokeBadge = byId("subtitle-karaoke-badge");
+  if (karaokeBadge) {
+    const kMode = sub.karaoke_mode || "off";
+    if (kMode === "off") {
+      karaokeBadge.textContent = "KARAOKE OFF";
+      karaokeBadge.className = "nle-tag mono";
+    } else {
+      const modeTag = kMode === "pill_box" ? "PILL" : kMode === "progressive_fill" ? "FILL" : "POP";
+      karaokeBadge.textContent = `KARAOKE ${modeTag}`;
+      karaokeBadge.className = "nle-tag is-active mono";
+    }
+  }
+
   const countBadge = byId("subtitle-cue-count-badge");
   if (countBadge) {
     countBadge.textContent = `${sub.cues.length} CUES`;
@@ -5690,6 +5749,12 @@ function updateSubtitleTimingBadges() {
       const cue = sub.cues[idx];
       const isActive = Boolean(activeCue && cue && activeCue.index === cue.index);
       row.classList.toggle("is-active-cue", isActive);
+      for (const chip of row.querySelectorAll(".subtitle-word-chip")) {
+        const wStart = Number.parseFloat(chip.getAttribute("data-word-start") || "-1");
+        const wEnd = Number.parseFloat(chip.getAttribute("data-word-end") || "-1");
+        const isWordActive = isActive && Number.isFinite(wStart) && Number.isFinite(wEnd) && tSec >= wStart && tSec <= wEnd;
+        chip.classList.toggle("is-active-word", isWordActive);
+      }
     }
   }
 }
@@ -5705,6 +5770,7 @@ function renderSubtitleCueList() {
   }
 
   const fps = getTimelineFps();
+  const uppercase = Boolean(state.subtitleTrack.uppercase);
   const rows = cues.map((cue, idx) => {
     cue.index = idx + 1;
     const row = dom("div", "subtitle-cue-row");
@@ -5736,7 +5802,9 @@ function renderSubtitleCueList() {
       const val = Number.parseFloat(startInput.value);
       if (Number.isFinite(val) && val >= 0 && val < cue.end_s) {
         cue.start_s = Number(val.toFixed(3));
+        cue.words = [];
         jumpBtn.textContent = `#${cue.index} @ ${formatCueTimecode(cue.start_s)}`;
+        renderSubtitleWordStrip(wordStrip, cue);
         updateSubtitleTimingBadges();
         redrawActiveCanvases();
         scheduleSubtitleCompile();
@@ -5761,6 +5829,8 @@ function renderSubtitleCueList() {
       const val = Number.parseFloat(endInput.value);
       if (Number.isFinite(val) && val > cue.start_s && val <= 86400) {
         cue.end_s = Number(val.toFixed(3));
+        cue.words = [];
+        renderSubtitleWordStrip(wordStrip, cue);
         updateSubtitleTimingBadges();
         redrawActiveCanvases();
         scheduleSubtitleCompile();
@@ -5791,14 +5861,39 @@ function renderSubtitleCueList() {
     textInput.maxLength = 300;
     textInput.value = cue.text;
     textInput.setAttribute("aria-label", `Cue ${cue.index} caption text`);
+
+    const wordStrip = dom("div", "subtitle-word-strip mono");
+    function renderSubtitleWordStrip(container, targetCue) {
+      const words = computeCueWordTimingsCanvas(targetCue, uppercase);
+      const chips = words.map((w) => {
+        const chip = dom("button", "subtitle-word-chip mono");
+        chip.type = "button";
+        chip.setAttribute("data-word-start", String(w.start_s));
+        chip.setAttribute("data-word-end", String(w.end_s));
+        chip.title = `${w.start_s.toFixed(2)}s - ${w.end_s.toFixed(2)}s (Click to seek)`;
+        const labelSpan = dom("span", "", w.text);
+        const timeSpan = dom("span", "subtitle-word-time", `${w.start_s.toFixed(2)}s`);
+        chip.append(labelSpan, timeSpan);
+        chip.addEventListener("click", () => {
+          stopPlayback();
+          setPlayhead(Math.max(0, Math.round(w.start_s * fps)));
+        });
+        return chip;
+      });
+      container.replaceChildren(...chips);
+    }
+
+    renderSubtitleWordStrip(wordStrip, cue);
     textInput.addEventListener("input", () => {
       cue.text = textInput.value;
+      cue.words = [];
+      renderSubtitleWordStrip(wordStrip, cue);
       updateSubtitleTimingBadges();
       redrawActiveCanvases();
       scheduleSubtitleCompile();
     });
 
-    row.append(head, textInput);
+    row.append(head, textInput, wordStrip);
     return row;
   });
 
@@ -5818,9 +5913,11 @@ function renderSubtitleCompileResult(res) {
     out.textContent = t("subtitles.compiler.empty");
     return;
   }
-  badge.textContent = `COMPILED (${res.cue_count})`;
+  const wordsTag = res.word_count ? ` | ${res.word_count}W` : "";
+  badge.textContent = `COMPILED (${res.cue_count}${wordsTag})`;
   badge.className = "nle-tag is-active mono";
-  out.textContent = res.filtergraph;
+  const viewMode = state.subtitleOutputView === "ass" ? "ass" : "fg";
+  out.textContent = viewMode === "ass" ? (res.ass_preview || res.filtergraph) : res.filtergraph;
 }
 
 function scheduleSubtitleCompile() {
@@ -5867,6 +5964,34 @@ async function parseSubtitleRawInput(rawContent, format = "auto") {
   }
 }
 
+async function autoChunkSubtitlesNow() {
+  try {
+    const validCues = state.subtitleTrack.cues.filter(
+      (c) => String(c.text || "").trim().length > 0 && c.end_s > c.start_s
+    );
+    if (validCues.length === 0) {
+      showBanner("Add or parse subtitle cues before auto-chunking.", "error");
+      return;
+    }
+    const maxWordsEl = byId("subtitle-chunk-words");
+    const maxWords = maxWordsEl ? Number.parseInt(maxWordsEl.value, 10) || 4 : 4;
+    const res = await api.chunkSubtitles({
+      cues: validCues,
+      max_words_per_cue: maxWords,
+      uppercase: Boolean(state.subtitleTrack.uppercase)
+    });
+    state.subtitleTrack.cues = Array.isArray(res.cues) ? res.cues : [];
+    const rawEl = byId("subtitle-raw-input");
+    if (rawEl) rawEl.value = formatCuesAsSrtLocal(state.subtitleTrack.cues);
+    renderSubtitleCueList();
+    redrawActiveCanvases();
+    await compileSubtitlesNow();
+    showBanner(`Chunked into ${res.cue_count} short cues (${res.word_count} words).`, "success");
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
 async function exportSubtitlesAndDownload(format) {
   try {
     const validCues = state.subtitleTrack.cues.filter(
@@ -5875,7 +6000,11 @@ async function exportSubtitlesAndDownload(format) {
     const res = await api.exportSubtitles({
       cues: validCues,
       format,
-      filename: `captions.${format}`
+      filename: `captions.${format}`,
+      subtitle_track: {
+        ...state.subtitleTrack,
+        cues: validCues
+      }
     });
     const rawEl = byId("subtitle-raw-input");
     if (rawEl) rawEl.value = res.content || "";
@@ -5891,9 +6020,22 @@ function syncSubtitleControlsFromState() {
   const sub = state.subtitleTrack;
   const fsRange = byId("subtitle-font-size-range");
   const fsNum = byId("subtitle-font-size-num");
+  const mRange = byId("subtitle-margin-range");
+  const mNum = byId("subtitle-margin-num");
+  const mPreset = byId("subtitle-safe-margin-preset");
+  const kMode = byId("subtitle-karaoke-mode");
+  const hlInput = byId("subtitle-highlight-color");
+  const upperChk = byId("subtitle-uppercase");
   const rawEl = byId("subtitle-raw-input");
+  const marginPctInt = Math.round((Number(sub.margin_bottom_pct ?? 0.08)) * 100);
   if (fsRange) fsRange.value = String(sub.font_size);
   if (fsNum) fsNum.value = String(sub.font_size);
+  if (mRange) mRange.value = String(marginPctInt);
+  if (mNum) mNum.value = String(marginPctInt);
+  if (mPreset) mPreset.value = sub.safe_margin_preset || "standard";
+  if (kMode) kMode.value = sub.karaoke_mode || "off";
+  if (hlInput) hlInput.value = sub.highlight_color || "#ffe047";
+  if (upperChk) upperChk.checked = Boolean(sub.uppercase);
   if (rawEl && !rawEl.value.trim() && sub.cues.length > 0) {
     rawEl.value = formatCuesAsSrtLocal(sub.cues);
   }
@@ -13463,13 +13605,34 @@ function wireEvents() {
     showBanner("Active Title / Lower-Third overlay linked to Deliver page.", "success");
   });
 
+  // Titles Safe Guides toggle
+  const titlesSafeBtn = byId("btn-titles-safe-guides");
+  if (titlesSafeBtn) {
+    titlesSafeBtn.addEventListener("click", () => {
+      state.titlesSafeGuides = !state.titlesSafeGuides;
+      titlesSafeBtn.classList.toggle("is-active", state.titlesSafeGuides);
+      titlesSafeBtn.setAttribute("aria-pressed", state.titlesSafeGuides ? "true" : "false");
+      redrawActiveCanvases();
+    });
+  }
+
   // Captions & Subtitles Track events
   for (const btn of document.querySelectorAll("[data-subtitle-style]")) {
     btn.addEventListener("click", () => {
       const sid = btn.getAttribute("data-subtitle-style");
       if (!sid) return;
       state.subtitleTrack.style = sid;
-      updateSubtitleStyleButtons();
+      const preset = SUBTITLE_STYLE_DEFAULTS[sid];
+      if (preset) {
+        state.subtitleTrack.font_size = preset.font_size;
+        state.subtitleTrack.margin_bottom_pct = preset.margin_bottom_pct;
+        state.subtitleTrack.safe_margin_preset = preset.safe_margin_preset;
+        state.subtitleTrack.karaoke_mode = preset.karaoke_mode;
+        state.subtitleTrack.highlight_color = preset.highlight_color;
+        state.subtitleTrack.uppercase = preset.uppercase;
+      }
+      syncSubtitleControlsFromState();
+      updateSubtitleTimingBadges();
       redrawActiveCanvases();
       compileSubtitlesNow();
     });
@@ -13479,6 +13642,74 @@ function wireEvents() {
     updateSubtitleTimingBadges();
     redrawActiveCanvases();
     compileSubtitlesNow();
+  });
+  byId("subtitle-karaoke-mode").addEventListener("change", (ev) => {
+    state.subtitleTrack.karaoke_mode = ev.target.value || "off";
+    updateSubtitleTimingBadges();
+    redrawActiveCanvases();
+    compileSubtitlesNow();
+  });
+  byId("subtitle-highlight-color").addEventListener("input", (ev) => {
+    state.subtitleTrack.highlight_color = String(ev.target.value || "#ffe047").toLowerCase();
+    updateSubtitleStyleButtons();
+    redrawActiveCanvases();
+    scheduleSubtitleCompile();
+  });
+  for (const sw of document.querySelectorAll("[data-hl-color]")) {
+    sw.addEventListener("click", () => {
+      const hex = String(sw.getAttribute("data-hl-color") || "#ffe047").toLowerCase();
+      state.subtitleTrack.highlight_color = hex;
+      const hlInput = byId("subtitle-highlight-color");
+      if (hlInput) hlInput.value = hex;
+      updateSubtitleStyleButtons();
+      redrawActiveCanvases();
+      compileSubtitlesNow();
+    });
+  }
+  byId("subtitle-uppercase").addEventListener("change", (ev) => {
+    state.subtitleTrack.uppercase = Boolean(ev.target.checked);
+    renderSubtitleCueList();
+    redrawActiveCanvases();
+    compileSubtitlesNow();
+  });
+  byId("subtitle-safe-margin-preset").addEventListener("change", (ev) => {
+    const pid = ev.target.value || "standard";
+    state.subtitleTrack.safe_margin_preset = pid;
+    if (Object.hasOwn(SUBTITLE_SAFE_MARGIN_MAP, pid)) {
+      const pct = SUBTITLE_SAFE_MARGIN_MAP[pid];
+      state.subtitleTrack.margin_bottom_pct = pct;
+      const pctInt = Math.round(pct * 100);
+      byId("subtitle-margin-range").value = String(pctInt);
+      byId("subtitle-margin-num").value = String(pctInt);
+    }
+    redrawActiveCanvases();
+    compileSubtitlesNow();
+  });
+  byId("subtitle-margin-range").addEventListener("input", () => {
+    const pctInt = Number.parseInt(byId("subtitle-margin-range").value, 10);
+    state.subtitleTrack.margin_bottom_pct = Number((pctInt / 100).toFixed(2));
+    state.subtitleTrack.safe_margin_preset = "custom";
+    byId("subtitle-margin-num").value = String(pctInt);
+    byId("subtitle-safe-margin-preset").value = "custom";
+    redrawActiveCanvases();
+    scheduleSubtitleCompile();
+  });
+  byId("subtitle-margin-num").addEventListener("input", () => {
+    const val = Number.parseInt(byId("subtitle-margin-num").value, 10);
+    if (Number.isFinite(val) && val >= 2 && val <= 45) {
+      state.subtitleTrack.margin_bottom_pct = Number((val / 100).toFixed(2));
+      state.subtitleTrack.safe_margin_preset = "custom";
+      byId("subtitle-margin-range").value = String(val);
+      byId("subtitle-safe-margin-preset").value = "custom";
+      redrawActiveCanvases();
+      scheduleSubtitleCompile();
+    }
+  });
+  byId("subtitle-margin-num").addEventListener("blur", () => {
+    const raw = Number.parseInt(byId("subtitle-margin-num").value, 10);
+    if (!Number.isFinite(raw) || raw < 2 || raw > 45) {
+      byId("subtitle-margin-num").value = String(Math.round(state.subtitleTrack.margin_bottom_pct * 100));
+    }
   });
   byId("subtitle-font-size-range").addEventListener("input", () => {
     const val = Number.parseInt(byId("subtitle-font-size-range").value, 10);
@@ -13512,7 +13743,8 @@ function wireEvents() {
     try {
       const text = await file.text();
       byId("subtitle-raw-input").value = text;
-      const fmt = file.name.toLowerCase().endsWith(".vtt") ? "vtt" : "srt";
+      const lower = file.name.toLowerCase();
+      const fmt = lower.endsWith(".vtt") ? "vtt" : lower.endsWith(".ass") ? "ass" : "srt";
       await parseSubtitleRawInput(text, fmt);
     } catch (err) {
       showBanner(err.message, "error");
@@ -13524,8 +13756,10 @@ function wireEvents() {
     byId("subtitle-raw-input").value = SAMPLE_SRT_TEXT;
     parseSubtitleRawInput(SAMPLE_SRT_TEXT, "srt");
   });
+  byId("btn-subtitle-auto-chunk").addEventListener("click", autoChunkSubtitlesNow);
   byId("btn-subtitle-export-srt").addEventListener("click", () => exportSubtitlesAndDownload("srt"));
   byId("btn-subtitle-export-vtt").addEventListener("click", () => exportSubtitlesAndDownload("vtt"));
+  byId("btn-subtitle-export-ass").addEventListener("click", () => exportSubtitlesAndDownload("ass"));
   byId("btn-subtitle-clear").addEventListener("click", () => {
     state.subtitleTrack.cues = [];
     byId("subtitle-raw-input").value = "";
@@ -13547,13 +13781,32 @@ function wireEvents() {
     redrawActiveCanvases();
     compileSubtitlesNow();
   });
+  byId("btn-subtitle-view-fg").addEventListener("click", () => {
+    state.subtitleOutputView = "fg";
+    byId("btn-subtitle-view-fg").classList.add("is-active");
+    byId("btn-subtitle-view-fg").setAttribute("aria-pressed", "true");
+    byId("btn-subtitle-view-ass").classList.remove("is-active");
+    byId("btn-subtitle-view-ass").setAttribute("aria-pressed", "false");
+    renderSubtitleCompileResult(state.subtitleLastCompile);
+  });
+  byId("btn-subtitle-view-ass").addEventListener("click", () => {
+    state.subtitleOutputView = "ass";
+    byId("btn-subtitle-view-ass").classList.add("is-active");
+    byId("btn-subtitle-view-ass").setAttribute("aria-pressed", "true");
+    byId("btn-subtitle-view-fg").classList.remove("is-active");
+    byId("btn-subtitle-view-fg").setAttribute("aria-pressed", "false");
+    renderSubtitleCompileResult(state.subtitleLastCompile);
+  });
   byId("btn-subtitle-compile").addEventListener("click", compileSubtitlesNow);
   byId("btn-subtitle-copy-fg").addEventListener("click", async () => {
-    const fg = state.subtitleLastCompile ? state.subtitleLastCompile.filtergraph : "";
-    if (!fg) return;
+    const res = state.subtitleLastCompile;
+    const textToCopy = res
+      ? (state.subtitleOutputView === "ass" ? res.ass_preview : res.filtergraph)
+      : "";
+    if (!textToCopy) return;
     try {
-      await navigator.clipboard.writeText(fg);
-      showBanner("Copied Subtitles FFmpeg filtergraph to clipboard.", "success");
+      await navigator.clipboard.writeText(textToCopy);
+      showBanner("Copied Subtitles output to clipboard.", "success");
     } catch {
       showBanner("Clipboard unavailable; copy directly from filtergraph box.", "error");
     }

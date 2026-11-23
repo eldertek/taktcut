@@ -25,7 +25,7 @@ TIMELINE_SUFFIXES: frozenset[str] = frozenset(
 OTIO_EXPORT_SUFFIXES: frozenset[str] = frozenset({".otio", ".otioz"})
 LUT_SUFFIXES: frozenset[str] = frozenset({".cube"})
 CDL_SUFFIXES: frozenset[str] = frozenset({".cdl", ".cc", ".ccc", ".xml"})
-SUBTITLE_SUFFIXES: frozenset[str] = frozenset({".srt", ".vtt"})
+SUBTITLE_SUFFIXES: frozenset[str] = frozenset({".srt", ".vtt", ".ass"})
 PROJECT_SUFFIXES: frozenset[str] = frozenset({".json"})
 MEDIA_SUFFIXES: frozenset[str] = frozenset(
     {".mp4", ".mov", ".m4v", ".mkv", ".mxf", ".webm", ".wav", ".aac", ".mp3"}

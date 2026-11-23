@@ -9,21 +9,31 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from taktcut.color import escape_ffmpeg_filter_path
 from taktcut.models import HardwareCapabilities, RenderProfile
 from taktcut.remote_render import RemoteRenderJobRequest
 from taktcut.render import build_render_plan, execute_render_plan
 from taktcut.subtitles import (
+    ALL_CAPTION_STYLE_IDS,
     CAPTION_STYLES,
+    SAFE_MARGIN_PRESETS,
     SubtitleCue,
     SubtitleTrackParams,
+    auto_chunk_cues,
     compile_subtitles,
     compile_subtitles_filter,
+    compute_cue_word_timings,
+    export_ass,
     export_srt,
     export_vtt,
+    format_ass_timestamp,
     format_srt_timestamp,
     format_vtt_timestamp,
     get_caption_style,
+    list_all_caption_styles,
     list_caption_styles,
+    parse_ass,
+    parse_ass_timestamp,
     parse_srt,
     parse_srt_timestamp,
     parse_vtt,
@@ -327,3 +337,197 @@ def test_real_ffmpeg_subtitles_burnin_smoke(tmp_path: Path) -> None:
     assert result.success is True, result.stderr_tail
     assert out.is_file()
     assert result.bytes_written > 0
+
+
+def test_pro_caption_styles_word_timings_and_auto_chunk() -> None:
+    all_styles = list_all_caption_styles()
+    assert len(all_styles) == 6
+    assert [s.id for s in all_styles] == list(ALL_CAPTION_STYLE_IDS)
+    assert get_caption_style("netflix_clean").border_w == 1
+    assert get_caption_style("social_karaoke").default_karaoke_mode == "color_pop"
+    assert get_caption_style("broadcast_gold").font_color == "#ffd54f"
+    assert SAFE_MARGIN_PRESETS["reels_tiktok"][1] == 0.24
+
+    cue = SubtitleCue(
+        index=1,
+        start_s=1.0,
+        end_s=3.0,
+        text="Clean-room timeline interchange workflow now",
+    )
+    words = compute_cue_word_timings(cue, uppercase=True)
+    assert len(words) == 5
+    assert [w.text for w in words] == [
+        "CLEAN-ROOM",
+        "TIMELINE",
+        "INTERCHANGE",
+        "WORKFLOW",
+        "NOW",
+    ]
+    assert words[0].start_s == 1.0
+    assert words[-1].end_s == 3.0
+    for idx in range(len(words) - 1):
+        assert words[idx].start_s < words[idx].end_s <= words[idx + 1].start_s
+
+    chunked = auto_chunk_cues([cue], max_words_per_cue=2, uppercase=True)
+    assert len(chunked) == 3
+    assert chunked[0].text == "CLEAN-ROOM TIMELINE"
+    assert chunked[1].text == "INTERCHANGE WORKFLOW"
+    assert chunked[2].text == "NOW"
+    assert len(chunked[0].words) == 2
+
+    with pytest.raises(ValueError, match="max_words_per_cue"):
+        auto_chunk_cues([cue], max_words_per_cue=15)
+
+
+def test_ass_karaoke_export_parse_and_compiler_modes() -> None:
+    assert parse_ass_timestamp("0:01:23.45") == 83.45
+    assert format_ass_timestamp(83.45) == "0:01:23.45"
+
+    track = SubtitleTrackParams(
+        cues=[
+            SubtitleCue(
+                index=1,
+                start_s=0.5,
+                end_s=2.5,
+                text="Broadcast <script>bad()</script> {tag} Karaoke",
+            )
+        ],
+        style="social_karaoke",
+        font_size=42,
+        margin_bottom_pct=0.24,
+        karaoke_mode="color_pop",
+        highlight_color="#00e5ff",
+        uppercase=True,
+        safe_margin_preset="reels_tiktok",
+        enabled=True,
+    )
+    ass_text = export_ass(track)
+    assert "[Script Info]" in ass_text
+    assert "[V4+ Styles]" in ass_text
+    assert "MarginV" in ass_text
+    assert "{\\k" in ass_text
+    assert "<script>" not in ass_text
+    assert "BROADCAST" in ass_text
+
+    reparsed = parse_ass(ass_text)
+    assert len(reparsed) == 1
+    assert reparsed[0].start_s == 0.5
+    assert reparsed[0].end_s == 2.5
+    assert len(reparsed[0].words) == 3
+    assert "BROADCAST" in reparsed[0].text
+
+    res_pop = compile_subtitles(track)
+    assert res_pop.is_active is True
+    assert res_pop.karaoke_mode == "color_pop"
+    assert res_pop.word_count == 3
+    assert "fontcolor=0x00e5ff" in res_pop.filtergraph
+    assert "enable='between(t,0.500," in res_pop.filtergraph
+
+    res_pill = compile_subtitles(track.model_copy(update={"karaoke_mode": "pill_box"}))
+    assert "boxcolor=0x00e5ff@0.94" in res_pill.filtergraph
+    assert "fontcolor=0x141416" in res_pill.filtergraph
+
+    res_fill = compile_subtitles(
+        track.model_copy(update={"karaoke_mode": "progressive_fill"})
+    )
+    assert "fontcolor=0x00e5ff" in res_fill.filtergraph
+    assert "KARAOKE" in res_fill.filtergraph
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not available")
+def test_real_ffmpeg_karaoke_and_ass_burnin_smoke(tmp_path: Path) -> None:
+    src = tmp_path / "src_karaoke.mp4"
+    out_drawtext = tmp_path / "out_karaoke_drawtext.mp4"
+    out_ass = tmp_path / "out_karaoke_ass.mp4"
+    ass_file = tmp_path / "captions.ass"
+
+    gen_proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x141418:s=640x360:d=2.0:r=25",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo:d=2.0",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(src),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert gen_proc.returncode == 0, gen_proc.stderr
+
+    sub_track = SubtitleTrackParams(
+        cues=[
+            SubtitleCue(
+                index=1,
+                start_s=0.2,
+                end_s=1.8,
+                text="Dynamic word karaoke test",
+            )
+        ],
+        style="social_karaoke",
+        font_size=40,
+        margin_bottom_pct=0.24,
+        karaoke_mode="color_pop",
+        highlight_color="#ffe047",
+        uppercase=True,
+        safe_margin_preset="reels_tiktok",
+        enabled=True,
+    )
+    caps = HardwareCapabilities(
+        ffmpeg_path=shutil.which("ffmpeg") or "ffmpeg",
+        libx264=True,
+    )
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out_drawtext,
+        profile=RenderProfile.WEB_H264,
+        subtitle_track=sub_track,
+        caps=caps,
+        prefer_hw=False,
+    )
+    res_dt = execute_render_plan(plan)
+    assert res_dt.success is True, res_dt.stderr_tail
+    assert out_drawtext.is_file() and res_dt.bytes_written > 0
+
+    ass_content = export_ass(sub_track.model_copy(update={"karaoke_mode": "progressive_fill"}))
+    ass_file.write_text(ass_content, encoding="utf-8")
+    escaped_ass = escape_ffmpeg_filter_path(ass_file)
+    ass_proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(src),
+            "-vf",
+            f"ass='{escaped_ass}',format=yuv420p",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "copy",
+            str(out_ass),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ass_proc.returncode == 0, ass_proc.stderr
+    assert out_ass.is_file() and out_ass.stat().st_size > 0

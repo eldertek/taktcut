@@ -951,7 +951,11 @@ const CAPTION_STYLE_SPECS = [
     box_opacity: 0.0,
     border_w: 2,
     default_font_size: 34,
-    bold: false
+    bold: false,
+    highlight_color: "#ffe047",
+    default_margin_bottom_pct: 0.08,
+    default_karaoke_mode: "off",
+    default_uppercase: false
   },
   {
     id: "yellow_broadcast",
@@ -962,7 +966,11 @@ const CAPTION_STYLE_SPECS = [
     box_opacity: 0.55,
     border_w: 2,
     default_font_size: 34,
-    bold: true
+    bold: true,
+    highlight_color: "#00e5ff",
+    default_margin_bottom_pct: 0.08,
+    default_karaoke_mode: "off",
+    default_uppercase: false
   },
   {
     id: "boxed_social",
@@ -973,8 +981,70 @@ const CAPTION_STYLE_SPECS = [
     box_opacity: 0.86,
     border_w: 0,
     default_font_size: 38,
-    bold: true
+    bold: true,
+    highlight_color: "#ffe047",
+    default_margin_bottom_pct: 0.08,
+    default_karaoke_mode: "off",
+    default_uppercase: false
   }
+];
+
+const PRO_CAPTION_STYLE_SPECS = [
+  {
+    id: "netflix_clean",
+    name: "Netflix Clean",
+    description: "Cinema streaming subtitle style with crisp outline, soft shadow, and 10% safe margin.",
+    font_color: "#ffffff",
+    box_color: "#000000",
+    box_opacity: 0.0,
+    border_w: 1,
+    default_font_size: 32,
+    bold: false,
+    highlight_color: "#ffe047",
+    default_margin_bottom_pct: 0.1,
+    default_karaoke_mode: "off",
+    default_uppercase: false
+  },
+  {
+    id: "social_karaoke",
+    name: "Social Karaoke Pop",
+    description: "High-retention Reels/Shorts word-pop karaoke style inside the 24% social safe zone.",
+    font_color: "#ffffff",
+    box_color: "#141416",
+    box_opacity: 0.86,
+    border_w: 2,
+    default_font_size: 42,
+    bold: true,
+    highlight_color: "#ffe047",
+    default_margin_bottom_pct: 0.24,
+    default_karaoke_mode: "color_pop",
+    default_uppercase: true
+  },
+  {
+    id: "broadcast_gold",
+    name: "Broadcast Gold Safe",
+    description: "EBU/SMPTE title-safe gold caption plate with cyan karaoke accent.",
+    font_color: "#ffd54f",
+    box_color: "#0c0c0e",
+    box_opacity: 0.72,
+    border_w: 2,
+    default_font_size: 34,
+    bold: true,
+    highlight_color: "#00e5ff",
+    default_margin_bottom_pct: 0.1,
+    default_karaoke_mode: "off",
+    default_uppercase: false
+  }
+];
+
+const ALL_CAPTION_STYLE_SPECS = [...CAPTION_STYLE_SPECS, ...PRO_CAPTION_STYLE_SPECS];
+const SAFE_MARGIN_PRESETS_CLIENT = [
+  { id: "standard", label: "Standard 8%", margin_bottom_pct: 0.08 },
+  { id: "broadcast_action", label: "Action Safe 5%", margin_bottom_pct: 0.05 },
+  { id: "broadcast_title", label: "Title Safe 10%", margin_bottom_pct: 0.1 },
+  { id: "reels_tiktok", label: "Reels / TikTok Safe 24%", margin_bottom_pct: 0.24 },
+  { id: "upper_third", label: "Upper Center 42%", margin_bottom_pct: 0.42 },
+  { id: "custom", label: "Custom Margin", margin_bottom_pct: 0.08 }
 ];
 
 function sanitizeCaptionTextClient(raw) {
@@ -1066,13 +1136,175 @@ function parseVttClient(raw) {
   return cues;
 }
 
+function computeCueWordTimingsClient(cue, uppercase = false) {
+  if (Array.isArray(cue.words) && cue.words.length > 0) {
+    return cue.words.map((w) => ({
+      text: uppercase ? String(w.text || "").toUpperCase() : String(w.text || ""),
+      start_s: Number(w.start_s ?? cue.start_s ?? 0),
+      end_s: Number(w.end_s ?? cue.end_s ?? 1)
+    }));
+  }
+  const clean = sanitizeCaptionTextClient(cue.text || "").replace(/\n/g, " ");
+  const tokens = clean.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+  const startS = Math.max(0, Number(cue.start_s ?? 0));
+  const endS = Math.max(startS + 0.01, Number(cue.end_s ?? startS + 2));
+  const totalSpan = endS - startS;
+  const weights = tokens.map((tok) => Math.max(1, tok.replace(/[^\w]/g, "").length || tok.length));
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  let cursor = startS;
+  return tokens.map((tok, idx) => {
+    const label = uppercase ? tok.toUpperCase() : tok;
+    let endT;
+    if (idx === tokens.length - 1) {
+      endT = Math.max(cursor + 0.005, endS);
+    } else {
+      const share = totalSpan * (weights[idx] / weightSum);
+      endT = Math.min(endS - 0.005 * (tokens.length - 1 - idx), cursor + share);
+      endT = Math.max(cursor + 0.005, Number(endT.toFixed(3)));
+    }
+    const item = { text: label, start_s: Number(cursor.toFixed(3)), end_s: Number(endT.toFixed(3)) };
+    cursor = endT;
+    return item;
+  });
+}
+
+function autoChunkCuesClient(cues, maxWords = 4, uppercase = false) {
+  const limit = Math.max(1, Math.min(12, Math.round(Number(maxWords) || 4)));
+  const out = [];
+  for (const cue of Array.isArray(cues) ? cues : []) {
+    const words = computeCueWordTimingsClient(cue, uppercase);
+    for (let i = 0; i < words.length; i += limit) {
+      const group = words.slice(i, i + limit);
+      const start_s = group[0].start_s;
+      const end_s = Math.max(start_s + 0.01, group[group.length - 1].end_s);
+      out.push({
+        index: out.length + 1,
+        start_s: Number(start_s.toFixed(3)),
+        end_s: Number(end_s.toFixed(3)),
+        text: group.map((w) => w.text).join(" "),
+        words: group
+      });
+    }
+  }
+  return out;
+}
+
+function parseAssTsClient(raw) {
+  const m = /^(\d{1,2}):([0-5]\d):([0-5]\d)\.(\d{2})$/.exec(String(raw || "").trim());
+  if (!m) throw new Error(`Invalid ASS timestamp: ${raw}`);
+  return Number((Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 100).toFixed(3));
+}
+
+function formatAssTsClient(seconds) {
+  const totalCs = Math.max(0, Math.round(Number(seconds) * 100));
+  const hh = Math.floor(totalCs / 360000);
+  const mm = Math.floor((totalCs % 360000) / 6000);
+  const ss = Math.floor((totalCs % 6000) / 100);
+  const cs = totalCs % 100;
+  return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+}
+
+function parseAssClient(raw) {
+  const cleaned = String(raw || "").replace(/^\ufeff/, "").replace(/\r\n|\r/g, "\n").trim();
+  if (!cleaned || (!cleaned.includes("[Events]") && !cleaned.includes("Dialogue:"))) {
+    throw new Error("Invalid ASS input: missing [Events] / Dialogue lines");
+  }
+  const cues = [];
+  for (const line of cleaned.split("\n")) {
+    const row = line.trim();
+    if (!row.startsWith("Dialogue:")) continue;
+    const parts = row.slice("Dialogue:".length).trim().split(",");
+    if (parts.length < 10) continue;
+    const start_s = parseAssTsClient(parts[1]);
+    const end_s = parseAssTsClient(parts[2]);
+    if (end_s <= start_s) continue;
+    const rawTxt = parts.slice(9).join(",").replace(/\\N|\\n/g, "\n").replace(/\{[^{}]{0,256}\}/g, "");
+    const text = sanitizeCaptionTextClient(rawTxt);
+    if (!text) continue;
+    const cue = { index: cues.length + 1, start_s, end_s, text };
+    cue.words = computeCueWordTimingsClient(cue);
+    cues.push(cue);
+  }
+  if (cues.length === 0) throw new Error("ASS input contains no valid Dialogue cues");
+  return cues;
+}
+
+function hexToAssColorClient(hex, opacity = 1) {
+  const clean = /^#[0-9a-fA-F]{6}$/.test(String(hex || "")) ? hex : "#ffffff";
+  const r = clean.slice(1, 3).toUpperCase();
+  const g = clean.slice(3, 5).toUpperCase();
+  const b = clean.slice(5, 7).toUpperCase();
+  const alpha = Math.round((1 - Math.max(0, Math.min(1, opacity))) * 255);
+  return `&H${alpha.toString(16).toUpperCase().padStart(2, "0")}${b}${g}${r}`;
+}
+
+function exportAssClient(track) {
+  const src = track && track.subtitle_track ? track.subtitle_track : track || {};
+  const styleId = ALL_CAPTION_STYLE_SPECS.some((s) => s.id === src.style) ? src.style : "clean_white";
+  const spec = ALL_CAPTION_STYLE_SPECS.find((s) => s.id === styleId) || ALL_CAPTION_STYLE_SPECS[0];
+  const fontSize = Math.min(72, Math.max(14, Math.round(Number(src.font_size ?? 34))));
+  const marginBottomPct = Math.min(0.45, Math.max(0.02, Number(src.margin_bottom_pct ?? 0.08)));
+  const karaokeMode = ["off", "color_pop", "pill_box", "progressive_fill"].includes(src.karaoke_mode) ? src.karaoke_mode : "off";
+  const hlColor = /^#[0-9a-fA-F]{6}$/.test(String(src.highlight_color || "")) ? src.highlight_color : "#ffe047";
+  const uppercase = Boolean(src.uppercase);
+  const cues = Array.isArray(src.cues) ? src.cues : [];
+
+  const primaryAss = hexToAssColorClient(karaokeMode !== "off" ? hlColor : spec.font_color, 1.0);
+  const secondaryAss = hexToAssColorClient(spec.font_color, 1.0);
+  const outlineAss = hexToAssColorClient("#000000", 0.85);
+  const backAss = hexToAssColorClient(spec.box_opacity > 0 ? spec.box_color : "#000000", spec.box_opacity > 0 ? spec.box_opacity : 0.55);
+  const borderStyle = spec.box_opacity > 0 ? 3 : 1;
+  const marginV = Math.max(12, Math.round(1080 * marginBottomPct));
+  const lines = [
+    "[Script Info]",
+    "Title: taktcut Studio Dynamic Captions",
+    "ScriptType: v4.00+",
+    "WrapStyle: 0",
+    "ScaledBorderAndShadow: yes",
+    "PlayResX: 1920",
+    "PlayResY: 1080",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    `Style: TaktCutCaption,Arial,${fontSize},${primaryAss},${secondaryAss},${outlineAss},${backAss},${spec.bold ? -1 : 0},0,0,0,100,100,0,0,${borderStyle},${borderStyle === 1 ? Math.max(1, spec.border_w) : 6},${borderStyle === 1 ? 1 : 0},2,64,64,${marginV},1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+  ];
+  const kTag = karaokeMode === "progressive_fill" ? "kf" : karaokeMode === "pill_box" ? "ko" : "k";
+  for (const cue of cues) {
+    const startTs = formatAssTsClient(cue.start_s);
+    const endTs = formatAssTsClient(cue.end_s);
+    let txt;
+    if (karaokeMode !== "off") {
+      const words = computeCueWordTimingsClient(cue, uppercase);
+      txt = words
+        .map((w, idx) => {
+          const cs = Math.max(1, Math.round((w.end_s - w.start_s) * 100));
+          const safe = sanitizeCaptionTextClient(w.text).replace(/\\/g, "/").replace(/\{/g, "(").replace(/\}/g, ")");
+          return `{\\${kTag}${cs}}${safe}${idx < words.length - 1 ? " " : ""}`;
+        })
+        .join("");
+    } else {
+      const raw = uppercase ? String(cue.text || "").toUpperCase() : String(cue.text || "");
+      txt = sanitizeCaptionTextClient(raw).replace(/\\/g, "/").replace(/\{/g, "(").replace(/\}/g, ")").replace(/\n/g, "\\N");
+    }
+    lines.push(`Dialogue: 0,${startTs},${endTs},TaktCutCaption,,0,0,0,,${txt}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 function compileSubtitlesClient(payload, opts = {}) {
   const src = payload && payload.subtitle_track ? payload.subtitle_track : payload || {};
   const enabled = src.enabled !== false;
-  const styleId = ["clean_white", "yellow_broadcast", "boxed_social"].includes(src.style) ? src.style : "clean_white";
-  const spec = CAPTION_STYLE_SPECS.find((s) => s.id === styleId) || CAPTION_STYLE_SPECS[0];
+  const styleId = ALL_CAPTION_STYLE_SPECS.some((s) => s.id === src.style) ? src.style : "clean_white";
+  const spec = ALL_CAPTION_STYLE_SPECS.find((s) => s.id === styleId) || ALL_CAPTION_STYLE_SPECS[0];
   const fontSize = Math.min(72, Math.max(14, Math.round(Number(src.font_size ?? 34))));
   const marginBottomPct = Math.min(0.45, Math.max(0.02, Number(src.margin_bottom_pct ?? 0.08)));
+  const karaokeMode = ["off", "color_pop", "pill_box", "progressive_fill"].includes(src.karaoke_mode) ? src.karaoke_mode : "off";
+  const hlHex = /^#[0-9a-fA-F]{6}$/.test(String(src.highlight_color || "")) ? src.highlight_color.toLowerCase() : "#ffe047";
+  const uppercase = Boolean(src.uppercase);
   const cues = Array.isArray(src.cues) ? src.cues : [];
 
   if (!enabled || cues.length === 0) {
@@ -1082,40 +1314,89 @@ function compileSubtitlesClient(payload, opts = {}) {
       is_active: false,
       cue_count: cues.length,
       style: styleId,
-      escaped_cues: []
+      escaped_cues: [],
+      karaoke_mode: karaokeMode,
+      highlight_color: hlHex,
+      uppercase,
+      margin_bottom_pct: marginBottomPct,
+      word_count: 0,
+      ass_preview: ""
     };
   }
 
   const fontColor = `0x${spec.font_color.slice(1)}`;
   const boxColor = `0x${spec.box_color.slice(1)}`;
+  const hlColor = `0x${hlHex.slice(1)}`;
   const fsExpr = `max(14,round(h*${(fontSize / 1080).toFixed(5)}))`;
+  const popFsExpr = `max(16,round(h*${((fontSize * 1.12) / 1080).toFixed(5)}))`;
   const lineStepRatio = (fontSize * 1.38) / 1080;
   const bottomYRatio = 1 - marginBottomPct;
   const styleOpts = [`fontcolor=${fontColor}`];
   if (spec.border_w > 0) styleOpts.push(`borderw=${spec.border_w}:bordercolor=0x000000@0.80`);
   if (spec.box_opacity > 0) {
-    const bw = spec.id === "boxed_social" ? 12 : 8;
+    const bw = spec.id === "boxed_social" || spec.id === "social_karaoke" ? 12 : 8;
     styleOpts.push(`box=1:boxcolor=${boxColor}@${spec.box_opacity.toFixed(2)}:boxborderw=${bw}`);
   }
   styleOpts.push("shadowcolor=0x000000@0.85:shadowx=1:shadowy=1");
   const styleStr = styleOpts.join(":");
 
+  const hlStyleOpts = [`fontcolor=${hlColor}`];
+  if (spec.border_w > 0) hlStyleOpts.push(`borderw=${spec.border_w}:bordercolor=0x000000@0.85`);
+  if (spec.box_opacity > 0) {
+    const bw = spec.id === "boxed_social" || spec.id === "social_karaoke" ? 12 : 8;
+    hlStyleOpts.push(`box=1:boxcolor=${boxColor}@${spec.box_opacity.toFixed(2)}:boxborderw=${bw}`);
+  }
+  hlStyleOpts.push("shadowcolor=0x000000@0.85:shadowx=1:shadowy=1");
+  const hlStyleStr = hlStyleOpts.join(":");
+
   const segs = [];
   const escapedCues = [];
+  let wordCount = 0;
   for (const cue of cues) {
     const clean = sanitizeCaptionTextClient(cue.text || "");
     if (!clean) continue;
-    const lines = clean.split("\n").filter(Boolean);
+    const rawLines = clean.split("\n").filter(Boolean);
+    const lines = uppercase ? rawLines.map((l) => l.toUpperCase()) : rawLines;
     const startS = Math.max(0, Number(cue.start_s ?? 0));
     const endS = Math.max(startS + 0.1, Number(cue.end_s ?? startS + 2));
     const en = `enable='between(t,${startS.toFixed(3)},${endS.toFixed(3)})'`;
     escapedCues.push(escapeDrawtextClient(lines.join(" ")));
+    const words = computeCueWordTimingsClient(cue, uppercase);
+    wordCount += words.length;
+
+    if (karaokeMode === "progressive_fill") {
+      for (let i = 0; i < words.length; i += 1) {
+        const w = words[i];
+        const phrase = words.slice(Math.max(0, i - 5), i + 1).map((x) => x.text).join(" ");
+        const escPhrase = escapeDrawtextClient(phrase);
+        const wEn = `enable='between(t,${w.start_s.toFixed(3)},${w.end_s.toFixed(3)})'`;
+        segs.push(
+          `drawtext=expansion=none:text='${escPhrase}':x=(w-tw)/2:y=round(h*${bottomYRatio.toFixed(4)}-th):fontsize='${fsExpr}':${hlStyleStr}:${wEn}`
+        );
+      }
+      continue;
+    }
+
     for (let idx = 0; idx < lines.length; idx += 1) {
       const escLine = escapeDrawtextClient(lines[idx]);
       const yRatio = Math.max(0.05, bottomYRatio - (lines.length - 1 - idx) * lineStepRatio);
       segs.push(
         `drawtext=expansion=none:text='${escLine}':x=(w-tw)/2:y=round(h*${yRatio.toFixed(4)}-th):fontsize='${fsExpr}':${styleStr}:${en}`
       );
+    }
+
+    if (karaokeMode === "color_pop" || karaokeMode === "pill_box") {
+      const topLineY = Math.max(0.06, bottomYRatio - lines.length * lineStepRatio - 0.015);
+      for (const w of words) {
+        const escW = escapeDrawtextClient(w.text);
+        const wEn = `enable='between(t,${w.start_s.toFixed(3)},${w.end_s.toFixed(3)})'`;
+        const wStyle = karaokeMode === "pill_box"
+          ? `fontcolor=0x141416:box=1:boxcolor=${hlColor}@0.94:boxborderw=12`
+          : `fontcolor=${hlColor}:borderw=2:bordercolor=0x000000@0.88:box=1:boxcolor=0x141416@0.88:boxborderw=10:shadowcolor=0x000000@0.85:shadowx=1:shadowy=1`;
+        segs.push(
+          `drawtext=expansion=none:text='${escW}':x=(w-tw)/2:y=round(h*${topLineY.toFixed(4)}-th):fontsize='${popFsExpr}':${wStyle}:${wEn}`
+        );
+      }
     }
   }
   if (opts.pix_fmt && segs.length > 0) segs.push(`format=${opts.pix_fmt}`);
@@ -1126,7 +1407,13 @@ function compileSubtitlesClient(payload, opts = {}) {
     is_active: segs.length > 0,
     cue_count: cues.length,
     style: styleId,
-    escaped_cues: escapedCues
+    escaped_cues: escapedCues,
+    karaoke_mode: karaokeMode,
+    highlight_color: hlHex,
+    uppercase,
+    margin_bottom_pct: marginBottomPct,
+    word_count: wordCount,
+    ass_preview: exportAssClient({ ...src, style: styleId, font_size: fontSize, margin_bottom_pct: marginBottomPct, karaoke_mode: karaokeMode, highlight_color: hlHex, uppercase })
   };
 }
 
@@ -2227,7 +2514,11 @@ export function createApiClient() {
       if (resolvedMode === "static-demo") {
         return {
           styles: CAPTION_STYLE_SPECS,
+          pro_styles: ALL_CAPTION_STYLE_SPECS,
           style_ids: CAPTION_STYLE_SPECS.map((s) => s.id),
+          all_style_ids: ALL_CAPTION_STYLE_SPECS.map((s) => s.id),
+          karaoke_modes: ["off", "color_pop", "pill_box", "progressive_fill"],
+          safe_margin_presets: SAFE_MARGIN_PRESETS_CLIENT,
           bounds: { max_cues: 500, max_text_len: 300, font_size: { min: 14, max: 72, default: 34 } }
         };
       }
@@ -2236,21 +2527,44 @@ export function createApiClient() {
     async parseSubtitles(payload) {
       if (resolvedMode === "static-demo") {
         const content = String(payload.content || "");
-        const fmt = payload.format === "vtt" || (!payload.format || payload.format === "auto") && content.trimStart().startsWith("WEBVTT")
-          ? "vtt"
-          : "srt";
-        const cues = fmt === "vtt" ? parseVttClient(content) : parseSrtClient(content);
+        const rawFmt = payload.format || "auto";
+        let fmt = rawFmt;
+        if (fmt === "auto") {
+          const head = content.trimStart();
+          if (head.startsWith("WEBVTT")) fmt = "vtt";
+          else if (head.includes("[Script Info]") || head.includes("[Events]") || head.startsWith("Dialogue:")) fmt = "ass";
+          else fmt = "srt";
+        }
+        let cues = fmt === "vtt" ? parseVttClient(content) : fmt === "ass" ? parseAssClient(content) : parseSrtClient(content);
+        if (payload.auto_chunk_words && Number(payload.auto_chunk_words) > 0) {
+          cues = autoChunkCuesClient(cues, Number(payload.auto_chunk_words));
+        } else {
+          cues = cues.map((c) => ({ ...c, words: c.words && c.words.length ? c.words : computeCueWordTimingsClient(c) }));
+        }
         return { format: fmt, cue_count: cues.length, cues };
       }
       return requestJson("/api/subtitles/parse", { method: "POST", body: payload });
     },
+    async chunkSubtitles(payload) {
+      if (resolvedMode === "static-demo") {
+        const cues = autoChunkCuesClient(payload.cues || [], payload.max_words_per_cue || 4, Boolean(payload.uppercase));
+        const word_count = cues.reduce((acc, c) => acc + (c.words ? c.words.length : 0), 0);
+        return { cue_count: cues.length, word_count, cues };
+      }
+      return requestJson("/api/subtitles/chunk", { method: "POST", body: payload });
+    },
     async exportSubtitles(payload) {
       if (resolvedMode === "static-demo") {
-        const fmt = payload.format === "vtt" ? "vtt" : "srt";
+        const fmt = payload.format === "vtt" ? "vtt" : payload.format === "ass" ? "ass" : "srt";
         const cues = Array.isArray(payload.cues) ? payload.cues : [];
-        const sep = fmt === "vtt" ? "." : ",";
-        const blocks = cues.map((c, idx) => `${idx + 1}\n${formatTsClient(c.start_s, sep)} --> ${formatTsClient(c.end_s, sep)}\n${sanitizeCaptionTextClient(c.text)}`);
-        const content = fmt === "vtt" ? `WEBVTT\n\n${blocks.join("\n\n")}\n` : (blocks.length ? `${blocks.join("\n\n")}\n` : "");
+        let content;
+        if (fmt === "ass") {
+          content = exportAssClient(payload.subtitle_track ? payload.subtitle_track : payload);
+        } else {
+          const sep = fmt === "vtt" ? "." : ",";
+          const blocks = cues.map((c, idx) => `${idx + 1}\n${formatTsClient(c.start_s, sep)} --> ${formatTsClient(c.end_s, sep)}\n${sanitizeCaptionTextClient(c.text)}`);
+          content = fmt === "vtt" ? `WEBVTT\n\n${blocks.join("\n\n")}\n` : (blocks.length ? `${blocks.join("\n\n")}\n` : "");
+        }
         return { format: fmt, filename: `captions.${fmt}`, content, cue_count: cues.length, saved_path: null };
       }
       return requestJson("/api/subtitles/export", { method: "POST", body: payload });

@@ -155,6 +155,7 @@ from taktcut.render import (
     validate_timecode_burnin,
 )
 from taktcut.subtitles import (
+    ALL_CAPTION_STYLE_IDS,
     CAPTION_FONT_SIZE_MAX,
     CAPTION_FONT_SIZE_MIN,
     CAPTION_MARGIN_BOTTOM_MAX,
@@ -163,11 +164,18 @@ from taktcut.subtitles import (
     CAPTION_MAX_TEXT_LEN,
     CAPTION_STYLE_IDS,
     CAPTION_TIME_MAX_S,
+    KARAOKE_MODES,
+    SAFE_MARGIN_PRESETS,
     SubtitleTrackParams,
+    auto_chunk_cues,
     compile_subtitles,
+    compute_cue_word_timings,
+    export_ass,
     export_srt,
     export_vtt,
+    list_all_caption_styles,
     list_caption_styles,
+    parse_ass,
     parse_srt,
     parse_vtt,
 )
@@ -880,6 +888,9 @@ def _build_subtitle_track_from_payload(payload: dict[str, Any]) -> SubtitleTrack
     enabled_raw = source.get("enabled", True)
     if not isinstance(enabled_raw, bool):
         raise ValueError("enabled must be a boolean")
+    uppercase_raw = source.get("uppercase", False)
+    if not isinstance(uppercase_raw, bool):
+        raise ValueError("uppercase must be a boolean")
     return SubtitleTrackParams.model_validate(
         {
             "cues": raw_cues,
@@ -887,6 +898,11 @@ def _build_subtitle_track_from_payload(payload: dict[str, Any]) -> SubtitleTrack
             "font_size": source.get("font_size", 34),
             "margin_bottom_pct": source.get("margin_bottom_pct", 0.08),
             "enabled": enabled_raw,
+            "karaoke_mode": source.get("karaoke_mode", "off"),
+            "highlight_color": source.get("highlight_color", "#ffe047"),
+            "uppercase": uppercase_raw,
+            "safe_margin_preset": source.get("safe_margin_preset", "standard"),
+            "max_words_per_cue": source.get("max_words_per_cue", 0),
         }
     )
 
@@ -1380,7 +1396,14 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "styles": [s.model_dump(mode="json") for s in list_caption_styles()],
+                    "pro_styles": [s.model_dump(mode="json") for s in list_all_caption_styles()],
                     "style_ids": list(CAPTION_STYLE_IDS),
+                    "all_style_ids": list(ALL_CAPTION_STYLE_IDS),
+                    "karaoke_modes": list(KARAOKE_MODES),
+                    "safe_margin_presets": [
+                        {"id": pid, "label": label, "margin_bottom_pct": pct}
+                        for pid, (label, pct) in SAFE_MARGIN_PRESETS.items()
+                    ],
                     "bounds": {
                         "max_cues": CAPTION_MAX_CUES,
                         "max_text_len": CAPTION_MAX_TEXT_LEN,
@@ -2097,8 +2120,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
         if route == "/api/subtitles/parse":
             raw_fmt = str(payload.get("format", "auto")).strip().lower()
-            if raw_fmt not in {"auto", "srt", "vtt"}:
-                raise ValueError("format must be 'auto', 'srt', or 'vtt'")
+            if raw_fmt not in {"auto", "srt", "vtt", "ass"}:
+                raise ValueError("format must be 'auto', 'srt', 'vtt', or 'ass'")
             raw_content = payload.get("content")
             if isinstance(raw_content, str):
                 text_content = raw_content
@@ -2118,15 +2141,36 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             detected_fmt = raw_fmt
             if detected_fmt == "auto":
-                first_line = text_content.lstrip("\ufeff").lstrip().splitlines()[0:1]
+                stripped_head = text_content.lstrip("\ufeff").lstrip()
+                first_line = stripped_head.splitlines()[0:1]
                 head = first_line[0].strip() if first_line else ""
-                detected_fmt = (
-                    "vtt"
-                    if head == "WEBVTT" or head.startswith(("WEBVTT ", "WEBVTT\t"))
-                    else "srt"
-                )
+                if head == "WEBVTT" or head.startswith(("WEBVTT ", "WEBVTT\t")):
+                    detected_fmt = "vtt"
+                elif (
+                    "[Script Info]" in stripped_head
+                    or "[Events]" in stripped_head
+                    or head.startswith("Dialogue:")
+                ):
+                    detected_fmt = "ass"
+                else:
+                    detected_fmt = "srt"
 
-            cues = parse_vtt(text_content) if detected_fmt == "vtt" else parse_srt(text_content)
+            if detected_fmt == "vtt":
+                cues = parse_vtt(text_content)
+            elif detected_fmt == "ass":
+                cues = parse_ass(text_content)
+            else:
+                cues = parse_srt(text_content)
+
+            raw_chunk = payload.get("auto_chunk_words", 0)
+            if isinstance(raw_chunk, int) and not isinstance(raw_chunk, bool) and raw_chunk > 0:
+                cues = auto_chunk_cues(cues, max_words_per_cue=raw_chunk)
+            else:
+                cues = [
+                    cue.model_copy(update={"words": compute_cue_word_timings(cue)})
+                    for cue in cues
+                ]
+
             self._send_json(
                 HTTPStatus.OK,
                 {
@@ -2137,14 +2181,51 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if route == "/api/subtitles/export":
-            raw_fmt = str(payload.get("format", "srt")).strip().lower()
-            if raw_fmt not in {"srt", "vtt"}:
-                raise ValueError("format must be 'srt' or 'vtt'")
+        if route == "/api/subtitles/chunk":
             raw_cues = payload.get("cues", [])
             if not isinstance(raw_cues, list):
                 raise ValueError("'cues' must be a list")
-            exported = export_vtt(raw_cues) if raw_fmt == "vtt" else export_srt(raw_cues)
+            raw_max_words = payload.get("max_words_per_cue", 4)
+            if isinstance(raw_max_words, bool) or not isinstance(raw_max_words, int):
+                raise ValueError("max_words_per_cue must be an integer")
+            uppercase_raw = payload.get("uppercase", False)
+            if not isinstance(uppercase_raw, bool):
+                raise ValueError("uppercase must be a boolean")
+            chunked = auto_chunk_cues(
+                raw_cues,
+                max_words_per_cue=raw_max_words,
+                uppercase=uppercase_raw,
+            )
+            word_count = sum(len(c.words) for c in chunked)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "cue_count": len(chunked),
+                    "word_count": word_count,
+                    "cues": [c.model_dump(mode="json") for c in chunked],
+                },
+            )
+            return
+
+        if route == "/api/subtitles/export":
+            raw_fmt = str(payload.get("format", "srt")).strip().lower()
+            if raw_fmt not in {"srt", "vtt", "ass"}:
+                raise ValueError("format must be 'srt', 'vtt', or 'ass'")
+            raw_cues = payload.get("cues", [])
+            if not isinstance(raw_cues, list):
+                raise ValueError("'cues' must be a list")
+            if raw_fmt == "vtt":
+                exported = export_vtt(raw_cues)
+            elif raw_fmt == "ass":
+                if isinstance(payload.get("subtitle_track"), dict):
+                    sub_params = _build_subtitle_track_from_payload(payload)
+                else:
+                    sub_params = _build_subtitle_track_from_payload(
+                        {"subtitle_track": {**payload, "cues": raw_cues}}
+                    )
+                exported = export_ass(sub_params)
+            else:
+                exported = export_srt(raw_cues)
             filename = sanitize_download_filename(
                 str(payload.get("filename") or "captions"),
                 "captions",

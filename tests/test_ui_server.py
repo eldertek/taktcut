@@ -7737,3 +7737,165 @@ def test_ui_server_planar_tracker_and_stabilizer_api(
     assert (workspace / ".taktcut-samples" / "sample_rec709.mp4").exists()
 
 
+def test_ui_karaoke_subtitles_ass_and_playwright_e2e(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    s_status, _, s_raw = _http_call(f"{base_url}/api/subtitles/styles")
+    assert s_status == 200
+    styles_data = json.loads(s_raw.decode("utf-8"))
+    assert [s["id"] for s in styles_data["pro_styles"]] == [
+        "clean_white",
+        "yellow_broadcast",
+        "boxed_social",
+        "netflix_clean",
+        "social_karaoke",
+        "broadcast_gold",
+    ]
+    assert "color_pop" in styles_data["karaoke_modes"]
+    assert any(p["id"] == "reels_tiktok" for p in styles_data["safe_margin_presets"])
+
+    ch_status, _, ch_raw = _http_call(
+        f"{base_url}/api/subtitles/chunk",
+        method="POST",
+        payload={
+            "cues": [
+                {
+                    "index": 1,
+                    "start_s": 0.5,
+                    "end_s": 4.5,
+                    "text": "Clean room OpenTimelineIO interchange workflow for broadcast studio",
+                }
+            ],
+            "max_words_per_cue": 4,
+            "uppercase": True,
+        },
+    )
+    assert ch_status == 200
+    chunked = json.loads(ch_raw.decode("utf-8"))
+    assert chunked["cue_count"] == 2
+    assert chunked["word_count"] == 8
+    assert len(chunked["cues"][0]["words"]) == 4
+
+    ass_exp_status, _, ass_exp_raw = _http_call(
+        f"{base_url}/api/subtitles/export",
+        method="POST",
+        payload={
+            "format": "ass",
+            "cues": chunked["cues"],
+            "out_path": "captions/karaoke_master.ass",
+            "subtitle_track": {
+                "cues": chunked["cues"],
+                "style": "social_karaoke",
+                "karaoke_mode": "color_pop",
+                "highlight_color": "#00e5ff",
+                "margin_bottom_pct": 0.24,
+                "uppercase": True,
+                "enabled": True,
+            },
+        },
+    )
+    assert ass_exp_status == 200
+    ass_exported = json.loads(ass_exp_raw.decode("utf-8"))
+    assert ass_exported["saved_path"] == "captions/karaoke_master.ass"
+    assert "{\\k" in ass_exported["content"]
+    assert (workspace / "captions" / "karaoke_master.ass").is_file()
+
+    ass_parse_status, _, ass_parse_raw = _http_call(
+        f"{base_url}/api/subtitles/parse",
+        method="POST",
+        payload={"format": "ass", "path": "captions/karaoke_master.ass"},
+    )
+    assert ass_parse_status == 200
+    ass_parsed = json.loads(ass_parse_raw.decode("utf-8"))
+    assert ass_parsed["format"] == "ass"
+    assert ass_parsed["cue_count"] == 2
+
+    comp_status, _, comp_raw = _http_call(
+        f"{base_url}/api/subtitles/compile",
+        method="POST",
+        payload={
+            "subtitle_track": {
+                "cues": chunked["cues"],
+                "style": "social_karaoke",
+                "karaoke_mode": "pill_box",
+                "highlight_color": "#38e08d",
+                "margin_bottom_pct": 0.24,
+                "uppercase": True,
+                "enabled": True,
+            }
+        },
+    )
+    assert comp_status == 200
+    compiled = json.loads(comp_raw.decode("utf-8"))
+    assert compiled["karaoke_mode"] == "pill_box"
+    assert compiled["word_count"] == 8
+    assert "boxcolor=0x38e08d@0.94" in compiled["filtergraph"]
+    assert "[Script Info]" in compiled["ass_preview"]
+
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.goto(base_url, wait_until="networkidle")
+            page.click("#tab-titles")
+            page.wait_for_selector("#panel-titles:not(.is-hidden)")
+
+            page.click('[data-subtitle-style="social_karaoke"]')
+            page.wait_for_function(
+                "() => document.getElementById('subtitle-karaoke-badge')"
+                "?.textContent === 'KARAOKE POP'"
+            )
+            assert page.locator("#subtitle-karaoke-mode").input_value() == "color_pop"
+            assert page.locator("#subtitle-uppercase").is_checked() is True
+            assert page.locator("#subtitle-margin-num").input_value() == "24"
+
+            page.click("#btn-titles-safe-guides")
+            assert page.locator("#btn-titles-safe-guides").get_attribute("aria-pressed") == "true"
+
+            page.click("#btn-subtitle-auto-chunk")
+            page.wait_for_function(
+                "() => document.querySelectorAll("
+                "'#subtitle-cue-list .subtitle-word-chip').length >= 6"
+            )
+
+            first_chip = page.locator("#subtitle-cue-list .subtitle-word-chip").first
+            first_chip.click()
+
+            page.click("#btn-subtitle-view-ass")
+            page.locator("#subtitle-filtergraph-drawer summary").click()
+            ass_out = page.locator("#subtitle-filtergraph-output").inner_text()
+            assert "[V4+ Styles]" in ass_out
+            assert "{\\k" in ass_out
+
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_timeout(120)
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            min_btn_h = page.evaluate(
+                "() => document.getElementById('btn-subtitle-auto-chunk')"
+                ".getBoundingClientRect().height"
+            )
+            assert min_btn_h >= 44, f"Mobile touch target too small: {min_btn_h}px"
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()
+
+
+

@@ -1,4 +1,4 @@
-"""Safe SRT & WebVTT caption parser/exporter and FFmpeg drawtext burn-in compiler."""
+"""Safe SRT/WebVTT/ASS caption parser/exporter, word-level karaoke engine, and FFmpeg compiler."""
 
 from __future__ import annotations
 
@@ -16,15 +16,49 @@ from taktcut.titles import (
     escape_ffmpeg_drawtext_text,
 )
 
-CaptionStyleId = Literal["clean_white", "yellow_broadcast", "boxed_social"]
+CaptionStyleId = Literal[
+    "clean_white",
+    "yellow_broadcast",
+    "boxed_social",
+    "netflix_clean",
+    "social_karaoke",
+    "broadcast_gold",
+]
+KaraokeMode = Literal["off", "color_pop", "pill_box", "progressive_fill"]
+SafeMarginPresetId = Literal[
+    "standard",
+    "broadcast_action",
+    "broadcast_title",
+    "reels_tiktok",
+    "upper_third",
+    "custom",
+]
 
 CAPTION_STYLE_IDS: tuple[CaptionStyleId, ...] = (
     "clean_white",
     "yellow_broadcast",
     "boxed_social",
 )
+PRO_CAPTION_STYLE_IDS: tuple[CaptionStyleId, ...] = (
+    "netflix_clean",
+    "social_karaoke",
+    "broadcast_gold",
+)
+ALL_CAPTION_STYLE_IDS: tuple[CaptionStyleId, ...] = CAPTION_STYLE_IDS + PRO_CAPTION_STYLE_IDS
+KARAOKE_MODES: tuple[KaraokeMode, ...] = ("off", "color_pop", "pill_box", "progressive_fill")
+
+SAFE_MARGIN_PRESETS: dict[SafeMarginPresetId, tuple[str, float]] = {
+    "standard": ("Standard 8%", 0.08),
+    "broadcast_action": ("Action Safe 5%", 0.05),
+    "broadcast_title": ("Title Safe 10%", 0.10),
+    "reels_tiktok": ("Reels / TikTok Safe 24%", 0.24),
+    "upper_third": ("Upper Center 42%", 0.42),
+    "custom": ("Custom Margin", 0.08),
+}
 
 CAPTION_MAX_CUES: int = 500
+CAPTION_MAX_WORDS_PER_CUE: int = 80
+CAPTION_MAX_WORD_LEN: int = 80
 CAPTION_MAX_TEXT_LEN: int = 300
 CAPTION_MAX_INPUT_BYTES: int = 512 * 1024
 CAPTION_TIME_MAX_S: float = 86400.0
@@ -32,9 +66,14 @@ CAPTION_FONT_SIZE_MIN: int = 14
 CAPTION_FONT_SIZE_MAX: int = 72
 CAPTION_MARGIN_BOTTOM_MIN: float = 0.02
 CAPTION_MARGIN_BOTTOM_MAX: float = 0.45
+DEFAULT_HIGHLIGHT_COLOR: str = "#ffe047"
 
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _SRT_TS_RE = re.compile(r"^(\d{2,3}):([0-5]\d):([0-5]\d),(\d{3})$")
 _VTT_TS_RE = re.compile(r"^(?:(\d{2,3}):)?([0-5]\d):([0-5]\d)\.(\d{3})$")
+_ASS_TS_RE = re.compile(r"^(\d{1,2}):([0-5]\d):([0-5]\d)\.(\d{2})$")
+_ASS_TAG_RE = re.compile(r"\{[^{}]{0,256}\}")
+_ASS_KARAOKE_RE = re.compile(r"\{\\[kKfFoO]{1,2}(\d{1,6})\}([^\{]*)")
 _SCRIPT_STYLE_BLOCK_RE = re.compile(
     r"<\s*(script|style)\b[^>]*>[\s\S]*?<\s*/\s*\1\s*>",
     re.IGNORECASE,
@@ -44,7 +83,7 @@ _ANY_TAG_RE = re.compile(r"<[^>]{0,512}>")
 
 
 class CaptionStyleSpec(BaseModel):
-    """Built-in broadcast and social caption burn-in style."""
+    """Built-in broadcast, cinema, and social caption burn-in style."""
 
     id: CaptionStyleId
     name: str
@@ -55,6 +94,10 @@ class CaptionStyleSpec(BaseModel):
     border_w: int
     default_font_size: int
     bold: bool
+    highlight_color: str = DEFAULT_HIGHLIGHT_COLOR
+    default_margin_bottom_pct: float = 0.08
+    default_karaoke_mode: KaraokeMode = "off"
+    default_uppercase: bool = False
 
 
 CAPTION_STYLES: tuple[CaptionStyleSpec, ...] = (
@@ -93,16 +136,73 @@ CAPTION_STYLES: tuple[CaptionStyleSpec, ...] = (
     ),
 )
 
+PRO_CAPTION_STYLES: tuple[CaptionStyleSpec, ...] = (
+    CaptionStyleSpec(
+        id="netflix_clean",
+        name="Netflix Clean",
+        description=(
+            "Cinema streaming subtitle style with crisp outline, soft shadow, and 10% safe margin."
+        ),
+        font_color="#ffffff",
+        box_color="#000000",
+        box_opacity=0.0,
+        border_w=1,
+        default_font_size=32,
+        bold=False,
+        highlight_color="#ffe047",
+        default_margin_bottom_pct=0.10,
+        default_karaoke_mode="off",
+        default_uppercase=False,
+    ),
+    CaptionStyleSpec(
+        id="social_karaoke",
+        name="Social Karaoke Pop",
+        description=(
+            "High-retention Reels/Shorts word-pop karaoke style inside the 24% social safe zone."
+        ),
+        font_color="#ffffff",
+        box_color="#141416",
+        box_opacity=0.86,
+        border_w=2,
+        default_font_size=42,
+        bold=True,
+        highlight_color="#ffe047",
+        default_margin_bottom_pct=0.24,
+        default_karaoke_mode="color_pop",
+        default_uppercase=True,
+    ),
+    CaptionStyleSpec(
+        id="broadcast_gold",
+        name="Broadcast Gold Safe",
+        description="EBU/SMPTE title-safe gold caption plate with cyan karaoke accent.",
+        font_color="#ffd54f",
+        box_color="#0c0c0e",
+        box_opacity=0.72,
+        border_w=2,
+        default_font_size=34,
+        bold=True,
+        highlight_color="#00e5ff",
+        default_margin_bottom_pct=0.10,
+        default_karaoke_mode="off",
+        default_uppercase=False,
+    ),
+)
+
 
 def list_caption_styles() -> tuple[CaptionStyleSpec, ...]:
-    """Return all built-in caption burn-in styles."""
+    """Return the core caption burn-in styles."""
     return CAPTION_STYLES
+
+
+def list_all_caption_styles() -> tuple[CaptionStyleSpec, ...]:
+    """Return all core and pro broadcast/streaming/karaoke caption styles."""
+    return CAPTION_STYLES + PRO_CAPTION_STYLES
 
 
 def get_caption_style(style_id: str) -> CaptionStyleSpec:
     """Look up a built-in caption style by id or case-insensitive name."""
     cleaned = style_id.strip().lower()
-    for spec in CAPTION_STYLES:
+    for spec in list_all_caption_styles():
         if spec.id == cleaned or spec.name.lower() == cleaned:
             return spec
     raise ValueError(f"Unknown caption style: {style_id!r}")
@@ -122,6 +222,12 @@ def _validate_finite_float(
     if val < min_val or val > max_val:
         raise ValueError(f"{field_name} must be within [{min_val}, {max_val}], got {val}")
     return val
+
+
+def _validate_hex_color(raw: Any, field_name: str = "highlight_color") -> str:
+    if not isinstance(raw, str) or not _HEX_COLOR_RE.match(raw.strip()):
+        raise ValueError(f"{field_name} must be #RRGGBB hex, got {raw!r}")
+    return raw.strip().lower()
 
 
 def sanitize_caption_text(raw: str) -> str:
@@ -197,6 +303,23 @@ def parse_vtt_timestamp(raw: str) -> float:
     return round(total, 3)
 
 
+def parse_ass_timestamp(raw: str) -> float:
+    """Strictly parse an ASS timestamp (H:MM:SS.cc) into seconds."""
+    if not isinstance(raw, str):
+        raise ValueError("ASS timestamp must be a string")
+    match = _ASS_TS_RE.match(raw.strip())
+    if not match:
+        raise ValueError(f"Invalid ASS timestamp: {raw!r} (expected H:MM:SS.cc)")
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    seconds = int(match.group(3))
+    centis = int(match.group(4))
+    total = hours * 3600.0 + minutes * 60.0 + seconds + centis / 100.0
+    if total > CAPTION_TIME_MAX_S:
+        raise ValueError(f"ASS timestamp exceeds {CAPTION_TIME_MAX_S}s limit: {raw!r}")
+    return round(total, 3)
+
+
 def format_srt_timestamp(seconds: float) -> str:
     """Format seconds into canonical SRT timestamp (HH:MM:SS,mmm)."""
     val = _validate_finite_float(seconds, "timestamp_s", 0.0, CAPTION_TIME_MAX_S)
@@ -217,13 +340,57 @@ def format_vtt_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
+def format_ass_timestamp(seconds: float) -> str:
+    """Format seconds into canonical ASS timestamp (H:MM:SS.cc)."""
+    val = _validate_finite_float(seconds, "timestamp_s", 0.0, CAPTION_TIME_MAX_S)
+    total_cs = round(val * 100.0)
+    hours, rem = divmod(total_cs, 360_000)
+    minutes, rem = divmod(rem, 6_000)
+    secs, centis = divmod(rem, 100)
+    return f"{hours:d}:{minutes:02d}:{secs:02d}.{centis:02d}"
+
+
+class SubtitleWordTiming(BaseModel):
+    """Single word timing slice inside a subtitle cue for karaoke highlight."""
+
+    text: str
+    start_s: float
+    end_s: float
+
+    @field_validator("start_s", "end_s", mode="before")
+    @classmethod
+    def _validate_word_time(cls, raw: Any, info: Any) -> float:
+        return _validate_finite_float(raw, str(info.field_name), 0.0, CAPTION_TIME_MAX_S)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _validate_word_text(cls, raw: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError("Word text must be a string")
+        cleaned = sanitize_caption_text(raw).replace("\n", " ").strip()
+        if not cleaned:
+            raise ValueError("Word text cannot be empty after sanitization")
+        if len(cleaned) > CAPTION_MAX_WORD_LEN:
+            raise ValueError(f"Word text exceeds {CAPTION_MAX_WORD_LEN} chars")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_word_window(self) -> SubtitleWordTiming:
+        if self.end_s <= self.start_s:
+            raise ValueError(
+                f"Word end_s ({self.end_s}) must exceed start_s ({self.start_s})"
+            )
+        return self
+
+
 class SubtitleCue(BaseModel):
-    """Single validated subtitle cue with safe plain-text content."""
+    """Single validated subtitle cue with safe plain-text content and optional word timings."""
 
     index: int = Field(default=1, ge=1)
     start_s: float
     end_s: float
     text: str
+    words: list[SubtitleWordTiming] = Field(default_factory=list)
 
     @field_validator("start_s", "end_s", mode="before")
     @classmethod
@@ -248,6 +415,17 @@ class SubtitleCue(BaseModel):
             )
         return cleaned
 
+    @field_validator("words")
+    @classmethod
+    def _validate_words_count(
+        cls, words: list[SubtitleWordTiming]
+    ) -> list[SubtitleWordTiming]:
+        if len(words) > CAPTION_MAX_WORDS_PER_CUE:
+            raise ValueError(
+                f"Cue exceeds maximum of {CAPTION_MAX_WORDS_PER_CUE} word timings"
+            )
+        return words
+
     @model_validator(mode="after")
     def _validate_window(self) -> SubtitleCue:
         if self.end_s <= self.start_s:
@@ -257,14 +435,97 @@ class SubtitleCue(BaseModel):
         return self
 
 
+def compute_cue_word_timings(
+    cue: SubtitleCue,
+    *,
+    uppercase: bool = False,
+) -> list[SubtitleWordTiming]:
+    """Return explicit word timings or deterministically split cue text proportionally by weight."""
+    if cue.words:
+        out: list[SubtitleWordTiming] = []
+        for word in cue.words:
+            label = word.text.upper() if uppercase else word.text
+            out.append(word.model_copy(update={"text": label}))
+        return out
+
+    tokens = [tok for tok in sanitize_caption_text(cue.text).replace("\n", " ").split() if tok]
+    if not tokens:
+        return []
+
+    total_span = max(0.01, cue.end_s - cue.start_s)
+    weights = [max(1, len(re.sub(r"[^\w]", "", tok)) or len(tok)) for tok in tokens]
+    weight_sum = sum(weights)
+
+    timings: list[SubtitleWordTiming] = []
+    cursor = cue.start_s
+    for idx, (tok, w) in enumerate(zip(tokens, weights, strict=True)):
+        label = tok.upper() if uppercase else tok
+        if idx == len(tokens) - 1:
+            end_t = max(cursor + 0.005, cue.end_s)
+        else:
+            share = total_span * (w / weight_sum)
+            end_t = min(cue.end_s - 0.005 * (len(tokens) - 1 - idx), cursor + share)
+            end_t = max(cursor + 0.005, round(end_t, 3))
+        timings.append(
+            SubtitleWordTiming(
+                text=label,
+                start_s=round(cursor, 3),
+                end_s=round(end_t, 3),
+            )
+        )
+        cursor = end_t
+    return timings
+
+
+def auto_chunk_cues(
+    cues: Sequence[SubtitleCue | dict[str, Any]],
+    *,
+    max_words_per_cue: int = 4,
+    uppercase: bool = False,
+) -> list[SubtitleCue]:
+    """Split cues into short punchy social/karaoke chunks with per-word timings."""
+    if isinstance(max_words_per_cue, bool) or not isinstance(max_words_per_cue, int):
+        raise ValueError("max_words_per_cue must be an integer")
+    if max_words_per_cue < 1 or max_words_per_cue > 12:
+        raise ValueError("max_words_per_cue must be within [1, 12]")
+
+    validated = _coerce_cues(cues)
+    chunked: list[SubtitleCue] = []
+    for cue in validated:
+        words = compute_cue_word_timings(cue, uppercase=uppercase)
+        if not words:
+            continue
+        for start_idx in range(0, len(words), max_words_per_cue):
+            group = words[start_idx : start_idx + max_words_per_cue]
+            c_start = group[0].start_s
+            c_end = max(c_start + 0.01, group[-1].end_s)
+            chunked.append(
+                SubtitleCue(
+                    index=len(chunked) + 1,
+                    start_s=round(c_start, 3),
+                    end_s=round(c_end, 3),
+                    text=" ".join(w.text for w in group),
+                    words=group,
+                )
+            )
+            if len(chunked) > CAPTION_MAX_CUES:
+                raise ValueError(f"Chunked track exceeds maximum of {CAPTION_MAX_CUES} cues")
+    return chunked
+
+
 class SubtitleTrackParams(BaseModel):
-    """Caption track and burn-in styling parameters."""
+    """Caption track, karaoke highlight, safe margins, and burn-in styling parameters."""
 
     cues: list[SubtitleCue] = Field(default_factory=list)
     style: CaptionStyleId = "clean_white"
     font_size: int = 34
     margin_bottom_pct: float = 0.08
     enabled: bool = True
+    karaoke_mode: KaraokeMode = "off"
+    highlight_color: str = DEFAULT_HIGHLIGHT_COLOR
+    uppercase: bool = False
+    safe_margin_preset: SafeMarginPresetId = "standard"
+    max_words_per_cue: int = 0
 
     @field_validator("cues")
     @classmethod
@@ -299,13 +560,28 @@ class SubtitleTrackParams(BaseModel):
             CAPTION_MARGIN_BOTTOM_MAX,
         )
 
+    @field_validator("highlight_color", mode="before")
+    @classmethod
+    def _validate_hl_color(cls, raw: Any) -> str:
+        return _validate_hex_color(raw, "highlight_color")
+
+    @field_validator("max_words_per_cue", mode="before")
+    @classmethod
+    def _validate_max_words(cls, raw: Any) -> int:
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
+            raise ValueError(f"max_words_per_cue must be an integer, got {raw!r}")
+        val = int(round(float(raw)))
+        if val != 0 and (val < 1 or val > 12):
+            raise ValueError(f"max_words_per_cue must be 0 or within [1, 12], got {val}")
+        return val
+
     def is_active(self) -> bool:
         """Return True when enabled and at least one cue is present."""
         return self.enabled and len(self.cues) > 0
 
 
 class SubtitleCompileResult(BaseModel):
-    """Compiled FFmpeg drawtext caption burn-in filtergraph and metadata."""
+    """Compiled FFmpeg drawtext + ASS karaoke caption burn-in filtergraph and metadata."""
 
     filtergraph: str
     ffmpeg_vf_args: list[str] = Field(default_factory=list)
@@ -313,6 +589,12 @@ class SubtitleCompileResult(BaseModel):
     cue_count: int
     style: CaptionStyleId
     escaped_cues: list[str] = Field(default_factory=list)
+    karaoke_mode: KaraokeMode = "off"
+    highlight_color: str = DEFAULT_HIGHLIGHT_COLOR
+    uppercase: bool = False
+    margin_bottom_pct: float = 0.08
+    word_count: int = 0
+    ass_preview: str = ""
 
 
 def _prepare_raw_subtitle_input(raw: str, *, format_label: str) -> str:
@@ -435,6 +717,77 @@ def parse_vtt(raw: str) -> list[SubtitleCue]:
     return cues
 
 
+def parse_ass(raw: str) -> list[SubtitleCue]:
+    """Parse and strictly validate an ASS/SSA subtitle payload into safe SubtitleCue objects."""
+    text = _prepare_raw_subtitle_input(raw, format_label="ASS")
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError("ASS input is empty")
+    if "[Events]" not in stripped and "Dialogue:" not in stripped:
+        raise ValueError("Invalid ASS input: missing [Events] / Dialogue lines")
+
+    cues: list[SubtitleCue] = []
+    for line in stripped.split("\n"):
+        row = line.strip()
+        if not row.startswith("Dialogue:"):
+            continue
+        payload = row[len("Dialogue:") :].strip()
+        parts = payload.split(",", 9)
+        if len(parts) < 10:
+            raise ValueError(f"Malformed ASS Dialogue line: {row!r}")
+        start_s = parse_ass_timestamp(parts[1])
+        end_s = parse_ass_timestamp(parts[2])
+        if end_s <= start_s:
+            raise ValueError(
+                f"ASS Dialogue end time ({end_s}) must exceed start time ({start_s})"
+            )
+        raw_dialogue_text = parts[9].replace("\\N", "\n").replace("\\n", "\n")
+
+        parsed_words: list[SubtitleWordTiming] = []
+        k_matches = list(_ASS_KARAOKE_RE.finditer(raw_dialogue_text))
+        if k_matches:
+            w_cursor = start_s
+            for match in k_matches:
+                dur_cs = max(1, int(match.group(1)))
+                seg_text = sanitize_caption_text(
+                    _ASS_TAG_RE.sub("", match.group(2)).replace("\n", " ")
+                )
+                seg_dur = dur_cs / 100.0
+                w_end = min(end_s, round(w_cursor + seg_dur, 3))
+                if w_end <= w_cursor:
+                    w_end = round(w_cursor + 0.01, 3)
+                for tok in seg_text.split():
+                    if tok:
+                        parsed_words.append(
+                            SubtitleWordTiming(
+                                text=tok,
+                                start_s=round(w_cursor, 3),
+                                end_s=round(max(w_cursor + 0.005, w_end), 3),
+                            )
+                        )
+                w_cursor = w_end
+
+        clean_text = sanitize_caption_text(_ASS_TAG_RE.sub("", raw_dialogue_text))
+        if not clean_text:
+            continue
+
+        cues.append(
+            SubtitleCue(
+                index=len(cues) + 1,
+                start_s=start_s,
+                end_s=end_s,
+                text=clean_text,
+                words=parsed_words[:CAPTION_MAX_WORDS_PER_CUE],
+            )
+        )
+        if len(cues) > CAPTION_MAX_CUES:
+            raise ValueError(f"ASS exceeds maximum of {CAPTION_MAX_CUES} cues")
+
+    if not cues:
+        raise ValueError("ASS input contains no valid Dialogue cues")
+    return cues
+
+
 def _coerce_cues(cues: Sequence[SubtitleCue | dict[str, Any]]) -> list[SubtitleCue]:
     if len(cues) > CAPTION_MAX_CUES:
         raise ValueError(f"Subtitle track exceeds maximum of {CAPTION_MAX_CUES} cues")
@@ -475,6 +828,102 @@ def export_vtt(cues: Sequence[SubtitleCue | dict[str, Any]]) -> str:
     return "WEBVTT\n\n" + "\n\n".join(blocks) + "\n"
 
 
+def _hex_to_ass_color(hex_color: str, *, opacity: float = 1.0) -> str:
+    """Convert #RRGGBB + opacity [0..1] to ASS &HAABBGGRR format (AA=00 opaque, FF transparent)."""
+    clean = _validate_hex_color(hex_color, "color")
+    r = clean[1:3].upper()
+    g = clean[3:5].upper()
+    b = clean[5:7].upper()
+    alpha = round((1.0 - max(0.0, min(1.0, opacity))) * 255.0)
+    return f"&H{alpha:02X}{b}{g}{r}"
+
+
+def _escape_ass_text(raw: str) -> str:
+    """Escape ASS braces and newlines safely."""
+    clean = sanitize_caption_text(raw)
+    escaped = clean.replace("\\", "/").replace("{", "(").replace("}", ")")
+    return escaped.replace("\n", "\\N")
+
+
+def export_ass(
+    track: SubtitleTrackParams | dict[str, Any] | Sequence[SubtitleCue | dict[str, Any]],
+    *,
+    width: int = 1920,
+    height: int = 1080,
+) -> str:
+    """Serialize validated cues & karaoke timings into Advanced SubStation Alpha (.ass)."""
+    params = _coerce_track_params(track)
+    spec = get_caption_style(params.style)
+
+    primary_hex = (
+        params.highlight_color if params.karaoke_mode != "off" else spec.font_color
+    )
+    primary_ass = _hex_to_ass_color(primary_hex, opacity=1.0)
+    secondary_ass = _hex_to_ass_color(spec.font_color, opacity=1.0)
+    outline_ass = _hex_to_ass_color("#000000", opacity=0.85)
+    back_ass = (
+        _hex_to_ass_color(spec.box_color, opacity=spec.box_opacity)
+        if spec.box_opacity > 0.0
+        else _hex_to_ass_color("#000000", opacity=0.55)
+    )
+    bold_flag = -1 if spec.bold else 0
+    border_style = 3 if spec.box_opacity > 0.0 else 1
+    outline_w = max(1, spec.border_w) if border_style == 1 else 6
+    shadow_w = 1 if border_style == 1 else 0
+    margin_v = max(12, round(height * params.margin_bottom_pct))
+    font_px = max(14, round(height * (params.font_size / 1080.0)))
+
+    lines: list[str] = [
+        "[Script Info]",
+        "Title: taktcut Studio Dynamic Captions",
+        "ScriptType: v4.00+",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "",
+        "[V4+ Styles]",
+        (
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
+            "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, "
+            "MarginV, Encoding"
+        ),
+        (
+            f"Style: TaktCutCaption,Arial,{font_px},{primary_ass},{secondary_ass},"
+            f"{outline_ass},{back_ass},{bold_flag},0,0,0,100,100,0,0,{border_style},"
+            f"{outline_w},{shadow_w},2,64,64,{margin_v},1"
+        ),
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+
+    k_tag = "kf" if params.karaoke_mode == "progressive_fill" else (
+        "ko" if params.karaoke_mode == "pill_box" else "k"
+    )
+    for cue in params.cues:
+        start_ts = format_ass_timestamp(cue.start_s)
+        end_ts = format_ass_timestamp(cue.end_s)
+        if params.karaoke_mode != "off":
+            words = compute_cue_word_timings(cue, uppercase=params.uppercase)
+            k_parts: list[str] = []
+            for idx, word in enumerate(words):
+                dur_cs = max(1, round((word.end_s - word.start_s) * 100.0))
+                safe_w = _escape_ass_text(word.text)
+                suffix = " " if idx < len(words) - 1 else ""
+                k_parts.append(f"{{\\{k_tag}{dur_cs}}}{safe_w}{suffix}")
+            event_text = "".join(k_parts)
+        else:
+            raw_txt = cue.text.upper() if params.uppercase else cue.text
+            event_text = _escape_ass_text(raw_txt)
+        lines.append(
+            f"Dialogue: 0,{start_ts},{end_ts},TaktCutCaption,,0,0,0,,{event_text}"
+        )
+
+    return "\n".join(lines) + "\n"
+
+
 def _coerce_track_params(
     track: SubtitleTrackParams | dict[str, Any] | Sequence[SubtitleCue | dict[str, Any]],
     *,
@@ -504,7 +953,7 @@ def compile_subtitles_filter(
     fontfile: Path | str | None = None,
     pix_fmt: str | None = None,
 ) -> str:
-    """Compile validated subtitle cues into an injection-safe FFmpeg drawtext filtergraph."""
+    """Compile validated subtitle cues and karaoke into an injection-safe FFmpeg filtergraph."""
     params = _coerce_track_params(track, style=style)
     if pix_fmt is not None and pix_fmt not in ALLOWED_TITLE_PIX_FMTS:
         raise ValueError(f"Unsupported pixel format {pix_fmt!r}")
@@ -516,9 +965,12 @@ def compile_subtitles_filter(
     font_opt = _resolve_font_option(fontfile)
     font_color = _hex_to_ffmpeg_color(spec.font_color)
     box_color = _hex_to_ffmpeg_color(spec.box_color)
+    hl_color = _hex_to_ffmpeg_color(params.highlight_color)
 
     fs_ratio = params.font_size / 1080.0
     fs_expr = f"max(14,round(h*{fs_ratio:.5f}))"
+    pop_fs_ratio = (params.font_size * 1.12) / 1080.0
+    pop_fs_expr = f"max(16,round(h*{pop_fs_ratio:.5f}))"
     line_step_ratio = (params.font_size * 1.38) / 1080.0
     bottom_y_ratio = 1.0 - params.margin_bottom_pct
 
@@ -526,20 +978,46 @@ def compile_subtitles_filter(
     if spec.border_w > 0:
         style_opts.append(f"borderw={spec.border_w}:bordercolor=0x000000@0.80")
     if spec.box_opacity > 0.0:
-        box_border = 12 if spec.id == "boxed_social" else 8
+        box_border = 12 if spec.id in {"boxed_social", "social_karaoke"} else 8
         style_opts.append(
             f"box=1:boxcolor={box_color}@{spec.box_opacity:.2f}:boxborderw={box_border}"
         )
     style_opts.append("shadowcolor=0x000000@0.85:shadowx=1:shadowy=1")
     style_str = ":".join(style_opts)
 
+    hl_style_opts: list[str] = [f"fontcolor={hl_color}"]
+    if spec.border_w > 0:
+        hl_style_opts.append(f"borderw={spec.border_w}:bordercolor=0x000000@0.85")
+    if spec.box_opacity > 0.0:
+        box_border = 12 if spec.id in {"boxed_social", "social_karaoke"} else 8
+        hl_style_opts.append(
+            f"box=1:boxcolor={box_color}@{spec.box_opacity:.2f}:boxborderw={box_border}"
+        )
+    hl_style_opts.append("shadowcolor=0x000000@0.85:shadowx=1:shadowy=1")
+    hl_style_str = ":".join(hl_style_opts)
+
     filters: list[str] = []
     for cue in params.cues:
-        lines = [ln for ln in sanitize_caption_text(cue.text).split("\n") if ln]
-        if not lines:
+        raw_lines = [ln for ln in sanitize_caption_text(cue.text).split("\n") if ln]
+        if not raw_lines:
             continue
+        lines = [ln.upper() if params.uppercase else ln for ln in raw_lines]
         enable_expr = f"enable='between(t,{cue.start_s:.3f},{cue.end_s:.3f})'"
         total_lines = len(lines)
+
+        if params.karaoke_mode == "progressive_fill":
+            words = compute_cue_word_timings(cue, uppercase=params.uppercase)
+            for idx, word in enumerate(words):
+                phrase = " ".join(w.text for w in words[max(0, idx - 5) : idx + 1])
+                escaped_phrase = escape_ffmpeg_drawtext_text(phrase)
+                w_enable = f"enable='between(t,{word.start_s:.3f},{word.end_s:.3f})'"
+                filters.append(
+                    f"drawtext={font_opt}expansion=none:text='{escaped_phrase}':"
+                    f"x=(w-tw)/2:y=round(h*{bottom_y_ratio:.4f}-th):fontsize='{fs_expr}':"
+                    f"{hl_style_str}:{w_enable}"
+                )
+            continue
+
         for idx, line in enumerate(lines):
             escaped_line = escape_ffmpeg_drawtext_text(line)
             offset_from_bottom = (total_lines - 1 - idx) * line_step_ratio
@@ -549,6 +1027,28 @@ def compile_subtitles_filter(
                 f"x=(w-tw)/2:y=round(h*{y_ratio:.4f}-th):fontsize='{fs_expr}':"
                 f"{style_str}:{enable_expr}"
             )
+
+        if params.karaoke_mode in {"color_pop", "pill_box"}:
+            words = compute_cue_word_timings(cue, uppercase=params.uppercase)
+            top_line_y = max(0.06, bottom_y_ratio - total_lines * line_step_ratio - 0.015)
+            for word in words:
+                esc_word = escape_ffmpeg_drawtext_text(word.text)
+                w_enable = f"enable='between(t,{word.start_s:.3f},{word.end_s:.3f})'"
+                if params.karaoke_mode == "pill_box":
+                    word_style = (
+                        f"fontcolor=0x141416:box=1:boxcolor={hl_color}@0.94:boxborderw=12"
+                    )
+                else:
+                    word_style = (
+                        f"fontcolor={hl_color}:borderw=2:bordercolor=0x000000@0.88:"
+                        "box=1:boxcolor=0x141416@0.88:boxborderw=10:"
+                        "shadowcolor=0x000000@0.85:shadowx=1:shadowy=1"
+                    )
+                filters.append(
+                    f"drawtext={font_opt}expansion=none:text='{esc_word}':"
+                    f"x=(w-tw)/2:y=round(h*{top_line_y:.4f}-th):fontsize='{pop_fs_expr}':"
+                    f"{word_style}:{w_enable}"
+                )
 
     if not filters:
         return ""
@@ -564,13 +1064,20 @@ def compile_subtitles(
     fontfile: Path | str | None = None,
     pix_fmt: str | None = None,
 ) -> SubtitleCompileResult:
-    """Compile subtitle cues into a structured FFmpeg filtergraph result."""
+    """Compile subtitle cues and karaoke timings into a structured FFmpeg + ASS result."""
     params = _coerce_track_params(track, style=style)
     fg = compile_subtitles_filter(params, fontfile=fontfile, pix_fmt=pix_fmt)
     escaped_cues = [
-        escape_ffmpeg_drawtext_text(cue.text.replace("\n", " "))
+        escape_ffmpeg_drawtext_text(
+            (cue.text.upper() if params.uppercase else cue.text).replace("\n", " ")
+        )
         for cue in params.cues
     ]
+    word_count = sum(
+        len(compute_cue_word_timings(cue, uppercase=params.uppercase))
+        for cue in params.cues
+    )
+    ass_text = export_ass(params) if params.is_active() else ""
     return SubtitleCompileResult(
         filtergraph=fg,
         ffmpeg_vf_args=["-vf", fg] if fg else [],
@@ -578,4 +1085,10 @@ def compile_subtitles(
         cue_count=len(params.cues),
         style=params.style,
         escaped_cues=escaped_cues,
+        karaoke_mode=params.karaoke_mode,
+        highlight_color=params.highlight_color,
+        uppercase=params.uppercase,
+        margin_bottom_pct=params.margin_bottom_pct,
+        word_count=word_count,
+        ass_preview=ass_text,
     )
