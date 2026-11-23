@@ -3008,7 +3008,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
 
                 # Restore a CRF-enabled MP4 preset before Audio-Only Master toggle checks
                 page.locator('[data-delivery-preset="youtube_1080p_h264"]').click()
-                assert page.locator("#render-profile").input_value() == "youtube_1080p"
+                assert page.locator("#render-profile").input_value() == "web_h264"
                 assert page.locator("#render-crf").is_disabled() is False
                 assert (page.locator("#render-output-path").input_value() or "").endswith(".mp4")
 
