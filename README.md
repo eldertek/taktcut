@@ -1,20 +1,22 @@
 # taktcut
 
 [![CI](https://github.com/eldertek/taktcut/actions/workflows/ci.yml/badge.svg)](https://github.com/eldertek/taktcut/actions/workflows/ci.yml)
-[![Release v0.1.16](https://img.shields.io/badge/release-v0.1.16-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.16)
+[![Release v0.1.17](https://img.shields.io/badge/release-v0.1.17-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.17)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-e68442.svg)](LICENSE)
 
-Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, SMPTE Timecode Burn-In & Client-Review Watermark, Deliver `export_fps` + Broadcast Deinterlace (`yadif`), Live Estimated Export File Size, CMX 3600 EDL Round-Trip Export (`.edl`), YouTube Chapters / FFMETADATA export, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
+Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, SMPTE Timecode Burn-In & Client-Review Watermark, Deliver `export_fps` + Broadcast Deinterlace (`yadif`), Live Estimated Export File Size, FCPXML 1.10 Round-Trip Export (`.fcpxml`), CMX 3600 EDL Round-Trip Export (`.edl`), YouTube Chapters / FFMETADATA export, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
 
-`taktcut` (`v0.1.16`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
+`taktcut` (`v0.1.17`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
 
 - **1-Click Desktop Download (Windows / macOS / Linux)**: [https://eclipse-technology.eu/taktcut/](https://eclipse-technology.eu/taktcut/)
 - **Live Browser Demo**: [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)
 
 ![taktcut Web Studio GUI](docs/screenshot-desktop.png)
 
-## What's New in v0.1.16
+## What's New in v0.1.17
+
+- **FCPXML 1.10 Round-Trip Export (`.fcpxml`)**: 1-click Deliver export generating valid `<fcpxml version="1.10">` XML with `<resources>` (`<format>`, `<asset>` + `<media-rep>`), primary `<spine>` `<asset-clip>` / `<gap>` timing in rational seconds, connected multi-track video/audio lanes, and `<marker>` cues for Final Cut Pro / DaVinci Resolve round-trip interchange.
 
 - **Live Estimated Export File Size**: Real-time Deliver readout calculating projected video + audio bitrate and output file size (`KB` / `MB` / `GB`) from timeline duration, target codec (`H.264`, `HEVC`, `ProRes`), resolution, `CRF`, and `export_fps`, with a large-file warning above `4000 MB`.
 - **CMX 3600 EDL Round-Trip Export (`.edl`)**: 1-click Deliver export generating standard `TITLE:` / `FCM: NON-DROP FRAME` CMX 3600 `.edl` edit decision lists with SMPTE source/record timecodes and `* FROM CLIP NAME:` entries for NLE round-trip interchange.
@@ -98,7 +100,7 @@ Six docked workstation pages:
 2. **FX**: 20 Boris FX Sapphire-inspired GPU/FFmpeg FX (`S_Glow`, `S_Shake`, `S_Flicker`, `S_LensFlare`, `S_FilmDamage`, `S_ChromaAberration`, `S_Vignette`, `S_FilmGrain`, `S_OpticalGlow`, `S_RGBSplit`, `S_Halation`, `S_Letterbox`, `S_Shake` Handheld, `S_LensDistortion`, `S_ScanLines`, `S_Sharpen`, `S_HueSatBright`, `S_FlipFlop`, `S_Mosaic`, `S_Invert`), **Split-Screen Wipe (Before/After)**, **DaVinci Still Gallery (`Shift+S`)**, **Chroma Key**, keyframe curve editor, and 1-click presets (`cinema_35mm`, `action_handheld`, `retro_vhs`, `neon_shift`, `retro_arcade`, etc.).
 3. **Titles**: Interactive Titles & Lower-Thirds generator plus **SRT / VTT Subtitles** cue editor and burn-in controls.
 4. **Color**: Interactive **Lift / Gamma / Gain** DaVinci Color Wheels & Primary Bars, Rec.709 **Split-Screen Wipe (Before/After)** monitor, **DaVinci Still Gallery (`Shift+S`)**, live **RGB Parade / Luma Waveform / Vectorscope**, `.cdl` import, and 3D `.cube` LUT baking.
-5. **Deliver**: One-click Delivery Presets, live **Estimated Export File Size** readout, Aspect Ratio framing (`16:9`, `9:16`, `1:1`, `4:5`), `export_fps` override (`source`, `24`, `25`, `30`, `60`), **Broadcast Deinterlace (`yadif`)**, **CMX 3600 EDL Round-Trip Export (`.edl`)**, **YouTube Chapters (`.txt`) & FFMETADATA** export from timeline markers, **SMPTE Timecode Burn-In** & **Client-Review Watermark** overlays, host `NVENC`/CPU encoder probe, **Remote GPU Render Node (`NVENC`)** dispatch, deterministic Rec.709 FFmpeg render planning & execution, studio LUT linking, and Fairlight EBU R128 loudness (`-14/-16/-23 LUFS`) + Dialogue EQ.
+5. **Deliver**: One-click Delivery Presets, live **Estimated Export File Size** readout, Aspect Ratio framing (`16:9`, `9:16`, `1:1`, `4:5`), `export_fps` override (`source`, `24`, `25`, `30`, `60`), **Broadcast Deinterlace (`yadif`)**, **FCPXML 1.10 Round-Trip Export (`.fcpxml`)**, **CMX 3600 EDL Round-Trip Export (`.edl`)**, **YouTube Chapters (`.txt`) & FFMETADATA** export from timeline markers, **SMPTE Timecode Burn-In** & **Client-Review Watermark** overlays, host `NVENC`/CPU encoder probe, **Remote GPU Render Node (`NVENC`)** dispatch, deterministic Rec.709 FFmpeg render planning & execution, studio LUT linking, and Fairlight EBU R128 loudness (`-14/-16/-23 LUFS`) + Dialogue EQ.
 6. **Broadcast QA**: `ffprobe` CFR/faststart audit, EBU R128 LUFS/dBTP gauges, and start/mid/end frame signalstats verification.
 
 Static frontend assets (`src/taktcut/ui/assets/`) also run standalone on static web hosting (via relative imports, `window.__TAKTCUT_CONFIG__`, and a client-side demo adapter), as hosted at [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/).
