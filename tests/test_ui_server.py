@@ -990,6 +990,17 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "btn-pw-reset",
         "pw-cx-range",
         "pw-soft-range",
+        "clip-retime-process",
+        "retime-ramp-editor",
+        "clip-retime-ramp-badge",
+        "clip-retime-ramp-presets",
+        "clip-retime-ramp-canvas",
+        "btn-retime-point-add",
+        "btn-retime-point-del",
+        "btn-retime-ramp-reset",
+        "clip-retime-ramp-readout",
+        "render-retime-process",
+        "render-retime-ramp-preset",
     ):
         assert elem_id in html_text
     assert "v0.1.27" in html_text
@@ -1009,6 +1020,9 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert ".color-node-card" in css_text
     assert ".color-power-window-dock" in css_text
     assert ".pw-param-grid" in css_text
+    assert ".retime-ramp-editor" in css_text
+    assert ".retime-ramp-canvas" in css_text
+    assert ".retime-deliver-advanced-row" in css_text
     assert "\u2013" not in css_text and "\u2014" not in css_text
 
     i18n_status, _, i18n_raw = _http_call(f"{base_url}/i18n.js")
@@ -1114,6 +1128,7 @@ import {{
   compileVideoFadeFilterClient,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
+  computeRetimeRampSummary,
   computeSplitWipeGeometry,
   computeSplitWipePercentFromPointer,
   computeTimelineZoomViewport,
@@ -1127,6 +1142,8 @@ import {{
   evaluateClipTransformAtTime,
   evaluateCubicBezier,
   evaluateCubicBezierDerivative,
+  evaluateRetimeSourceOffset,
+  evaluateRetimeSpeedAt,
   filterMediaPoolEntries,
   filterTimelineClips,
   findActiveTransitionAtFrame,
@@ -2701,6 +2718,50 @@ assert.equal(kfRes.clip.transform.keyframes.zoom_pct.length, 1);
 kfRes = clearTransformParamKeyframesInDocument(kfRes.doc, "video", 1, 0, "zoom_pct");
 assert.equal(kfRes.changed, true);
 assert.equal(kfRes.clip.transform, null);
+
+// Optical Flow & Speed Ramp Curve client unit checks
+let rampRes = updateClipRetimeInDocument(doc, "video", 1, 0, {{
+  retime_process: "optical_flow",
+  retime_ramp_preset: "hero_slowmo"
+}});
+assert.equal(rampRes.changed, true);
+assert.equal(rampRes.clip.retime_process, "optical_flow");
+assert.equal(rampRes.clip.retime_ramp_preset, "hero_slowmo");
+assert.equal(rampRes.clip.retime_ramp_points.length, 4);
+
+const speedStart = evaluateRetimeSpeedAt(rampRes.clip.retime_ramp_points, 0.0, 1.0);
+const speedMid = evaluateRetimeSpeedAt(rampRes.clip.retime_ramp_points, 0.5, 1.0);
+assert.ok(Math.abs(speedStart - 1.5) < 1e-4);
+assert.ok(Math.abs(speedMid - 0.35) < 1e-4);
+
+const rampSum = computeRetimeRampSummary(rampRes.clip, 4.0);
+assert.ok(rampSum.avgSpeed > 0.35 && rampSum.avgSpeed < 1.5);
+assert.ok(rampSum.effectiveDurationS > 4.0);
+
+const srcEvalMid = evaluateRetimeSourceOffset(rampRes.clip, 50);
+assert.equal(srcEvalMid.isRamp, true);
+assert.ok(srcEvalMid.sourceDeltaFrames > 0);
+
+const badgeRamp = formatRetimeBadgeText(
+  1.0,
+  false,
+  "optical_flow",
+  rampRes.clip.retime_ramp_points
+);
+assert.equal(badgeRamp, "RAMP 0.35x-1.5x OF");
+
+const compiledRampClient = compileRetimeFilterClient({{
+  speed_rate: 1.0,
+  reverse: false,
+  retime_process: "optical_flow",
+  ramp_preset: "hero_slowmo",
+  ramp_points: rampRes.clip.retime_ramp_points,
+  clip_duration_s: 4.0,
+  fps: "25"
+}});
+assert.equal(compiledRampClient.is_identity, false);
+assert.ok(compiledRampClient.video_filtergraph.includes("setpts='if(lt(T,"));
+assert.ok(compiledRampClient.video_filtergraph.includes("minterpolate=fps=25:mi_mode=mci"));
 """
     proc = subprocess.run(
         [node, "--input-type=module"],
@@ -3409,6 +3470,22 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator("#btn-timeline-index-clear").click()
                     assert page.locator("#timeline-index-count").text_content() == "9 / 9"
 
+                    # Verify Optical Flow & Speed Ramp Curve Editor in Clip Retime Inspector
+                    page.locator("#timeline-index-list .timeline-index-row").first.click()
+                    ramp_canvas_box = page.locator("#clip-retime-ramp-canvas").bounding_box()
+                    assert ramp_canvas_box is not None and ramp_canvas_box["width"] > 120
+                    assert ramp_canvas_box["height"] >= 80
+                    page.locator('[data-retime-ramp-preset="hero_slowmo"]').click()
+                    page.locator("#clip-retime-process").select_option("optical_flow")
+                    page.locator("#btn-retime-point-add").click()
+                    rt_badge_text = page.locator("#clip-retime-badge").text_content() or ""
+                    assert "if(lt(T," in rt_badge_text
+                    assert "minterpolate=fps=" in rt_badge_text
+                    assert "mi_mode=mci" in rt_badge_text
+                    page.locator("#btn-clip-retime-reset").click()
+                    reset_rt_badge = page.locator("#clip-retime-badge").text_content() or ""
+                    assert reset_rt_badge == "1.0x NORMAL"
+
                 if width == 375:
                     pill_box = page.locator(
                         '#clip-label-color-group [data-clip-label-color="blue"]'
@@ -3438,6 +3515,11 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                         "#btn-tf-kf-next",
                         "#btn-tf-kf-clear",
                         '[data-tf-bezier-preset="ease_in_out"]',
+                        "#clip-retime-process",
+                        '[data-retime-ramp-preset="hero_slowmo"]',
+                        "#btn-retime-point-add",
+                        "#btn-retime-point-del",
+                        "#btn-retime-ramp-reset",
                     ):
                         box = page.locator(idx_selector).first.bounding_box()
                         assert box is not None and box["height"] >= 44, (
@@ -4218,6 +4300,25 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert rt_overflow <= 0, (
                     f"Deliver retime overflow at {width}x{height}: {rt_overflow}px"
                 )
+                rt_proc_sel = page.locator("#render-retime-process")
+                rt_ramp_sel = page.locator("#render-retime-ramp-preset")
+                assert rt_proc_sel.is_visible() is True
+                assert rt_ramp_sel.is_visible() is True
+                if width <= 820:
+                    for adv_loc in (rt_proc_sel, rt_ramp_sel):
+                        adv_box = adv_loc.bounding_box()
+                        assert adv_box is not None and adv_box["height"] >= 44
+                rt_proc_sel.select_option("optical_flow")
+                rt_ramp_sel.select_option("hero_slowmo")
+                page.wait_for_function(
+                    "() => (document.getElementById('render-retime-preview')"
+                    ".textContent || '').includes('minterpolate=fps=')"
+                )
+                rt_ramp_preview = page.locator("#render-retime-preview").text_content() or ""
+                assert "mi_mode=mci" in rt_ramp_preview
+                assert "if(lt(T," in rt_ramp_preview
+                rt_proc_sel.select_option("nearest")
+                rt_ramp_sel.select_option("constant")
                 rt_rev.click()
                 rt_chk.uncheck()
 
@@ -7235,4 +7336,100 @@ def test_ui_transform_keyframes_bezier_compile_and_project_persistence(
     assert imp_kf[0]["easing"] == "bezier"
     assert imp_kf[0]["bezier"] == [0.16, 1.0, 0.3, 1.0]
     assert imp_kf[1]["value"] == pytest.approx(135.0)
+
+
+def test_ui_optical_flow_speed_ramp_endpoints_and_project_roundtrip(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    comp_status, _, comp_raw = _http_call(
+        f"{base_url}/api/retime/compile",
+        method="POST",
+        payload={
+            "speed_rate": 1.0,
+            "reverse": False,
+            "retime_process": "optical_flow",
+            "ramp_preset": "hero_slowmo",
+            "clip_duration_s": 4.0,
+            "fps": "25",
+        },
+    )
+    assert comp_status == 200
+    comp_body = json.loads(comp_raw.decode("utf-8"))
+    assert comp_body["is_identity"] is False
+    assert comp_body["retime_process"] == "optical_flow"
+    assert comp_body["ramp_preset"] == "hero_slowmo"
+    assert 0.35 < comp_body["avg_speed"] < 1.5
+    assert "if(lt(T," in comp_body["video_filtergraph"]
+    assert "minterpolate=fps=25:mi_mode=mci:mc_mode=aobmc:me_mode=bilat:vsbmc=1" in (
+        comp_body["video_filtergraph"]
+    )
+    assert "atempo=" in comp_body["audio_filtergraph"]
+
+    plan_status, _, plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/ramp_optical_flow.mp4",
+            "prefer_hw": False,
+            "retime": {
+                "enabled": True,
+                "speed": 1.0,
+                "reverse": False,
+                "retime_process": "frame_blend",
+                "ramp_preset": "ramp_up",
+            },
+        },
+    )
+    assert plan_status == 200
+    plan = json.loads(plan_raw.decode("utf-8"))["plan"]
+    assert plan["retime_enabled"] is True
+    assert plan["retime_process"] == "frame_blend"
+    assert plan["retime_ramp_preset"] == "ramp_up"
+    assert "minterpolate=fps=25:mi_mode=blend" in (plan["video_filter"] or "")
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/retime/compile",
+        method="POST",
+        payload={"retime_process": "bogus_mode"},
+    )
+    assert bad_status == 400
+
+    sample_status, _, sample_raw = _http_call(f"{base_url}/api/sample")
+    assert sample_status == 200
+    doc = json.loads(sample_raw.decode("utf-8"))["document"]
+    doc["tracks"][0]["clips"][0]["retime_process"] = "optical_flow"
+    doc["tracks"][0]["clips"][0]["retime_ramp_preset"] = "bullet_pulse"
+    doc["tracks"][0]["clips"][0]["retime_ramp_points"] = [
+        {"pos_norm": 0.0, "speed_rate": 1.0},
+        {"pos_norm": 0.25, "speed_rate": 3.5},
+        {"pos_norm": 0.55, "speed_rate": 0.4},
+        {"pos_norm": 1.0, "speed_rate": 1.0},
+    ]
+    exp_status, _, exp_raw = _http_call(
+        f"{base_url}/api/project/export",
+        method="POST",
+        payload={
+            "project": {
+                "schema_version": "taktcut.project.v1",
+                "project_name": "Speed_Ramp_OF_Test",
+                "timeline": doc,
+            }
+        },
+    )
+    assert exp_status == 200
+    exported_text = json.loads(exp_raw.decode("utf-8"))["project_json"]
+    imp_status, _, imp_raw = _http_call(
+        f"{base_url}/api/project/import",
+        method="POST",
+        payload={"project_json": exported_text},
+    )
+    assert imp_status == 200
+    imp_clip = json.loads(imp_raw.decode("utf-8"))["project"]["timeline"]["tracks"][0]["clips"][0]
+    assert imp_clip["retime_process"] == "optical_flow"
+    assert imp_clip["retime_ramp_preset"] == "bullet_pulse"
+    assert len(imp_clip["retime_ramp_points"]) == 4
+
 

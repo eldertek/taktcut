@@ -16,8 +16,11 @@ from taktcut.models import (
     HardwareCapabilities,
     RationalFrameRate,
     RenderProfile,
+    RetimeSpeedPoint,
     TimelineClip,
     TimelineTrack,
+    compute_retime_ramp_summary,
+    evaluate_retime_speed_at,
 )
 from taktcut.qa import audit_loudness, check_mp4_faststart, probe_media, run_qa_gate
 from taktcut.render import (
@@ -1740,6 +1743,83 @@ def test_retime_params_validation_and_filter_compile(tmp_path: Path) -> None:
     result = execute_render_plan(plan)
     assert result.success is True, result.stderr_tail
     assert result.bytes_written > 0
+
+
+def test_optical_flow_and_speed_ramp_retime_compile_and_execute(tmp_path: Path) -> None:
+    ramp_clip = ClipRetimeParams(
+        speed_rate=1.0,
+        retime_process="optical_flow",
+        ramp_preset="hero_slowmo",
+    )
+    assert ramp_clip.has_ramp() is True
+    assert len(ramp_clip.ramp_points) == 4
+    assert ramp_clip.is_identity() is False
+    assert evaluate_retime_speed_at(ramp_clip.ramp_points, 0.0) == pytest.approx(1.5)
+    assert evaluate_retime_speed_at(ramp_clip.ramp_points, 0.5) == pytest.approx(0.35)
+    assert evaluate_retime_speed_at(ramp_clip.ramp_points, 1.0) == pytest.approx(1.5)
+
+    summary = compute_retime_ramp_summary(ramp_clip.ramp_points, clip_duration_s=2.0)
+    assert summary["min_speed"] == pytest.approx(0.35)
+    assert summary["max_speed"] == pytest.approx(1.5)
+    assert 0.35 < summary["avg_speed"] < 1.5
+    assert summary["effective_duration_s"] > 2.0
+
+    compiled_of = compile_retime_filter_result(
+        ramp_clip,
+        target_fps=RationalFrameRate(num=25, den=1),
+        clip_duration_s=2.0,
+    )
+    assert compiled_of.is_active is True
+    assert compiled_of.retime_process == "optical_flow"
+    assert compiled_of.ramp_preset == "hero_slowmo"
+    assert "setpts='if(lt(T," in compiled_of.video_filtergraph
+    assert "minterpolate=fps=25:mi_mode=mci:mc_mode=aobmc:me_mode=bilat:vsbmc=1" in (
+        compiled_of.video_filtergraph
+    )
+    assert "atempo=" in compiled_of.audio_filtergraph
+
+    blend_deliver = RetimeParams(
+        enabled=True,
+        speed=0.5,
+        retime_process="frame_blend",
+        ramp_preset="ramp_up",
+    )
+    compiled_blend = compile_retime_filter_result(
+        blend_deliver,
+        target_fps=RationalFrameRate(num=25, den=1),
+        clip_duration_s=2.0,
+    )
+    assert "minterpolate=fps=25:mi_mode=blend" in compiled_blend.video_filtergraph
+
+    for bad_rt in (
+        {"retime_process": "warp_magic"},
+        {"ramp_preset": "unknown_ramp"},
+        {"ramp_points": [RetimeSpeedPoint(pos_norm=i / 15.0, speed_rate=1.0) for i in range(13)]},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            ClipRetimeParams(**bad_rt)  # type: ignore[arg-type]
+
+    src = tmp_path / "ramp_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "ramp_out_blend.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        retime_params=ClipRetimeParams(
+            retime_process="frame_blend",
+            ramp_preset="hero_slowmo",
+        ),
+        clip_duration_s=2.0,
+        prefer_hw=False,
+    )
+    assert plan.retime_enabled is True
+    assert plan.retime_process == "frame_blend"
+    assert plan.retime_ramp_preset == "hero_slowmo"
+    res = execute_render_plan(plan)
+    assert res.success is True, res.stderr_tail
+    assert res.bytes_written > 0
 
 
 def test_reframe_params_validation_and_filter_compile(tmp_path: Path) -> None:

@@ -695,7 +695,39 @@
                       <span class="retime-rev-arrow" aria-hidden="true">&lt;&lt;</span>
                       <span data-i18n="timeline.retime.reverse">Reverse</span>
                     </button>
+                    <div class="retime-process-wrap">
+                      <label for="clip-retime-process" data-i18n="timeline.retime.process">Retime Process</label>
+                      <select id="clip-retime-process" class="input-select retime-process-select" aria-label="Retime motion interpolation mode">
+                        <option value="nearest" data-i18n="timeline.retime.processNearest">Nearest</option>
+                        <option value="frame_blend" data-i18n="timeline.retime.processBlend">Frame Blend</option>
+                        <option value="optical_flow" data-i18n="timeline.retime.processOpticalFlow">Optical Flow (MCI)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="retime-dur-line">
                     <span id="clip-retime-dur-note" class="telemetry-note mono">--</span>
+                  </div>
+                  <div id="retime-ramp-editor" class="retime-ramp-editor" role="region" aria-label="Retime Speed Ramp Curve Editor">
+                    <div class="retime-ramp-header">
+                      <span class="retime-ramp-title" data-i18n="timeline.retime.rampTitle">Speed Ramp Curve</span>
+                      <span id="clip-retime-ramp-badge" class="nle-tag mono">CONSTANT</span>
+                    </div>
+                    <div id="clip-retime-ramp-presets" class="retime-ramp-presets" role="group" aria-label="Speed Ramp Curve Presets">
+                      <button type="button" class="btn btn-mini retime-ramp-preset-btn is-active" data-retime-ramp-preset="constant" aria-pressed="true" data-i18n="timeline.retime.rampConstant">Constant</button>
+                      <button type="button" class="btn btn-mini retime-ramp-preset-btn" data-retime-ramp-preset="hero_slowmo" aria-pressed="false" data-i18n="timeline.retime.rampHeroSlowmo">Hero Slow-Mo</button>
+                      <button type="button" class="btn btn-mini retime-ramp-preset-btn" data-retime-ramp-preset="ramp_up" aria-pressed="false" data-i18n="timeline.retime.rampUp">Ramp Up</button>
+                      <button type="button" class="btn btn-mini retime-ramp-preset-btn" data-retime-ramp-preset="ramp_down" aria-pressed="false" data-i18n="timeline.retime.rampDown">Ramp Down</button>
+                      <button type="button" class="btn btn-mini retime-ramp-preset-btn" data-retime-ramp-preset="bullet_pulse" aria-pressed="false" data-i18n="timeline.retime.rampBullet">Bullet Pulse</button>
+                    </div>
+                    <div class="retime-ramp-canvas-well">
+                      <canvas id="clip-retime-ramp-canvas" class="retime-ramp-canvas" aria-label="Speed Ramp curve editor"></canvas>
+                    </div>
+                    <div class="retime-ramp-actions">
+                      <button type="button" id="btn-retime-point-add" class="btn btn-mini" data-i18n="timeline.retime.pointAdd">+ Point @ PH</button>
+                      <button type="button" id="btn-retime-point-del" class="btn btn-mini" disabled data-i18n="timeline.retime.pointDel">- Point</button>
+                      <button type="button" id="btn-retime-ramp-reset" class="btn btn-mini" data-i18n="timeline.retime.rampReset">Reset Curve</button>
+                    </div>
+                    <div id="clip-retime-ramp-readout" class="telemetry-note mono" aria-live="polite">1.00x constant</div>
                   </div>
                 </div>
               </div>
@@ -1863,6 +1895,26 @@
                       <div class="form-row retime-deliver-rev-col">
                         <span class="retime-deliver-rev-caption" data-i18n="render.retime.label.direction">Direction</span>
                         <button type="button" id="render-retime-reverse" class="btn btn-secondary retime-deliver-reverse-btn" aria-pressed="false" data-i18n="render.retime.reverse">Reverse</button>
+                      </div>
+                    </div>
+                    <div class="retime-deliver-advanced-row">
+                      <div class="form-row">
+                        <label for="render-retime-process" data-i18n="render.retime.label.process">Retime Process</label>
+                        <select id="render-retime-process" class="input-control mono">
+                          <option value="nearest" data-i18n="timeline.retime.processNearest">Nearest</option>
+                          <option value="frame_blend" data-i18n="timeline.retime.processBlend">Frame Blend</option>
+                          <option value="optical_flow" data-i18n="timeline.retime.processOpticalFlow">Optical Flow (MCI)</option>
+                        </select>
+                      </div>
+                      <div class="form-row">
+                        <label for="render-retime-ramp-preset" data-i18n="render.retime.label.rampPreset">Speed Ramp</label>
+                        <select id="render-retime-ramp-preset" class="input-control mono">
+                          <option value="constant" data-i18n="timeline.retime.rampConstant">Constant</option>
+                          <option value="hero_slowmo" data-i18n="timeline.retime.rampHeroSlowmo">Hero Slow-Mo</option>
+                          <option value="ramp_up" data-i18n="timeline.retime.rampUp">Ramp Up</option>
+                          <option value="ramp_down" data-i18n="timeline.retime.rampDown">Ramp Down</option>
+                          <option value="bullet_pulse" data-i18n="timeline.retime.rampBullet">Bullet Pulse</option>
+                        </select>
                       </div>
                     </div>
                     <div class="retime-deliver-meta-row">

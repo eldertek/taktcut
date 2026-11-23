@@ -4087,6 +4087,96 @@ input[type="range"] {
   font-weight: 700;
 }
 
+.retime-process-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 160px;
+}
+
+.retime-process-wrap label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.retime-process-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.retime-dur-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.retime-ramp-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.retime-ramp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.retime-ramp-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.retime-ramp-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.retime-ramp-preset-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: var(--accent-amber-bright);
+}
+
+.retime-ramp-canvas-well {
+  width: 100%;
+  height: 98px;
+  background: #111114;
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.retime-ramp-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.retime-ramp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
 /* CUT TRANSITION INSPECTOR */
 .transition-inspector-dock {
   display: flex;
@@ -5019,6 +5109,18 @@ input[type="range"] {
   min-width: 0;
 }
 
+.retime-deliver-advanced-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.retime-deliver-advanced-row .form-row {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
 .retime-deliver-slider-col,
 .retime-deliver-rev-col {
   margin-bottom: 0;
@@ -5710,11 +5812,24 @@ input[type="range"] {
     min-width: 44px;
   }
   .retime-deliver-speed-row,
+  .retime-deliver-advanced-row,
   .reframe-deliver-pan-row,
   .film-grain-deliver-controls-row,
   .vignette-deliver-controls-row,
   .voice-cleanup-deliver-controls-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .retime-preset-btn,
+  .retime-reverse-btn,
+  .retime-process-select,
+  .retime-ramp-preset-btn,
+  .retime-ramp-actions .btn-mini,
+  #render-retime-process,
+  #render-retime-ramp-preset {
+    min-height: 44px;
+  }
+  .retime-ramp-canvas-well {
+    height: 118px;
   }
   .deliver-chapters-actions .btn {
     white-space: normal;

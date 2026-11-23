@@ -1,6 +1,8 @@
 import {
   CLIP_LABEL_COLORS,
   MARKER_COLOR_HEX,
+  RETIME_SPEED_MAX,
+  RETIME_SPEED_MIN,
   TRANSFORM_PARAM_BOUNDS,
   applyColorNodeChainRgbAtClient,
   applyColorNodeChainRgbClient,
@@ -11,10 +13,13 @@ import {
   computeTimelineZoomViewport,
   evaluateClipFadeEnvelope,
   evaluateClipTransformAtTime,
+  evaluateRetimeSourceOffset,
+  evaluateRetimeSpeedAt,
   evaluateTransformParamAtTime,
   evaluateTransformParamSpeedAtTime,
   findActiveTransitionAtFrame,
   formatRetimeBadgeText,
+  formatRetimeSpeedValue,
   formatTransformBadgeText,
   getAllTransformKeyframeTimes,
   getAspectRatioPreset,
@@ -771,15 +776,29 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   let hudText = "BLACK / NO VIDEO AT PLAYHEAD";
   if (activeClips.length > 0) {
     const top = activeClips[activeClips.length - 1];
-    const retimeNorm = normalizeClipRetime(top.clip);
-    const isRetimed = Math.abs(retimeNorm.speedRate - 1.0) > 0.005 || retimeNorm.reverse;
     const localPos = playheadFrame - top.clip.start_frame;
-    const retimedLocal = retimeNorm.reverse
-      ? (Math.max(1, top.clip.duration_frames) - 1 - localPos) * retimeNorm.speedRate
-      : localPos * retimeNorm.speedRate;
-    const relOffset = (top.clip.source_in_frame || 0) + Math.round(retimedLocal);
+    const retimedEval = evaluateRetimeSourceOffset(top.clip, localPos);
+    const retimeNorm = retimedEval.retimeNorm;
+    const isRetimed =
+      retimedEval.isRamp ||
+      retimeNorm.retimeProcess !== "nearest" ||
+      Math.abs(retimeNorm.speedRate - 1.0) > 0.005 ||
+      retimeNorm.reverse;
+    const relOffset = (top.clip.source_in_frame || 0) + Math.round(retimedEval.sourceDeltaFrames);
     const retimeSlateTag = isRetimed
-      ? ` | ${formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse)}`
+      ? retimedEval.isRamp
+        ? ` | ${formatRetimeBadgeText(
+            retimeNorm.speedRate,
+            retimeNorm.reverse,
+            retimeNorm.retimeProcess,
+            retimeNorm.rampPoints
+          )} @${formatRetimeSpeedValue(retimedEval.instantSpeed)}`
+        : ` | ${formatRetimeBadgeText(
+            retimeNorm.speedRate,
+            retimeNorm.reverse,
+            retimeNorm.retimeProcess,
+            retimeNorm.rampPoints
+          )}`
       : "";
     const transformNorm = normalizeClipTransform(top.clip);
     const transformSlateTag = !isClipTransformIdentity(transformNorm)
@@ -3340,13 +3359,23 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       }
 
       const retimeNorm = normalizeClipRetime(clip);
-      const hasRetime = Math.abs(retimeNorm.speedRate - 1.0) > 0.005 || retimeNorm.reverse;
+      const hasRamp = retimeNorm.rampPoints.length >= 2;
+      const hasRetime =
+        hasRamp ||
+        retimeNorm.retimeProcess !== "nearest" ||
+        Math.abs(retimeNorm.speedRate - 1.0) > 0.005 ||
+        retimeNorm.reverse;
       const transformNorm = !isAudio ? normalizeClipTransform(clip) : null;
       const hasTransform = Boolean(transformNorm && !isClipTransformIdentity(transformNorm));
       let speedBadgeW = 0;
       const rightReserve = showFadeHandles ? 14 : 5;
       if (hasRetime && drawW >= 42) {
-        const badgeText = formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse);
+        const badgeText = formatRetimeBadgeText(
+          retimeNorm.speedRate,
+          retimeNorm.reverse,
+          retimeNorm.retimeProcess,
+          retimeNorm.rampPoints
+        );
         ctx.font = "700 9px ui-monospace, monospace";
         const measuredW = Math.ceil(ctx.measureText(badgeText).width) + 8;
         if (measuredW + rightReserve + 18 <= drawW) {
@@ -3356,13 +3385,23 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           const badgeH = 14;
           ctx.fillStyle = retimeNorm.reverse
             ? "rgba(224, 123, 57, 0.28)"
-            : "rgba(210, 153, 34, 0.24)";
+            : retimeNorm.retimeProcess === "optical_flow"
+              ? "rgba(57, 197, 207, 0.24)"
+              : "rgba(210, 153, 34, 0.24)";
           roundRectPath(ctx, badgeX, badgeY, speedBadgeW, badgeH, 2);
           ctx.fill();
-          ctx.strokeStyle = retimeNorm.reverse ? "#e68442" : "#d29922";
+          ctx.strokeStyle = retimeNorm.reverse
+            ? "#e68442"
+            : retimeNorm.retimeProcess === "optical_flow"
+              ? "#39c5cf"
+              : "#d29922";
           ctx.lineWidth = 1;
           ctx.stroke();
-          ctx.fillStyle = retimeNorm.reverse ? "#ffd8a8" : "#ffd166";
+          ctx.fillStyle = retimeNorm.reverse
+            ? "#ffd8a8"
+            : retimeNorm.retimeProcess === "optical_flow"
+              ? "#a5f3fc"
+              : "#ffd166";
           ctx.fillText(badgeText, badgeX + 4, badgeY + 10);
         }
       }
@@ -3505,7 +3544,12 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
             : "";
           const muteTag = trackAudiblyMuted ? " | MUTED" : "";
           const retimeTag = hasRetime && speedBadgeW === 0
-            ? ` | ${formatRetimeBadgeText(retimeNorm.speedRate, retimeNorm.reverse)}`
+            ? ` | ${formatRetimeBadgeText(
+                retimeNorm.speedRate,
+                retimeNorm.reverse,
+                retimeNorm.retimeProcess,
+                retimeNorm.rampPoints
+              )}`
             : "";
           ctx.fillText(
             `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${gainTag}${muteTag}${retimeTag}`,
@@ -3514,6 +3558,35 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           );
           ctx.restore();
         }
+      }
+
+      if (hasRamp && drawW >= 26 && !isAudio) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(drawX + 2, clipY + 2, Math.max(0, drawW - 4), Math.max(0, clipH - 4));
+        ctx.clip();
+        const curveTop = clipY + clipH - 16;
+        const curveBot = clipY + clipH - 3;
+        const logMin = Math.log2(RETIME_SPEED_MIN);
+        const logSpan = Math.log2(RETIME_SPEED_MAX) - logMin;
+        const samples = Math.max(8, Math.min(32, Math.round(drawW / 6)));
+        ctx.strokeStyle =
+          retimeNorm.retimeProcess === "optical_flow"
+            ? "rgba(57, 197, 207, 0.85)"
+            : "rgba(255, 209, 102, 0.85)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        for (let si = 0; si <= samples; si++) {
+          const u = si / samples;
+          const spd = evaluateRetimeSpeedAt(retimeNorm.rampPoints, u, retimeNorm.speedRate);
+          const normY = (Math.log2(clamp01((spd - RETIME_SPEED_MIN) / (RETIME_SPEED_MAX - RETIME_SPEED_MIN)) * (RETIME_SPEED_MAX - RETIME_SPEED_MIN) + RETIME_SPEED_MIN) - logMin) / logSpan;
+          const px = drawX + 3 + u * Math.max(1, drawW - 6);
+          const py = curveBot - clamp01(normY) * (curveBot - curveTop);
+          if (si === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.restore();
       }
 
       const kfTimes = !isAudio && hasTransformKeyframes(transformNorm)
@@ -5084,4 +5157,206 @@ export function drawStereoVuMeterCanvas(canvas, meterState = {}) {
     const drawX = tick === 0 ? Math.min(width - tw - 2, x - tw + 2) : x - tw / 2;
     ctx.fillText(txt, Math.max(labelW, drawX), scaleY + 1);
   }
+}
+
+export function drawRetimeRampEditorCanvas(canvas, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width, height } = setupCanvas(canvas, 98);
+  if (!ctx) return null;
+
+  const hasClip = Boolean(opts.hasClip);
+  const retimeNorm = normalizeClipRetime(opts.retimeNorm || {});
+  const selectedPointIdx =
+    typeof opts.selectedPointIdx === "number" ? opts.selectedPointIdx : -1;
+  const playheadNorm = Number.isFinite(Number(opts.playheadNorm))
+    ? clamp01(Number(opts.playheadNorm))
+    : null;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#111114";
+  ctx.fillRect(0, 0, width, height);
+
+  const padL = 34;
+  const padR = 12;
+  const padT = 12;
+  const padB = 18;
+  const plotW = Math.max(40, width - padL - padR);
+  const plotH = Math.max(32, height - padT - padB);
+
+  const logMin = Math.log2(RETIME_SPEED_MIN);
+  const logMax = Math.log2(RETIME_SPEED_MAX);
+  const logSpan = Math.max(1e-6, logMax - logMin);
+
+  const speedToY = (spd) => {
+    const clamped = Math.max(RETIME_SPEED_MIN, Math.min(RETIME_SPEED_MAX, Number(spd) || 1.0));
+    const norm = (Math.log2(clamped) - logMin) / logSpan;
+    return padT + plotH - norm * plotH;
+  };
+  const yToSpeed = (y) => {
+    const norm = clamp01((padT + plotH - y) / plotH);
+    return Number(
+      Math.max(
+        RETIME_SPEED_MIN,
+        Math.min(RETIME_SPEED_MAX, Math.pow(2, logMin + norm * logSpan))
+      ).toFixed(2)
+    );
+  };
+  const posToX = (posNorm) => padL + clamp01(posNorm) * plotW;
+  const xToPos = (x) => clamp01((x - padL) / plotW);
+
+  // Horizontal speed grid lines (0.25x, 0.5x, 1x, 2x, 4x)
+  ctx.font = "9px ui-monospace, monospace";
+  const speedTicks = [0.25, 0.5, 1.0, 2.0, 4.0];
+  for (const tick of speedTicks) {
+    const gy = Math.round(speedToY(tick)) + 0.5;
+    const isUnity = Math.abs(tick - 1.0) < 1e-6;
+    ctx.strokeStyle = isUnity ? "rgba(255, 255, 255, 0.22)" : "rgba(255, 255, 255, 0.07)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+
+    ctx.fillStyle = isUnity ? "#d8d8de" : "#6e6e78";
+    const lbl = tick === 1 ? "1x" : tick < 1 ? `${tick}` : `${tick}x`;
+    ctx.fillText(lbl, 4, gy + 3);
+  }
+
+  // Vertical time percent grid (0%, 25%, 50%, 75%, 100%)
+  for (const pct of [0, 0.25, 0.5, 0.75, 1]) {
+    const gx = Math.round(posToX(pct)) + 0.5;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+
+    ctx.fillStyle = "#6e6e78";
+    const pctText = `${Math.round(pct * 100)}%`;
+    const tw = ctx.measureText(pctText).width;
+    const tx = pct === 1 ? padL + plotW - tw : pct === 0 ? padL : gx - tw / 2;
+    ctx.fillText(pctText, tx, height - 4);
+  }
+
+  // Plot frame border
+  ctx.strokeStyle = "#2b2b33";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
+
+  if (!hasClip) {
+    ctx.fillStyle = "#6e6e78";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText("Select a clip to edit Speed Ramp curve", padL + 10, padT + plotH / 2 + 4);
+    return {
+      padL,
+      padT,
+      plotW,
+      plotH,
+      points: [],
+      speedToY,
+      yToSpeed,
+      posToX,
+      xToPos
+    };
+  }
+
+  const pts =
+    retimeNorm.rampPoints.length >= 2
+      ? retimeNorm.rampPoints
+      : [
+          { pos_norm: 0.0, speed_rate: retimeNorm.speedRate },
+          { pos_norm: 1.0, speed_rate: retimeNorm.speedRate }
+        ];
+
+  const isOpticalFlow = retimeNorm.retimeProcess === "optical_flow";
+  const strokeHex = isOpticalFlow ? "#39c5cf" : "#e68442";
+  const fillTop = isOpticalFlow ? "rgba(57, 197, 207, 0.24)" : "rgba(230, 132, 66, 0.26)";
+  const fillBot = isOpticalFlow ? "rgba(57, 197, 207, 0.02)" : "rgba(230, 132, 66, 0.02)";
+
+  // Smooth curve area + line
+  const samples = 72;
+  const curveCoords = [];
+  for (let i = 0; i <= samples; i++) {
+    const u = i / samples;
+    const spd = evaluateRetimeSpeedAt(pts, u, retimeNorm.speedRate);
+    curveCoords.push({ x: posToX(u), y: speedToY(spd), u, spd });
+  }
+
+  const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+  grad.addColorStop(0, fillTop);
+  grad.addColorStop(1, fillBot);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(curveCoords[0].x, padT + plotH);
+  for (const c of curveCoords) ctx.lineTo(c.x, c.y);
+  ctx.lineTo(curveCoords[curveCoords.length - 1].x, padT + plotH);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = strokeHex;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < curveCoords.length; i++) {
+    if (i === 0) ctx.moveTo(curveCoords[i].x, curveCoords[i].y);
+    else ctx.lineTo(curveCoords[i].x, curveCoords[i].y);
+  }
+  ctx.stroke();
+
+  // Playhead vertical cursor + live instantaneous speed dot
+  if (playheadNorm !== null) {
+    const phX = posToX(playheadNorm);
+    const phSpd = evaluateRetimeSpeedAt(pts, playheadNorm, retimeNorm.speedRate);
+    const phY = speedToY(phSpd);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(phX, padT);
+    ctx.lineTo(phX, padT + plotH);
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(phX, phY, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Control point diamonds
+  const renderedPoints = [];
+  for (let idx = 0; idx < pts.length; idx++) {
+    const pt = pts[idx];
+    const px = posToX(pt.pos_norm);
+    const py = speedToY(pt.speed_rate);
+    const isSel = idx === selectedPointIdx;
+    renderedPoints.push({ index: idx, x: px, y: py, pos_norm: pt.pos_norm, speed_rate: pt.speed_rate });
+
+    if (isSel) {
+      ctx.fillStyle = "rgba(255, 209, 102, 0.26)";
+      ctx.beginPath();
+      ctx.arc(px, py, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(Math.PI / 4);
+    const sz = isSel ? 5.2 : 4.2;
+    ctx.fillStyle = isSel ? "#ffd166" : strokeHex;
+    ctx.strokeStyle = "#111114";
+    ctx.lineWidth = 1.4;
+    ctx.fillRect(-sz, -sz, sz * 2, sz * 2);
+    ctx.strokeRect(-sz, -sz, sz * 2, sz * 2);
+    ctx.restore();
+  }
+
+  return {
+    padL,
+    padT,
+    plotW,
+    plotH,
+    points: renderedPoints,
+    speedToY,
+    yToSpeed,
+    posToX,
+    xToPos
+  };
 }

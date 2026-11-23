@@ -195,6 +195,40 @@ VignetteMode = Literal["forward", "backward"]
 VoiceCleanupPresetId = Literal["youtube_voice", "podcast_warm", "broadcast_crisp", "custom"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
+RetimeProcessMode = Literal["nearest", "frame_blend", "optical_flow"]
+RetimeRampPresetId = Literal[
+    "constant",
+    "hero_slowmo",
+    "ramp_up",
+    "ramp_down",
+    "bullet_pulse",
+    "custom",
+]
+
+ALLOWED_RETIME_PROCESS_MODES: tuple[RetimeProcessMode, ...] = (
+    "nearest",
+    "frame_blend",
+    "optical_flow",
+)
+ALLOWED_RETIME_RAMP_PRESETS: tuple[RetimeRampPresetId, ...] = (
+    "constant",
+    "hero_slowmo",
+    "ramp_up",
+    "ramp_down",
+    "bullet_pulse",
+    "custom",
+)
+RETIME_SPEED_MIN: float = 0.25
+RETIME_SPEED_MAX: float = 4.0
+MAX_RETIME_RAMP_POINTS: int = 12
+RETIME_RAMP_PRESET_POINTS: dict[RetimeRampPresetId, tuple[tuple[float, float], ...]] = {
+    "constant": (),
+    "hero_slowmo": ((0.0, 1.5), (0.3, 0.35), (0.7, 0.35), (1.0, 1.5)),
+    "ramp_up": ((0.0, 0.5), (0.65, 1.0), (1.0, 3.0)),
+    "ramp_down": ((0.0, 3.0), (0.35, 1.0), (1.0, 0.4)),
+    "bullet_pulse": ((0.0, 1.0), (0.25, 3.5), (0.55, 0.4), (0.8, 3.0), (1.0, 1.0)),
+    "custom": (),
+}
 
 ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "off",
@@ -751,6 +785,110 @@ class ClipTransformParams(BaseModel):
         )
 
 
+class RetimeSpeedPoint(BaseModel):
+    """Normalized speed control point on a DaVinci Retime Speed Ramp curve."""
+
+    pos_norm: float = Field(ge=0.0, le=1.0)
+    speed_rate: float = Field(ge=RETIME_SPEED_MIN, le=RETIME_SPEED_MAX)
+
+    @field_validator("pos_norm", "speed_rate", mode="before")
+    @classmethod
+    def _validate_finite_ramp_float(cls, raw: Any, info: Any) -> float:
+        return _check_finite_number(raw, str(info.field_name))
+
+    @model_validator(mode="after")
+    def _round_fields(self) -> RetimeSpeedPoint:
+        self.pos_norm = round(self.pos_norm, 4)
+        self.speed_rate = round(self.speed_rate, 4)
+        return self
+
+
+def normalize_retime_ramp_points(raw_points: Sequence[RetimeSpeedPoint]) -> list[RetimeSpeedPoint]:
+    """Sort, validate, and deduplicate speed ramp control points."""
+    if len(raw_points) > MAX_RETIME_RAMP_POINTS:
+        raise ValueError(
+            f"Too many retime ramp points ({len(raw_points)}); max is {MAX_RETIME_RAMP_POINTS}"
+        )
+    ordered = sorted(raw_points, key=lambda pt: pt.pos_norm)
+    deduped: list[RetimeSpeedPoint] = []
+    for pt in ordered:
+        if deduped and abs(deduped[-1].pos_norm - pt.pos_norm) <= 1e-3:
+            deduped[-1] = pt
+        else:
+            deduped.append(pt)
+    return deduped
+
+
+def evaluate_retime_speed_at(
+    points: Sequence[RetimeSpeedPoint],
+    pos_norm: float,
+    fallback_speed: float = 1.0,
+) -> float:
+    """Evaluate smoothstep-interpolated instantaneous speed rate at normalized clip position."""
+    u = max(0.0, min(1.0, float(pos_norm)))
+    if len(points) < 2:
+        return max(RETIME_SPEED_MIN, min(RETIME_SPEED_MAX, float(fallback_speed)))
+    ordered = sorted(points, key=lambda pt: pt.pos_norm)
+    if u <= ordered[0].pos_norm:
+        return ordered[0].speed_rate
+    if u >= ordered[-1].pos_norm:
+        return ordered[-1].speed_rate
+    for idx in range(len(ordered) - 1):
+        p0 = ordered[idx]
+        p1 = ordered[idx + 1]
+        if u <= p1.pos_norm:
+            span = p1.pos_norm - p0.pos_norm
+            if span <= 1e-6:
+                return p1.speed_rate
+            t = max(0.0, min(1.0, (u - p0.pos_norm) / span))
+            smooth = t * t * (3.0 - 2.0 * t)
+            return p0.speed_rate + (p1.speed_rate - p0.speed_rate) * smooth
+    return ordered[-1].speed_rate
+
+
+def compute_retime_ramp_summary(
+    points: Sequence[RetimeSpeedPoint],
+    fallback_speed: float = 1.0,
+    clip_duration_s: float | None = None,
+) -> dict[str, float]:
+    """Compute harmonic average speed, min/max speed, and effective output duration."""
+    if len(points) < 2:
+        spd = max(RETIME_SPEED_MIN, min(RETIME_SPEED_MAX, float(fallback_speed)))
+        eff_dur = (clip_duration_s / spd) if (clip_duration_s and clip_duration_s > 0.0) else 0.0
+        return {
+            "avg_speed": round(spd, 4),
+            "min_speed": round(spd, 4),
+            "max_speed": round(spd, 4),
+            "effective_duration_s": round(eff_dur, 4),
+        }
+    steps = 64
+    inv_integral = 0.0
+    min_spd = RETIME_SPEED_MAX
+    max_spd = RETIME_SPEED_MIN
+    prev_inv = 1.0 / evaluate_retime_speed_at(points, 0.0, fallback_speed)
+    for i in range(steps + 1):
+        u = i / steps
+        s_u = evaluate_retime_speed_at(points, u, fallback_speed)
+        min_spd = min(min_spd, s_u)
+        max_spd = max(max_spd, s_u)
+        if i > 0:
+            cur_inv = 1.0 / s_u
+            inv_integral += 0.5 * (prev_inv + cur_inv) / steps
+            prev_inv = cur_inv
+    avg_spd = max(RETIME_SPEED_MIN, min(RETIME_SPEED_MAX, 1.0 / max(1e-6, inv_integral)))
+    eff_dur = (
+        clip_duration_s * inv_integral
+        if (clip_duration_s is not None and clip_duration_s > 0.0)
+        else 0.0
+    )
+    return {
+        "avg_speed": round(avg_spd, 4),
+        "min_speed": round(min_spd, 4),
+        "max_speed": round(max_spd, 4),
+        "effective_duration_s": round(eff_dur, 4),
+    }
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -767,8 +905,11 @@ class TimelineClip(BaseModel):
     audio_gain_db: float = Field(default=0.0, ge=-24.0, le=12.0)
     fade_in_s: float = Field(default=0.0, ge=0.0, le=5.0)
     fade_out_s: float = Field(default=0.0, ge=0.0, le=5.0)
-    speed_rate: float = Field(default=1.0, ge=0.25, le=4.0)
+    speed_rate: float = Field(default=1.0, ge=RETIME_SPEED_MIN, le=RETIME_SPEED_MAX)
     reverse: bool = False
+    retime_process: RetimeProcessMode = "nearest"
+    retime_ramp_preset: RetimeRampPresetId = "constant"
+    retime_ramp_points: list[RetimeSpeedPoint] = Field(default_factory=list)
     transition_out: ClipTransition | None = None
     transform: ClipTransformParams | None = None
 
@@ -776,6 +917,47 @@ class TimelineClip(BaseModel):
     @classmethod
     def _validate_audio_float(cls, raw: Any, info: Any) -> float:
         return _check_finite_number(raw, str(info.field_name))
+
+    @field_validator("retime_process", mode="before")
+    @classmethod
+    def _validate_clip_retime_process(cls, raw: Any) -> RetimeProcessMode:
+        if raw is None or raw == "":
+            return "nearest"
+        cleaned = str(raw).strip().lower()
+        if cleaned == "nearest":
+            return "nearest"
+        if cleaned == "frame_blend":
+            return "frame_blend"
+        if cleaned == "optical_flow":
+            return "optical_flow"
+        allowed = ", ".join(ALLOWED_RETIME_PROCESS_MODES)
+        raise ValueError(f"Unsupported retime_process {raw!r}; expected one of: {allowed}")
+
+    @field_validator("retime_ramp_preset", mode="before")
+    @classmethod
+    def _validate_clip_ramp_preset(cls, raw: Any) -> RetimeRampPresetId:
+        if raw is None or raw == "":
+            return "constant"
+        cleaned = str(raw).strip().lower()
+        if cleaned == "constant":
+            return "constant"
+        if cleaned == "hero_slowmo":
+            return "hero_slowmo"
+        if cleaned == "ramp_up":
+            return "ramp_up"
+        if cleaned == "ramp_down":
+            return "ramp_down"
+        if cleaned == "bullet_pulse":
+            return "bullet_pulse"
+        if cleaned == "custom":
+            return "custom"
+        allowed = ", ".join(ALLOWED_RETIME_RAMP_PRESETS)
+        raise ValueError(f"Unsupported retime_ramp_preset {raw!r}; expected one of: {allowed}")
+
+    @field_validator("retime_ramp_points", mode="after")
+    @classmethod
+    def _normalize_clip_ramp_points(cls, raw: list[RetimeSpeedPoint]) -> list[RetimeSpeedPoint]:
+        return normalize_retime_ramp_points(raw)
 
     @property
     def end_frame_exclusive(self) -> int:
@@ -945,6 +1127,8 @@ class RenderPlan(BaseModel):
     retime_enabled: bool = False
     retime_speed: float = 1.0
     retime_reverse: bool = False
+    retime_process: RetimeProcessMode = "nearest"
+    retime_ramp_preset: RetimeRampPresetId = "constant"
     reframe_enabled: bool = False
     reframe_aspect_ratio: ReframeAspectRatio = "source"
     reframe_pan_x: float = 0.0

@@ -12,14 +12,20 @@ import {
   compileFairlightAudioFilterClient,
   compileFairlightMixerClient,
   compileFramingFilterClient,
+  compileMinterpolateFilterClient,
   compileRetimeFilterClient,
+  compileRetimeRampSetptsClient,
   compileTransformFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
+  computeRetimeRampSummary,
   deserializeColorNodeFromApi,
   getDeliveryPresetClient,
   normalizeFairlightAudioParams,
+  normalizeRetimeProcess,
+  normalizeRetimeRampPreset,
   parseCubeLutTextClient,
+  resolveRetimeRampPointsForPreset,
   validateTimelineClient
 } from "./timeline_ops.js";
 
@@ -647,17 +653,38 @@ function compileDeliverRetimeClient(payload) {
   ) {
     throw new Error("speed must be within [0.25, 4.0]");
   }
-  const isActive = Boolean(enabled && (reverse || Math.abs(rawSpeed - 1.0) > 1e-6));
+  const retimeProcess = normalizeRetimeProcess(src.retime_process);
+  const rampPreset = normalizeRetimeRampPreset(src.ramp_preset);
+  const rampPoints = resolveRetimeRampPointsForPreset(rampPreset, src.ramp_points);
+  const hasRamp = rampPoints.length >= 2;
+  const summary = computeRetimeRampSummary(
+    { speed_rate: rawSpeed, retime_ramp_preset: rampPreset, retime_ramp_points: rampPoints },
+    src.clip_duration_s || 10.0
+  );
+  const isActive = Boolean(
+    enabled &&
+      (reverse ||
+        retimeProcess !== "nearest" ||
+        hasRamp ||
+        Math.abs(rawSpeed - 1.0) > 1e-6)
+  );
   const isIdentity = !isActive;
   const vfParts = [];
   const afParts = [];
   if (isActive) {
-    if (Math.abs(rawSpeed - 1.0) > 1e-6) {
+    if (hasRamp) {
+      vfParts.push(compileRetimeRampSetptsClient(rampPoints, src.clip_duration_s || 10.0));
+      for (const stage of buildAtempoStagesClient(summary.avgSpeed)) {
+        afParts.push(`atempo=${stage.toFixed(4)}`);
+      }
+    } else if (Math.abs(rawSpeed - 1.0) > 1e-6) {
       vfParts.push(`setpts=PTS/${rawSpeed.toFixed(4)}`);
       for (const stage of buildAtempoStagesClient(rawSpeed)) {
         afParts.push(`atempo=${stage.toFixed(4)}`);
       }
     }
+    const interpVf = compileMinterpolateFilterClient(retimeProcess, src.fps || "25");
+    if (interpVf) vfParts.push(interpVf);
     if (reverse) {
       vfParts.push("reverse");
       afParts.push("areverse");
@@ -672,10 +699,16 @@ function compileDeliverRetimeClient(payload) {
     ffmpeg_af_args: af ? ["-af", af] : [],
     is_identity: isIdentity,
     is_active: isActive,
+    avg_speed: summary.avgSpeed,
+    retime_process: retimeProcess,
+    ramp_preset: rampPreset,
     params: {
       enabled,
       speed: rawSpeed,
-      reverse
+      reverse,
+      retime_process: retimeProcess,
+      ramp_preset: rampPreset,
+      ramp_points: rampPoints
     }
   };
 }
@@ -1423,23 +1456,35 @@ export function createApiClient() {
         let retimeEnabled = false;
         let retimeSpeed = 1.0;
         let retimeReverse = false;
+        let retimeProcess = "nearest";
+        let retimeRampPreset = "constant";
         if (body.retime) {
-          const compiledRetime = compileDeliverRetimeClient(body.retime);
+          const compiledRetime = compileDeliverRetimeClient({
+            ...body.retime,
+            fps: rawFps || "25"
+          });
           if (!compiledRetime.is_identity) {
             if (compiledRetime.video_filtergraph) vfParts.push(compiledRetime.video_filtergraph);
             if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
             retimeEnabled = true;
-            retimeSpeed = compiledRetime.params.speed;
+            retimeSpeed = compiledRetime.avg_speed;
             retimeReverse = compiledRetime.params.reverse;
+            retimeProcess = compiledRetime.retime_process;
+            retimeRampPreset = compiledRetime.ramp_preset;
           }
         } else if (body.retime_params) {
-          const compiledRetime = compileRetimeFilterClient(body.retime_params);
+          const compiledRetime = compileRetimeFilterClient({
+            ...body.retime_params,
+            fps: rawFps || "25"
+          });
           if (!compiledRetime.is_identity) {
             if (compiledRetime.video_filtergraph) vfParts.push(compiledRetime.video_filtergraph);
             if (compiledRetime.audio_filtergraph) afParts.push(compiledRetime.audio_filtergraph);
             retimeEnabled = true;
-            retimeSpeed = compiledRetime.params.speed_rate;
+            retimeSpeed = compiledRetime.avg_speed;
             retimeReverse = compiledRetime.params.reverse;
+            retimeProcess = compiledRetime.retime_process;
+            retimeRampPreset = compiledRetime.ramp_preset;
           }
         }
         if (rawExportFps !== "source") {
@@ -1731,6 +1776,8 @@ export function createApiClient() {
               retime_enabled: retimeEnabled,
               retime_speed: retimeSpeed,
               retime_reverse: retimeReverse,
+              retime_process: retimeProcess,
+              retime_ramp_preset: retimeRampPreset,
               reframe_enabled: false,
               reframe_aspect_ratio: "source",
               reframe_pan_x: 0.0,
@@ -1819,6 +1866,8 @@ export function createApiClient() {
             retime_enabled: retimeEnabled,
             retime_speed: retimeSpeed,
             retime_reverse: retimeReverse,
+            retime_process: retimeProcess,
+            retime_ramp_preset: retimeRampPreset,
             reframe_enabled: reframeEnabled,
             reframe_aspect_ratio: reframeAspectRatio,
             reframe_pan_x: reframePanX,

@@ -7,6 +7,7 @@ import {
   drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
   drawProgramMonitorCanvas,
+  drawRetimeRampEditorCanvas,
   drawStereoVuMeterCanvas,
   drawTimelineCanvas,
   drawTimelineOverviewCanvas,
@@ -91,6 +92,7 @@ import {
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
   computeInOutRangeMetrics,
+  computeRetimeRampSummary,
   computeSplitWipePercentFromPointer,
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
@@ -103,6 +105,7 @@ import {
   estimateRenderFileSize,
   evaluateClipTransformAtTime,
   evaluatePowerWindowMask,
+  evaluateRetimeSpeedAt,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
   filterMediaPoolEntries,
@@ -115,6 +118,7 @@ import {
   formatFcpxmlTimeline,
   formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
+  formatRetimeSpeedValue,
   formatShuttleSpeedLabel,
   formatTrackPanLabel,
   formatTransformBadgeText,
@@ -147,12 +151,16 @@ import {
   normalizeMarkerColor,
   normalizeMasterBusState,
   normalizePowerWindow,
+  normalizeRetimeProcess,
+  normalizeRetimeRampPoints,
+  normalizeRetimeRampPreset,
   normalizeTrackMixerState,
   parseCubeLutTextClient,
   removeColorNodeFromTree,
   removeStillById,
   removeTransformKeyframeInDocument,
   resetAllTracksMixerInDocument,
+  resolveRetimeRampPointsForPreset,
   resolveSourceTapeFrame,
   resolveTransformKeyframeBezier,
   rippleDeleteClipInDocument,
@@ -467,8 +475,14 @@ const state = {
   deliverRetime: {
     enabled: false,
     speed: 1.0,
-    reverse: false
+    reverse: false,
+    retime_process: "nearest",
+    ramp_preset: "constant",
+    ramp_points: []
   },
+  retimeRampSelectedIdx: -1,
+  retimeRampDrag: null,
+  retimeRampGeom: null,
   deliverRetimeCompileSeq: 0,
   deliverRetimeCompileTimer: null,
   reframe: {
@@ -927,6 +941,7 @@ function updatePlayheadReadout() {
   updateSubtitleTimingBadges();
   if (state.activeTab === "timeline" && state.timelineDoc) {
     renderTimelineTransformInspector();
+    renderTimelineRetimeRampCanvas();
   }
 }
 
@@ -1269,12 +1284,20 @@ function getSelectedClipRetimePayload() {
   const info = getSelectedClipTrack();
   if (!doc || !info) return null;
   const norm = normalizeClipRetime(info.clip);
-  const isIdentity = !norm.reverse && Math.abs(norm.speedRate - 1.0) <= 1e-6;
+  const hasRamp = norm.rampPoints.length >= 2;
+  const isIdentity =
+    !norm.reverse &&
+    norm.retimeProcess === "nearest" &&
+    !hasRamp &&
+    Math.abs(norm.speedRate - 1.0) <= 1e-6;
   return {
     isIdentity,
     retime_params: {
       speed_rate: norm.speedRate,
-      reverse: norm.reverse
+      reverse: norm.reverse,
+      retime_process: norm.retimeProcess,
+      ramp_preset: norm.rampPreset,
+      ramp_points: norm.rampPoints
     }
   };
 }
@@ -2196,6 +2219,31 @@ function startVuMeterDecay() {
   }
 }
 
+function renderTimelineRetimeRampCanvas() {
+  const rampCanvas = byId("clip-retime-ramp-canvas");
+  if (!rampCanvas) return;
+  const info = getSelectedClipTrack();
+  if (!info) {
+    state.retimeRampGeom = drawRetimeRampEditorCanvas(rampCanvas, { hasClip: false });
+    return;
+  }
+  const norm = normalizeClipRetime(info.clip);
+  const clipDurFrames = Math.max(1, Number(info.clip.duration_frames || 1));
+  const localFrame = state.playheadFrame - Number(info.clip.start_frame || 0);
+  const playheadNorm =
+    localFrame >= 0 && localFrame <= clipDurFrames ? localFrame / clipDurFrames : null;
+  const clampedSel =
+    state.retimeRampSelectedIdx >= 0 && state.retimeRampSelectedIdx < norm.rampPoints.length
+      ? state.retimeRampSelectedIdx
+      : -1;
+  state.retimeRampGeom = drawRetimeRampEditorCanvas(rampCanvas, {
+    hasClip: true,
+    retimeNorm: norm,
+    selectedPointIdx: clampedSel,
+    playheadNorm
+  });
+}
+
 function renderTimelineRetimeInspector() {
   const ctrlBox = byId("clip-retime-controls");
   const badge = byId("clip-retime-badge");
@@ -2204,21 +2252,41 @@ function renderTimelineRetimeInspector() {
   const speedNum = byId("clip-retime-speed-num");
   const rstBtn = byId("btn-clip-retime-reset");
   const revBtn = byId("btn-clip-retime-reverse");
+  const procSel = byId("clip-retime-process");
   const durNote = byId("clip-retime-dur-note");
   const presetBtns = document.querySelectorAll(".retime-preset-btn");
+  const rampPresetBtns = document.querySelectorAll(".retime-ramp-preset-btn");
+  const rampBadge = byId("clip-retime-ramp-badge");
+  const rampAddBtn = byId("btn-retime-point-add");
+  const rampDelBtn = byId("btn-retime-point-del");
+  const rampRstBtn = byId("btn-retime-ramp-reset");
+  const rampReadout = byId("clip-retime-ramp-readout");
 
   if (!ctrlBox) return;
 
   const info = getSelectedClipTrack();
   const hasClip = Boolean(info);
   ctrlBox.classList.toggle("is-disabled", !hasClip);
-  for (const el of [speedRange, speedNum, rstBtn, revBtn, sendBtn, ...presetBtns]) {
+  for (const el of [
+    speedRange,
+    speedNum,
+    rstBtn,
+    revBtn,
+    procSel,
+    sendBtn,
+    rampAddBtn,
+    rampRstBtn,
+    ...presetBtns,
+    ...rampPresetBtns
+  ]) {
     if (el) el.disabled = !hasClip;
   }
 
   if (!info) {
+    state.retimeRampSelectedIdx = -1;
     if (speedRange) speedRange.value = "1";
     if (speedNum && document.activeElement !== speedNum) speedNum.value = "1.00";
+    if (procSel) procSel.value = "nearest";
     if (revBtn) {
       revBtn.classList.remove("is-active");
       revBtn.setAttribute("aria-pressed", "false");
@@ -2227,42 +2295,116 @@ function renderTimelineRetimeInspector() {
       btn.classList.remove("is-active");
       btn.setAttribute("aria-pressed", "false");
     }
+    for (const btn of rampPresetBtns) {
+      btn.classList.remove("is-active");
+      btn.setAttribute("aria-pressed", "false");
+    }
+    if (rampDelBtn) rampDelBtn.disabled = true;
+    if (rampBadge) {
+      rampBadge.textContent = "CONSTANT";
+      rampBadge.className = "nle-tag mono";
+    }
+    if (rampReadout) rampReadout.textContent = "--";
     if (badge) {
       badge.textContent = "NO CLIP";
       badge.className = "nle-tag mono";
     }
     if (durNote) durNote.textContent = "--";
+    renderTimelineRetimeRampCanvas();
     return;
   }
 
   const norm = normalizeClipRetime(info.clip);
+  const hasRamp = norm.rampPoints.length >= 2;
+  if (state.retimeRampSelectedIdx >= norm.rampPoints.length) {
+    state.retimeRampSelectedIdx = norm.rampPoints.length > 0 ? norm.rampPoints.length - 1 : -1;
+  }
   if (speedRange) speedRange.value = String(norm.speedRate);
   if (speedNum && document.activeElement !== speedNum) {
     speedNum.value = norm.speedRate.toFixed(2);
   }
+  if (procSel) procSel.value = norm.retimeProcess;
   if (revBtn) {
     revBtn.classList.toggle("is-active", norm.reverse);
     revBtn.setAttribute("aria-pressed", norm.reverse ? "true" : "false");
   }
   for (const btn of presetBtns) {
     const presetVal = Number.parseFloat(btn.getAttribute("data-retime-preset") || "1");
-    const isMatch = Math.abs(presetVal - norm.speedRate) < 0.005;
+    const isMatch = !hasRamp && Math.abs(presetVal - norm.speedRate) < 0.005;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+  for (const btn of rampPresetBtns) {
+    const rpId = btn.getAttribute("data-retime-ramp-preset") || "constant";
+    const isMatch = norm.rampPreset === rpId;
     btn.classList.toggle("is-active", isMatch);
     btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
   }
 
   const fpsRate = getTimelineFps();
   const baseDurS = info.clip.duration_frames / fpsRate;
-  const srcFramesUsed = Math.max(1, Math.round(info.clip.duration_frames * norm.speedRate));
+  const summary = computeRetimeRampSummary(
+    {
+      speed_rate: norm.speedRate,
+      retime_ramp_preset: norm.rampPreset,
+      retime_ramp_points: norm.rampPoints
+    },
+    baseDurS
+  );
+  const srcFramesUsed = Math.max(1, Math.round(info.clip.duration_frames * summary.avgSpeed));
   const srcDurS = srcFramesUsed / fpsRate;
   if (durNote) {
-    durNote.textContent = `${info.clip.duration_frames}f (${baseDurS.toFixed(2)}s) | SRC ${srcFramesUsed}f (${srcDurS.toFixed(2)}s)`;
+    durNote.textContent = hasRamp
+      ? `${info.clip.duration_frames}f (${baseDurS.toFixed(2)}s) | AVG ${summary.avgSpeed.toFixed(2)}x | SRC ${srcFramesUsed}f`
+      : `${info.clip.duration_frames}f (${baseDurS.toFixed(2)}s) | SRC ${srcFramesUsed}f (${srcDurS.toFixed(2)}s)`;
+  }
+
+  if (rampBadge) {
+    if (hasRamp) {
+      rampBadge.textContent = `${norm.rampPoints.length} PTS | ${formatRetimeSpeedValue(summary.minSpeed)}-${formatRetimeSpeedValue(summary.maxSpeed)}`;
+      rampBadge.className = norm.retimeProcess === "optical_flow" ? "nle-tag is-blue mono" : "nle-tag is-active mono";
+    } else if (norm.retimeProcess === "optical_flow") {
+      rampBadge.textContent = "OPTICAL FLOW";
+      rampBadge.className = "nle-tag is-blue mono";
+    } else {
+      rampBadge.textContent = "CONSTANT";
+      rampBadge.className = "nle-tag mono";
+    }
+  }
+
+  if (rampDelBtn) {
+    const canDel =
+      hasRamp &&
+      norm.rampPoints.length > 2 &&
+      state.retimeRampSelectedIdx >= 0 &&
+      state.retimeRampSelectedIdx < norm.rampPoints.length;
+    rampDelBtn.disabled = !canDel;
+  }
+
+  if (rampReadout) {
+    if (hasRamp) {
+      const selPt =
+        state.retimeRampSelectedIdx >= 0 && state.retimeRampSelectedIdx < norm.rampPoints.length
+          ? norm.rampPoints[state.retimeRampSelectedIdx]
+          : null;
+      const selText = selPt
+        ? ` | Pt #${state.retimeRampSelectedIdx + 1}: ${Math.round(selPt.pos_norm * 100)}% @ ${selPt.speed_rate.toFixed(2)}x`
+        : "";
+      rampReadout.textContent = `${norm.rampPreset.toUpperCase()} (${summary.minSpeed.toFixed(2)}x..${summary.maxSpeed.toFixed(2)}x)${selText}`;
+    } else {
+      rampReadout.textContent = `${norm.speedRate.toFixed(2)}x flat (${norm.retimeProcess})`;
+    }
   }
 
   if (badge) {
     const compiled = compileRetimeFilterClient({
       speed_rate: norm.speedRate,
-      reverse: norm.reverse
+      reverse: norm.reverse,
+      retime_process: norm.retimeProcess,
+      ramp_preset: norm.rampPreset,
+      ramp_points: norm.rampPoints,
+      clip_duration_s: Math.max(0.5, baseDurS),
+      fps: String(Math.round(fpsRate))
     });
     if (compiled.is_identity) {
       badge.textContent = "1.0x NORMAL";
@@ -2272,9 +2414,14 @@ function renderTimelineRetimeInspector() {
       if (compiled.video_filtergraph) parts.push(compiled.video_filtergraph);
       if (compiled.audio_filtergraph) parts.push(compiled.audio_filtergraph);
       badge.textContent = parts.join(" | ");
-      badge.className = norm.reverse ? "nle-tag mono is-warn" : "nle-tag mono is-pass";
+      badge.className = norm.reverse
+        ? "nle-tag mono is-warn"
+        : norm.retimeProcess === "optical_flow"
+          ? "nle-tag mono is-blue"
+          : "nle-tag mono is-pass";
     }
   }
+  renderTimelineRetimeRampCanvas();
 }
 
 function getSelectedClipLocalContext() {
@@ -3865,13 +4012,25 @@ function applyFullProjectState(project, validation) {
   syncLowerThirdControlsUI({ syncInputs: true });
   if (del.retime && typeof del.retime === "object") {
     const rawSpd = Number(del.retime.speed);
+    const rpPreset = normalizeRetimeRampPreset(del.retime.ramp_preset);
+    const rpPoints = resolveRetimeRampPointsForPreset(rpPreset, del.retime.ramp_points);
     state.deliverRetime = {
       enabled: Boolean(del.retime.enabled),
       speed: Number.isFinite(rawSpd) ? Math.min(4.0, Math.max(0.25, rawSpd)) : 1.0,
-      reverse: Boolean(del.retime.reverse)
+      reverse: Boolean(del.retime.reverse),
+      retime_process: normalizeRetimeProcess(del.retime.retime_process),
+      ramp_preset: rpPreset,
+      ramp_points: rpPoints
     };
   } else {
-    state.deliverRetime = { enabled: false, speed: 1.0, reverse: false };
+    state.deliverRetime = {
+      enabled: false,
+      speed: 1.0,
+      reverse: false,
+      retime_process: "nearest",
+      ramp_preset: "constant",
+      ramp_points: []
+    };
   }
   syncDeliverRetimeControlsUI({ syncInputs: true });
   if (del.reframe && typeof del.reframe === "object") {
@@ -6757,14 +6916,23 @@ function updateDeliverRetimeDurationEstimate() {
     return;
   }
   const rt = getNormalizedDeliverRetimePayload();
-  const effectiveSpeed = rt.enabled ? rt.speed : 1.0;
+  const summary = computeRetimeRampSummary(
+    {
+      speed_rate: rt.speed,
+      retime_ramp_preset: rt.ramp_preset,
+      retime_ramp_points: rt.ramp_points
+    },
+    durationS
+  );
+  const effectiveSpeed = rt.enabled ? summary.avgSpeed : 1.0;
   const effectiveDur = durationS / effectiveSpeed;
   if (!rt.enabled) {
     durEl.textContent = `${durationS.toFixed(2)}s (1.00x)`;
     return;
   }
   const revTag = rt.reverse ? " REV" : "";
-  durEl.textContent = `${durationS.toFixed(2)}s -> ${effectiveDur.toFixed(2)}s (${rt.speed.toFixed(2)}x${revTag})`;
+  const ofTag = rt.retime_process === "optical_flow" ? " OF" : rt.retime_process === "frame_blend" ? " FB" : "";
+  durEl.textContent = `${durationS.toFixed(2)}s -> ${effectiveDur.toFixed(2)}s (${effectiveSpeed.toFixed(2)}x${ofTag}${revTag})`;
 }
 
 function updateDeliverSizeEstimate() {
@@ -6774,10 +6942,18 @@ function updateDeliverSizeEstimate() {
 
   const doc = state.timelineDoc;
   const { durationS: baseDurationS, scope, timelineFps } = computeDeliverBaseDurationInfo();
-  const rt = state.deliverRetime;
+  const rt = getNormalizedDeliverRetimePayload();
+  const rtSummary = computeRetimeRampSummary(
+    {
+      speed_rate: rt.speed,
+      retime_ramp_preset: rt.ramp_preset,
+      retime_ramp_points: rt.ramp_points
+    },
+    baseDurationS
+  );
   const durationS =
-    rt && rt.enabled && Number.isFinite(rt.speed) && rt.speed > 0
-      ? baseDurationS / rt.speed
+    rt && rt.enabled && rtSummary.avgSpeed > 0
+      ? baseDurationS / rtSummary.avgSpeed
       : baseDurationS;
   updateDeliverRetimeDurationEstimate();
 
@@ -7044,12 +7220,19 @@ function scheduleLowerThirdCompile() {
 function getNormalizedDeliverRetimePayload() {
   const rt = state.deliverRetime;
   const rawSpeed = Number(rt.speed);
+  const speed = Number.isFinite(rawSpeed)
+    ? Math.min(RETIME_SPEED_MAX, Math.max(RETIME_SPEED_MIN, Number(rawSpeed.toFixed(2))))
+    : 1.0;
+  const retimeProcess = normalizeRetimeProcess(rt.retime_process);
+  const rampPreset = normalizeRetimeRampPreset(rt.ramp_preset);
+  const rampPoints = resolveRetimeRampPointsForPreset(rampPreset, rt.ramp_points);
   return {
     enabled: Boolean(rt.enabled),
-    speed: Number.isFinite(rawSpeed)
-      ? Math.min(RETIME_SPEED_MAX, Math.max(RETIME_SPEED_MIN, Number(rawSpeed.toFixed(2))))
-      : 1.0,
-    reverse: Boolean(rt.reverse)
+    speed,
+    reverse: Boolean(rt.reverse),
+    retime_process: retimeProcess,
+    ramp_preset: rampPreset,
+    ramp_points: rampPoints
   };
 }
 
@@ -7057,7 +7240,7 @@ function syncDeliverRetimePresetButtons() {
   const rt = getNormalizedDeliverRetimePayload();
   for (const btn of document.querySelectorAll(".retime-deliver-preset-btn[data-deliver-retime-speed]")) {
     const presetVal = Number.parseFloat(btn.getAttribute("data-deliver-retime-speed") || "1");
-    const isMatch = Math.abs(presetVal - rt.speed) < 0.005;
+    const isMatch = rt.ramp_points.length < 2 && Math.abs(presetVal - rt.speed) < 0.005;
     btn.classList.toggle("is-active", isMatch);
     btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
   }
@@ -7078,6 +7261,14 @@ function syncDeliverRetimeControlsUI(opts = {}) {
   if (speedValEl) {
     speedValEl.textContent = `${rt.speed.toFixed(2)}x`;
   }
+  const procEl = byId("render-retime-process");
+  if (procEl) {
+    procEl.value = rt.retime_process;
+  }
+  const rampSelEl = byId("render-retime-ramp-preset");
+  if (rampSelEl) {
+    rampSelEl.value = rt.ramp_preset === "custom" ? "constant" : rt.ramp_preset;
+  }
   const revBtn = byId("render-retime-reverse");
   if (revBtn) {
     revBtn.classList.toggle("is-active", rt.reverse);
@@ -7085,13 +7276,28 @@ function syncDeliverRetimeControlsUI(opts = {}) {
   }
   const badgeEl = byId("render-retime-badge");
   if (badgeEl) {
-    const isActive = rt.enabled && (rt.reverse || Math.abs(rt.speed - 1.0) > 1e-6);
+    const hasRamp = rt.ramp_points.length >= 2;
+    const isActive =
+      rt.enabled &&
+      (rt.reverse ||
+        rt.retime_process !== "nearest" ||
+        hasRamp ||
+        Math.abs(rt.speed - 1.0) > 1e-6);
     if (!rt.enabled) {
       badgeEl.textContent = "OFF";
       badgeEl.className = "nle-tag mono";
     } else if (isActive) {
-      badgeEl.textContent = `${rt.speed.toFixed(2)}x${rt.reverse ? " REV" : ""}`;
-      badgeEl.className = rt.reverse ? "nle-tag is-warn mono" : "nle-tag is-active mono";
+      badgeEl.textContent = formatRetimeBadgeText(
+        rt.speed,
+        rt.reverse,
+        rt.retime_process,
+        rt.ramp_points
+      );
+      badgeEl.className = rt.reverse
+        ? "nle-tag is-warn mono"
+        : rt.retime_process === "optical_flow"
+          ? "nle-tag is-blue mono"
+          : "nle-tag is-active mono";
     } else {
       badgeEl.textContent = "1.00x";
       badgeEl.className = "nle-tag mono";
@@ -7110,12 +7316,24 @@ function scheduleDeliverRetimeCompile() {
   state.deliverRetimeCompileTimer = window.setTimeout(async () => {
     const previewEl = byId("render-retime-preview");
     const payload = getNormalizedDeliverRetimePayload();
-    if (!payload.enabled || (!payload.reverse && Math.abs(payload.speed - 1.0) <= 1e-6)) {
+    const hasRamp = payload.ramp_points.length >= 2;
+    if (
+      !payload.enabled ||
+      (!payload.reverse &&
+        payload.retime_process === "nearest" &&
+        !hasRamp &&
+        Math.abs(payload.speed - 1.0) <= 1e-6)
+    ) {
       if (previewEl) previewEl.textContent = "(off)";
       return;
     }
     try {
-      const compiled = await api.compileRetimeFilter(payload);
+      const { durationS, timelineFps } = computeDeliverBaseDurationInfo();
+      const compiled = await api.compileRetimeFilter({
+        ...payload,
+        fps: String(Math.round(timelineFps || 25)),
+        clip_duration_s: durationS > 0 ? durationS : 10.0
+      });
       if (seq !== state.deliverRetimeCompileSeq) return;
       if (previewEl) {
         const parts = [];
@@ -7999,7 +8217,13 @@ async function buildOrExecuteRender(execute) {
       [
         t("render.plan.retime"),
         plan.retime_enabled
-          ? `${Number(plan.retime_speed ?? 1).toFixed(2)}x${plan.retime_reverse ? " REV" : ""}`
+          ? `${Number(plan.retime_speed ?? 1).toFixed(2)}x${
+              plan.retime_ramp_preset && plan.retime_ramp_preset !== "constant"
+                ? ` ${plan.retime_ramp_preset}`
+                : ""
+            }${plan.retime_process && plan.retime_process !== "nearest" ? ` (${plan.retime_process})` : ""}${
+              plan.retime_reverse ? " REV" : ""
+            }`
           : "off"
       ],
       [
@@ -10179,8 +10403,14 @@ function wireClipRetimeInspector() {
   const numEl = byId("clip-retime-speed-num");
   const rstEl = byId("btn-clip-retime-reset");
   const revEl = byId("btn-clip-retime-reverse");
+  const procEl = byId("clip-retime-process");
   const sendBtn = byId("btn-clip-retime-to-deliver");
   const presetBtns = document.querySelectorAll(".retime-preset-btn");
+  const rampPresetBtns = document.querySelectorAll(".retime-ramp-preset-btn");
+  const rampCanvas = byId("clip-retime-ramp-canvas");
+  const rampAddBtn = byId("btn-retime-point-add");
+  const rampDelBtn = byId("btn-retime-point-del");
+  const rampRstBtn = byId("btn-retime-ramp-reset");
   let dragSnap = null;
 
   const liveUpdateRetime = (patch) => {
@@ -10206,17 +10436,249 @@ function wireClipRetimeInspector() {
       if (!info) return;
       const speedVal = Number.parseFloat(btn.getAttribute("data-retime-preset") || "1");
       if (!Number.isFinite(speedVal)) return;
+      state.retimeRampSelectedIdx = -1;
       const res = updateClipRetimeInDocument(
         state.timelineDoc,
         info.ref.trackKind,
         info.ref.trackIndex,
         info.ref.clipIndex,
-        { speed_rate: speedVal }
+        {
+          speed_rate: speedVal,
+          retime_ramp_preset: "constant",
+          retime_ramp_points: []
+        }
       );
       if (res.changed) {
         commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
       }
     });
+  }
+
+  for (const btn of rampPresetBtns) {
+    btn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const presetId = btn.getAttribute("data-retime-ramp-preset") || "constant";
+      const pts = resolveRetimeRampPointsForPreset(presetId, []);
+      state.retimeRampSelectedIdx = pts.length >= 2 ? 1 : -1;
+      const res = updateClipRetimeInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        {
+          retime_ramp_preset: presetId,
+          retime_ramp_points: pts
+        }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      } else {
+        renderTimelineRetimeInspector();
+      }
+    });
+  }
+
+  if (procEl) {
+    procEl.addEventListener("change", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const res = updateClipRetimeInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { retime_process: procEl.value }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  const addRampPointAt = (posNorm, speedRate) => {
+    const info = getSelectedClipTrack();
+    if (!info) return;
+    const norm = normalizeClipRetime(info.clip);
+    const basePts =
+      norm.rampPoints.length >= 2
+        ? norm.rampPoints.map((pt) => ({ ...pt }))
+        : [
+            { pos_norm: 0.0, speed_rate: norm.speedRate },
+            { pos_norm: 1.0, speed_rate: norm.speedRate }
+          ];
+    const u = Math.max(0.0, Math.min(1.0, Number(posNorm)));
+    const spd =
+      speedRate !== undefined
+        ? Math.max(RETIME_SPEED_MIN, Math.min(RETIME_SPEED_MAX, Number(speedRate)))
+        : evaluateRetimeSpeedAt(basePts, u, norm.speedRate);
+    basePts.push({ pos_norm: Number(u.toFixed(4)), speed_rate: Number(spd.toFixed(2)) });
+    const nextPts = normalizeRetimeRampPoints(basePts);
+    let selIdx = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < nextPts.length; i++) {
+      const d = Math.abs(nextPts[i].pos_norm - u);
+      if (d < bestD) {
+        bestD = d;
+        selIdx = i;
+      }
+    }
+    state.retimeRampSelectedIdx = selIdx;
+    const res = updateClipRetimeInDocument(
+      state.timelineDoc,
+      info.ref.trackKind,
+      info.ref.trackIndex,
+      info.ref.clipIndex,
+      { retime_ramp_preset: "custom", retime_ramp_points: nextPts }
+    );
+    if (res.changed) {
+      commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+    }
+  };
+
+  if (rampAddBtn) {
+    rampAddBtn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const dur = Math.max(1, Number(info.clip.duration_frames || 1));
+      const local = state.playheadFrame - Number(info.clip.start_frame || 0);
+      const posNorm = local >= 0 && local <= dur ? local / dur : 0.5;
+      addRampPointAt(posNorm);
+    });
+  }
+
+  if (rampDelBtn) {
+    rampDelBtn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      const norm = normalizeClipRetime(info.clip);
+      if (norm.rampPoints.length <= 2) return;
+      const idx = state.retimeRampSelectedIdx;
+      if (idx < 0 || idx >= norm.rampPoints.length) return;
+      const nextPts = norm.rampPoints.filter((_, i) => i !== idx);
+      state.retimeRampSelectedIdx = Math.min(idx, nextPts.length - 1);
+      const res = updateClipRetimeInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { retime_ramp_preset: "custom", retime_ramp_points: nextPts }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (rampRstBtn) {
+    rampRstBtn.addEventListener("click", () => {
+      const info = getSelectedClipTrack();
+      if (!info) return;
+      state.retimeRampSelectedIdx = -1;
+      const res = updateClipRetimeInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { retime_ramp_preset: "constant", retime_ramp_points: [] }
+      );
+      if (res.changed) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      }
+    });
+  }
+
+  if (rampCanvas) {
+    const canvasCoords = (ev) => {
+      const rect = rampCanvas.getBoundingClientRect();
+      return {
+        x: ev.clientX - rect.left,
+        y: ev.clientY - rect.top
+      };
+    };
+
+    rampCanvas.addEventListener("pointerdown", (ev) => {
+      const info = getSelectedClipTrack();
+      const geom = state.retimeRampGeom;
+      if (!info || !geom) return;
+      const { x, y } = canvasCoords(ev);
+      let hitIdx = -1;
+      let bestDist = 14;
+      for (const pt of geom.points) {
+        const d = Math.hypot(pt.x - x, pt.y - y);
+        if (d <= bestDist) {
+          bestDist = d;
+          hitIdx = pt.index;
+        }
+      }
+      const norm = normalizeClipRetime(info.clip);
+      if (hitIdx >= 0) {
+        state.retimeRampSelectedIdx = hitIdx;
+        const pts =
+          norm.rampPoints.length >= 2
+            ? norm.rampPoints.map((pt) => ({ ...pt }))
+            : [
+                { pos_norm: 0.0, speed_rate: norm.speedRate },
+                { pos_norm: 1.0, speed_rate: norm.speedRate }
+              ];
+        state.retimeRampDrag = {
+          snap: captureTimelineSnapshot(),
+          pointIdx: hitIdx,
+          points: pts
+        };
+        if (rampCanvas.setPointerCapture) {
+          try {
+            rampCanvas.setPointerCapture(ev.pointerId);
+          } catch {
+            // ignore synthetic pointer capture failure
+          }
+        }
+        renderTimelineRetimeInspector();
+      } else if (x >= geom.padL && x <= geom.padL + geom.plotW) {
+        const u = geom.xToPos(x);
+        const spd = geom.yToSpeed(y);
+        addRampPointAt(u, spd);
+      }
+    });
+
+    rampCanvas.addEventListener("pointermove", (ev) => {
+      const drag = state.retimeRampDrag;
+      const geom = state.retimeRampGeom;
+      if (!drag || !geom) return;
+      const { x, y } = canvasCoords(ev);
+      const pts = drag.points.map((pt) => ({ ...pt }));
+      const idx = drag.pointIdx;
+      if (idx < 0 || idx >= pts.length) return;
+      const nextSpd = geom.yToSpeed(y);
+      let nextPos = pts[idx].pos_norm;
+      if (idx === 0) {
+        nextPos = 0.0;
+      } else if (idx === pts.length - 1) {
+        nextPos = 1.0;
+      } else {
+        const minPos = pts[idx - 1].pos_norm + 0.02;
+        const maxPos = pts[idx + 1].pos_norm - 0.02;
+        nextPos = Math.max(minPos, Math.min(maxPos, geom.xToPos(x)));
+      }
+      pts[idx] = {
+        pos_norm: Number(nextPos.toFixed(4)),
+        speed_rate: Number(nextSpd.toFixed(2))
+      };
+      drag.points = pts;
+      liveUpdateRetime({ retime_ramp_preset: "custom", retime_ramp_points: pts });
+    });
+
+    const finishRampDrag = () => {
+      const drag = state.retimeRampDrag;
+      if (!drag) return;
+      state.retimeRampDrag = null;
+      if (drag.snap) {
+        pushUndoSnapshot(drag.snap);
+        updateTimelineToolbarUI();
+      }
+    };
+    rampCanvas.addEventListener("pointerup", finishRampDrag);
+    rampCanvas.addEventListener("pointercancel", finishRampDrag);
   }
 
   if (rangeEl) {
@@ -10227,7 +10689,11 @@ function wireClipRetimeInspector() {
       const val = Number.parseFloat(rangeEl.value);
       if (!Number.isFinite(val)) return;
       if (!dragSnap) dragSnap = captureTimelineSnapshot();
-      liveUpdateRetime({ speed_rate: val });
+      liveUpdateRetime({
+        speed_rate: val,
+        retime_ramp_preset: "constant",
+        retime_ramp_points: []
+      });
     });
     rangeEl.addEventListener("change", () => {
       const val = Number.parseFloat(rangeEl.value);
@@ -10250,7 +10716,11 @@ function wireClipRetimeInspector() {
       const val = Number.parseFloat(numEl.value);
       if (Number.isFinite(val) && val >= RETIME_SPEED_MIN && val <= RETIME_SPEED_MAX) {
         if (!dragSnap) dragSnap = captureTimelineSnapshot();
-        liveUpdateRetime({ speed_rate: val });
+        liveUpdateRetime({
+          speed_rate: val,
+          retime_ramp_preset: "constant",
+          retime_ramp_points: []
+        });
       }
     });
     numEl.addEventListener("change", () => {
@@ -10273,7 +10743,11 @@ function wireClipRetimeInspector() {
           baseRef.trackKind,
           baseRef.trackIndex,
           baseRef.clipIndex,
-          { speed_rate: clamped }
+          {
+            speed_rate: clamped,
+            retime_ramp_preset: "constant",
+            retime_ramp_points: []
+          }
         );
         if (res.changed) {
           commitTimelineMutation(res.doc, { kind: "clip", data: res.clip }, dragSnap);
@@ -10308,12 +10782,19 @@ function wireClipRetimeInspector() {
     rstEl.addEventListener("click", () => {
       const info = getSelectedClipTrack();
       if (!info) return;
+      state.retimeRampSelectedIdx = -1;
       const res = updateClipRetimeInDocument(
         state.timelineDoc,
         info.ref.trackKind,
         info.ref.trackIndex,
         info.ref.clipIndex,
-        { speed_rate: 1.0, reverse: false }
+        {
+          speed_rate: 1.0,
+          reverse: false,
+          retime_process: "nearest",
+          retime_ramp_preset: "constant",
+          retime_ramp_points: []
+        }
       );
       if (res.changed) {
         commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
@@ -10326,7 +10807,7 @@ function wireClipRetimeInspector() {
       const chk = byId("render-use-clip-retime");
       if (chk) chk.checked = true;
       switchTab("render");
-      showBanner("Selected clip speed / retime linked to Deliver page.", "success");
+      showBanner("Selected clip speed, ramp & optical flow linked to Deliver page.", "success");
     });
   }
 }
@@ -12707,6 +13188,8 @@ function wireEvents() {
       const val = Number.parseFloat(btn.getAttribute("data-deliver-retime-speed") || "1");
       if (!Number.isFinite(val)) return;
       state.deliverRetime.speed = Math.min(RETIME_SPEED_MAX, Math.max(RETIME_SPEED_MIN, val));
+      state.deliverRetime.ramp_preset = "constant";
+      state.deliverRetime.ramp_points = [];
       if (Math.abs(state.deliverRetime.speed - 1.0) > 1e-6) {
         state.deliverRetime.enabled = true;
       }
@@ -12720,6 +13203,8 @@ function wireEvents() {
       const val = Number.parseFloat(rtSpeedEl.value);
       if (Number.isFinite(val) && val >= RETIME_SPEED_MIN && val <= RETIME_SPEED_MAX) {
         state.deliverRetime.speed = Number(val.toFixed(2));
+        state.deliverRetime.ramp_preset = "constant";
+        state.deliverRetime.ramp_points = [];
         syncDeliverRetimeControlsUI();
         updateDeliverSizeEstimate();
       }
@@ -12732,6 +13217,30 @@ function wireEvents() {
     rtRevBtn.addEventListener("click", () => {
       state.deliverRetime.reverse = !state.deliverRetime.reverse;
       if (state.deliverRetime.reverse) {
+        state.deliverRetime.enabled = true;
+      }
+      syncDeliverRetimeControlsUI();
+      updateDeliverSizeEstimate();
+    });
+  }
+  const rtProcEl = byId("render-retime-process");
+  if (rtProcEl) {
+    rtProcEl.addEventListener("change", () => {
+      state.deliverRetime.retime_process = normalizeRetimeProcess(rtProcEl.value);
+      if (state.deliverRetime.retime_process !== "nearest") {
+        state.deliverRetime.enabled = true;
+      }
+      syncDeliverRetimeControlsUI();
+      updateDeliverSizeEstimate();
+    });
+  }
+  const rtRampSelEl = byId("render-retime-ramp-preset");
+  if (rtRampSelEl) {
+    rtRampSelEl.addEventListener("change", () => {
+      const presetId = normalizeRetimeRampPreset(rtRampSelEl.value);
+      state.deliverRetime.ramp_preset = presetId;
+      state.deliverRetime.ramp_points = resolveRetimeRampPointsForPreset(presetId, []);
+      if (presetId !== "constant") {
         state.deliverRetime.enabled = true;
       }
       syncDeliverRetimeControlsUI();

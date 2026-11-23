@@ -549,7 +549,11 @@ def _build_retime_from_payload(
             return None
         if not isinstance(raw_rt, dict):
             raise ValueError("'retime' must be a JSON object")
-        if "speed_rate" in raw_rt and "speed" not in raw_rt and "enabled" not in raw_rt:
+        if (
+            "speed_rate" in raw_rt
+            and "speed" not in raw_rt
+            and "enabled" not in raw_rt
+        ):
             return None
         return RetimeParams.model_validate(raw_rt)
     if allow_top_level and (
@@ -557,7 +561,14 @@ def _build_retime_from_payload(
         or "speed" in payload
         or ("speed_rate" not in payload and "retime_params" not in payload)
     ):
-        allowed_keys = ("enabled", "speed", "reverse")
+        allowed_keys = (
+            "enabled",
+            "speed",
+            "reverse",
+            "retime_process",
+            "ramp_preset",
+            "ramp_points",
+        )
         subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
         return RetimeParams.model_validate(subset)
     return None
@@ -678,23 +689,33 @@ def _build_retime_params_from_payload(
         rev_raw = raw_retime.get("reverse", False)
         if not isinstance(rev_raw, bool):
             raise ValueError("reverse must be a boolean")
-        return ClipRetimeParams.model_validate(
-            {
-                "speed_rate": raw_retime.get("speed_rate", 1.0),
-                "reverse": rev_raw,
-            }
-        )
+        retime_payload: dict[str, Any] = {
+            "speed_rate": raw_retime.get("speed_rate", 1.0),
+            "reverse": rev_raw,
+        }
+        if raw_retime.get("retime_process") is not None:
+            retime_payload["retime_process"] = raw_retime["retime_process"]
+        if raw_retime.get("ramp_preset") is not None:
+            retime_payload["ramp_preset"] = raw_retime["ramp_preset"]
+        if raw_retime.get("ramp_points") is not None:
+            retime_payload["ramp_points"] = raw_retime["ramp_points"]
+        return ClipRetimeParams.model_validate(retime_payload)
 
     if allow_top_level:
         rev_raw = payload.get("reverse", False)
         if not isinstance(rev_raw, bool):
             raise ValueError("reverse must be a boolean")
-        return ClipRetimeParams.model_validate(
-            {
-                "speed_rate": payload.get("speed_rate", 1.0),
-                "reverse": rev_raw,
-            }
-        )
+        top_payload: dict[str, Any] = {
+            "speed_rate": payload.get("speed_rate", 1.0),
+            "reverse": rev_raw,
+        }
+        if payload.get("retime_process") is not None:
+            top_payload["retime_process"] = payload["retime_process"]
+        if payload.get("ramp_preset") is not None:
+            top_payload["ramp_preset"] = payload["ramp_preset"]
+        if payload.get("ramp_points") is not None:
+            top_payload["ramp_points"] = payload["ramp_points"]
+        return ClipRetimeParams.model_validate(top_payload)
     return None
 
 
@@ -2090,13 +2111,29 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/retime/compile":
+            raw_fps = payload.get("fps")
+            rt_fps = RationalFrameRate.from_str(str(raw_fps)) if raw_fps not in (None, "") else None
+            raw_dur = payload.get("clip_duration_s")
+            rt_dur: float | None = None
+            if raw_dur not in (None, ""):
+                if isinstance(raw_dur, bool) or not isinstance(raw_dur, (int, float)):
+                    raise ValueError("clip_duration_s must be a finite number")
+                rt_dur = float(raw_dur)
             retime_obj = _build_retime_from_payload(payload, allow_top_level=True)
             if retime_obj is not None:
-                compiled_retime = compile_retime_filter_result(retime_obj)
+                compiled_retime = compile_retime_filter_result(
+                    retime_obj,
+                    target_fps=rt_fps,
+                    clip_duration_s=rt_dur,
+                )
             else:
                 retime_params = _build_retime_params_from_payload(payload, allow_top_level=True)
                 assert retime_params is not None
-                compiled_retime = compile_retime_filter_result(retime_params)
+                compiled_retime = compile_retime_filter_result(
+                    retime_params,
+                    target_fps=rt_fps,
+                    clip_duration_s=rt_dur,
+                )
             self._send_json(HTTPStatus.OK, compiled_retime.model_dump(mode="json"))
             return
 

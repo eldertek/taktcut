@@ -1016,6 +1016,47 @@ def test_project_delivery_retime_roundtrip(tmp_path: Path) -> None:
             validate_project_payload(bad_payload)
 
 
+def test_project_clip_retime_ramp_and_optical_flow_roundtrip(tmp_path: Path) -> None:
+    from taktcut.models import RetimeSpeedPoint
+    from taktcut.render import RetimeParams
+
+    proj = _build_full_test_project()
+    clip = proj.timeline.tracks[0].clips[0]
+    clip.retime_process = "optical_flow"
+    clip.retime_ramp_preset = "hero_slowmo"
+    clip.retime_ramp_points = [
+        RetimeSpeedPoint(pos_norm=0.0, speed_rate=1.5),
+        RetimeSpeedPoint(pos_norm=0.35, speed_rate=0.35),
+        RetimeSpeedPoint(pos_norm=0.75, speed_rate=0.4),
+        RetimeSpeedPoint(pos_norm=1.0, speed_rate=1.8),
+    ]
+    proj.delivery.retime = RetimeParams(
+        enabled=True,
+        speed=1.0,
+        reverse=False,
+        retime_process="frame_blend",
+        ramp_preset="ramp_up",
+    )
+
+    proj_path = tmp_path / "ramp_optical_flow.taktcut.json"
+    save_project_file(proj, proj_path)
+    loaded = load_project_file(proj_path)
+
+    loaded_clip = loaded.timeline.tracks[0].clips[0]
+    assert loaded_clip.retime_process == "optical_flow"
+    assert loaded_clip.retime_ramp_preset == "hero_slowmo"
+    assert len(loaded_clip.retime_ramp_points) == 4
+    assert loaded_clip.retime_ramp_points[1].speed_rate == pytest.approx(0.35)
+    assert loaded.delivery.retime.retime_process == "frame_blend"
+    assert loaded.delivery.retime.ramp_preset == "ramp_up"
+    assert len(loaded.delivery.retime.ramp_points) == 3
+
+    bad_payload = export_project_dict(loaded)
+    bad_payload["timeline"]["tracks"][0]["clips"][0]["retime_process"] = "invalid_proc"
+    with pytest.raises((ValueError, ValidationError)):
+        validate_project_payload(bad_payload)
+
+
 def test_project_delivery_reframe_roundtrip(tmp_path: Path) -> None:
     from taktcut.render import ReframeParams
 

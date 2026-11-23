@@ -33,6 +33,43 @@ export const DIALOGUE_EQ_FILTERS = {
 };
 export const RETIME_SPEED_MIN = 0.25;
 export const RETIME_SPEED_MAX = 4.0;
+export const MAX_RETIME_RAMP_POINTS = 12;
+export const ALLOWED_RETIME_PROCESS_MODES = ["nearest", "frame_blend", "optical_flow"];
+export const ALLOWED_RETIME_RAMP_PRESETS = [
+  "constant",
+  "hero_slowmo",
+  "ramp_up",
+  "ramp_down",
+  "bullet_pulse",
+  "custom"
+];
+export const RETIME_RAMP_PRESET_POINTS = Object.freeze({
+  constant: [],
+  hero_slowmo: [
+    { pos_norm: 0.0, speed_rate: 1.5 },
+    { pos_norm: 0.3, speed_rate: 0.35 },
+    { pos_norm: 0.7, speed_rate: 0.35 },
+    { pos_norm: 1.0, speed_rate: 1.5 }
+  ],
+  ramp_up: [
+    { pos_norm: 0.0, speed_rate: 0.5 },
+    { pos_norm: 0.65, speed_rate: 1.0 },
+    { pos_norm: 1.0, speed_rate: 3.0 }
+  ],
+  ramp_down: [
+    { pos_norm: 0.0, speed_rate: 3.0 },
+    { pos_norm: 0.35, speed_rate: 1.0 },
+    { pos_norm: 1.0, speed_rate: 0.4 }
+  ],
+  bullet_pulse: [
+    { pos_norm: 0.0, speed_rate: 1.0 },
+    { pos_norm: 0.25, speed_rate: 3.5 },
+    { pos_norm: 0.55, speed_rate: 0.4 },
+    { pos_norm: 0.8, speed_rate: 3.0 },
+    { pos_norm: 1.0, speed_rate: 1.0 }
+  ],
+  custom: []
+});
 export const TRANSFORM_ZOOM_MIN = 10.0;
 export const TRANSFORM_ZOOM_MAX = 300.0;
 export const TRANSFORM_ZOOM_DEFAULT = 100.0;
@@ -396,14 +433,170 @@ export function normalizeClipAudio(clip) {
   };
 }
 
+export function normalizeRetimeProcess(raw) {
+  const cleaned = typeof raw === "string" ? raw.trim().toLowerCase() : "nearest";
+  return ALLOWED_RETIME_PROCESS_MODES.includes(cleaned) ? cleaned : "nearest";
+}
+
+export function normalizeRetimeRampPreset(raw) {
+  const cleaned = typeof raw === "string" ? raw.trim().toLowerCase() : "constant";
+  return ALLOWED_RETIME_RAMP_PRESETS.includes(cleaned) ? cleaned : "constant";
+}
+
+export function normalizeRetimeRampPoints(rawPoints) {
+  if (!Array.isArray(rawPoints) || rawPoints.length === 0) return [];
+  const valid = [];
+  for (const item of rawPoints) {
+    if (!item || typeof item !== "object") continue;
+    const p = Number(item.pos_norm);
+    const s = Number(item.speed_rate);
+    if (!Number.isFinite(p) || !Number.isFinite(s)) continue;
+    valid.push({
+      pos_norm: Number(clampNum(p, 0.0, 1.0).toFixed(4)),
+      speed_rate: Number(clampNum(s, RETIME_SPEED_MIN, RETIME_SPEED_MAX).toFixed(4))
+    });
+  }
+  valid.sort((a, b) => a.pos_norm - b.pos_norm);
+  const deduped = [];
+  for (const pt of valid.slice(0, MAX_RETIME_RAMP_POINTS)) {
+    if (deduped.length > 0 && Math.abs(deduped[deduped.length - 1].pos_norm - pt.pos_norm) <= 1e-3) {
+      deduped[deduped.length - 1] = pt;
+    } else {
+      deduped.push(pt);
+    }
+  }
+  return deduped;
+}
+
+export function resolveRetimeRampPointsForPreset(presetId, rawPoints) {
+  const normPoints = normalizeRetimeRampPoints(rawPoints);
+  if (normPoints.length > 0) return normPoints;
+  const preset = normalizeRetimeRampPreset(presetId);
+  const tpl = RETIME_RAMP_PRESET_POINTS[preset];
+  if (!tpl || tpl.length === 0) return [];
+  return tpl.map((pt) => ({ pos_norm: pt.pos_norm, speed_rate: pt.speed_rate }));
+}
+
 export function normalizeClipRetime(clip) {
   const rawSpeed =
     clip && clip.speed_rate !== undefined && clip.speed_rate !== null && Number.isFinite(Number(clip.speed_rate))
       ? Number(clip.speed_rate)
       : 1.0;
+  const retimeProcess = normalizeRetimeProcess(clip && (clip.retime_process ?? clip.retimeProcess));
+  const rampPreset = normalizeRetimeRampPreset(
+    clip && (clip.retime_ramp_preset ?? clip.ramp_preset ?? clip.rampPreset)
+  );
+  const rawPts = clip && (clip.retime_ramp_points ?? clip.ramp_points ?? clip.rampPoints);
+  const rampPoints = resolveRetimeRampPointsForPreset(rampPreset, rawPts);
   return {
     speedRate: Number(clampNum(rawSpeed, RETIME_SPEED_MIN, RETIME_SPEED_MAX).toFixed(2)),
-    reverse: Boolean(clip && clip.reverse)
+    reverse: Boolean(clip && clip.reverse),
+    retimeProcess,
+    rampPreset,
+    rampPoints
+  };
+}
+
+export function evaluateRetimeSpeedAt(points, posNorm, fallbackSpeed = 1.0) {
+  const u = clampNum(Number.isFinite(Number(posNorm)) ? Number(posNorm) : 0, 0, 1);
+  if (!Array.isArray(points) || points.length < 2) {
+    return clampNum(
+      Number.isFinite(Number(fallbackSpeed)) ? Number(fallbackSpeed) : 1.0,
+      RETIME_SPEED_MIN,
+      RETIME_SPEED_MAX
+    );
+  }
+  const ordered = normalizeRetimeRampPoints(points);
+  if (ordered.length < 2) {
+    return clampNum(fallbackSpeed, RETIME_SPEED_MIN, RETIME_SPEED_MAX);
+  }
+  if (u <= ordered[0].pos_norm) return ordered[0].speed_rate;
+  if (u >= ordered[ordered.length - 1].pos_norm) return ordered[ordered.length - 1].speed_rate;
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const p0 = ordered[i];
+    const p1 = ordered[i + 1];
+    if (u <= p1.pos_norm) {
+      const span = p1.pos_norm - p0.pos_norm;
+      if (span <= 1e-6) return p1.speed_rate;
+      const t = clampNum((u - p0.pos_norm) / span, 0, 1);
+      const smooth = t * t * (3 - 2 * t);
+      return p0.speed_rate + (p1.speed_rate - p0.speed_rate) * smooth;
+    }
+  }
+  return ordered[ordered.length - 1].speed_rate;
+}
+
+export function computeRetimeRampSummary(params, clipDurationS = 10.0) {
+  const norm = normalizeClipRetime(params);
+  const pts = norm.rampPoints;
+  const dur = Number.isFinite(Number(clipDurationS)) && Number(clipDurationS) > 0 ? Number(clipDurationS) : 0;
+  if (pts.length < 2) {
+    const spd = norm.speedRate;
+    return {
+      avgSpeed: Number(spd.toFixed(4)),
+      minSpeed: Number(spd.toFixed(4)),
+      maxSpeed: Number(spd.toFixed(4)),
+      effectiveDurationS: dur > 0 ? Number((dur / spd).toFixed(4)) : 0
+    };
+  }
+  const steps = 64;
+  let invIntegral = 0;
+  let minSpd = RETIME_SPEED_MAX;
+  let maxSpd = RETIME_SPEED_MIN;
+  let prevInv = 1.0 / evaluateRetimeSpeedAt(pts, 0, norm.speedRate);
+  for (let i = 0; i <= steps; i++) {
+    const u = i / steps;
+    const s = evaluateRetimeSpeedAt(pts, u, norm.speedRate);
+    if (s < minSpd) minSpd = s;
+    if (s > maxSpd) maxSpd = s;
+    if (i > 0) {
+      const curInv = 1.0 / s;
+      invIntegral += (0.5 * (prevInv + curInv)) / steps;
+      prevInv = curInv;
+    }
+  }
+  const avgSpeed = clampNum(1.0 / Math.max(1e-6, invIntegral), RETIME_SPEED_MIN, RETIME_SPEED_MAX);
+  return {
+    avgSpeed: Number(avgSpeed.toFixed(4)),
+    minSpeed: Number(minSpd.toFixed(4)),
+    maxSpeed: Number(maxSpd.toFixed(4)),
+    effectiveDurationS: dur > 0 ? Number((dur * invIntegral).toFixed(4)) : 0
+  };
+}
+
+export function evaluateRetimeSourceOffset(clip, localFrame) {
+  const norm = normalizeClipRetime(clip);
+  const durFrames = Math.max(1, Number(clip && clip.duration_frames ? clip.duration_frames : 1));
+  const clampedLocal = clampNum(Number.isFinite(Number(localFrame)) ? Number(localFrame) : 0, 0, durFrames);
+  const effectiveLocal = norm.reverse ? Math.max(0, durFrames - 1 - clampedLocal) : clampedLocal;
+  if (norm.rampPoints.length < 2) {
+    return {
+      sourceDeltaFrames: effectiveLocal * norm.speedRate,
+      instantSpeed: norm.speedRate,
+      isRamp: false,
+      retimeNorm: norm
+    };
+  }
+  const uEnd = clampNum(effectiveLocal / durFrames, 0, 1);
+  const slices = 24;
+  let integral = 0;
+  let prevS = evaluateRetimeSpeedAt(norm.rampPoints, 0, norm.speedRate);
+  for (let i = 1; i <= slices; i++) {
+    const u = (uEnd * i) / slices;
+    const curS = evaluateRetimeSpeedAt(norm.rampPoints, u, norm.speedRate);
+    integral += 0.5 * (prevS + curS) * (uEnd / slices);
+    prevS = curS;
+  }
+  const instantSpeed = evaluateRetimeSpeedAt(
+    norm.rampPoints,
+    clampNum(clampedLocal / durFrames, 0, 1),
+    norm.speedRate
+  );
+  return {
+    sourceDeltaFrames: integral * durFrames,
+    instantSpeed,
+    isRamp: true,
+    retimeNorm: norm
   };
 }
 
@@ -417,9 +610,81 @@ export function formatRetimeSpeedValue(speedRate) {
   return Number.isInteger(rounded * 10) ? `${rounded.toFixed(1)}x` : `${rounded.toFixed(2)}x`;
 }
 
-export function formatRetimeBadgeText(speedRate, reverse) {
-  const speedText = formatRetimeSpeedValue(speedRate);
-  return reverse ? `${speedText} REV` : speedText;
+export function formatRetimeBadgeText(speedRate, reverse, retimeProcess = "nearest", rampPoints = []) {
+  const pts = Array.isArray(rampPoints) ? rampPoints : [];
+  let baseText;
+  if (pts.length >= 2) {
+    const speeds = pts.map((pt) => Number(pt.speed_rate)).filter((v) => Number.isFinite(v));
+    const minS = speeds.length > 0 ? Math.min(...speeds) : speedRate;
+    const maxS = speeds.length > 0 ? Math.max(...speeds) : speedRate;
+    baseText = `RAMP ${formatRetimeSpeedValue(minS)}-${formatRetimeSpeedValue(maxS)}`;
+  } else {
+    baseText = formatRetimeSpeedValue(speedRate);
+  }
+  const tags = [baseText];
+  if (retimeProcess === "optical_flow") tags.push("OF");
+  else if (retimeProcess === "frame_blend") tags.push("FB");
+  if (reverse) tags.push("REV");
+  return tags.join(" ");
+}
+
+export function compileRetimeRampSetptsClient(points, clipDurationS = 10.0) {
+  const dur = clampNum(
+    Number.isFinite(Number(clipDurationS)) && Number(clipDurationS) > 0 ? Number(clipDurationS) : 10.0,
+    0.5,
+    86400
+  );
+  const ordered = normalizeRetimeRampPoints(points);
+  if (ordered.length < 2) {
+    const spd = ordered.length === 1 ? ordered[0].speed_rate : 1.0;
+    return `setpts=PTS/${spd.toFixed(4)}`;
+  }
+  const knots = ordered.map((pt) => ({ ...pt }));
+  if (knots[0].pos_norm > 0) {
+    knots.unshift({ pos_norm: 0.0, speed_rate: knots[0].speed_rate });
+  }
+  if (knots[knots.length - 1].pos_norm < 1) {
+    knots.push({ pos_norm: 1.0, speed_rate: knots[knots.length - 1].speed_rate });
+  }
+  const segments = [];
+  let cumOutS = 0;
+  for (let i = 0; i < knots.length - 1; i++) {
+    const p0 = knots[i];
+    const p1 = knots[i + 1];
+    if (p1.pos_norm - p0.pos_norm <= 1e-4) continue;
+    const t0 = p0.pos_norm * dur;
+    const t1 = p1.pos_norm * dur;
+    const segSpeed = clampNum(0.5 * (p0.speed_rate + p1.speed_rate), RETIME_SPEED_MIN, RETIME_SPEED_MAX);
+    segments.push({ t0, t1, segSpeed, offS: cumOutS });
+    cumOutS += (t1 - t0) / segSpeed;
+  }
+  if (segments.length === 0) {
+    return `setpts=PTS/${knots[0].speed_rate.toFixed(4)}`;
+  }
+  const last = segments[segments.length - 1];
+  let expr =
+    last.t0 <= 1e-6
+      ? `PTS/${last.segSpeed.toFixed(4)}`
+      : `${last.offS.toFixed(6)}/TB+(PTS-${last.t0.toFixed(4)}/TB)/${last.segSpeed.toFixed(4)}`;
+  for (let i = segments.length - 2; i >= 0; i--) {
+    const seg = segments[i];
+    const branch =
+      seg.t0 <= 1e-6
+        ? `PTS/${seg.segSpeed.toFixed(4)}`
+        : `${seg.offS.toFixed(6)}/TB+(PTS-${seg.t0.toFixed(4)}/TB)/${seg.segSpeed.toFixed(4)}`;
+    expr = `if(lt(T,${seg.t1.toFixed(4)}),${branch},${expr})`;
+  }
+  return `setpts='${expr}'`;
+}
+
+export function compileMinterpolateFilterClient(retimeProcess, targetFps = "25") {
+  const proc = normalizeRetimeProcess(retimeProcess);
+  const fpsStr = targetFps || "25";
+  if (proc === "frame_blend") return `minterpolate=fps=${fpsStr}:mi_mode=blend`;
+  if (proc === "optical_flow") {
+    return `minterpolate=fps=${fpsStr}:mi_mode=mci:mc_mode=aobmc:me_mode=bilat:vsbmc=1`;
+  }
+  return "";
 }
 
 export function buildAtempoStagesClient(speedRate) {
@@ -456,18 +721,37 @@ export function compileRetimeFilterClient(params) {
   const norm = normalizeClipRetime(p);
   const speedRate = norm.speedRate;
   const reverse = norm.reverse;
-  const isIdentity = !reverse && Math.abs(speedRate - 1.0) <= 1e-6;
+  const retimeProcess = norm.retimeProcess;
+  const rampPreset = norm.rampPreset;
+  const rampPoints = norm.rampPoints;
+  const hasRamp = rampPoints.length >= 2;
+  const isIdentity =
+    !reverse &&
+    retimeProcess === "nearest" &&
+    !hasRamp &&
+    Math.abs(speedRate - 1.0) <= 1e-6;
 
+  const summary = computeRetimeRampSummary(
+    { speed_rate: speedRate, retime_ramp_preset: rampPreset, retime_ramp_points: rampPoints },
+    p.clip_duration_s || 10.0
+  );
   const vfParts = [];
   const afParts = [];
   if (!isIdentity) {
-    if (Math.abs(speedRate - 1.0) > 1e-6) {
+    if (hasRamp) {
+      vfParts.push(compileRetimeRampSetptsClient(rampPoints, p.clip_duration_s || 10.0));
+      for (const stage of buildAtempoStagesClient(summary.avgSpeed)) {
+        afParts.push(`atempo=${stage.toFixed(4)}`);
+      }
+    } else if (Math.abs(speedRate - 1.0) > 1e-6) {
       const ptsScale = 1.0 / speedRate;
       vfParts.push(`setpts=${ptsScale.toFixed(6)}*PTS`);
       for (const stage of buildAtempoStagesClient(speedRate)) {
         afParts.push(`atempo=${stage.toFixed(4)}`);
       }
     }
+    const interpVf = compileMinterpolateFilterClient(retimeProcess, p.fps || "25");
+    if (interpVf) vfParts.push(interpVf);
     if (reverse) {
       vfParts.push("reverse");
       afParts.push("areverse");
@@ -482,7 +766,17 @@ export function compileRetimeFilterClient(params) {
     ffmpeg_vf_args: videoFiltergraph ? ["-vf", videoFiltergraph] : [],
     ffmpeg_af_args: audioFiltergraph ? ["-af", audioFiltergraph] : [],
     is_identity: isIdentity,
-    params: { speed_rate: speedRate, reverse }
+    is_active: !isIdentity,
+    avg_speed: summary.avgSpeed,
+    retime_process: retimeProcess,
+    ramp_preset: rampPreset,
+    params: {
+      speed_rate: speedRate,
+      reverse,
+      retime_process: retimeProcess,
+      ramp_preset: rampPreset,
+      ramp_points: rampPoints
+    }
   };
 }
 
@@ -2042,6 +2336,9 @@ function _buildSplitClipPair(clip, cut, fps, fpsRate) {
     fade_out_s: 0,
     speed_rate: retimeNorm.speedRate,
     reverse: retimeNorm.reverse,
+    retime_process: retimeNorm.retimeProcess,
+    retime_ramp_preset: retimeNorm.rampPreset,
+    retime_ramp_points: retimeNorm.rampPoints.map((pt) => ({ ...pt })),
     transition_out: null,
     transform: clip.transform ? { ...clip.transform } : null
   };
@@ -2055,6 +2352,9 @@ function _buildSplitClipPair(clip, cut, fps, fpsRate) {
     fade_out_s: Number(Math.min(audioNorm.fadeOutS, rightDur / fpsRate).toFixed(2)),
     speed_rate: retimeNorm.speedRate,
     reverse: retimeNorm.reverse,
+    retime_process: retimeNorm.retimeProcess,
+    retime_ramp_preset: retimeNorm.rampPreset,
+    retime_ramp_points: retimeNorm.rampPoints.map((pt) => ({ ...pt })),
     transition_out: clip.transition_out ? { ...clip.transition_out } : null,
     transform: clip.transform ? { ...clip.transform } : null
   };
@@ -2246,10 +2546,32 @@ export function updateClipRetimeInDocument(doc, trackKind, trackIndex, clipIndex
   const nextSpeed = Number(clampNum(rawNextSpeed, RETIME_SPEED_MIN, RETIME_SPEED_MAX).toFixed(2));
   const nextReverse =
     patch.reverse !== undefined ? Boolean(patch.reverse) : origNorm.reverse;
+  const nextProcess =
+    patch.retime_process !== undefined
+      ? normalizeRetimeProcess(patch.retime_process)
+      : origNorm.retimeProcess;
+
+  let nextPreset = origNorm.rampPreset;
+  let nextPoints = origNorm.rampPoints;
+  if (patch.retime_ramp_preset !== undefined && patch.retime_ramp_points === undefined) {
+    nextPreset = normalizeRetimeRampPreset(patch.retime_ramp_preset);
+    nextPoints = resolveRetimeRampPointsForPreset(nextPreset, []);
+  } else if (patch.retime_ramp_points !== undefined) {
+    nextPoints = normalizeRetimeRampPoints(patch.retime_ramp_points);
+    nextPreset =
+      patch.retime_ramp_preset !== undefined
+        ? normalizeRetimeRampPreset(patch.retime_ramp_preset)
+        : nextPoints.length >= 2
+          ? "custom"
+          : "constant";
+  }
 
   const unchanged =
     Math.abs(nextSpeed - origNorm.speedRate) < 1e-6 &&
-    nextReverse === origNorm.reverse;
+    nextReverse === origNorm.reverse &&
+    nextProcess === origNorm.retimeProcess &&
+    nextPreset === origNorm.rampPreset &&
+    JSON.stringify(nextPoints) === JSON.stringify(origNorm.rampPoints);
   if (unchanged) {
     return { doc, clip: foundOrig.clip, changed: false };
   }
@@ -2259,6 +2581,9 @@ export function updateClipRetimeInDocument(doc, trackKind, trackIndex, clipIndex
   if (!found) return { doc, clip: null, changed: false };
   found.clip.speed_rate = nextSpeed;
   found.clip.reverse = nextReverse;
+  found.clip.retime_process = nextProcess;
+  found.clip.retime_ramp_preset = nextPreset;
+  found.clip.retime_ramp_points = nextPoints;
   return { doc: nextDoc, clip: found.clip, changed: true };
 }
 

@@ -31,6 +31,8 @@ from taktcut.models import (
     ALLOWED_FILM_GRAIN_PRESETS,
     ALLOWED_LOWER_THIRD_POSITIONS,
     ALLOWED_REFRAME_ASPECT_RATIOS,
+    ALLOWED_RETIME_PROCESS_MODES,
+    ALLOWED_RETIME_RAMP_PRESETS,
     ALLOWED_TIMECODE_BURNIN,
     ALLOWED_VIGNETTE_MODES,
     ALLOWED_VIGNETTE_PRESETS,
@@ -47,6 +49,7 @@ from taktcut.models import (
     LOWER_THIRD_FONT_SIZE_MIN,
     LOWER_THIRD_TEXT_MAX_LEN,
     LOWER_THIRD_TIME_MAX_S,
+    RETIME_RAMP_PRESET_POINTS,
     REVIEW_WATERMARK_MAX_LEN,
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     REVIEW_WATERMARK_OPACITY_MAX,
@@ -82,12 +85,17 @@ from taktcut.models import (
     RenderPlan,
     RenderProfile,
     RenderResult,
+    RetimeProcessMode,
+    RetimeRampPresetId,
+    RetimeSpeedPoint,
     TimecodeBurnInPosition,
     TransformKeyframe,
     VignetteMode,
     VignettePresetId,
     VoiceCleanupPresetId,
+    compute_retime_ramp_summary,
     evaluate_cubic_bezier,
+    normalize_retime_ramp_points,
 )
 from taktcut.subtitles import SubtitleTrackParams, compile_subtitles_filter
 from taktcut.titles import (
@@ -1023,30 +1031,118 @@ def compile_auto_duck_filter_result(
     )
 
 
+def _validate_retime_process_field(raw: Any) -> RetimeProcessMode:
+    if raw is None or raw == "":
+        return "nearest"
+    if not isinstance(raw, str):
+        raise ValueError(f"retime_process must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned == "nearest":
+        return "nearest"
+    if cleaned == "frame_blend":
+        return "frame_blend"
+    if cleaned == "optical_flow":
+        return "optical_flow"
+    allowed = ", ".join(ALLOWED_RETIME_PROCESS_MODES)
+    raise ValueError(f"Unsupported retime_process {raw!r}; expected one of: {allowed}")
+
+
+def _validate_retime_ramp_preset_field(raw: Any) -> RetimeRampPresetId:
+    if raw is None or raw == "":
+        return "constant"
+    if not isinstance(raw, str):
+        raise ValueError(f"ramp_preset must be a string, got {raw!r}")
+    cleaned = raw.strip().lower()
+    if cleaned == "constant":
+        return "constant"
+    if cleaned == "hero_slowmo":
+        return "hero_slowmo"
+    if cleaned == "ramp_up":
+        return "ramp_up"
+    if cleaned == "ramp_down":
+        return "ramp_down"
+    if cleaned == "bullet_pulse":
+        return "bullet_pulse"
+    if cleaned == "custom":
+        return "custom"
+    allowed = ", ".join(ALLOWED_RETIME_RAMP_PRESETS)
+    raise ValueError(f"Unsupported ramp_preset {raw!r}; expected one of: {allowed}")
+
+
+def _resolve_ramp_points_for_preset(
+    preset: RetimeRampPresetId,
+    points: list[RetimeSpeedPoint],
+) -> list[RetimeSpeedPoint]:
+    if points:
+        return normalize_retime_ramp_points(points)
+    if preset in ("constant", "custom"):
+        return []
+    raw_pairs = RETIME_RAMP_PRESET_POINTS.get(preset, ())
+    return normalize_retime_ramp_points(
+        [RetimeSpeedPoint(pos_norm=p, speed_rate=s) for p, s in raw_pairs]
+    )
+
+
 class ClipRetimeParams(BaseModel):
-    """Per-clip speed multiplier (0.25x..4.0x) and reverse direction parameters."""
+    """Per-clip speed multiplier (0.25x..4.0x), speed ramp curve, optical flow, and reverse."""
 
     speed_rate: float = 1.0
     reverse: bool = False
+    retime_process: RetimeProcessMode = "nearest"
+    ramp_preset: RetimeRampPresetId = "constant"
+    ramp_points: list[RetimeSpeedPoint] = Field(default_factory=list)
 
     @field_validator("speed_rate", mode="before")
     @classmethod
     def _validate_speed_rate(cls, raw: Any) -> float:
         return _validate_bounded_float(raw, "speed_rate", RETIME_SPEED_MIN, RETIME_SPEED_MAX)
 
+    @field_validator("retime_process", mode="before")
+    @classmethod
+    def _validate_process(cls, raw: Any) -> RetimeProcessMode:
+        return _validate_retime_process_field(raw)
+
+    @field_validator("ramp_preset", mode="before")
+    @classmethod
+    def _validate_ramp_preset(cls, raw: Any) -> RetimeRampPresetId:
+        return _validate_retime_ramp_preset_field(raw)
+
+    @model_validator(mode="after")
+    def _sync_ramp_points(self) -> ClipRetimeParams:
+        self.ramp_points = _resolve_ramp_points_for_preset(self.ramp_preset, self.ramp_points)
+        return self
+
+    def has_ramp(self) -> bool:
+        """Return True when a multi-point speed ramp curve is configured."""
+        return len(self.ramp_points) >= 2
+
+    def effective_avg_speed(self) -> float:
+        """Return harmonic average speed over the ramp or scalar speed_rate."""
+        if self.has_ramp():
+            return compute_retime_ramp_summary(self.ramp_points, self.speed_rate)["avg_speed"]
+        return self.speed_rate
+
     def is_identity(self) -> bool:
-        """Return True when speed_rate is 1.0x and reverse is False."""
-        return not self.reverse and math.isclose(self.speed_rate, 1.0, abs_tol=1e-6)
+        """Return True when speed_rate is 1.0x, nearest mode, no ramp, and reverse is False."""
+        return (
+            not self.reverse
+            and self.retime_process == "nearest"
+            and not self.has_ramp()
+            and math.isclose(self.speed_rate, 1.0, abs_tol=1e-6)
+        )
 
 
 class RetimeParams(BaseModel):
-    """Delivery and clip Speed & Reverse Retime parameters with strict bounds."""
+    """Delivery and clip Speed, Ramp Curve, Optical Flow & Reverse Retime parameters."""
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     speed: float = 1.0
     reverse: bool = False
+    retime_process: RetimeProcessMode = "nearest"
+    ramp_preset: RetimeRampPresetId = "constant"
+    ramp_points: list[RetimeSpeedPoint] = Field(default_factory=list)
 
     @field_validator("enabled", "reverse", mode="before")
     @classmethod
@@ -1060,20 +1156,50 @@ class RetimeParams(BaseModel):
     def _validate_speed(cls, raw: Any) -> float:
         return _validate_bounded_float(raw, "speed", RETIME_SPEED_MIN, RETIME_SPEED_MAX)
 
+    @field_validator("retime_process", mode="before")
+    @classmethod
+    def _validate_process(cls, raw: Any) -> RetimeProcessMode:
+        return _validate_retime_process_field(raw)
+
+    @field_validator("ramp_preset", mode="before")
+    @classmethod
+    def _validate_ramp_preset(cls, raw: Any) -> RetimeRampPresetId:
+        return _validate_retime_ramp_preset_field(raw)
+
+    @model_validator(mode="after")
+    def _sync_ramp_points(self) -> RetimeParams:
+        self.ramp_points = _resolve_ramp_points_for_preset(self.ramp_preset, self.ramp_points)
+        return self
+
+    def has_ramp(self) -> bool:
+        """Return True when a multi-point speed ramp curve is configured."""
+        return len(self.ramp_points) >= 2
+
+    def effective_avg_speed(self) -> float:
+        """Return harmonic average speed over the ramp or scalar speed."""
+        if self.has_ramp():
+            return compute_retime_ramp_summary(self.ramp_points, self.speed)["avg_speed"]
+        return self.speed
+
     def is_active(self) -> bool:
-        """Return True when enabled and speed != 1.0 or reverse is True."""
+        """Return True when enabled and speed/ramp/optical-flow/reverse modifies playback."""
         return bool(
             self.enabled
-            and (self.reverse or not math.isclose(self.speed, 1.0, abs_tol=1e-6))
+            and (
+                self.reverse
+                or self.retime_process != "nearest"
+                or self.has_ramp()
+                or not math.isclose(self.speed, 1.0, abs_tol=1e-6)
+            )
         )
 
     def is_identity(self) -> bool:
-        """Return True when disabled or effectively 1.0x forward."""
+        """Return True when disabled or effectively 1.0x forward nearest."""
         return not self.is_active()
 
 
 class RetimeCompileResult(BaseModel):
-    """Compiled FFmpeg video and audio filtergraphs for clip retime."""
+    """Compiled FFmpeg video and audio filtergraphs for clip retime & optical flow."""
 
     video_filtergraph: str
     audio_filtergraph: str
@@ -1081,6 +1207,9 @@ class RetimeCompileResult(BaseModel):
     ffmpeg_af_args: list[str]
     is_identity: bool
     is_active: bool = False
+    avg_speed: float = 1.0
+    retime_process: RetimeProcessMode = "nearest"
+    ramp_preset: RetimeRampPresetId = "constant"
     params: ClipRetimeParams | RetimeParams
 
 
@@ -1106,17 +1235,96 @@ def build_atempo_stages(speed_rate: float) -> list[float]:
     return stages
 
 
+def compile_retime_ramp_setpts(
+    points: Sequence[RetimeSpeedPoint],
+    clip_duration_s: float = 10.0,
+) -> str:
+    """Compile a piecewise continuous FFmpeg setpts expression from Speed Ramp knots."""
+    dur = max(0.5, min(CLIP_DURATION_MAX_S, float(clip_duration_s)))
+    ordered = sorted(points, key=lambda pt: pt.pos_norm)
+    if len(ordered) < 2:
+        spd = ordered[0].speed_rate if ordered else 1.0
+        return f"setpts=PTS/{spd:.4f}"
+
+    # Ensure endpoints cover [0.0, 1.0] cleanly
+    knots = list(ordered)
+    if knots[0].pos_norm > 0.0:
+        knots.insert(0, RetimeSpeedPoint(pos_norm=0.0, speed_rate=knots[0].speed_rate))
+    if knots[-1].pos_norm < 1.0:
+        knots.append(RetimeSpeedPoint(pos_norm=1.0, speed_rate=knots[-1].speed_rate))
+
+    segments: list[tuple[float, float, float, float]] = []
+    cum_out_s = 0.0
+    for idx in range(len(knots) - 1):
+        p0 = knots[idx]
+        p1 = knots[idx + 1]
+        if p1.pos_norm - p0.pos_norm <= 1e-4:
+            continue
+        t0 = p0.pos_norm * dur
+        t1 = p1.pos_norm * dur
+        seg_speed = max(
+            RETIME_SPEED_MIN,
+            min(RETIME_SPEED_MAX, 0.5 * (p0.speed_rate + p1.speed_rate)),
+        )
+        segments.append((t0, t1, seg_speed, cum_out_s))
+        cum_out_s += (t1 - t0) / seg_speed
+
+    if not segments:
+        spd = knots[0].speed_rate
+        return f"setpts=PTS/{spd:.4f}"
+
+    # Build nested if(lt(T,t_end), branch, ...) from last segment back to first
+    last_t0, _, last_spd, last_off = segments[-1]
+    if last_t0 <= 1e-6:
+        expr = f"PTS/{last_spd:.4f}"
+    else:
+        expr = f"{last_off:.6f}/TB+(PTS-{last_t0:.4f}/TB)/{last_spd:.4f}"
+    for t0, t1, seg_spd, off_s in reversed(segments[:-1]):
+        if t0 <= 1e-6:
+            branch = f"PTS/{seg_spd:.4f}"
+        else:
+            branch = f"{off_s:.6f}/TB+(PTS-{t0:.4f}/TB)/{seg_spd:.4f}"
+        expr = f"if(lt(T,{t1:.4f}),{branch},{expr})"
+    return f"setpts='{expr}'"
+
+
+def compile_minterpolate_filter(
+    retime_process: RetimeProcessMode,
+    target_fps: RationalFrameRate | None = None,
+) -> str | None:
+    """Compile DaVinci-style Frame Blend or Optical Flow minterpolate filter."""
+    fps_str = target_fps.ffmpeg_rate if target_fps is not None else "25"
+    if retime_process == "frame_blend":
+        return f"minterpolate=fps={fps_str}:mi_mode=blend"
+    if retime_process == "optical_flow":
+        return f"minterpolate=fps={fps_str}:mi_mode=mci:mc_mode=aobmc:me_mode=bilat:vsbmc=1"
+    return None
+
+
 def compile_retime_filter(
     params: ClipRetimeParams | RetimeParams,
+    *,
+    target_fps: RationalFrameRate | None = None,
+    clip_duration_s: float | None = None,
 ) -> tuple[str | None, str | None]:
-    """Compile validated retime parameters into FFmpeg (vf, af) filter strings."""
+    """Compile validated retime, speed ramp, and optical flow params into FFmpeg (vf, af)."""
     if params.is_identity():
         return (None, None)
 
     vf_parts: list[str] = []
     af_parts: list[str] = []
+    avg_speed = params.effective_avg_speed()
 
-    if isinstance(params, RetimeParams):
+    if params.has_ramp():
+        dur = (
+            clip_duration_s
+            if (clip_duration_s is not None and clip_duration_s > 0.0)
+            else 10.0
+        )
+        vf_parts.append(compile_retime_ramp_setpts(params.ramp_points, dur))
+        for stage in build_atempo_stages(avg_speed):
+            af_parts.append(f"atempo={stage:.4f}")
+    elif isinstance(params, RetimeParams):
         if not math.isclose(params.speed, 1.0, abs_tol=1e-6):
             vf_parts.append(f"setpts=PTS/{params.speed:.4f}")
             for stage in build_atempo_stages(params.speed):
@@ -1127,6 +1335,10 @@ def compile_retime_filter(
             vf_parts.append(f"setpts={pts_scale:.6f}*PTS")
             for stage in build_atempo_stages(params.speed_rate):
                 af_parts.append(f"atempo={stage:.4f}")
+
+    interp_vf = compile_minterpolate_filter(params.retime_process, target_fps=target_fps)
+    if interp_vf is not None:
+        vf_parts.append(interp_vf)
 
     if params.reverse:
         vf_parts.append("reverse")
@@ -1140,9 +1352,16 @@ def compile_retime_filter(
 
 def compile_retime_filter_result(
     params: ClipRetimeParams | RetimeParams,
+    *,
+    target_fps: RationalFrameRate | None = None,
+    clip_duration_s: float | None = None,
 ) -> RetimeCompileResult:
-    """Compile clip retime parameters into structured video/audio filtergraphs and argv slices."""
-    vf, af = compile_retime_filter(params)
+    """Compile clip retime, speed ramp, and optical flow parameters into filtergraphs."""
+    vf, af = compile_retime_filter(
+        params,
+        target_fps=target_fps,
+        clip_duration_s=clip_duration_s,
+    )
     vf_str = vf or ""
     af_str = af or ""
     is_id = params.is_identity()
@@ -1153,6 +1372,9 @@ def compile_retime_filter_result(
         ffmpeg_af_args=["-af", af_str] if af_str else [],
         is_identity=is_id,
         is_active=not is_id,
+        avg_speed=round(params.effective_avg_speed(), 4),
+        retime_process=params.retime_process,
+        ramp_preset=params.ramp_preset,
         params=params,
     )
 
@@ -2704,16 +2926,30 @@ def build_render_plan(
     retime_enabled = False
     retime_speed = 1.0
     retime_reverse = False
+    retime_process: RetimeProcessMode = "nearest"
+    retime_ramp_preset: RetimeRampPresetId = "constant"
     if retime is not None and retime.is_active():
-        retime_vf, retime_af = compile_retime_filter(retime)
+        retime_vf, retime_af = compile_retime_filter(
+            retime,
+            target_fps=target_fps,
+            clip_duration_s=clip_duration_s,
+        )
         retime_enabled = True
-        retime_speed = retime.speed
+        retime_speed = retime.effective_avg_speed()
         retime_reverse = retime.reverse
+        retime_process = retime.retime_process
+        retime_ramp_preset = retime.ramp_preset
     elif retime_params is not None and not retime_params.is_identity():
-        retime_vf, retime_af = compile_retime_filter(retime_params)
+        retime_vf, retime_af = compile_retime_filter(
+            retime_params,
+            target_fps=target_fps,
+            clip_duration_s=clip_duration_s,
+        )
         retime_enabled = True
-        retime_speed = retime_params.speed_rate
+        retime_speed = retime_params.effective_avg_speed()
         retime_reverse = retime_params.reverse
+        retime_process = retime_params.retime_process
+        retime_ramp_preset = retime_params.ramp_preset
 
     framing_vf: str | None = None
     target_width: int | None = None
@@ -2949,6 +3185,8 @@ def build_render_plan(
             retime_enabled=retime_enabled,
             retime_speed=retime_speed,
             retime_reverse=retime_reverse,
+            retime_process=retime_process,
+            retime_ramp_preset=retime_ramp_preset,
             reframe_enabled=False,
             reframe_aspect_ratio="source",
             reframe_pan_x=0.0,
@@ -3069,6 +3307,8 @@ def build_render_plan(
         retime_enabled=retime_enabled,
         retime_speed=retime_speed,
         retime_reverse=retime_reverse,
+        retime_process=retime_process,
+        retime_ramp_preset=retime_ramp_preset,
         reframe_enabled=reframe_enabled,
         reframe_aspect_ratio=reframe_aspect_ratio,
         reframe_pan_x=reframe_pan_x,
