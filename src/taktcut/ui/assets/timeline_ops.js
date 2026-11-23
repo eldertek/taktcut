@@ -4655,6 +4655,130 @@ function normalizeNodeLut(rawLut) {
   };
 }
 
+export const POWER_WINDOW_SHAPES = ["off", "circle", "linear", "gradient"];
+
+export const POWER_WINDOW_DEFAULTS = {
+  shape: "off",
+  center_x: 0.5,
+  center_y: 0.5,
+  width: 0.45,
+  height: 0.45,
+  rotation_deg: 0.0,
+  softness: 0.12,
+  invert: false
+};
+
+function clampPwNum(raw, min, max, fallback) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function smoothstepUnit(edge0, edge1, x) {
+  if (edge1 <= edge0) return x >= edge1 ? 1.0 : 0.0;
+  const t = clampUnitColor((x - edge0) / (edge1 - edge0));
+  return t * t * (3.0 - 2.0 * t);
+}
+
+export function createDefaultPowerWindow(overrides = {}) {
+  return normalizePowerWindow({ ...POWER_WINDOW_DEFAULTS, ...overrides });
+}
+
+export function normalizePowerWindow(raw) {
+  const pw = raw && typeof raw === "object" ? raw : {};
+  const shapeRaw = typeof pw.shape === "string" ? pw.shape.trim().toLowerCase() : "off";
+  const shape = POWER_WINDOW_SHAPES.includes(shapeRaw) ? shapeRaw : "off";
+  return {
+    shape,
+    center_x: clampPwNum(pw.center_x, 0.0, 1.0, POWER_WINDOW_DEFAULTS.center_x),
+    center_y: clampPwNum(pw.center_y, 0.0, 1.0, POWER_WINDOW_DEFAULTS.center_y),
+    width: clampPwNum(pw.width, 0.05, 1.0, POWER_WINDOW_DEFAULTS.width),
+    height: clampPwNum(pw.height, 0.05, 1.0, POWER_WINDOW_DEFAULTS.height),
+    rotation_deg: clampPwNum(pw.rotation_deg, -180.0, 180.0, POWER_WINDOW_DEFAULTS.rotation_deg),
+    softness: clampPwNum(pw.softness, 0.0, 0.5, POWER_WINDOW_DEFAULTS.softness),
+    invert: Boolean(pw.invert)
+  };
+}
+
+export function isPowerWindowActive(pw) {
+  return Boolean(pw && pw.shape && pw.shape !== "off");
+}
+
+export function evaluatePowerWindowMask(pwRaw, u, v) {
+  const pw = normalizePowerWindow(pwRaw);
+  if (pw.shape === "off") return 1.0;
+  const rad = -(pw.rotation_deg * Math.PI) / 180.0;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const ux = u - pw.center_x;
+  const vy = v - pw.center_y;
+  const dx = ux * cosA - vy * sinA;
+  const dy = ux * sinA + vy * cosA;
+
+  let raw = 1.0;
+  if (pw.shape === "circle") {
+    const rx = Math.max(0.025, pw.width * 0.5);
+    const ry = Math.max(0.025, pw.height * 0.5);
+    const d = Math.hypot(dx / rx, dy / ry);
+    const s = pw.softness * 2.0;
+    const inner = Math.max(0.0, 1.0 - s * 0.5);
+    const outer = Math.max(inner + 1e-4, 1.0 + s * 0.5);
+    raw = 1.0 - smoothstepUnit(inner, outer, d);
+  } else if (pw.shape === "linear") {
+    const hx = Math.max(0.025, pw.width * 0.5);
+    const hy = Math.max(0.025, pw.height * 0.5);
+    const qx = Math.abs(dx) - hx;
+    const qy = Math.abs(dy) - hy;
+    const sd = Math.hypot(Math.max(qx, 0.0), Math.max(qy, 0.0)) + Math.min(Math.max(qx, qy), 0.0);
+    const halfSoft = Math.max(0.0005, pw.softness * 0.5);
+    raw = 1.0 - smoothstepUnit(-halfSoft, halfSoft, sd);
+  } else {
+    const span = Math.max(0.04, pw.height * 0.5 + pw.softness * 0.5);
+    raw = 1.0 - smoothstepUnit(-span, span, dy);
+  }
+
+  return pw.invert ? 1.0 - raw : raw;
+}
+
+export function compilePowerWindowMaskExprClient(pwRaw) {
+  const pw = normalizePowerWindow(pwRaw);
+  if (pw.shape === "off") return "255";
+  const rad = -(pw.rotation_deg * Math.PI) / 180.0;
+  const ca = Math.cos(rad).toFixed(6);
+  const sa = Math.sin(rad).toFixed(6);
+  const cx = pw.center_x.toFixed(4);
+  const cy = pw.center_y.toFixed(4);
+  const dx = `((X/W-${cx})*(${ca})-(Y/H-${cy})*(${sa}))`;
+  const dy = `((X/W-${cx})*(${sa})+(Y/H-${cy})*(${ca}))`;
+  let setup = "";
+  if (pw.shape === "circle") {
+    const rx = Math.max(0.025, pw.width * 0.5);
+    const ry = Math.max(0.025, pw.height * 0.5);
+    const s = pw.softness * 2.0;
+    const inner = Math.max(0.0, 1.0 - s * 0.5);
+    const outer = Math.max(inner + 1e-4, 1.0 + s * 0.5);
+    const denom = Math.max(1e-4, outer - inner);
+    setup =
+      `st(0,${dx});st(1,${dy});` +
+      `st(2,hypot(ld(0)/${rx.toFixed(6)},ld(1)/${ry.toFixed(6)}));` +
+      `st(3,clip((ld(2)-${inner.toFixed(6)})/${denom.toFixed(6)},0,1));`;
+  } else if (pw.shape === "linear") {
+    const hx = Math.max(0.025, pw.width * 0.5);
+    const hy = Math.max(0.025, pw.height * 0.5);
+    const lo = -Math.max(0.0005, pw.softness * 0.5);
+    const denom = Math.max(0.001, pw.softness);
+    setup =
+      `st(0,abs(${dx})-${hx.toFixed(6)});st(1,abs(${dy})-${hy.toFixed(6)});` +
+      `st(2,hypot(max(ld(0),0),max(ld(1),0))+min(max(ld(0),ld(1)),0));` +
+      `st(3,clip((ld(2)-(${lo.toFixed(6)}))/${denom.toFixed(6)},0,1));`;
+  } else {
+    const span = Math.max(0.04, pw.height * 0.5 + pw.softness * 0.5);
+    setup = `st(0,${dy});st(3,clip((ld(0)+${span.toFixed(6)})/${(2.0 * span).toFixed(6)},0,1));`;
+  }
+  const tExpr = "ld(3)*ld(3)*(3-2*ld(3))";
+  return pw.invert ? `${setup}255*(${tExpr})` : `${setup}255*(1-(${tExpr}))`;
+}
+
 export function createColorNode(index = 1, overrides = {}) {
   const safeIdx = Math.max(1, Math.round(Number(index) || 1));
   return {
@@ -4670,6 +4794,7 @@ export function createColorNode(index = 1, overrides = {}) {
           : `Serial ${safeIdx}`,
     enabled: overrides.enabled !== false,
     grade: normalizeColorGrade(overrides.grade),
+    power_window: normalizePowerWindow(overrides.power_window),
     lut: normalizeNodeLut(overrides.lut)
   };
 }
@@ -4681,6 +4806,7 @@ export function normalizeColorNode(raw, index = 0) {
     label: n.label,
     enabled: n.enabled,
     grade: n.grade,
+    power_window: n.power_window,
     lut: n.lut
   });
 }
@@ -4745,6 +4871,7 @@ export function addColorNodeToTree(tree, opts = {}) {
     id: `node-${seq}`,
     label: defaultLabel,
     grade: opts.grade,
+    power_window: opts.power_window,
     lut: opts.lut
   });
   const selIdx = norm.nodes.findIndex((n) => n.id === norm.selectedNodeId);
@@ -4755,6 +4882,29 @@ export function addColorNodeToTree(tree, opts = {}) {
     nodes: nextNodes,
     selectedNodeId: created.id
   };
+}
+
+export function addOutsideColorNodeInTree(tree, sourceNodeId = null) {
+  const norm = normalizeColorNodeTree(tree);
+  if (norm.nodes.length >= MAX_COLOR_NODES) {
+    return norm;
+  }
+  const targetId = sourceNodeId || norm.selectedNodeId;
+  const parent = norm.nodes.find((n) => n.id === targetId);
+  if (!parent || !isPowerWindowActive(parent.power_window)) {
+    return norm;
+  }
+  const invertedPw = {
+    ...normalizePowerWindow(parent.power_window),
+    invert: !parent.power_window.invert
+  };
+  return addColorNodeToTree(
+    { ...norm, selectedNodeId: parent.id },
+    {
+      label: invertedPw.invert ? "Outside" : "Inside",
+      power_window: invertedPw
+    }
+  );
 }
 
 export function removeColorNodeFromTree(tree, nodeId) {
@@ -4812,6 +4962,10 @@ export function updateColorNodeInTree(tree, nodeId, patch = {}) {
             : n.label,
         enabled: patch.enabled !== undefined ? Boolean(patch.enabled) : n.enabled,
         grade: patch.grade !== undefined ? normalizeColorGrade(patch.grade) : n.grade,
+        power_window:
+          patch.power_window !== undefined
+            ? normalizePowerWindow(patch.power_window)
+            : normalizePowerWindow(n.power_window),
         lut: patch.lut !== undefined ? normalizeNodeLut(patch.lut) : n.lut
       };
     })
@@ -4832,6 +4986,35 @@ export function applyColorNodeChainRgbClient(r, g, b, treeOrNodes) {
     [curR, curG, curB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
     if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
       [curR, curG, curB] = applyCubeLutRgbClient(curR, curG, curB, node.lut, node.lut.mix);
+    }
+  }
+  return [curR, curG, curB];
+}
+
+export function applyColorNodeChainRgbAtClient(r, g, b, u, v, treeOrNodes) {
+  const nodes = Array.isArray(treeOrNodes)
+    ? treeOrNodes
+    : treeOrNodes && Array.isArray(treeOrNodes.nodes)
+      ? treeOrNodes.nodes
+      : [];
+  let curR = clampUnitColor(r);
+  let curG = clampUnitColor(g);
+  let curB = clampUnitColor(b);
+  for (const node of nodes) {
+    if (!node || node.enabled === false) continue;
+    let [outR, outG, outB] = applyColorGradeRgbPure(curR, curG, curB, node.grade);
+    if (node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6) {
+      [outR, outG, outB] = applyCubeLutRgbClient(outR, outG, outB, node.lut, node.lut.mix);
+    }
+    if (isPowerWindowActive(node.power_window)) {
+      const m = evaluatePowerWindowMask(node.power_window, u, v);
+      curR = clampUnitColor(curR + (outR - curR) * m);
+      curG = clampUnitColor(curG + (outG - curG) * m);
+      curB = clampUnitColor(curB + (outB - curB) * m);
+    } else {
+      curR = outR;
+      curG = outG;
+      curB = outB;
     }
   }
   return [curR, curG, curB];
@@ -4872,13 +5055,31 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
   const parts = [];
   let activeCount = 0;
   let hasLutNodes = false;
+  let hasPowerWindows = false;
+  let pwIdx = 0;
 
   for (const node of nodes) {
     if (!node || node.enabled === false) continue;
     const hasLut = Boolean(node.lut && Array.isArray(node.lut.table) && Number(node.lut.mix ?? 1.0) > 1e-6);
     if (hasLut) hasLutNodes = true;
+    if (isPowerWindowActive(node.power_window)) hasPowerWindows = true;
     if (!isColorGradeIdentity(node.grade)) {
-      parts.push(compileSingleGradeFilterStr(node.grade));
+      const gradeFg = compileSingleGradeFilterStr(node.grade);
+      if (isPowerWindowActive(node.power_window)) {
+        const tag = `pw${pwIdx}`;
+        pwIdx += 1;
+        const maskExpr = compilePowerWindowMaskExprClient(node.power_window);
+        parts.push(
+          `split=3[${tag}b][${tag}g][${tag}m];` +
+            `[${tag}b]format=gbrp[${tag}bg];` +
+            `[${tag}g]${gradeFg},format=gbrp[${tag}fg];` +
+            `[${tag}m]format=gray,geq=lum='${maskExpr}',split=3[${tag}mr][${tag}mg][${tag}mb];` +
+            `[${tag}mr][${tag}mg][${tag}mb]mergeplanes=0x001020:gbrp[${tag}msk];` +
+            `[${tag}bg][${tag}fg][${tag}msk]maskedmerge`
+        );
+      } else {
+        parts.push(gradeFg);
+      }
     }
     if (!isColorNodeIdentity(node)) {
       activeCount += 1;
@@ -4898,7 +5099,8 @@ export function compileColorNodeChainClient(treeOrNodes, pixFmt = null) {
     is_identity: activeCount === 0,
     active_node_count: activeCount,
     total_node_count: nodes.length,
-    has_lut_nodes: hasLutNodes
+    has_lut_nodes: hasLutNodes,
+    has_power_windows: hasPowerWindows
   };
 }
 
@@ -4910,6 +5112,7 @@ export function serializeColorNodeForApi(node) {
     label: norm.label,
     enabled: norm.enabled,
     grade: norm.grade,
+    power_window: normalizePowerWindow(norm.power_window),
     lut_title: lut ? lut.title : "",
     lut_dimension: lut ? lut.dimension : null,
     lut_size: lut ? lut.size : null,
@@ -4942,6 +5145,7 @@ export function deserializeColorNodeFromApi(rawNode, index = 0) {
     label: n.label,
     enabled: n.enabled,
     grade: n.grade,
+    power_window: n.power_window,
     lut
   });
 }

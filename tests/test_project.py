@@ -1186,7 +1186,7 @@ def test_project_delivery_voice_cleanup_roundtrip(tmp_path: Path) -> None:
 
 
 def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
-    from taktcut.color import ColorNodeParams, parse_cube_lut_text
+    from taktcut.color import ColorNodeParams, PowerWindowParams, parse_cube_lut_text
 
     cube_text = (
         'TITLE "Demo_LUT"\n'
@@ -1208,6 +1208,16 @@ def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
             label="Balance",
             enabled=True,
             grade=ColorGradeParams(contrast=1.12, temperature=0.15),
+            power_window=PowerWindowParams(
+                shape="circle",
+                center_x=0.42,
+                center_y=0.48,
+                width=0.35,
+                height=0.50,
+                rotation_deg=15.0,
+                softness=0.14,
+                invert=False,
+            ),
         ),
         ColorNodeParams(
             id="node-2",
@@ -1231,6 +1241,9 @@ def test_project_color_node_tree_roundtrip(tmp_path: Path) -> None:
     assert loaded.color.selected_node_id == "node-2"
     assert len(loaded.color.nodes) == 2
     assert loaded.color.nodes[0].label == "Balance"
+    assert loaded.color.nodes[0].power_window.shape == "circle"
+    assert loaded.color.nodes[0].power_window.center_x == pytest.approx(0.42)
+    assert loaded.color.nodes[0].power_window.rotation_deg == pytest.approx(15.0)
     assert loaded.color.nodes[1].lut_title == "Demo_LUT"
     assert loaded.color.nodes[1].lut_mix == pytest.approx(0.8)
     assert loaded.color.nodes[1].lut_size == 2

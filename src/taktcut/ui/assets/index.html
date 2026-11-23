@@ -1487,6 +1487,7 @@
                   </div>
                   <div class="color-node-actions">
                     <button type="button" id="btn-color-node-add" class="btn btn-mini" data-i18n="color.nodes.add">+ Serial Node</button>
+                    <button type="button" id="btn-color-node-outside" class="btn btn-mini" disabled title="Add Outside Inverse Mask Node (Alt+O)" data-i18n="color.nodes.outside">+ Outside</button>
                     <button type="button" id="btn-color-node-bypass" class="btn btn-mini" aria-pressed="false" data-i18n="color.nodes.bypass">Bypass Node</button>
                     <button type="button" id="btn-color-node-left" class="btn btn-mini" aria-label="Move node earlier" title="Move node earlier">&lt;</button>
                     <button type="button" id="btn-color-node-right" class="btn btn-mini" aria-label="Move node later" title="Move node later">&gt;</button>
@@ -1510,6 +1511,57 @@
                     <input type="range" id="cube-lut-mix-range" min="0" max="100" step="1" value="100" disabled>
                     <input type="number" id="cube-lut-mix-num" class="input-num mono" min="0" max="100" step="1" value="100" aria-label="Node LUT mix percentage" disabled>
                     <button type="button" id="btn-color-node-clear-lut" class="btn btn-mini" disabled data-i18n="color.nodes.clearLut">Clear LUT</button>
+                  </div>
+                </div>
+                <div id="color-power-window-dock" class="color-power-window-dock" role="region" aria-label="Power Window Shape Mask">
+                  <div class="pw-toolbar">
+                    <div class="pw-title-group">
+                      <span class="pane-subheader-label" data-i18n="color.window.title">Power Window</span>
+                      <span id="pw-status-badge" class="nle-tag mono">OFF</span>
+                    </div>
+                    <div id="pw-shape-group" class="pw-shape-group" role="group" aria-label="Power Window shape">
+                      <button type="button" class="btn btn-mini pw-shape-btn is-active" data-pw-shape="off" aria-pressed="true" data-i18n="color.window.off">Off</button>
+                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="circle" aria-pressed="false" data-i18n="color.window.circle">Circle</button>
+                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="linear" aria-pressed="false" data-i18n="color.window.linear">Linear</button>
+                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="gradient" aria-pressed="false" data-i18n="color.window.gradient">Gradient</button>
+                    </div>
+                    <div class="pw-toggles">
+                      <button type="button" id="btn-pw-invert" class="btn btn-mini" aria-pressed="false" disabled data-i18n="color.window.invert">Invert</button>
+                      <button type="button" id="btn-pw-overlay" class="btn btn-mini is-active" aria-pressed="true" disabled data-i18n="color.window.overlay">Overlay</button>
+                      <button type="button" id="btn-pw-reset" class="btn btn-mini" disabled aria-label="Reset Power Window">Rst</button>
+                    </div>
+                  </div>
+                  <div id="color-pw-controls" class="pw-param-grid mono is-dimmed">
+                    <div class="pw-param-row">
+                      <label for="pw-cx-range" data-i18n="color.window.centerX">Center X (%)</label>
+                      <input type="range" id="pw-cx-range" min="0" max="100" step="1" value="50" disabled>
+                      <input type="number" id="pw-cx-num" class="input-num" min="0" max="100" step="1" value="50" aria-label="Power Window Center X percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-cy-range" data-i18n="color.window.centerY">Center Y (%)</label>
+                      <input type="range" id="pw-cy-range" min="0" max="100" step="1" value="50" disabled>
+                      <input type="number" id="pw-cy-num" class="input-num" min="0" max="100" step="1" value="50" aria-label="Power Window Center Y percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-w-range" data-i18n="color.window.width">Width (%)</label>
+                      <input type="range" id="pw-w-range" min="5" max="100" step="1" value="45" disabled>
+                      <input type="number" id="pw-w-num" class="input-num" min="5" max="100" step="1" value="45" aria-label="Power Window Width percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-h-range" data-i18n="color.window.height">Height (%)</label>
+                      <input type="range" id="pw-h-range" min="5" max="100" step="1" value="45" disabled>
+                      <input type="number" id="pw-h-num" class="input-num" min="5" max="100" step="1" value="45" aria-label="Power Window Height percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-rot-range" data-i18n="color.window.rotate">Rotate (deg)</label>
+                      <input type="range" id="pw-rot-range" min="-180" max="180" step="1" value="0" disabled>
+                      <input type="number" id="pw-rot-num" class="input-num" min="-180" max="180" step="1" value="0" aria-label="Power Window Rotation degrees" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-soft-range" data-i18n="color.window.softness">Softness (%)</label>
+                      <input type="range" id="pw-soft-range" min="0" max="50" step="1" value="12" disabled>
+                      <input type="number" id="pw-soft-num" class="input-num" min="0" max="50" step="1" value="12" aria-label="Power Window Feather Softness percentage" disabled>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -1,5 +1,15 @@
 """taktcut: Clean-room timeline interchange, color science, FFmpeg/NVENC render, and QA toolkit."""
 
+from taktcut.color import (
+    POWER_WINDOW_SHAPES,
+    ColorNodeChainCompileResult,
+    ColorNodeParams,
+    PowerWindowParams,
+    PowerWindowShape,
+    compile_color_node_chain,
+    compile_color_node_chain_filter,
+    compile_power_window_mask_expr,
+)
 from taktcut.fx import (
     ChromaKeyCompileResult,
     ChromaKeyParams,
@@ -203,9 +213,13 @@ __all__ = [
     "ClipRetimeParams",
     "ClipTransformParams",
     "ClipTransition",
+    "ColorNodeChainCompileResult",
+    "ColorNodeParams",
     "compile_audio_filter",
     "compile_chroma_key",
     "compile_chroma_key_filter",
+    "compile_color_node_chain",
+    "compile_color_node_chain_filter",
     "compile_deinterlace_filter",
     "compile_dialogue_eq_filter",
     "compile_export_fps_filter",
@@ -216,6 +230,7 @@ __all__ = [
     "compile_framing_filter",
     "compile_framing_filter_result",
     "compile_loudness_preset_filter",
+    "compile_power_window_mask_expr",
     "compile_reframe_filter",
     "compile_reframe_filter_result",
     "compile_retime_filter",
@@ -278,6 +293,9 @@ __all__ = [
     "parse_project_json",
     "parse_srt",
     "parse_vtt",
+    "POWER_WINDOW_SHAPES",
+    "PowerWindowParams",
+    "PowerWindowShape",
     "PROJECT_FILE_SUFFIX",
     "PROJECT_SCHEMA_VERSION",
     "ProjectColorState",

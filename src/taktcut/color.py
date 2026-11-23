@@ -40,6 +40,17 @@ LUT_MIX_DEFAULT: float = 1.0
 MAX_CUBE_TEXT_BYTES: int = 8 * 1024 * 1024
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
+PowerWindowShape = Literal["off", "circle", "linear", "gradient"]
+POWER_WINDOW_SHAPES: tuple[PowerWindowShape, ...] = ("off", "circle", "linear", "gradient")
+POWER_WINDOW_CENTER_MIN: float = 0.0
+POWER_WINDOW_CENTER_MAX: float = 1.0
+POWER_WINDOW_SIZE_MIN: float = 0.05
+POWER_WINDOW_SIZE_MAX: float = 1.0
+POWER_WINDOW_ROT_MIN: float = -180.0
+POWER_WINDOW_ROT_MAX: float = 180.0
+POWER_WINDOW_SOFTNESS_MIN: float = 0.0
+POWER_WINDOW_SOFTNESS_MAX: float = 0.5
+
 ALLOWED_COLOR_PIX_FMTS: frozenset[str] = frozenset(
     {"yuv420p", "yuv422p10le", "rgb24", "yuv444p"}
 )
@@ -629,13 +640,163 @@ def build_rec709_lut_filter(
     return f"lut3d=file='{escaped}':interp={interp},format={target_pix_fmt}"
 
 
+def _smoothstep(edge0: float, edge1: float, x: float) -> float:
+    if edge1 <= edge0:
+        return 1.0 if x >= edge1 else 0.0
+    t = _clamp_unit((x - edge0) / (edge1 - edge0))
+    return t * t * (3.0 - 2.0 * t)
+
+
+class PowerWindowParams(BaseModel):
+    """DaVinci Resolve style spatial shape mask (Power Window) for a color node."""
+
+    shape: PowerWindowShape = "off"
+    center_x: float = 0.5
+    center_y: float = 0.5
+    width: float = 0.45
+    height: float = 0.45
+    rotation_deg: float = 0.0
+    softness: float = 0.12
+    invert: bool = False
+
+    @field_validator("shape", mode="before")
+    @classmethod
+    def _validate_shape(cls, raw: Any) -> PowerWindowShape:
+        if raw is None:
+            return "off"
+        if not isinstance(raw, str):
+            raise ValueError(f"power_window.shape must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in POWER_WINDOW_SHAPES:
+            allowed = ", ".join(POWER_WINDOW_SHAPES)
+            raise ValueError(f"Unsupported power_window.shape {raw!r}; expected one of: {allowed}")
+        return cleaned
+
+    @field_validator("center_x", "center_y", mode="before")
+    @classmethod
+    def _validate_center(cls, raw: Any, info: Any) -> float:
+        return _validate_bounded_float(
+            raw, f"power_window.{info.field_name}", POWER_WINDOW_CENTER_MIN, POWER_WINDOW_CENTER_MAX
+        )
+
+    @field_validator("width", "height", mode="before")
+    @classmethod
+    def _validate_size(cls, raw: Any, info: Any) -> float:
+        return _validate_bounded_float(
+            raw, f"power_window.{info.field_name}", POWER_WINDOW_SIZE_MIN, POWER_WINDOW_SIZE_MAX
+        )
+
+    @field_validator("rotation_deg", mode="before")
+    @classmethod
+    def _validate_rotation(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "power_window.rotation_deg", POWER_WINDOW_ROT_MIN, POWER_WINDOW_ROT_MAX
+        )
+
+    @field_validator("softness", mode="before")
+    @classmethod
+    def _validate_softness(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw, "power_window.softness", POWER_WINDOW_SOFTNESS_MIN, POWER_WINDOW_SOFTNESS_MAX
+        )
+
+    @field_validator("invert", mode="before")
+    @classmethod
+    def _validate_invert(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"power_window.invert must be a boolean, got {raw!r}")
+        return raw
+
+    def is_active(self) -> bool:
+        """Return True when a spatial Power Window mask shape is enabled."""
+        return self.shape != "off"
+
+    def evaluate_mask(self, u: float, v: float) -> float:
+        """Evaluate smooth C1 feather mask weight in [0.0, 1.0] at normalized coords (u, v)."""
+        if self.shape == "off":
+            return 1.0
+        rad = -math.radians(self.rotation_deg)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+        ux = u - self.center_x
+        vy = v - self.center_y
+        dx = ux * cos_a - vy * sin_a
+        dy = ux * sin_a + vy * cos_a
+
+        if self.shape == "circle":
+            rx = max(0.025, self.width * 0.5)
+            ry = max(0.025, self.height * 0.5)
+            d = math.hypot(dx / rx, dy / ry)
+            s = self.softness * 2.0
+            inner = max(0.0, 1.0 - s * 0.5)
+            outer = max(inner + 1e-4, 1.0 + s * 0.5)
+            raw = 1.0 - _smoothstep(inner, outer, d)
+        elif self.shape == "linear":
+            hx = max(0.025, self.width * 0.5)
+            hy = max(0.025, self.height * 0.5)
+            qx = abs(dx) - hx
+            qy = abs(dy) - hy
+            sd = math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0)
+            half_soft = max(0.0005, self.softness * 0.5)
+            raw = 1.0 - _smoothstep(-half_soft, half_soft, sd)
+        else:
+            span = max(0.04, self.height * 0.5 + self.softness * 0.5)
+            raw = 1.0 - _smoothstep(-span, span, dy)
+
+        return (1.0 - raw) if self.invert else raw
+
+
+def compile_power_window_mask_expr(pw: PowerWindowParams) -> str:
+    """Compile a PowerWindowParams shape mask into a deterministic FFmpeg geq lum expression."""
+    if not pw.is_active():
+        return "255"
+    rad = -math.radians(pw.rotation_deg)
+    ca = math.cos(rad)
+    sa = math.sin(rad)
+    dx = f"((X/W-{pw.center_x:.4f})*({ca:.6f})-(Y/H-{pw.center_y:.4f})*({sa:.6f}))"
+    dy = f"((X/W-{pw.center_x:.4f})*({sa:.6f})+(Y/H-{pw.center_y:.4f})*({ca:.6f}))"
+    if pw.shape == "circle":
+        rx = max(0.025, pw.width * 0.5)
+        ry = max(0.025, pw.height * 0.5)
+        s = pw.softness * 2.0
+        inner = max(0.0, 1.0 - s * 0.5)
+        outer = max(inner + 1e-4, 1.0 + s * 0.5)
+        denom = max(1e-4, outer - inner)
+        setup = (
+            f"st(0,{dx});st(1,{dy});"
+            f"st(2,hypot(ld(0)/{rx:.6f},ld(1)/{ry:.6f}));"
+            f"st(3,clip((ld(2)-{inner:.6f})/{denom:.6f},0,1));"
+        )
+    elif pw.shape == "linear":
+        hx = max(0.025, pw.width * 0.5)
+        hy = max(0.025, pw.height * 0.5)
+        lo = -max(0.0005, pw.softness * 0.5)
+        denom = max(0.001, pw.softness)
+        setup = (
+            f"st(0,abs({dx})-{hx:.6f});st(1,abs({dy})-{hy:.6f});"
+            f"st(2,hypot(max(ld(0),0),max(ld(1),0))+min(max(ld(0),ld(1)),0));"
+            f"st(3,clip((ld(2)-({lo:.6f}))/{denom:.6f},0,1));"
+        )
+    else:
+        span = max(0.04, pw.height * 0.5 + pw.softness * 0.5)
+        setup = (
+            f"st(0,{dy});"
+            f"st(3,clip((ld(0)+{span:.6f})/{(2.0 * span):.6f},0,1));"
+        )
+    t_expr = "ld(3)*ld(3)*(3-2*ld(3))"
+    if pw.invert:
+        return f"{setup}255*({t_expr})"
+    return f"{setup}255*(1-({t_expr}))"
+
+
 class ColorNodeParams(BaseModel):
-    """A single serial color grading node combining Lift/Gamma/Gain/Tone and optional .cube LUT."""
+    """A single serial color grading node combining Lift/Gamma/Gain/Tone, Power Window, and LUT."""
 
     id: str = "node-1"
     label: str = "Primary"
     enabled: bool = True
     grade: ColorGradeParams = Field(default_factory=ColorGradeParams)
+    power_window: PowerWindowParams = Field(default_factory=PowerWindowParams)
     lut_title: str = ""
     lut_dimension: Literal["1D", "3D"] | None = None
     lut_size: int | None = None
@@ -774,6 +935,28 @@ class ColorNodeParams(BaseModel):
             )
         return (out_r, out_g, out_b)
 
+    def apply_rgb_at(
+        self,
+        r: float,
+        g: float,
+        b: float,
+        u: float = 0.5,
+        v: float = 0.5,
+    ) -> tuple[float, float, float]:
+        """Apply this node's grade and optional LUT blended by its Power Window mask at (u, v)."""
+        in_rgb = (_clamp_unit(r), _clamp_unit(g), _clamp_unit(b))
+        if not self.enabled:
+            return in_rgb
+        out_r, out_g, out_b = self.apply_rgb(in_rgb[0], in_rgb[1], in_rgb[2])
+        if not self.power_window.is_active():
+            return (out_r, out_g, out_b)
+        mask = self.power_window.evaluate_mask(u, v)
+        return (
+            _clamp_unit(in_rgb[0] + (out_r - in_rgb[0]) * mask),
+            _clamp_unit(in_rgb[1] + (out_g - in_rgb[1]) * mask),
+            _clamp_unit(in_rgb[2] + (out_b - in_rgb[2]) * mask),
+        )
+
 
 class ColorNodeChainCompileResult(BaseModel):
     """Compiled FFmpeg pipeline and metadata for a serial color node tree."""
@@ -784,6 +967,7 @@ class ColorNodeChainCompileResult(BaseModel):
     active_node_count: int
     total_node_count: int
     has_lut_nodes: bool
+    has_power_windows: bool = False
 
 
 def _coerce_color_nodes(
@@ -804,16 +988,32 @@ def compile_color_node_chain_filter(
     *,
     pix_fmt: str | None = None,
 ) -> str:
-    """Compile an ordered serial node chain into deterministic FFmpeg colorbalance+eq stages."""
+    """Compile a serial node chain into FFmpeg colorbalance, eq, and maskedmerge stages."""
     if pix_fmt is not None and pix_fmt not in ALLOWED_COLOR_PIX_FMTS:
         raise ValueError(f"Unsupported pixel format {pix_fmt!r}")
     validated = _coerce_color_nodes(nodes)
     parts: list[str] = []
+    pw_idx = 0
     for node in validated:
         if not node.enabled:
             continue
-        if not node.grade.is_identity():
-            parts.append(compile_color_grade_filter(node.grade, pix_fmt=None))
+        if node.grade.is_identity():
+            continue
+        grade_fg = compile_color_grade_filter(node.grade, pix_fmt=None)
+        if not node.power_window.is_active():
+            parts.append(grade_fg)
+            continue
+        tag = f"pw{pw_idx}"
+        pw_idx += 1
+        mask_expr = compile_power_window_mask_expr(node.power_window)
+        parts.append(
+            f"split=3[{tag}b][{tag}g][{tag}m];"
+            f"[{tag}b]format=gbrp[{tag}bg];"
+            f"[{tag}g]{grade_fg},format=gbrp[{tag}fg];"
+            f"[{tag}m]format=gray,geq=lum='{mask_expr}',split=3[{tag}mr][{tag}mg][{tag}mb];"
+            f"[{tag}mr][{tag}mg][{tag}mb]mergeplanes=0x001020:gbrp[{tag}msk];"
+            f"[{tag}bg][{tag}fg][{tag}msk]maskedmerge"
+        )
     if not parts:
         parts.append(compile_color_grade_filter(ColorGradeParams(), pix_fmt=None))
     if pix_fmt is not None:
@@ -831,6 +1031,7 @@ def compile_color_node_chain(
     fg = compile_color_node_chain_filter(validated, pix_fmt=pix_fmt)
     active_nodes = [n for n in validated if n.enabled and not n.is_identity()]
     has_lut_nodes = any(n.enabled and n.has_lut() and n.lut_mix > 1e-6 for n in validated)
+    has_power_windows = any(n.enabled and n.power_window.is_active() for n in validated)
     return ColorNodeChainCompileResult(
         filtergraph=fg,
         ffmpeg_vf_args=["-vf", fg],
@@ -838,6 +1039,7 @@ def compile_color_node_chain(
         active_node_count=len(active_nodes),
         total_node_count=len(validated),
         has_lut_nodes=has_lut_nodes,
+        has_power_windows=has_power_windows,
     )
 
 

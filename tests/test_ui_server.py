@@ -970,6 +970,7 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "color-node-graph",
         "color-node-count",
         "btn-color-node-add",
+        "btn-color-node-outside",
         "btn-color-node-bypass",
         "btn-color-node-left",
         "btn-color-node-right",
@@ -981,6 +982,14 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
         "cube-lut-mix-range",
         "cube-lut-mix-num",
         "btn-color-node-clear-lut",
+        "color-power-window-dock",
+        "pw-shape-group",
+        "pw-status-badge",
+        "btn-pw-invert",
+        "btn-pw-overlay",
+        "btn-pw-reset",
+        "pw-cx-range",
+        "pw-soft-range",
     ):
         assert elem_id in html_text
     assert "v0.1.27" in html_text
@@ -998,6 +1007,8 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert ".nle-titles-bottom" in css_text
     assert ".color-node-tree-dock" in css_text
     assert ".color-node-card" in css_text
+    assert ".color-power-window-dock" in css_text
+    assert ".pw-param-grid" in css_text
     assert "\u2013" not in css_text and "\u2014" not in css_text
 
     i18n_status, _, i18n_raw = _http_call(f"{base_url}/i18n.js")
@@ -3665,6 +3676,38 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     assert page.locator("#btn-color-node-clear-lut").is_disabled() is True
                     page.locator("#btn-color-node-delete").click()
                     assert page.locator("#color-node-count").text_content() == "1 / 8 NODES"
+
+                    # Verify Power Window Circle/Linear/Gradient + Outside Node + maskedmerge
+                    assert page.locator("#pw-status-badge").text_content() == "OFF"
+                    assert page.locator("#btn-color-node-outside").is_disabled() is True
+                    page.locator('[data-pw-shape="circle"]').click()
+                    assert page.locator("#pw-status-badge").text_content() == "CIRCLE"
+                    assert page.locator("#btn-color-node-outside").is_disabled() is False
+                    assert page.locator("#pw-cx-num").is_disabled() is False
+                    page.locator('[data-grade-preset="teal_orange"]').click()
+                    page.wait_for_function(
+                        "() => document.getElementById('color-compile-badge').textContent"
+                        " === 'GRADED | PW' && (document.getElementById('color-filtergraph-output')"
+                        ".textContent || '').includes('maskedmerge')"
+                    )
+                    scope_pw_inside = page.evaluate(
+                        "() => document.getElementById('color-scope-canvas').toDataURL()"
+                    )
+                    page.locator("#btn-pw-invert").click()
+                    assert page.locator("#pw-status-badge").text_content() == "CIRCLE | INV"
+                    scope_pw_inv = page.evaluate(
+                        "() => document.getElementById('color-scope-canvas').toDataURL()"
+                    )
+                    assert scope_pw_inv != scope_pw_inside
+                    page.locator("#btn-color-node-outside").click()
+                    assert page.locator("#color-node-count").text_content() == "2 / 8 NODES"
+                    assert (
+                        page.locator("#color-node-graph .color-node-pw-tag").count() == 2
+                    )
+                    page.locator('[data-pw-shape="linear"]').click()
+                    assert page.locator("#pw-status-badge").text_content() == "LINEAR"
+                    page.locator('[data-pw-shape="gradient"]').click()
+                    assert page.locator("#pw-status-badge").text_content() == "GRADIENT"
                     page.locator("#btn-cdl-reset").click()
                 else:
                     # Mobile check: Grab Still + Serial Node targets >= 44px + 0 overflow
@@ -3679,8 +3722,10 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     if width <= 820:
                         for node_sel in (
                             "#btn-color-node-add",
+                            "#btn-color-node-outside",
                             "#btn-color-node-bypass",
                             "#cube-file-input",
+                            '[data-pw-shape="circle"]',
                         ):
                             node_box = page.locator(node_sel).bounding_box()
                             assert node_box is not None and node_box["height"] >= 44
@@ -6830,6 +6875,78 @@ def test_ui_color_node_tree_and_cube_import_endpoints(ui_server: tuple[str, Path
     assert plan_status == 200
     plan = json.loads(plan_raw.decode("utf-8"))
     assert "lut3d=" in (plan["plan"]["video_filter"] or "")
+
+    pw_nodes_payload = [
+        {
+            "id": "node-1",
+            "label": "Subject Spot",
+            "enabled": True,
+            "grade": {
+                "lift": [0.0, 0.0, 0.0],
+                "gamma": [0.04, 0.01, -0.04],
+                "gain": [0.08, 0.02, -0.06],
+                "contrast": 1.15,
+                "saturation": 1.12,
+                "temperature": 0.1,
+            },
+            "power_window": {
+                "shape": "circle",
+                "center_x": 0.5,
+                "center_y": 0.5,
+                "width": 0.45,
+                "height": 0.45,
+                "rotation_deg": 0.0,
+                "softness": 0.12,
+                "invert": False,
+            },
+        },
+        {
+            "id": "node-2",
+            "label": "Outside",
+            "enabled": True,
+            "grade": {
+                "lift": [-0.05, 0.0, 0.05],
+                "gamma": [0.0, 0.0, 0.0],
+                "gain": [0.0, 0.0, 0.0],
+                "contrast": 1.0,
+                "saturation": 0.85,
+                "temperature": -0.1,
+            },
+            "power_window": {
+                "shape": "circle",
+                "center_x": 0.5,
+                "center_y": 0.5,
+                "width": 0.45,
+                "height": 0.45,
+                "rotation_deg": 0.0,
+                "softness": 0.12,
+                "invert": True,
+            },
+        },
+    ]
+    pw_comp_status, _, pw_comp_raw = _http_call(
+        f"{base_url}/api/color/compile",
+        method="POST",
+        payload={"nodes": pw_nodes_payload, "pix_fmt": "yuv420p"},
+    )
+    assert pw_comp_status == 200
+    pw_comp = json.loads(pw_comp_raw.decode("utf-8"))
+    assert pw_comp["has_power_windows"] is True
+    assert "maskedmerge" in pw_comp["filtergraph"]
+
+    pw_plan_status, _, pw_plan_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/pw_node_tree_out.mp4",
+            "color_nodes": pw_nodes_payload,
+            "execute": False,
+        },
+    )
+    assert pw_plan_status == 200
+    pw_plan = json.loads(pw_plan_raw.decode("utf-8"))
+    assert "maskedmerge" in (pw_plan["plan"]["video_filter"] or "")
 
 
 def test_ui_fairlight_mixer_compile_and_project_persistence(

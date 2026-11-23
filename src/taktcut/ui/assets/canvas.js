@@ -2,6 +2,7 @@ import {
   CLIP_LABEL_COLORS,
   MARKER_COLOR_HEX,
   TRANSFORM_PARAM_BOUNDS,
+  applyColorNodeChainRgbAtClient,
   applyColorNodeChainRgbClient,
   clampSplitWipePercent,
   computeBpmBeatFrames,
@@ -22,10 +23,12 @@ import {
   getTransitionShortTag,
   hasTransformKeyframes,
   isClipTransformIdentity,
+  isPowerWindowActive,
   normalizeClipLabelColor,
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
+  normalizePowerWindow,
   resolveTransformKeyframeBezier,
   sampleTransformCurve
 } from "./timeline_ops.js";
@@ -4120,7 +4123,29 @@ const REFERENCE_SWATCHES = [
   { label: "Crimson", rgb: [0.72, 0.18, 0.22] }
 ];
 
-function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
+let _pwBaseCanvas = null;
+let _pwOutCanvas = null;
+
+function hasActivePowerWindowInChain(cdl) {
+  if (!cdl || !Array.isArray(cdl.nodes)) return false;
+  return cdl.nodes.some((n) => n && n.enabled !== false && isPowerWindowActive(n.power_window));
+}
+
+function drawColorPreviewSwatchLabels(ctx, width, height) {
+  const row1H = Math.round((88 / 224) * height);
+  const row2Y = row1H;
+  const row2H = Math.round((66 / 224) * height);
+  const swW = width / REFERENCE_SWATCHES.length;
+  REFERENCE_SWATCHES.forEach((sw, i) => {
+    ctx.fillStyle = "rgba(17, 17, 20, 0.78)";
+    ctx.fillRect(i * swW + 3, row2Y + row2H - 18, Math.max(8, swW - 6), 15);
+    ctx.fillStyle = "#d8d8de";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText(sw.label, i * swW + 6, row2Y + row2H - 7);
+  });
+}
+
+function renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels) {
   const barW = width / SMPTE_BARS.length;
   const row1H = Math.round((88 / 224) * height);
   SMPTE_BARS.forEach((col, i) => {
@@ -4136,14 +4161,10 @@ function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
     const [r, g, b] = graded ? applyGradeOrCdlRgb(sw.rgb[0], sw.rgb[1], sw.rgb[2], cdl) : sw.rgb;
     ctx.fillStyle = toCssRgb(r, g, b);
     ctx.fillRect(i * swW, row2Y, Math.ceil(swW), row2H);
-    if (showLabels) {
-      ctx.fillStyle = "rgba(17, 17, 20, 0.78)";
-      ctx.fillRect(i * swW + 3, row2Y + row2H - 18, Math.max(8, swW - 6), 15);
-      ctx.fillStyle = "#d8d8de";
-      ctx.font = "10px ui-monospace, monospace";
-      ctx.fillText(sw.label, i * swW + 6, row2Y + row2H - 7);
-    }
   });
+  if (showLabels) {
+    drawColorPreviewSwatchLabels(ctx, width, height);
+  }
 
   const row3Y = row1H + row2H;
   const row3H = Math.round((38 / 224) * height);
@@ -4174,6 +4195,199 @@ function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
     ctx.fillStyle = toCssRgb(r, g, b);
     ctx.fillRect(i * hStepW, row4Y, Math.ceil(hStepW), row4H);
   }
+}
+
+function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels) {
+  if (!graded || !hasActivePowerWindowInChain(cdl)) {
+    renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels);
+    return;
+  }
+
+  const pwW = Math.max(160, Math.min(280, Math.floor(width)));
+  const pwH = Math.max(100, Math.min(168, Math.floor(height)));
+  if (!_pwBaseCanvas) _pwBaseCanvas = document.createElement("canvas");
+  if (!_pwOutCanvas) _pwOutCanvas = document.createElement("canvas");
+  if (_pwBaseCanvas.width !== pwW || _pwBaseCanvas.height !== pwH) {
+    _pwBaseCanvas.width = pwW;
+    _pwBaseCanvas.height = pwH;
+  }
+  if (_pwOutCanvas.width !== pwW || _pwOutCanvas.height !== pwH) {
+    _pwOutCanvas.width = pwW;
+    _pwOutCanvas.height = pwH;
+  }
+  const baseCtx = _pwBaseCanvas.getContext("2d", { willReadFrequently: true });
+  const outCtx = _pwOutCanvas.getContext("2d");
+  if (!baseCtx || !outCtx) {
+    renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels);
+    return;
+  }
+
+  renderColorPreviewBaseChart(baseCtx, pwW, pwH, null, false, false);
+  const srcImg = baseCtx.getImageData(0, 0, pwW, pwH);
+  const outImg = outCtx.createImageData(pwW, pwH);
+  const s = srcImg.data;
+  const d = outImg.data;
+  const nodes = cdl.nodes;
+
+  for (let py = 0; py < pwH; py++) {
+    const v = (py + 0.5) / pwH;
+    const rowOff = py * pwW * 4;
+    for (let px = 0; px < pwW; px++) {
+      const u = (px + 0.5) / pwW;
+      const idx = rowOff + px * 4;
+      const [ro, go, bo] = applyColorNodeChainRgbAtClient(
+        s[idx] / 255,
+        s[idx + 1] / 255,
+        s[idx + 2] / 255,
+        u,
+        v,
+        nodes
+      );
+      d[idx] = Math.round(clamp01(ro) * 255);
+      d[idx + 1] = Math.round(clamp01(go) * 255);
+      d[idx + 2] = Math.round(clamp01(bo) * 255);
+      d[idx + 3] = 255;
+    }
+  }
+  outCtx.putImageData(outImg, 0, 0);
+  ctx.drawImage(_pwOutCanvas, 0, 0, width, height);
+  if (showLabels) {
+    drawColorPreviewSwatchLabels(ctx, width, height);
+  }
+}
+
+function drawPowerWindowOverlay(ctx, width, height, rawPw, opts = {}) {
+  const pw = normalizePowerWindow(rawPw);
+  if (pw.shape === "off") return null;
+
+  const cxPx = pw.center_x * width;
+  const cyPx = pw.center_y * height;
+  const rxPx = Math.max(8, pw.width * 0.5 * width);
+  const ryPx = Math.max(8, pw.height * 0.5 * height);
+  const rad = (pw.rotation_deg * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const toWorld = (lx, ly) => ({
+    x: cxPx + lx * cosA - ly * sinA,
+    y: cyPx + lx * sinA + ly * cosA
+  });
+
+  const primaryColor = pw.invert ? "#689cff" : "#e68442";
+  const featherColor = pw.invert ? "rgba(104, 156, 255, 0.55)" : "rgba(230, 132, 66, 0.55)";
+
+  ctx.save();
+  ctx.translate(cxPx, cyPx);
+  ctx.rotate(rad);
+
+  // Outer feather boundary
+  if (pw.softness > 0.005) {
+    ctx.save();
+    ctx.strokeStyle = featherColor;
+    ctx.lineWidth = 1.25;
+    ctx.setLineDash([4, 4]);
+    if (pw.shape === "circle") {
+      const fRx = rxPx * (1 + pw.softness);
+      const fRy = ryPx * (1 + pw.softness);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, fRx, fRy, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (pw.shape === "linear") {
+      const pad = pw.softness * 0.5 * Math.min(width, height);
+      ctx.strokeRect(-rxPx - pad, -ryPx - pad, (rxPx + pad) * 2, (ryPx + pad) * 2);
+    } else {
+      const spanPx = Math.max(12, (pw.height * 0.5 + pw.softness * 0.5) * height);
+      const halfLine = width * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(-halfLine, -spanPx);
+      ctx.lineTo(halfLine, -spanPx);
+      ctx.moveTo(-halfLine, spanPx);
+      ctx.lineTo(halfLine, spanPx);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Inner primary shape
+  ctx.strokeStyle = primaryColor;
+  ctx.lineWidth = 1.75;
+  if (pw.shape === "circle") {
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rxPx, ryPx, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (pw.shape === "linear") {
+    ctx.strokeRect(-rxPx, -ryPx, rxPx * 2, ryPx * 2);
+  } else {
+    const halfLine = width * 0.45;
+    ctx.beginPath();
+    ctx.moveTo(-halfLine, 0);
+    ctx.lineTo(halfLine, 0);
+    ctx.stroke();
+    // Direction indicator tick
+    const dirY = pw.invert ? 12 : -12;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, dirY);
+    ctx.stroke();
+  }
+
+  // Rotation stem & handle
+  const rotLocalY = pw.shape === "gradient" ? -Math.min(40, height * 0.22) : -Math.min(ryPx + 18, height * 0.44);
+  ctx.strokeStyle = primaryColor;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(0, pw.shape === "gradient" ? 0 : -ryPx);
+  ctx.lineTo(0, rotLocalY);
+  ctx.stroke();
+
+  // Center crosshair
+  ctx.beginPath();
+  ctx.moveTo(-6, 0);
+  ctx.lineTo(6, 0);
+  ctx.moveTo(0, -6);
+  ctx.lineTo(0, 6);
+  ctx.stroke();
+
+  // Center puck
+  ctx.fillStyle = "#141416";
+  ctx.strokeStyle = primaryColor;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Resize handle (corner for circle/linear, span bottom for gradient)
+  const resLocalX = pw.shape === "gradient" ? 0 : rxPx;
+  const resLocalY = pw.shape === "gradient" ? Math.min(ryPx, height * 0.42) : ryPx;
+  ctx.fillStyle = primaryColor;
+  ctx.fillRect(resLocalX - 4, resLocalY - 4, 8, 8);
+
+  // Rotate handle
+  ctx.fillStyle = "#d8d8de";
+  ctx.strokeStyle = primaryColor;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(0, rotLocalY, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+
+  return {
+    shape: pw.shape,
+    cxPx,
+    cyPx,
+    rxPx,
+    ryPx,
+    rad,
+    canvasWidth: width,
+    canvasHeight: height,
+    handles: {
+      move: { x: cxPx, y: cyPx },
+      resize: toWorld(resLocalX, resLocalY),
+      rotate: toWorld(0, rotLocalY)
+    }
+  };
 }
 
 export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null) {
@@ -4208,6 +4422,13 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   } else {
     drawHalf(0, width, true);
     canvas._splitWipeGeom = null;
+  }
+
+  const pwOpts = splitOpts && splitOpts.powerWindow ? splitOpts.powerWindow : null;
+  if (pwOpts && pwOpts.showOverlay && pwOpts.window && isPowerWindowActive(pwOpts.window)) {
+    canvas._powerWindowGeom = drawPowerWindowOverlay(ctx, width, height, pwOpts.window, pwOpts);
+  } else {
+    canvas._powerWindowGeom = null;
   }
 
   // Maintain a clean full-frame graded buffer of #color-preview-canvas for real ImageData scopes

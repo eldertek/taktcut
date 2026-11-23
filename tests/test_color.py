@@ -11,8 +11,10 @@ from pydantic import ValidationError
 
 from taktcut.color import (
     COLOR_GRADE_PRESETS,
+    POWER_WINDOW_SHAPES,
     ColorGradeParams,
     ColorNodeParams,
+    PowerWindowParams,
     apply_color_preset,
     apply_cube_lut_rgb,
     bake_cdl_to_cube,
@@ -22,6 +24,7 @@ from taktcut.color import (
     compile_color_grade,
     compile_color_grade_filter,
     compile_color_node_chain,
+    compile_power_window_mask_expr,
     get_color_preset,
     list_color_presets,
     parse_cdl_xml,
@@ -353,3 +356,167 @@ def test_serial_color_node_chain_lut_import_and_composite_bake(tmp_path: Path) -
     )
     assert plan.video_filter is not None
     assert "eq=contrast=1.1000:saturation=1.0500" in plan.video_filter
+
+
+def test_power_window_bounds_mask_math_and_ffmpeg_compile(tmp_path: Path) -> None:
+    assert POWER_WINDOW_SHAPES == ("off", "circle", "linear", "gradient")
+
+    with pytest.raises(ValidationError):
+        PowerWindowParams.model_validate({"shape": "triangle"})
+    with pytest.raises(ValidationError):
+        PowerWindowParams.model_validate({"center_x": 1.2})
+    with pytest.raises(ValidationError):
+        PowerWindowParams.model_validate({"width": 0.01})
+    with pytest.raises(ValidationError):
+        PowerWindowParams.model_validate({"rotation_deg": 200.0})
+    with pytest.raises(ValidationError):
+        PowerWindowParams.model_validate({"softness": 0.9})
+    with pytest.raises(ValidationError):
+        PowerWindowParams.model_validate({"invert": "yes"})
+
+    circle_pw = PowerWindowParams(
+        shape="circle",
+        center_x=0.5,
+        center_y=0.5,
+        width=0.4,
+        height=0.4,
+        softness=0.1,
+        invert=False,
+    )
+    assert circle_pw.is_active() is True
+    assert circle_pw.evaluate_mask(0.5, 0.5) == pytest.approx(1.0)
+    assert circle_pw.evaluate_mask(0.02, 0.02) == pytest.approx(0.0)
+
+    inv_pw = PowerWindowParams(
+        shape="circle",
+        center_x=0.5,
+        center_y=0.5,
+        width=0.4,
+        height=0.4,
+        softness=0.1,
+        invert=True,
+    )
+    assert inv_pw.evaluate_mask(0.5, 0.5) == pytest.approx(0.0)
+    assert inv_pw.evaluate_mask(0.02, 0.02) == pytest.approx(1.0)
+
+    linear_rot_pw = PowerWindowParams(
+        shape="linear",
+        center_x=0.5,
+        center_y=0.5,
+        width=0.5,
+        height=0.2,
+        rotation_deg=90.0,
+        softness=0.0,
+    )
+    assert linear_rot_pw.evaluate_mask(0.5, 0.32) == pytest.approx(1.0, abs=1e-3)
+    assert linear_rot_pw.evaluate_mask(0.2, 0.5) == pytest.approx(0.0, abs=1e-3)
+
+    grad_pw = PowerWindowParams(
+        shape="gradient",
+        center_x=0.5,
+        center_y=0.5,
+        height=0.3,
+        softness=0.1,
+    )
+    assert grad_pw.evaluate_mask(0.5, 0.1) > 0.95
+    assert grad_pw.evaluate_mask(0.5, 0.9) < 0.05
+
+    node_inside = ColorNodeParams(
+        id="node-1",
+        label="Subject Spot",
+        enabled=True,
+        grade=ColorGradeParams(saturation=0.0),
+        power_window=circle_pw,
+    )
+    assert node_inside.apply_rgb_at(0.8, 0.2, 0.2, 0.5, 0.5) == pytest.approx(
+        node_inside.apply_rgb(0.8, 0.2, 0.2)
+    )
+    assert node_inside.apply_rgb_at(0.8, 0.2, 0.2, 0.02, 0.02) == pytest.approx((0.8, 0.2, 0.2))
+
+    node_outside = ColorNodeParams(
+        id="node-2",
+        label="Outside",
+        enabled=True,
+        grade=ColorGradeParams(contrast=1.25),
+        power_window=inv_pw,
+    )
+
+    expr = compile_power_window_mask_expr(circle_pw)
+    assert "hypot(" in expr
+    compiled = compile_color_node_chain([node_inside, node_outside], pix_fmt="yuv420p")
+    assert compiled.has_power_windows is True
+    assert compiled.active_node_count == 2
+    assert "maskedmerge" in compiled.filtergraph
+    assert "mergeplanes=0x001020:gbrp" in compiled.filtergraph
+    assert compiled.filtergraph.endswith(",format=yuv420p")
+
+    caps = HardwareCapabilities(ffmpeg_path="ffmpeg", libx264=True)
+    plan = build_render_plan(
+        input_path=tmp_path / "in.mp4",
+        output_path=tmp_path / "out_pw.mp4",
+        profile=RenderProfile.WEB_H264,
+        color_nodes=[node_inside, node_outside],
+        prefer_hw=False,
+        caps=caps,
+    )
+    assert plan.video_filter is not None
+    assert "maskedmerge" in plan.video_filter
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_power_window_shapes_execute_and_mask_pixels_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    for shape in ("circle", "linear", "gradient"):
+        node = ColorNodeParams(
+            id="node-1",
+            label=f"PW {shape}",
+            enabled=True,
+            grade=ColorGradeParams(saturation=0.0),
+            power_window=PowerWindowParams(
+                shape=shape,
+                center_x=0.5,
+                center_y=0.5,
+                width=0.40,
+                height=0.40,
+                rotation_deg=15.0,
+                softness=0.05,
+                invert=False,
+            ),
+        )
+        fg = compile_color_node_chain([node], pix_fmt="rgb24").filtergraph
+        cmd = [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=64x64:d=0.1",
+            "-vf",
+            fg,
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+        assert proc.returncode == 0, f"FFmpeg rejected Power Window {shape}: {proc.stderr.decode()}"
+        raw = proc.stdout
+        assert len(raw) == 64 * 64 * 3
+        # Check spatially distinct pixels (graded region vs untouched blue corner)
+        top_idx = (4 * 64 + 32) * 3
+        ctr_idx = (32 * 64 + 32) * 3
+        crn_idx = (60 * 64 + 60) * 3
+        top_px = (raw[top_idx], raw[top_idx + 1], raw[top_idx + 2])
+        center_px = (raw[ctr_idx], raw[ctr_idx + 1], raw[ctr_idx + 2])
+        corner_px = (raw[crn_idx], raw[crn_idx + 1], raw[crn_idx + 2])
+        if shape in ("circle", "linear"):
+            # Center is desaturated (R~G~B), corner stays blue (B >> R)
+            assert abs(center_px[0] - center_px[2]) < 15
+            assert corner_px[2] > corner_px[0] + 180
+        else:
+            # Gradient top is desaturated, bottom stays blue
+            assert abs(top_px[0] - top_px[2]) < 15
+            assert corner_px[2] > corner_px[0] + 180

@@ -74,6 +74,7 @@ import {
   TRANSITION_DURATION_MIN_S,
   addColorNodeToTree,
   addMarkerInDocument,
+  addOutsideColorNodeInTree,
   appendClipToTrackInDocument,
   appendStillBounded,
   buildSourceTapeSegments,
@@ -94,12 +95,14 @@ import {
   computeTimelineMaxFrame,
   computeTimelineZoomViewport,
   createDefaultColorNodeTree,
+  createDefaultPowerWindow,
   createEmptyTransformKeyframes,
   createStillRecord,
   deleteMarkerInDocument,
   deserializeColorNodeFromApi,
   estimateRenderFileSize,
   evaluateClipTransformAtTime,
+  evaluatePowerWindowMask,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
   filterMediaPoolEntries,
@@ -128,6 +131,7 @@ import {
   isClipTransformIdentity,
   isColorNodeIdentity,
   isPointerOnSplitWipeDivider,
+  isPowerWindowActive,
   isTrackAudiblyMuted,
   moveColorNodeInTree,
   normalizeAutoDuckParams,
@@ -142,6 +146,7 @@ import {
   normalizeInOutRange,
   normalizeMarkerColor,
   normalizeMasterBusState,
+  normalizePowerWindow,
   normalizeTrackMixerState,
   parseCubeLutTextClient,
   removeColorNodeFromTree,
@@ -402,6 +407,8 @@ const state = {
   colorLastCompile: null,
   colorCompileTimer: null,
   colorCompileSeq: 0,
+  powerWindowOverlay: true,
+  powerWindowDrag: null,
   wipeRatio: 0.5,
   colorSplitWipe: {
     enabled: true,
@@ -1036,13 +1043,18 @@ function redrawActiveCanvases() {
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
+    const activeNode = getSelectedColorNode(state.colorNodeTree);
     drawColorPreviewCanvas(previewCanvas, activeColorChain, state.wipeRatio, {
       enabled: Boolean(state.colorSplitWipe.enabled),
       positionPct: state.colorSplitWipe.positionPct,
       isHovered: Boolean(state.colorSplitWipe.isHovered),
       isDragging: Boolean(state.colorSplitWipe.isDragging),
       beforeLabel: t("wipe.pill.before"),
-      afterLabel: t("wipe.pill.after")
+      afterLabel: t("wipe.pill.after"),
+      powerWindow: {
+        window: activeNode ? activeNode.power_window : null,
+        showOverlay: Boolean(state.powerWindowOverlay)
+      }
     });
     drawColorScopeCanvas(
       byId("color-scope-canvas"),
@@ -5371,7 +5383,11 @@ function renderColorCompileResult(res) {
     out.textContent = "";
     return;
   }
-  badge.textContent = res.is_identity ? "UNITY" : "GRADED";
+  badge.textContent = res.is_identity
+    ? "UNITY"
+    : res.has_power_windows
+      ? "GRADED | PW"
+      : "GRADED";
   badge.className = `nle-tag mono ${res.is_identity ? "" : "is-pass"}`;
   out.textContent = res.filtergraph;
   renderColorNodeTreeUI();
@@ -5407,6 +5423,12 @@ function renderColorNodeTreeUI() {
 
   const addBtn = byId("btn-color-node-add");
   if (addBtn) addBtn.disabled = nodes.length >= MAX_COLOR_NODES;
+
+  const outsideBtn = byId("btn-color-node-outside");
+  if (outsideBtn) {
+    outsideBtn.disabled =
+      nodes.length >= MAX_COLOR_NODES || !isPowerWindowActive(activeNode.power_window);
+  }
 
   const delBtn = byId("btn-color-node-delete");
   if (delBtn) delBtn.disabled = nodes.length <= 1;
@@ -5500,6 +5522,22 @@ function renderColorNodeTreeUI() {
       statusClass = "color-node-status is-graded";
     }
     metaRow.appendChild(dom("span", statusClass, statusText));
+    if (isPowerWindowActive(node.power_window)) {
+      const pwShort =
+        node.power_window.shape === "circle"
+          ? "CIR"
+          : node.power_window.shape === "linear"
+            ? "LIN"
+            : "GRAD";
+      const pwLabel = node.power_window.invert ? `INV ${pwShort}` : pwShort;
+      metaRow.appendChild(
+        dom(
+          "span",
+          `color-node-pw-tag${node.power_window.invert ? " is-invert" : ""}`,
+          pwLabel
+        )
+      );
+    }
     selBtn.replaceChildren(topRow, metaRow);
     selBtn.addEventListener("click", () => selectColorNodeAction(node.id));
 
@@ -5521,6 +5559,91 @@ function renderColorNodeTreeUI() {
   flowChildren.push(dom("span", "color-node-link mono", "->"));
   flowChildren.push(dom("span", "color-node-pin mono", "OUT"));
   graph.replaceChildren(...flowChildren);
+  renderPowerWindowControlsUI(activeNode);
+}
+
+const POWER_WINDOW_CONTROL_DEFS = [
+  { key: "center_x", rangeId: "pw-cx-range", numId: "pw-cx-num", scale: 100, min: 0, max: 100, def: 50 },
+  { key: "center_y", rangeId: "pw-cy-range", numId: "pw-cy-num", scale: 100, min: 0, max: 100, def: 50 },
+  { key: "width", rangeId: "pw-w-range", numId: "pw-w-num", scale: 100, min: 5, max: 100, def: 45 },
+  { key: "height", rangeId: "pw-h-range", numId: "pw-h-num", scale: 100, min: 5, max: 100, def: 45 },
+  { key: "rotation_deg", rangeId: "pw-rot-range", numId: "pw-rot-num", scale: 1, min: -180, max: 180, def: 0 },
+  { key: "softness", rangeId: "pw-soft-range", numId: "pw-soft-num", scale: 100, min: 0, max: 50, def: 12 }
+];
+
+function renderPowerWindowControlsUI(activeNode) {
+  const pw = normalizePowerWindow(activeNode ? activeNode.power_window : null);
+  const active = isPowerWindowActive(pw);
+
+  const badge = byId("pw-status-badge");
+  if (badge) {
+    if (!active) {
+      badge.textContent = "OFF";
+      badge.className = "nle-tag mono";
+    } else {
+      const tag = pw.shape.toUpperCase();
+      badge.textContent = pw.invert ? `${tag} | INV` : tag;
+      badge.className = `nle-tag ${pw.invert ? "is-blue" : "is-active"} mono`;
+    }
+  }
+
+  for (const btn of document.querySelectorAll("[data-pw-shape]")) {
+    const isSel = btn.getAttribute("data-pw-shape") === pw.shape;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  const invBtn = byId("btn-pw-invert");
+  if (invBtn) {
+    invBtn.disabled = !active;
+    invBtn.classList.toggle("is-active", active && pw.invert);
+    invBtn.setAttribute("aria-pressed", active && pw.invert ? "true" : "false");
+  }
+
+  const ovBtn = byId("btn-pw-overlay");
+  if (ovBtn) {
+    ovBtn.disabled = !active;
+    ovBtn.classList.toggle("is-active", active && Boolean(state.powerWindowOverlay));
+    ovBtn.setAttribute("aria-pressed", active && Boolean(state.powerWindowOverlay) ? "true" : "false");
+  }
+
+  const rstBtn = byId("btn-pw-reset");
+  if (rstBtn) rstBtn.disabled = !active;
+
+  const ctrlGrid = byId("color-pw-controls");
+  if (ctrlGrid) ctrlGrid.classList.toggle("is-dimmed", !active);
+
+  for (const def of POWER_WINDOW_CONTROL_DEFS) {
+    const val = Math.round(Number(pw[def.key]) * def.scale);
+    const rEl = byId(def.rangeId);
+    const nEl = byId(def.numId);
+    if (rEl) {
+      rEl.disabled = !active;
+      rEl.value = String(val);
+    }
+    if (nEl) {
+      nEl.disabled = !active;
+      if (document.activeElement !== nEl) {
+        nEl.value = String(val);
+      }
+    }
+  }
+}
+
+function updateActivePowerWindow(patch, shouldCompile = true) {
+  const active = syncActiveColorGradeFromTree();
+  const nextPw = normalizePowerWindow({ ...active.power_window, ...patch });
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    power_window: nextPw
+  });
+  syncActiveColorGradeFromTree();
+  renderColorNodeTreeUI();
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+  if (shouldCompile) {
+    scheduleColorCompile();
+  }
 }
 
 function selectColorNodeAction(nodeId) {
@@ -5533,6 +5656,17 @@ function selectColorNodeAction(nodeId) {
 function addColorNodeAction() {
   if (state.colorNodeTree.nodes.length >= MAX_COLOR_NODES) return;
   state.colorNodeTree = addColorNodeToTree(state.colorNodeTree);
+  syncActiveColorGradeFromTree();
+  state.colorActivePresetId = "";
+  syncColorInputsFromState();
+  compileColorNow();
+}
+
+function addOutsideColorNodeAction() {
+  if (state.colorNodeTree.nodes.length >= MAX_COLOR_NODES) return;
+  const active = syncActiveColorGradeFromTree();
+  if (!isPowerWindowActive(active.power_window)) return;
+  state.colorNodeTree = addOutsideColorNodeInTree(state.colorNodeTree, active.id);
   syncActiveColorGradeFromTree();
   state.colorActivePresetId = "";
   syncColorInputsFromState();
@@ -5570,6 +5704,7 @@ function resetSelectedColorNodeAction() {
   const active = syncActiveColorGradeFromTree();
   state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
     grade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
+    power_window: createDefaultPowerWindow(),
     lut: null
   });
   syncActiveColorGradeFromTree();
@@ -5582,8 +5717,11 @@ async function compileColorNow() {
   const seq = ++state.colorCompileSeq;
   try {
     const serializedNodes = getSerializedColorNodes();
+    const hasPw = serializedNodes.some(
+      (n) => n.power_window && n.power_window.shape && n.power_window.shape !== "off"
+    );
     const payload =
-      serializedNodes.length === 1 && !serializedNodes[0].lut_table
+      serializedNodes.length === 1 && !serializedNodes[0].lut_table && !hasPw
         ? { grade: state.colorGrade }
         : { nodes: serializedNodes };
     const compiled = await api.compileColorGrade(payload);
@@ -6112,6 +6250,132 @@ function wireColorInputs() {
         }
       });
     }
+  }
+
+  const colorPreviewCanvas = byId("color-preview-canvas");
+  if (colorPreviewCanvas) {
+    const toPwCanvasPoint = (ev) => {
+      const rect = colorPreviewCanvas.getBoundingClientRect();
+      const geom = colorPreviewCanvas._powerWindowGeom;
+      if (!geom || rect.width <= 0 || rect.height <= 0) return null;
+      const scaleX = (geom.canvasWidth || rect.width) / rect.width;
+      const scaleY = (geom.canvasHeight || rect.height) / rect.height;
+      return {
+        geom,
+        x: (ev.clientX - rect.left) * scaleX,
+        y: (ev.clientY - rect.top) * scaleY
+      };
+    };
+
+    colorPreviewCanvas.addEventListener("pointerdown", (ev) => {
+      if (state.colorSplitWipe.isDragging || !state.powerWindowOverlay) return;
+      const activeNode = syncActiveColorGradeFromTree();
+      if (!isPowerWindowActive(activeNode.power_window)) return;
+      const pt = toPwCanvasPoint(ev);
+      if (!pt) return;
+      const { geom, x, y } = pt;
+      const splitGeom = colorPreviewCanvas._splitWipeGeom;
+      if (
+        state.colorSplitWipe.enabled &&
+        splitGeom &&
+        isPointerOnSplitWipeDivider(x, y, splitGeom, SPLIT_WIPE_HIT_RADIUS_PX)
+      ) {
+        return;
+      }
+
+      let mode = null;
+      if (Math.hypot(x - geom.handles.rotate.x, y - geom.handles.rotate.y) <= 13) {
+        mode = "rotate";
+      } else if (Math.hypot(x - geom.handles.resize.x, y - geom.handles.resize.y) <= 13) {
+        mode = "resize";
+      } else if (Math.hypot(x - geom.handles.move.x, y - geom.handles.move.y) <= 14) {
+        mode = "move";
+      } else {
+        const u = x / Math.max(1, geom.canvasWidth);
+        const v = y / Math.max(1, geom.canvasHeight);
+        const m = evaluatePowerWindowMask(
+          { ...activeNode.power_window, invert: false },
+          u,
+          v
+        );
+        if (m > 0.35) mode = "move";
+      }
+      if (!mode) return;
+      ev.preventDefault();
+      state.powerWindowDrag = {
+        mode,
+        startX: x,
+        startY: y,
+        startPw: { ...activeNode.power_window }
+      };
+      if (typeof colorPreviewCanvas.setPointerCapture === "function") {
+        try {
+          colorPreviewCanvas.setPointerCapture(ev.pointerId);
+        } catch {
+          // Ignore synthetic pointer capture errors
+        }
+      }
+    });
+
+    colorPreviewCanvas.addEventListener("pointermove", (ev) => {
+      if (!state.powerWindowDrag) return;
+      const pt = toPwCanvasPoint(ev);
+      if (!pt) return;
+      ev.preventDefault();
+      const { geom, x, y } = pt;
+      const drag = state.powerWindowDrag;
+      const w = Math.max(1, geom.canvasWidth);
+      const h = Math.max(1, geom.canvasHeight);
+
+      if (drag.mode === "move") {
+        const dx = (x - drag.startX) / w;
+        const dy = (y - drag.startY) / h;
+        updateActivePowerWindow(
+          {
+            center_x: Math.min(1, Math.max(0, drag.startPw.center_x + dx)),
+            center_y: Math.min(1, Math.max(0, drag.startPw.center_y + dy))
+          },
+          false
+        );
+      } else if (drag.mode === "rotate") {
+        const angleRad = Math.atan2(x - geom.cxPx, -(y - geom.cyPx));
+        let deg = Math.round((angleRad * 180) / Math.PI);
+        if (deg > 180) deg -= 360;
+        if (deg < -180) deg += 360;
+        updateActivePowerWindow({ rotation_deg: deg }, false);
+      } else if (drag.mode === "resize") {
+        const rad = -(drag.startPw.rotation_deg * Math.PI) / 180;
+        const dx = x - geom.cxPx;
+        const dy = y - geom.cyPx;
+        const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+        const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+        if (drag.startPw.shape === "gradient") {
+          const nextH = Math.min(1, Math.max(0.05, (Math.abs(ly) * 2) / h));
+          updateActivePowerWindow({ height: nextH }, false);
+        } else {
+          const nextW = Math.min(1, Math.max(0.05, (Math.abs(lx) * 2) / w));
+          const nextH = Math.min(1, Math.max(0.05, (Math.abs(ly) * 2) / h));
+          updateActivePowerWindow({ width: nextW, height: nextH }, false);
+        }
+      }
+    });
+
+    const endPwDrag = (ev) => {
+      if (!state.powerWindowDrag) return;
+      state.powerWindowDrag = null;
+      if (ev && typeof colorPreviewCanvas.releasePointerCapture === "function") {
+        try {
+          if (colorPreviewCanvas.hasPointerCapture && colorPreviewCanvas.hasPointerCapture(ev.pointerId)) {
+            colorPreviewCanvas.releasePointerCapture(ev.pointerId);
+          }
+        } catch {
+          // Ignore pointer release errors
+        }
+      }
+      compileColorNow();
+    };
+    colorPreviewCanvas.addEventListener("pointerup", endPwDrag);
+    colorPreviewCanvas.addEventListener("pointercancel", endPwDrag);
   }
 
   for (const btn of document.querySelectorAll("[data-grade-preset]")) {
@@ -8694,6 +8958,9 @@ function handleTransportKeydown(ev) {
     if (onPlayheadTab && !ev.ctrlKey && !ev.metaKey && lower === "x") {
       ev.preventDefault();
       clearInOutAction();
+    } else if (state.activeTab === "color" && !ev.ctrlKey && !ev.metaKey && lower === "o") {
+      ev.preventDefault();
+      addOutsideColorNodeAction();
     }
     return;
   }
@@ -11943,11 +12210,56 @@ function wireEvents() {
   });
 
   byId("btn-color-node-add")?.addEventListener("click", addColorNodeAction);
+  byId("btn-color-node-outside")?.addEventListener("click", addOutsideColorNodeAction);
   byId("btn-color-node-bypass")?.addEventListener("click", () => toggleColorNodeBypassAction(null));
   byId("btn-color-node-left")?.addEventListener("click", () => moveColorNodeAction(-1));
   byId("btn-color-node-right")?.addEventListener("click", () => moveColorNodeAction(1));
   byId("btn-color-node-reset")?.addEventListener("click", resetSelectedColorNodeAction);
   byId("btn-color-node-delete")?.addEventListener("click", removeColorNodeAction);
+
+  for (const btn of document.querySelectorAll("[data-pw-shape]")) {
+    btn.addEventListener("click", () => {
+      const shape = btn.getAttribute("data-pw-shape") || "off";
+      updateActivePowerWindow({ shape }, true);
+    });
+  }
+  byId("btn-pw-invert")?.addEventListener("click", () => {
+    const active = syncActiveColorGradeFromTree();
+    if (!isPowerWindowActive(active.power_window)) return;
+    updateActivePowerWindow({ invert: !active.power_window.invert }, true);
+  });
+  byId("btn-pw-overlay")?.addEventListener("click", () => {
+    state.powerWindowOverlay = !state.powerWindowOverlay;
+    renderColorNodeTreeUI();
+    redrawActiveCanvases();
+  });
+  byId("btn-pw-reset")?.addEventListener("click", () => {
+    const active = syncActiveColorGradeFromTree();
+    const curShape = active.power_window ? active.power_window.shape : "off";
+    updateActivePowerWindow(
+      createDefaultPowerWindow({ shape: curShape === "off" ? "off" : curShape }),
+      true
+    );
+  });
+  for (const def of POWER_WINDOW_CONTROL_DEFS) {
+    const rEl = byId(def.rangeId);
+    const nEl = byId(def.numId);
+    rEl?.addEventListener("input", () => {
+      const raw = Number.parseFloat(rEl.value);
+      if (!Number.isFinite(raw)) return;
+      const clamped = Math.min(def.max, Math.max(def.min, raw));
+      updateActivePowerWindow({ [def.key]: clamped / def.scale }, true);
+    });
+    nEl?.addEventListener("change", () => {
+      const raw = Number.parseFloat(nEl.value);
+      if (!Number.isFinite(raw)) {
+        renderColorNodeTreeUI();
+        return;
+      }
+      const clamped = Math.min(def.max, Math.max(def.min, raw));
+      updateActivePowerWindow({ [def.key]: clamped / def.scale }, true);
+    });
+  }
 
   byId("color-node-label-input")?.addEventListener("change", (ev) => {
     const active = syncActiveColorGradeFromTree();
