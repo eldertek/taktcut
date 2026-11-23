@@ -717,3 +717,67 @@ def test_project_fx_scanlines_unsharp_mask_retro_vhs_roundtrip(tmp_path: Path) -
         bad_payload["fx"]["nodes"][1]["params"]["sharpen_amount"] = bad_amount
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_fx_hue_shift_mirror_flip_neon_shift_roundtrip(tmp_path: Path) -> None:
+    proj = _build_full_test_project()
+    proj.fx.nodes = [
+        FxNode(
+            effect="hue_shift",
+            enabled=True,
+            params={"hue_deg": 45.0, "saturation": 1.45},
+        ),
+        FxNode(
+            effect="mirror_flip",
+            enabled=True,
+            params={"axis": "both"},
+        ),
+        FxNode(
+            effect="optical_glow",
+            enabled=True,
+            params={"glow_intensity": 0.65, "glow_radius": 14.0},
+        ),
+        FxNode(
+            effect="vignette",
+            enabled=True,
+            params={"angle_rad": 0.58},
+        ),
+    ]
+    proj.fx.active_preset_id = "neon_shift"
+
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.fx.active_preset_id == "neon_shift"
+    assert [n.effect for n in loaded.fx.nodes] == [
+        "hue_shift",
+        "mirror_flip",
+        "optical_glow",
+        "vignette",
+    ]
+    assert loaded.fx.nodes[0].params["hue_deg"] == pytest.approx(45.0)
+    assert loaded.fx.nodes[0].params["saturation"] == pytest.approx(1.45)
+    assert loaded.fx.nodes[1].params["axis"] == "both"
+
+    proj_path = tmp_path / "neon_shift.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.fx.nodes[0].params["hue_deg"] == pytest.approx(45.0)
+    assert disk_loaded.fx.nodes[1].params["axis"] == "both"
+
+    for bad_hue in (-181.0, 181.0, True):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["hue_deg"] = bad_hue
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_sat in (-0.1, 2.6, False):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][0]["params"]["saturation"] = bad_sat
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)
+
+    for bad_axis in ("diagonal", "", 123, True):
+        bad_payload = export_project_dict(loaded)
+        bad_payload["fx"]["nodes"][1]["params"]["axis"] = bad_axis
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

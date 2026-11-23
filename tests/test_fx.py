@@ -165,9 +165,10 @@ def test_ten_presets_compile_and_lookup() -> None:
         "35mm Cinema Halation",
         "Action Handheld",
         "Retro VHS CRT",
+        "Neon Hue Shift",
     }
     assert {p.name for p in FX_PRESETS} == expected_names
-    assert len(FX_PRESETS) == 13
+    assert len(FX_PRESETS) == 14
 
     for preset in FX_PRESETS:
         by_id = get_fx_preset(preset.id)
@@ -270,7 +271,7 @@ def test_fx_compile_http_endpoint_and_presets(fx_ui_server: str) -> None:
     p_status, p_raw = _http_call(f"{base_url}/api/fx/presets")
     assert p_status == 200
     p_data = json.loads(p_raw.decode("utf-8"))
-    assert len(p_data["presets"]) == 13
+    assert len(p_data["presets"]) == 14
     assert set(p_data["specs"].keys()) == set(FX_TYPES)
 
     c_status, c_raw = _http_call(
@@ -1093,7 +1094,7 @@ def test_camera_shake_lens_distortion_and_action_handheld_execute_in_real_ffmpeg
 
 
 def test_scanlines_unsharp_mask_bounds_and_retro_vhs() -> None:
-    assert len(FX_TYPES) == 16
+    assert len(FX_TYPES) >= 16
     assert "scanlines" in FX_TYPES
     assert "unsharp_mask" in FX_TYPES
 
@@ -1176,6 +1177,132 @@ def test_scanlines_unsharp_mask_and_retro_vhs_execute_in_real_ffmpeg() -> None:
         ],
         [FxNode(effect="unsharp_mask", params={"sharpen_amount": 1.6})],
         get_fx_preset("retro_vhs").nodes,
+    ):
+        res = compile_fx_filtergraph(stack, duration_seconds=0.2, width=w, height=h, fps=25.0)
+        proc = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc=duration=0.2:size={w}x{h}:rate=25",
+                "-vf",
+                res.filtergraph,
+                "-frames:v",
+                "3",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-",
+            ],
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        assert proc.returncode == 0, (
+            f"FFmpeg rejected {res.active_effects}: "
+            f"{proc.stderr.decode('utf-8', errors='replace')}"
+        )
+        assert len(proc.stdout) == 3 * w * h * 3
+
+
+def test_hue_shift_mirror_flip_bounds_and_neon_shift() -> None:
+    assert len(FX_TYPES) == 18
+    assert "hue_shift" in FX_TYPES
+    assert "mirror_flip" in FX_TYPES
+
+    hs_low = normalize_fx_node(
+        {
+            "effect": "hue_shift",
+            "params": {"HueDeg": -270.0, "Saturation": -0.5},
+        }
+    )
+    assert hs_low.params["hue_deg"] == pytest.approx(-180.0)
+    assert hs_low.params["saturation"] == pytest.approx(0.0)
+    hs_low_res = compile_fx_filtergraph([hs_low])
+    assert hs_low_res.active_effects == ["hue_shift"]
+    assert hs_low_res.filtergraph == "hue=h=-180.00:s=0.0000"
+
+    hs_high = normalize_fx_node(
+        {
+            "effect": "hue_shift",
+            "params": {"hue_deg": 320.0, "saturation": 4.2},
+        }
+    )
+    assert hs_high.params["hue_deg"] == pytest.approx(180.0)
+    assert hs_high.params["saturation"] == pytest.approx(2.5)
+    assert compile_fx_filtergraph([hs_high]).filtergraph == "hue=h=180.00:s=2.5000"
+
+    mf_h = normalize_fx_node({"effect": "mirror_flip", "params": {"Axis": " HORIZONTAL "}})
+    assert mf_h.params["axis"] == "horizontal"
+    assert compile_fx_filtergraph([mf_h]).filtergraph == "hflip"
+
+    mf_v = normalize_fx_node({"effect": "mirror_flip", "params": {"axis": "vertical"}})
+    assert compile_fx_filtergraph([mf_v]).filtergraph == "vflip"
+
+    mf_b = normalize_fx_node({"effect": "mirror_flip", "params": {"axis": "both"}})
+    assert compile_fx_filtergraph([mf_b]).filtergraph == "hflip,vflip"
+
+    kf_res = compile_fx_filtergraph(
+        [
+            FxNode(
+                effect="hue_shift",
+                params={"hue_deg": 45.0, "saturation": 1.45},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=2.0, value=1.0)],
+            ),
+            FxNode(
+                effect="mirror_flip",
+                params={"axis": "both"},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=2.0, value=1.0)],
+            ),
+        ]
+    )
+    assert kf_res.keyframed_effects == ["hue_shift", "mirror_flip"]
+    assert "hue=h=45.00:s=1.4500" in kf_res.filtergraph
+    assert "hflip,vflip" in kf_res.filtergraph
+    assert "blend=all_expr=" in kf_res.filtergraph
+
+    neon = compile_preset_filtergraph("neon_shift", duration_seconds=6.0)
+    assert neon.active_effects == ["hue_shift", "optical_glow", "vignette"]
+    assert "hue=h=45.00:s=1.4500" in neon.filtergraph
+    assert "gblur=sigma=14.00" in neon.filtergraph
+    assert "blend=all_mode=screen:all_opacity=0.6500" in neon.filtergraph
+    assert "vignette=angle=0.580" in neon.filtergraph
+
+    for bad_node in (
+        {"effect": "hue_shift", "params": {"hue_deg": float("nan")}},
+        {"effect": "hue_shift", "params": {"saturation": float("inf")}},
+        {"effect": "hue_shift", "params": {"hue_deg": True}},
+        {"effect": "mirror_flip", "params": {"axis": "diagonal"}},
+        {"effect": "mirror_flip", "params": {"axis": ""}},
+        {"effect": "mirror_flip", "params": {"axis": False}},
+    ):
+        with pytest.raises(ValueError):
+            normalize_fx_node(bad_node)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg binary not on PATH")
+def test_hue_shift_mirror_flip_and_neon_shift_execute_in_real_ffmpeg() -> None:
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    w, h = 320, 180
+
+    for stack in (
+        [FxNode(effect="hue_shift", params={"hue_deg": 45.0, "saturation": 1.45})],
+        [
+            FxNode(
+                effect="hue_shift",
+                params={"hue_deg": -90.0, "saturation": 1.8},
+                keyframes=[Keyframe(time_s=0.0, value=0.0), Keyframe(time_s=0.2, value=1.0)],
+            )
+        ],
+        [FxNode(effect="mirror_flip", params={"axis": "horizontal"})],
+        [FxNode(effect="mirror_flip", params={"axis": "vertical"})],
+        [FxNode(effect="mirror_flip", params={"axis": "both"})],
+        get_fx_preset("neon_shift").nodes,
     ):
         res = compile_fx_filtergraph(stack, duration_seconds=0.2, width=w, height=h, fps=25.0)
         proc = subprocess.run(

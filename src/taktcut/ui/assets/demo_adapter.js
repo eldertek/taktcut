@@ -317,7 +317,7 @@ function compileFxClient(nodes, opts = {}) {
     totalWeight += 0.75;
   }
   if (needsRgb) segs.push("format=rgb24");
-  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55, scanlines: 0.25, unsharp_mask: 0.45 };
+  const weights = { glow: 1.45, shake: 0.7, flicker: 0.25, lens_flare: 1.25, film_damage: 1.1, chroma_aberration: 0.65, vignette: 0.35, film_grain: 0.45, optical_glow: 1.2, rgb_split: 0.55, halation: 1.25, letterbox: 0.2, camera_shake: 0.65, lens_distortion: 0.55, scanlines: 0.25, unsharp_mask: 0.45, hue_shift: 0.3, mirror_flip: 0.2 };
   const keyframedEffects = [];
   active.forEach((n, idx) => {
     const p = n.params || {};
@@ -397,6 +397,15 @@ function compileFxClient(nodes, opts = {}) {
     } else if (n.effect === "unsharp_mask") {
       const amount = Math.min(3.0, Math.max(0.2, Number(p.sharpen_amount ?? 1.2)));
       segs.push(`unsharp=5:5:${amount.toFixed(4)}:5:5:0.0`);
+    } else if (n.effect === "hue_shift") {
+      const hueDeg = Math.min(180, Math.max(-180, Number(p.hue_deg ?? 30)));
+      const sat = Math.min(2.5, Math.max(0, Number(p.saturation ?? 1.25)));
+      segs.push(`hue=h=${hueDeg.toFixed(2)}:s=${sat.toFixed(4)}`);
+    } else if (n.effect === "mirror_flip") {
+      const axis = String(p.axis ?? "horizontal").trim().toLowerCase();
+      if (axis === "vertical") segs.push("vflip");
+      else if (axis === "both") segs.push("hflip,vflip");
+      else segs.push("hflip");
     }
   });
   if (needsRgb || ckActive) segs.push(`format=${pixFmt}`);

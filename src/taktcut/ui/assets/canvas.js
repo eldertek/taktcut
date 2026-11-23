@@ -1406,6 +1406,118 @@ export function drawProgramMonitorCanvas(
         applyChromaKeyOnBuffer(bctx, bw, bh, pCkRaw, pCkMatteView);
       }
 
+      // Apply S_FlipFlop horizontal/vertical mirror flip on frame buffer
+      const mirrorNodes = pActiveFx.filter((n) => n.effect === "mirror_flip");
+      if (mirrorNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        let flipH = false;
+        let flipV = false;
+        let maxMul = 0;
+        for (const mNode of mirrorNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(mNode, tSec));
+          if (mul <= 0.0001) continue;
+          maxMul = Math.max(maxMul, mul);
+          const axis = String((mNode.params && mNode.params.axis) || "horizontal").trim().toLowerCase();
+          if (axis === "horizontal") flipH = !flipH;
+          else if (axis === "vertical") flipV = !flipV;
+          else if (axis === "both") {
+            flipH = !flipH;
+            flipV = !flipV;
+          }
+        }
+        if ((flipH || flipV) && maxMul > 0.0001) {
+          const srcImg = bctx.getImageData(0, 0, bw, bh);
+          const outImg = bctx.createImageData(bw, bh);
+          const s = srcImg.data;
+          const d = outImg.data;
+          const wetW = maxMul;
+          const dryW = 1 - wetW;
+          for (let y = 0; y < bh; y++) {
+            const sy = flipV ? bh - 1 - y : y;
+            const rowOff = y * bw;
+            const srcRowOff = sy * bw;
+            for (let x = 0; x < bw; x++) {
+              const sx = flipH ? bw - 1 - x : x;
+              const di = (rowOff + x) * 4;
+              const si = (srcRowOff + sx) * 4;
+              if (wetW >= 0.999) {
+                d[di] = s[si];
+                d[di + 1] = s[si + 1];
+                d[di + 2] = s[si + 2];
+                d[di + 3] = s[si + 3];
+              } else {
+                d[di] = Math.round(s[di] * dryW + s[si] * wetW);
+                d[di + 1] = Math.round(s[di + 1] * dryW + s[si + 1] * wetW);
+                d[di + 2] = Math.round(s[di + 2] * dryW + s[si + 2] * wetW);
+                d[di + 3] = Math.round(s[di + 3] * dryW + s[si + 3] * wetW);
+              }
+            }
+          }
+          bctx.putImageData(outImg, 0, 0);
+        }
+      }
+
+      // Apply S_HueSatBright hue rotation & saturation boost on frame buffer
+      const hueNodes = pActiveFx.filter((n) => n.effect === "hue_shift");
+      if (hueNodes.length > 0 && !(pCkActive && pCkMatteView === "alpha_matte")) {
+        let totalHueDeg = 0;
+        let totalSat = 1;
+        let anyHueActive = false;
+        for (const hNode of hueNodes) {
+          const mul = Math.min(1, evaluateNodeIntensity(hNode, tSec));
+          if (mul <= 0.0001) continue;
+          anyHueActive = true;
+          const hp = hNode.params || {};
+          const rawHue = Math.min(180, Math.max(-180, Number(hp.hue_deg ?? 30)));
+          const rawSat = Math.min(2.5, Math.max(0, Number(hp.saturation ?? 1.25)));
+          totalHueDeg += rawHue * mul;
+          totalSat *= 1 + (rawSat - 1) * mul;
+        }
+        if (anyHueActive && (Math.abs(totalHueDeg) > 0.05 || Math.abs(totalSat - 1) > 0.005)) {
+          const srcImg = bctx.getImageData(0, 0, bw, bh);
+          const d = srcImg.data;
+          const rad = (totalHueDeg * Math.PI) / 180;
+          const cosA = Math.cos(rad);
+          const sinA = Math.sin(rad);
+          const sat = Math.min(2.5, Math.max(0, totalSat));
+          const lumR = 0.213;
+          const lumG = 0.715;
+          const lumB = 0.072;
+          const m00 = lumR + cosA * (1 - lumR) + sinA * (-lumR);
+          const m01 = lumG + cosA * (-lumG) + sinA * (-lumG);
+          const m02 = lumB + cosA * (-lumB) + sinA * (1 - lumB);
+          const m10 = lumR + cosA * (-lumR) + sinA * 0.143;
+          const m11 = lumG + cosA * (1 - lumG) + sinA * 0.140;
+          const m12 = lumB + cosA * (-lumB) + sinA * (-0.283);
+          const m20 = lumR + cosA * (-lumR) + sinA * (-(1 - lumR));
+          const m21 = lumG + cosA * (-lumG) + sinA * lumG;
+          const m22 = lumB + cosA * (1 - lumB) + sinA * lumB;
+          const sr = (1 - sat) * lumR;
+          const sg = (1 - sat) * lumG;
+          const sb = (1 - sat) * lumB;
+          const a00 = (sr + sat) * m00 + sg * m10 + sb * m20;
+          const a01 = (sr + sat) * m01 + sg * m11 + sb * m21;
+          const a02 = (sr + sat) * m02 + sg * m12 + sb * m22;
+          const a10 = sr * m00 + (sg + sat) * m10 + sb * m20;
+          const a11 = sr * m01 + (sg + sat) * m11 + sb * m21;
+          const a12 = sr * m02 + (sg + sat) * m12 + sb * m22;
+          const a20 = sr * m00 + sg * m10 + (sb + sat) * m20;
+          const a21 = sr * m01 + sg * m11 + (sb + sat) * m21;
+          const a22 = sr * m02 + sg * m12 + (sb + sat) * m22;
+          for (let i = 0; i < d.length; i += 4) {
+            const r = d[i];
+            const g = d[i + 1];
+            const b = d[i + 2];
+            const nr = a00 * r + a01 * g + a02 * b;
+            const ng = a10 * r + a11 * g + a12 * b;
+            const nb = a20 * r + a21 * g + a22 * b;
+            d[i] = nr < 0 ? 0 : nr > 255 ? 255 : Math.round(nr);
+            d[i + 1] = ng < 0 ? 0 : ng > 255 ? 255 : Math.round(ng);
+            d[i + 2] = nb < 0 ? 0 : nb > 255 ? 255 : Math.round(nb);
+          }
+          bctx.putImageData(srcImg, 0, 0);
+        }
+      }
+
       // Apply Chroma Aberration & Sapphire RGB Split channel shift directly on frame buffer
       const shiftNodes = pActiveFx.filter(
         (n) => n.effect === "chroma_aberration" || n.effect === "rgb_split"

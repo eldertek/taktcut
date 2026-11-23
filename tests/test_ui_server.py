@@ -2967,7 +2967,7 @@ def test_ui_sapphire_halation_letterbox_cinema_35mm_endpoints_and_assets(
     assert 'data-fx-add="halation"' in html_text
     assert 'data-fx-add="letterbox"' in html_text
     assert 'data-fx-preset="cinema_35mm"' in html_text
-    assert "16 FX" in html_text
+    assert "18 FX" in html_text
 
     for asset_name in (
         "index.html",
@@ -3122,7 +3122,7 @@ def test_ui_sapphire_camera_shake_lens_distortion_action_handheld_endpoints_and_
     assert 'data-fx-add="camera_shake"' in html_text
     assert 'data-fx-add="lens_distortion"' in html_text
     assert 'data-fx-preset="action_handheld"' in html_text
-    assert "16 FX" in html_text
+    assert "18 FX" in html_text
 
     i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
     for key in (
@@ -3201,7 +3201,7 @@ def test_ui_sapphire_scanlines_unsharp_mask_retro_vhs_endpoints_and_assets(
     assert 'data-fx-add="scanlines"' in html_text
     assert 'data-fx-add="unsharp_mask"' in html_text
     assert 'data-fx-preset="retro_vhs"' in html_text
-    assert "16 FX" in html_text
+    assert "18 FX" in html_text
 
     i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
     for key in (
@@ -3211,6 +3211,85 @@ def test_ui_sapphire_scanlines_unsharp_mask_retro_vhs_endpoints_and_assets(
         "fx.param.line_spacing_px",
         "fx.param.opacity",
         "fx.param.sharpen_amount",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "demo_adapter.js",
+        "i18n.js",
+        "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+
+def test_ui_sapphire_hue_shift_mirror_flip_neon_shift_endpoints_and_assets(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    presets_status, _, presets_raw = _http_call(f"{base_url}/api/fx/presets")
+    assert presets_status == 200
+    presets_data = json.loads(presets_raw.decode("utf-8"))
+    preset_ids = {p["id"] for p in presets_data["presets"]}
+    assert "neon_shift" in preset_ids
+    assert "hue_shift" in presets_data["specs"]
+    assert "mirror_flip" in presets_data["specs"]
+
+    compile_status, _, compile_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={"preset_id": "neon_shift", "duration_seconds": 6.0},
+    )
+    assert compile_status == 200
+    compiled = json.loads(compile_raw.decode("utf-8"))
+    assert compiled["active_effects"] == ["hue_shift", "optical_glow", "vignette"]
+    assert "hue=h=45.00:s=1.4500" in compiled["filtergraph"]
+    assert "gblur=sigma=14.00" in compiled["filtergraph"]
+    assert "vignette=angle=0.580" in compiled["filtergraph"]
+
+    mirror_status, _, mirror_raw = _http_call(
+        f"{base_url}/api/fx/compile",
+        method="POST",
+        payload={
+            "nodes": [
+                {
+                    "effect": "mirror_flip",
+                    "enabled": True,
+                    "params": {"axis": "both"},
+                }
+            ],
+            "duration_seconds": 4.0,
+        },
+    )
+    assert mirror_status == 200
+    mirror_compiled = json.loads(mirror_raw.decode("utf-8"))
+    assert mirror_compiled["filtergraph"] == "hflip,vflip"
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'data-fx-add="hue_shift"' in html_text
+    assert 'data-fx-add="mirror_flip"' in html_text
+    assert 'data-fx-preset="neon_shift"' in html_text
+    assert "18 FX" in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "fx.preset.neonShift",
+        "fx.add.hue_shift",
+        "fx.add.mirror_flip",
+        "fx.param.hue_deg",
+        "fx.param.saturation",
+        "fx.param.axis",
+        "fx.enum.axis.horizontal",
+        "fx.enum.axis.vertical",
+        "fx.enum.axis.both",
     ):
         assert i18n_text.count(f'"{key}"') == 2
 

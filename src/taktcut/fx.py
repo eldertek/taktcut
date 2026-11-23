@@ -26,6 +26,8 @@ FxType = Literal[
     "lens_distortion",
     "scanlines",
     "unsharp_mask",
+    "hue_shift",
+    "mirror_flip",
 ]
 
 FX_TYPES: tuple[FxType, ...] = (
@@ -45,9 +47,12 @@ FX_TYPES: tuple[FxType, ...] = (
     "lens_distortion",
     "scanlines",
     "unsharp_mask",
+    "hue_shift",
+    "mirror_flip",
 )
 
 LETTERBOX_RATIOS: tuple[str, ...] = ("2.39", "2.35", "1.85", "2.00")
+MIRROR_FLIP_AXES: tuple[str, ...] = ("horizontal", "vertical", "both")
 _LETTERBOX_RATIO_ALIASES: dict[str, str] = {
     "2.39": "2.39",
     "2.35": "2.35",
@@ -117,6 +122,10 @@ _PARAM_ALIASES: dict[str, str] = {
     "LineSpacingPx": "line_spacing_px",
     "Opacity": "opacity",
     "SharpenAmount": "sharpen_amount",
+    "HueDeg": "hue_deg",
+    "Hue": "hue_deg",
+    "Saturation": "saturation",
+    "Axis": "axis",
 }
 
 
@@ -516,6 +525,36 @@ FX_PARAM_SPECS: dict[FxType, tuple[FxParamSpec, ...]] = {
             step=0.10,
         ),
     ),
+    "hue_shift": (
+        FxParamSpec(
+            name="hue_deg",
+            label="Hue (deg)",
+            kind="float",
+            default=30.0,
+            min_val=-180.0,
+            max_val=180.0,
+            step=1.0,
+            unit="deg",
+        ),
+        FxParamSpec(
+            name="saturation",
+            label="Saturation",
+            kind="float",
+            default=1.25,
+            min_val=0.0,
+            max_val=2.5,
+            step=0.05,
+        ),
+    ),
+    "mirror_flip": (
+        FxParamSpec(
+            name="axis",
+            label="Mirror Axis",
+            kind="enum",
+            default="horizontal",
+            options=MIRROR_FLIP_AXES,
+        ),
+    ),
 }
 
 _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
@@ -535,6 +574,8 @@ _FX_COMPLEXITY_WEIGHTS: dict[FxType, float] = {
     "lens_distortion": 0.55,
     "scanlines": 0.25,
     "unsharp_mask": 0.45,
+    "hue_shift": 0.30,
+    "mirror_flip": 0.20,
 }
 
 
@@ -1099,6 +1140,39 @@ FX_PRESETS: tuple[FxPreset, ...] = (
             ),
         ],
     ),
+    FxPreset(
+        id="neon_shift",
+        name="Neon Hue Shift",
+        category="Stylize",
+        description=(
+            "Vibrant 45-degree hue rotation and saturation boost with optical glow and vignette."
+        ),
+        nodes=[
+            FxNode(
+                effect="hue_shift",
+                enabled=True,
+                params={
+                    "hue_deg": 45.0,
+                    "saturation": 1.45,
+                },
+            ),
+            FxNode(
+                effect="optical_glow",
+                enabled=True,
+                params={
+                    "glow_intensity": 0.65,
+                    "glow_radius": 14.0,
+                },
+            ),
+            FxNode(
+                effect="vignette",
+                enabled=True,
+                params={
+                    "angle_rad": 0.58,
+                },
+            ),
+        ],
+    ),
 )
 
 
@@ -1133,11 +1207,14 @@ def normalize_enum_fx_param(raw: Any, spec: FxParamSpec) -> str:
         candidate = f"{num:.2f}"
     elif isinstance(raw, str):
         trimmed = raw.strip()
-        candidate = _LETTERBOX_RATIO_ALIASES.get(trimmed, trimmed)
+        if spec.name == "axis":
+            candidate = trimmed.lower()
+        else:
+            candidate = _LETTERBOX_RATIO_ALIASES.get(trimmed, trimmed)
     else:
         raise ValueError(f"Parameter {spec.name!r} must be a valid option string, got {raw!r}")
 
-    if candidate in _LETTERBOX_RATIO_ALIASES:
+    if spec.name != "axis" and candidate in _LETTERBOX_RATIO_ALIASES:
         candidate = _LETTERBOX_RATIO_ALIASES[candidate]
     if candidate not in options:
         raise ValueError(
@@ -1707,6 +1784,21 @@ def _compile_unsharp_mask(params: dict[str, float | int | str]) -> str:
     return f"unsharp=5:5:{amount:.4f}:5:5:0.0"
 
 
+def _compile_hue_shift(params: dict[str, float | int | str]) -> str:
+    hue_deg = _clamp_num(float(params["hue_deg"]), -180.0, 180.0)
+    saturation = _clamp_num(float(params["saturation"]), 0.0, 2.5)
+    return f"hue=h={hue_deg:.2f}:s={saturation:.4f}"
+
+
+def _compile_mirror_flip(params: dict[str, float | int | str]) -> str:
+    axis = normalize_enum_fx_param(params["axis"], FX_PARAM_SPECS["mirror_flip"][0])
+    if axis == "vertical":
+        return "vflip"
+    if axis == "both":
+        return "hflip,vflip"
+    return "hflip"
+
+
 def list_chroma_key_presets() -> list[ChromaKeyPreset]:
     """Return all built-in Chroma Key / Green Screen Studio presets."""
     return [preset.model_copy(deep=True) for preset in CHROMA_KEY_PRESETS]
@@ -1901,6 +1993,12 @@ def compile_fx_filtergraph(
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
         elif node.effect == "unsharp_mask":
             seg = _compile_unsharp_mask(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "hue_shift":
+            seg = _compile_hue_shift(node.params)
+            segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
+        elif node.effect == "mirror_flip":
+            seg = _compile_mirror_flip(node.params)
             segments.append(_wrap_keyframed_segment(idx, seg, node.keyframes) if has_kf else seg)
 
     if needs_rgb or ck_active:

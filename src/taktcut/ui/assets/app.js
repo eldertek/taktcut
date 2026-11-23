@@ -2308,6 +2308,13 @@ const FX_PARAM_FALLBACK = {
   ],
   unsharp_mask: [
     { name: "sharpen_amount", label: "Sharpen Amount", kind: "float", default: 1.20, min_val: 0.20, max_val: 3.00, step: 0.10 }
+  ],
+  hue_shift: [
+    { name: "hue_deg", label: "Hue (deg)", kind: "float", default: 30.0, min_val: -180.0, max_val: 180.0, step: 1.0, unit: "deg" },
+    { name: "saturation", label: "Saturation", kind: "float", default: 1.25, min_val: 0.0, max_val: 2.5, step: 0.05 }
+  ],
+  mirror_flip: [
+    { name: "axis", label: "Mirror Axis", kind: "enum", default: "horizontal", options: ["horizontal", "vertical", "both"] }
   ]
 };
 
@@ -2366,6 +2373,11 @@ const FX_PRESET_FALLBACK = {
     { effect: "scanlines", enabled: true, params: { line_spacing_px: 4, opacity: 0.45 } },
     { effect: "rgb_split", enabled: true, params: { chroma_shift_px: 4 } },
     { effect: "film_grain", enabled: true, params: { strength: 18.0 } }
+  ],
+  neon_shift: [
+    { effect: "hue_shift", enabled: true, params: { hue_deg: 45.0, saturation: 1.45 } },
+    { effect: "optical_glow", enabled: true, params: { glow_intensity: 0.65, glow_radius: 14.0 } },
+    { effect: "vignette", enabled: true, params: { angle_rad: 0.58 } }
   ]
 };
 
@@ -2385,13 +2397,21 @@ const FX_DISPLAY_TITLES = {
   camera_shake: "S_Shake Handheld",
   lens_distortion: "S_LensDistortion",
   scanlines: "S_ScanLines",
-  unsharp_mask: "S_Sharpen"
+  unsharp_mask: "S_Sharpen",
+  hue_shift: "S_HueSatBright",
+  mirror_flip: "S_FlipFlop"
 };
 
 function getFxParamLabel(spec) {
   const key = `fx.param.${spec.name}`;
   const translated = t(key);
   return translated !== key ? translated : spec.label;
+}
+
+function getFxEnumOptionLabel(spec, optVal) {
+  const key = `fx.enum.${spec.name}.${optVal}`;
+  const translated = t(key);
+  return translated !== key ? translated : `${optVal}${spec.unit || ""}`;
 }
 
 function getFxSpecs(effect) {
@@ -2826,16 +2846,16 @@ function renderFxStack() {
         selectEl.setAttribute("aria-label", labelText);
         const curStr = String(curVal);
         const optEls = options.map((optVal) => {
-          const opt = dom("option", "", `${optVal}${spec.unit || ""}`);
+          const opt = dom("option", "", getFxEnumOptionLabel(spec, optVal));
           opt.value = String(optVal);
           if (String(optVal) === curStr) opt.selected = true;
           return opt;
         });
         selectEl.replaceChildren(...optEls);
-        const badgeEl = dom("span", "mono nle-tag", `${curStr}${spec.unit || ""}`);
+        const badgeEl = dom("span", "mono nle-tag", getFxEnumOptionLabel(spec, curStr));
         selectEl.addEventListener("change", () => {
           node.params[spec.name] = selectEl.value;
-          badgeEl.textContent = `${selectEl.value}${spec.unit || ""}`;
+          badgeEl.textContent = getFxEnumOptionLabel(spec, selectEl.value);
           state.fxActivePresetId = "";
           redrawActiveCanvases();
           scheduleFxCompile();
