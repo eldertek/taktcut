@@ -84,16 +84,22 @@ from taktcut.remote_render import (
     RemoteRenderJobRequest,
 )
 from taktcut.render import (
+    AUTO_DUCK_ATTACK_MS_DEFAULT,
+    AUTO_DUCK_RATIO_DEFAULT,
+    AUTO_DUCK_RELEASE_MS_DEFAULT,
+    AUTO_DUCK_THRESHOLD_DB_DEFAULT,
     RENDER_AUDIO_BITRATE_KBPS_MAX,
     RENDER_AUDIO_BITRATE_KBPS_MIN,
     RENDER_AUDIO_BITRATE_OPTIONS_KBPS,
     RENDER_CRF_MAX,
     RENDER_CRF_MIN,
+    AutoDuckParams,
     ClipAudioParams,
     ClipRetimeParams,
     FramingParams,
     build_render_plan,
     compile_audio_filter_result,
+    compile_auto_duck_filter_result,
     compile_framing_filter_result,
     compile_retime_filter_result,
     compile_transform_filter_result,
@@ -362,6 +368,40 @@ def _build_audio_params_from_payload(
             clip_duration_s,
         )
     return None, clip_duration_s
+
+
+def _build_auto_duck_params_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> AutoDuckParams | None:
+    raw_duck = payload.get("auto_duck")
+    if raw_duck is None:
+        raw_duck = payload.get("duck")
+    if raw_duck is not None:
+        if not isinstance(raw_duck, dict):
+            raise ValueError("'auto_duck' must be a JSON object")
+        return AutoDuckParams.model_validate(
+            {
+                "enabled": raw_duck.get("enabled", False),
+                "threshold_db": raw_duck.get("threshold_db", AUTO_DUCK_THRESHOLD_DB_DEFAULT),
+                "ratio": raw_duck.get("ratio", AUTO_DUCK_RATIO_DEFAULT),
+                "attack_ms": raw_duck.get("attack_ms", AUTO_DUCK_ATTACK_MS_DEFAULT),
+                "release_ms": raw_duck.get("release_ms", AUTO_DUCK_RELEASE_MS_DEFAULT),
+            }
+        )
+
+    if allow_top_level:
+        return AutoDuckParams.model_validate(
+            {
+                "enabled": payload.get("enabled", False),
+                "threshold_db": payload.get("threshold_db", AUTO_DUCK_THRESHOLD_DB_DEFAULT),
+                "ratio": payload.get("ratio", AUTO_DUCK_RATIO_DEFAULT),
+                "attack_ms": payload.get("attack_ms", AUTO_DUCK_ATTACK_MS_DEFAULT),
+                "release_ms": payload.get("release_ms", AUTO_DUCK_RELEASE_MS_DEFAULT),
+            }
+        )
+    return None
 
 
 def _build_retime_params_from_payload(
@@ -1596,6 +1636,14 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 target_lufs=target_lufs_val,
             )
             self._send_json(HTTPStatus.OK, compiled_audio.model_dump(mode="json"))
+            return
+
+        if route == "/api/audio/duck/compile":
+            duck_params = _build_auto_duck_params_from_payload(payload, allow_top_level=True)
+            assert duck_params is not None
+            mix_sc = bool(payload.get("mix_sidechain", False))
+            compiled_duck = compile_auto_duck_filter_result(duck_params, mix_sidechain=mix_sc)
+            self._send_json(HTTPStatus.OK, compiled_duck.model_dump(mode="json"))
             return
 
         if route == "/api/retime/compile":

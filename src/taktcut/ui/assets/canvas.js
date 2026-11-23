@@ -3119,3 +3119,107 @@ export function drawFramesCanvas(canvas, samples) {
     ctx.fillText(`${s.timestamp_s}s  Y:${s.y_min}..${s.y_avg.toFixed(1)}..${s.y_max}`, padX, y + 4);
   });
 }
+
+export function drawStereoVuMeterCanvas(canvas, meterState = {}) {
+  if (!canvas) return;
+  const { ctx, width, height } = setupCanvas(canvas, 56);
+  ctx.fillStyle = "#141416";
+  ctx.fillRect(0, 0, width, height);
+
+  const minDb = -60;
+  const maxDb = 0;
+  const labelW = 18;
+  const padR = 8;
+  const padT = 7;
+  const barW = Math.max(80, width - labelW - padR);
+  const barH = 10;
+  const gapY = 5;
+  const dbToFrac = (db) => clamp01((db - minDb) / (maxDb - minDb));
+  const dbToX = (db) => labelW + dbToFrac(db) * barW;
+
+  const leftDb = Number.isFinite(Number(meterState.leftDb)) ? Number(meterState.leftDb) : minDb;
+  const rightDb = Number.isFinite(Number(meterState.rightDb)) ? Number(meterState.rightDb) : minDb;
+  const holdL = Number.isFinite(Number(meterState.holdL)) ? Number(meterState.holdL) : minDb;
+  const holdR = Number.isFinite(Number(meterState.holdR)) ? Number(meterState.holdR) : minDb;
+  const allMuted = Boolean(meterState.allMuted);
+  const duckEnabled = Boolean(meterState.duckEnabled);
+  const duckThreshDb = Number.isFinite(Number(meterState.duckThresholdDb))
+    ? Number(meterState.duckThresholdDb)
+    : -24;
+
+  const grad = ctx.createLinearGradient(labelW, 0, labelW + barW, 0);
+  grad.addColorStop(0.0, "#238636");
+  grad.addColorStop(0.72, "#3fb950");
+  grad.addColorStop(0.80, "#d29922");
+  grad.addColorStop(0.94, "#e68442");
+  grad.addColorStop(1.0, "#e5534b");
+
+  const channels = [
+    { label: "L", db: leftDb, hold: holdL, y: padT },
+    { label: "R", db: rightDb, hold: holdR, y: padT + barH + gapY }
+  ];
+
+  for (const ch of channels) {
+    ctx.fillStyle = allMuted ? "#6e6e78" : "#d8d8de";
+    ctx.font = "700 9.5px ui-monospace, monospace";
+    ctx.fillText(ch.label, 5, ch.y + 8.5);
+
+    ctx.fillStyle = "#1b1b20";
+    ctx.fillRect(labelW, ch.y, barW, barH);
+
+    const activeFrac = dbToFrac(ch.db);
+    if (activeFrac > 0.005 && !allMuted) {
+      const fillW = Math.max(2, activeFrac * barW);
+      ctx.fillStyle = grad;
+      ctx.fillRect(labelW, ch.y + 1, fillW, barH - 2);
+    }
+
+    // Crisp Fairlight segment grid notches every 3 dB
+    ctx.fillStyle = "#141416";
+    for (let db = -57; db < 0; db += 3) {
+      const sx = Math.round(dbToX(db));
+      ctx.fillRect(sx, ch.y, 1, barH);
+    }
+
+    // Peak hold tick
+    if (!allMuted && ch.hold > minDb + 0.5) {
+      const hx = Math.min(labelW + barW - 2, Math.max(labelW, dbToX(ch.hold) - 1));
+      ctx.fillStyle = ch.hold >= -3 ? "#ff8e88" : ch.hold >= -12 ? "#ffd166" : "#e6edf3";
+      ctx.fillRect(hx, ch.y + 1, 2, barH - 2);
+    }
+
+    ctx.strokeStyle = "#2c2c31";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(labelW + 0.5, ch.y + 0.5, barW - 1, barH - 1);
+  }
+
+  // Optional Auto-Duck sidechain threshold marker across meter bridge
+  if (duckEnabled) {
+    const tx = Math.round(dbToX(duckThreshDb)) + 0.5;
+    ctx.strokeStyle = "rgba(57, 197, 207, 0.85)";
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.moveTo(tx, padT - 2);
+    ctx.lineTo(tx, padT + barH * 2 + gapY + 2);
+    ctx.stroke();
+  }
+
+  // dBFS scale ticks below channels
+  const scaleY = padT + barH * 2 + gapY + 12;
+  const ticks = width < 320 ? [-48, -24, -12, -6, 0] : [-48, -36, -24, -18, -12, -6, -3, 0];
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.fillStyle = "#8e8e98";
+  for (const tick of ticks) {
+    const x = dbToX(tick);
+    ctx.strokeStyle = "#34343c";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, scaleY - 10);
+    ctx.lineTo(x, scaleY - 7);
+    ctx.stroke();
+    const txt = tick === 0 ? "0" : String(tick);
+    const tw = ctx.measureText(txt).width;
+    const drawX = tick === 0 ? Math.min(width - tw - 2, x - tw + 2) : x - tw / 2;
+    ctx.fillText(txt, Math.max(labelW, drawX), scaleY + 1);
+  }
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,6 +34,18 @@ AUDIO_GAIN_DB_MIN: float = -24.0
 AUDIO_GAIN_DB_MAX: float = 12.0
 AUDIO_FADE_S_MIN: float = 0.0
 AUDIO_FADE_S_MAX: float = 5.0
+AUTO_DUCK_THRESHOLD_DB_MIN: float = -40.0
+AUTO_DUCK_THRESHOLD_DB_MAX: float = -6.0
+AUTO_DUCK_THRESHOLD_DB_DEFAULT: float = -24.0
+AUTO_DUCK_RATIO_MIN: float = 2.0
+AUTO_DUCK_RATIO_MAX: float = 12.0
+AUTO_DUCK_RATIO_DEFAULT: float = 6.0
+AUTO_DUCK_ATTACK_MS_MIN: float = 10.0
+AUTO_DUCK_ATTACK_MS_MAX: float = 200.0
+AUTO_DUCK_ATTACK_MS_DEFAULT: float = 40.0
+AUTO_DUCK_RELEASE_MS_MIN: float = 100.0
+AUTO_DUCK_RELEASE_MS_MAX: float = 1500.0
+AUTO_DUCK_RELEASE_MS_DEFAULT: float = 400.0
 RETIME_SPEED_MIN: float = 0.25
 RETIME_SPEED_MAX: float = 4.0
 CLIP_DURATION_MAX_S: float = 86400.0
@@ -203,6 +216,142 @@ def compile_audio_filter_result(
     return AudioCompileResult(
         filtergraph=fg,
         ffmpeg_af_args=["-af", fg] if fg else [],
+        is_identity=(fg == ""),
+        params=params,
+    )
+
+
+_AUDIO_PAD_LABEL_RE = re.compile(r"^[A-Za-z0-9_:]{1,32}$")
+
+
+def _validate_audio_pad_label(label: str, field_name: str) -> str:
+    if not isinstance(label, str) or not _AUDIO_PAD_LABEL_RE.fullmatch(label):
+        raise ValueError(f"{field_name} contains unsafe or invalid FFmpeg pad label: {label!r}")
+    return label
+
+
+class AutoDuckParams(BaseModel):
+    """Sidechain music auto-ducking parameters with strict Fairlight-grade numeric bounds."""
+
+    enabled: bool = False
+    threshold_db: float = AUTO_DUCK_THRESHOLD_DB_DEFAULT
+    ratio: float = AUTO_DUCK_RATIO_DEFAULT
+    attack_ms: float = AUTO_DUCK_ATTACK_MS_DEFAULT
+    release_ms: float = AUTO_DUCK_RELEASE_MS_DEFAULT
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"enabled must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("threshold_db", mode="before")
+    @classmethod
+    def _validate_threshold_db(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "threshold_db",
+            AUTO_DUCK_THRESHOLD_DB_MIN,
+            AUTO_DUCK_THRESHOLD_DB_MAX,
+        )
+
+    @field_validator("ratio", mode="before")
+    @classmethod
+    def _validate_ratio(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "ratio", AUTO_DUCK_RATIO_MIN, AUTO_DUCK_RATIO_MAX)
+
+    @field_validator("attack_ms", mode="before")
+    @classmethod
+    def _validate_attack_ms(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "attack_ms",
+            AUTO_DUCK_ATTACK_MS_MIN,
+            AUTO_DUCK_ATTACK_MS_MAX,
+        )
+
+    @field_validator("release_ms", mode="before")
+    @classmethod
+    def _validate_release_ms(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "release_ms",
+            AUTO_DUCK_RELEASE_MS_MIN,
+            AUTO_DUCK_RELEASE_MS_MAX,
+        )
+
+    def is_identity(self) -> bool:
+        """Return True when auto-ducking is disabled."""
+        return not self.enabled
+
+    def threshold_linear(self) -> float:
+        """Convert threshold_db to FFmpeg sidechaincompress linear amplitude threshold."""
+        return float(10.0 ** (self.threshold_db / 20.0))
+
+
+class AutoDuckCompileResult(BaseModel):
+    """Compiled FFmpeg sidechaincompress filtergraph and validated auto-duck parameters."""
+
+    filtergraph: str
+    ffmpeg_args: list[str]
+    threshold_linear: float
+    is_identity: bool
+    params: AutoDuckParams
+
+
+def compile_auto_duck_filter(
+    params: AutoDuckParams,
+    *,
+    music_pad: str = "0:a",
+    sidechain_pad: str = "1:a",
+    output_pad: str = "aout",
+    mix_sidechain: bool = False,
+) -> str | None:
+    """Compile validated AutoDuckParams into an FFmpeg sidechaincompress filtergraph."""
+    m_pad = _validate_audio_pad_label(music_pad, "music_pad")
+    s_pad = _validate_audio_pad_label(sidechain_pad, "sidechain_pad")
+    o_pad = _validate_audio_pad_label(output_pad, "output_pad")
+    if not params.enabled:
+        return None
+    thresh_lin = params.threshold_linear()
+    sc = (
+        "sidechaincompress="
+        f"threshold={thresh_lin:.6f}:"
+        f"ratio={params.ratio:.2f}:"
+        f"attack={params.attack_ms:.1f}:"
+        f"release={params.release_ms:.1f}"
+    )
+    if not mix_sidechain:
+        return f"[{m_pad}][{s_pad}]{sc}[{o_pad}]"
+    return (
+        f"[{s_pad}]asplit[sc_trig][sc_vo];"
+        f"[{m_pad}][sc_trig]{sc}[ducked_mx];"
+        f"[ducked_mx][sc_vo]amix=inputs=2:duration=longest:normalize=0[{o_pad}]"
+    )
+
+
+def compile_auto_duck_filter_result(
+    params: AutoDuckParams,
+    *,
+    music_pad: str = "0:a",
+    sidechain_pad: str = "1:a",
+    output_pad: str = "aout",
+    mix_sidechain: bool = False,
+) -> AutoDuckCompileResult:
+    """Compile AutoDuckParams into structured filtergraph, FFmpeg argv slice, and metadata."""
+    fg = compile_auto_duck_filter(
+        params,
+        music_pad=music_pad,
+        sidechain_pad=sidechain_pad,
+        output_pad=output_pad,
+        mix_sidechain=mix_sidechain,
+    ) or ""
+    o_pad = _validate_audio_pad_label(output_pad, "output_pad")
+    return AutoDuckCompileResult(
+        filtergraph=fg,
+        ffmpeg_args=["-filter_complex", fg, "-map", f"[{o_pad}]"] if fg else [],
+        threshold_linear=round(params.threshold_linear(), 6),
         is_identity=(fg == ""),
         params=params,
     )

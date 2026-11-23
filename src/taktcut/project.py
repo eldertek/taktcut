@@ -33,6 +33,7 @@ from taktcut.render import (
     RENDER_CRF_MIN,
     TARGET_LUFS_MAX,
     TARGET_LUFS_MIN,
+    AutoDuckParams,
     DeliveryPresetId,
     EncoderPresetId,
     FramingParams,
@@ -326,6 +327,7 @@ class TaktcutProject(BaseModel):
     timeline_zoom: float = 1.0
     snap_enabled: bool = True
     bpm_grid: BpmGridConfig = Field(default_factory=BpmGridConfig)
+    auto_duck: AutoDuckParams = Field(default_factory=AutoDuckParams)
     color: ProjectColorState = Field(default_factory=ProjectColorState)
     fx: ProjectFxState = Field(default_factory=ProjectFxState)
     title_overlay: TitleOverlayParams = Field(

@@ -2321,3 +2321,63 @@ def test_ui_transform_compile_and_render_plan_endpoint(ui_server: tuple[str, Pat
     plan = json.loads(plan_raw.decode("utf-8"))["plan"]
     assert plan["video_filter"] is not None
     assert "scale=w=ceil(iw*1.150000/2)*2" in plan["video_filter"]
+
+
+def test_ui_auto_duck_compile_and_vu_meter_assets(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    off_status, _, off_raw = _http_call(
+        f"{base_url}/api/audio/duck/compile",
+        method="POST",
+        payload={"enabled": False, "threshold_db": -24.0},
+    )
+    assert off_status == 200
+    off_data = json.loads(off_raw.decode("utf-8"))
+    assert off_data["is_identity"] is True
+    assert off_data["filtergraph"] == ""
+    assert off_data["ffmpeg_args"] == []
+
+    on_status, _, on_raw = _http_call(
+        f"{base_url}/api/audio/duck/compile",
+        method="POST",
+        payload={
+            "enabled": True,
+            "threshold_db": -18.0,
+            "ratio": 8.0,
+            "attack_ms": 25.0,
+            "release_ms": 600.0,
+            "mix_sidechain": True,
+        },
+    )
+    assert on_status == 200
+    on_data = json.loads(on_raw.decode("utf-8"))
+    assert on_data["is_identity"] is False
+    assert "sidechaincompress=" in on_data["filtergraph"]
+    assert "ratio=8.00:attack=25.0:release=600.0" in on_data["filtergraph"]
+
+    bad_status, _, _ = _http_call(
+        f"{base_url}/api/audio/duck/compile",
+        method="POST",
+        payload={"enabled": True, "threshold_db": -2.0},
+    )
+    assert bad_status == 400
+
+    # Verify VU meter & Auto-Duck DOM hooks + zero innerHTML / zero em-en-dash in UI assets
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    assert 'id="timeline-vu-meter"' in html_text
+    assert 'id="btn-auto-duck-toggle"' in html_text
+    assert 'id="auto-duck-threshold-range"' in html_text
+    for asset_name in (
+        "index.html",
+        "app.js",
+        "canvas.js",
+        "timeline_ops.js",
+        "i18n.js",
+        "styles.css",
+    ):
+        content = (assets_dir / asset_name).read_text(encoding="utf-8")
+        assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+        assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+        if asset_name.endswith(".js"):
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"

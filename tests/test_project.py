@@ -37,7 +37,7 @@ from taktcut.project import (
     save_project_file,
     validate_project_payload,
 )
-from taktcut.render import FramingParams
+from taktcut.render import AutoDuckParams, FramingParams
 from taktcut.subtitles import SubtitleCue, SubtitleTrackParams
 from taktcut.titles import TitleOverlayParams
 
@@ -390,9 +390,29 @@ def _mutated_dict(mutator: Any) -> dict[str, Any]:
             "rotation_deg", 270.0
         ),
         lambda d: d["timeline"]["tracks"][1]["clips"][0].__setitem__("audio_gain_db", 48.0),
+        lambda d: d["auto_duck"].__setitem__("threshold_db", -2.0),
+        lambda d: d["auto_duck"].__setitem__("ratio", 25.0),
     ],
 )
 def test_project_rejects_corrupted_and_out_of_bounds_fields(mutator: Any) -> None:
     bad = _mutated_dict(mutator)
     with pytest.raises((ValueError, ValidationError)):
         validate_project_payload(bad)
+
+
+def test_project_auto_duck_roundtrip() -> None:
+    proj = _build_full_test_project()
+    proj.auto_duck = AutoDuckParams(
+        enabled=True,
+        threshold_db=-18.0,
+        ratio=8.0,
+        attack_ms=30.0,
+        release_ms=550.0,
+    )
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.auto_duck.enabled is True
+    assert loaded.auto_duck.threshold_db == -18.0
+    assert loaded.auto_duck.ratio == 8.0
+    assert loaded.auto_duck.attack_ms == 30.0
+    assert loaded.auto_duck.release_ms == 550.0

@@ -3,6 +3,18 @@ export const AUDIO_GAIN_DB_MIN = -24;
 export const AUDIO_GAIN_DB_MAX = 12;
 export const AUDIO_FADE_S_MIN = 0;
 export const AUDIO_FADE_S_MAX = 5;
+export const AUTO_DUCK_THRESHOLD_DB_MIN = -40;
+export const AUTO_DUCK_THRESHOLD_DB_MAX = -6;
+export const AUTO_DUCK_THRESHOLD_DB_DEFAULT = -24;
+export const AUTO_DUCK_RATIO_MIN = 2.0;
+export const AUTO_DUCK_RATIO_MAX = 12.0;
+export const AUTO_DUCK_RATIO_DEFAULT = 6.0;
+export const AUTO_DUCK_ATTACK_MS_MIN = 10;
+export const AUTO_DUCK_ATTACK_MS_MAX = 200;
+export const AUTO_DUCK_ATTACK_MS_DEFAULT = 40;
+export const AUTO_DUCK_RELEASE_MS_MIN = 100;
+export const AUTO_DUCK_RELEASE_MS_MAX = 1500;
+export const AUTO_DUCK_RELEASE_MS_DEFAULT = 400;
 export const RETIME_SPEED_MIN = 0.25;
 export const RETIME_SPEED_MAX = 4.0;
 export const TRANSFORM_ZOOM_MIN = 10.0;
@@ -537,6 +549,206 @@ export function compileAudioFilterClient(params, clipDurationS = null, targetLuf
     ffmpeg_af_args: filtergraph ? ["-af", filtergraph] : [],
     is_identity: filtergraph === "",
     params: { gain_db: gainDb, fade_in_s: fadeInS, fade_out_s: fadeOutS, muted }
+  };
+}
+
+export function normalizeAutoDuckParams(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const enabled = Boolean(src.enabled);
+  const rawThresh = Number(src.threshold_db);
+  const thresholdDb = Number.isFinite(rawThresh)
+    ? clampNum(rawThresh, AUTO_DUCK_THRESHOLD_DB_MIN, AUTO_DUCK_THRESHOLD_DB_MAX)
+    : AUTO_DUCK_THRESHOLD_DB_DEFAULT;
+  const rawRatio = Number(src.ratio);
+  const ratio = Number.isFinite(rawRatio)
+    ? clampNum(rawRatio, AUTO_DUCK_RATIO_MIN, AUTO_DUCK_RATIO_MAX)
+    : AUTO_DUCK_RATIO_DEFAULT;
+  const rawAttack = Number(src.attack_ms);
+  const attackMs = Number.isFinite(rawAttack)
+    ? clampNum(rawAttack, AUTO_DUCK_ATTACK_MS_MIN, AUTO_DUCK_ATTACK_MS_MAX)
+    : AUTO_DUCK_ATTACK_MS_DEFAULT;
+  const rawRelease = Number(src.release_ms);
+  const releaseMs = Number.isFinite(rawRelease)
+    ? clampNum(rawRelease, AUTO_DUCK_RELEASE_MS_MIN, AUTO_DUCK_RELEASE_MS_MAX)
+    : AUTO_DUCK_RELEASE_MS_DEFAULT;
+
+  return {
+    enabled,
+    threshold_db: Number(thresholdDb.toFixed(1)),
+    ratio: Number(ratio.toFixed(2)),
+    attack_ms: Number(attackMs.toFixed(1)),
+    release_ms: Number(releaseMs.toFixed(1))
+  };
+}
+
+export function compileAutoDuckFilterClient(params, opts = {}) {
+  const norm = normalizeAutoDuckParams(params);
+  const threshLin = Math.pow(10, norm.threshold_db / 20);
+  if (!norm.enabled) {
+    return {
+      filtergraph: "",
+      ffmpeg_args: [],
+      threshold_linear: Number(threshLin.toFixed(6)),
+      is_identity: true,
+      params: norm
+    };
+  }
+  const musicPad = typeof opts.music_pad === "string" && opts.music_pad ? opts.music_pad : "0:a";
+  const sidechainPad =
+    typeof opts.sidechain_pad === "string" && opts.sidechain_pad ? opts.sidechain_pad : "1:a";
+  const outPad = typeof opts.output_pad === "string" && opts.output_pad ? opts.output_pad : "aout";
+  const sc =
+    `sidechaincompress=threshold=${threshLin.toFixed(6)}:` +
+    `ratio=${norm.ratio.toFixed(2)}:attack=${norm.attack_ms.toFixed(1)}:release=${norm.release_ms.toFixed(1)}`;
+  const fg = opts.mix_sidechain
+    ? `[${sidechainPad}]asplit[sc_trig][sc_vo];[${musicPad}][sc_trig]${sc}[ducked_mx];[ducked_mx][sc_vo]amix=inputs=2:duration=longest:normalize=0[${outPad}]`
+    : `[${musicPad}][${sidechainPad}]${sc}[${outPad}]`;
+  return {
+    filtergraph: fg,
+    ffmpeg_args: ["-filter_complex", fg, "-map", `[${outPad}]`],
+    threshold_linear: Number(threshLin.toFixed(6)),
+    is_identity: false,
+    params: norm
+  };
+}
+
+export function evaluateClipFadeEnvelope(clip, frame, fpsRate = 25) {
+  if (!clip || clip.enabled === false) return 0;
+  const durFrames = Math.max(0, Number(clip.duration_frames) || 0);
+  if (durFrames <= 0) return 0;
+  const startF = Number(clip.start_frame) || 0;
+  const f = Number(frame);
+  if (!Number.isFinite(f) || f < startF || f >= startF + durFrames) return 0;
+
+  const rate = Math.max(1, Number(fpsRate) || 25);
+  const durS = durFrames / rate;
+  const tInS = (f - startF) / rate;
+  const tRemS = Math.max(0, durS - tInS);
+  const norm = normalizeClipAudio(clip);
+  let fadeInS = norm.fadeInS;
+  let fadeOutS = norm.fadeOutS;
+  if (fadeInS + fadeOutS > durS && durS > 0) {
+    const scale = durS / (fadeInS + fadeOutS);
+    fadeInS *= scale;
+    fadeOutS *= scale;
+  }
+  const inEnv = fadeInS > 1e-6 && tInS < fadeInS ? clampNum(tInS / fadeInS, 0, 1) : 1.0;
+  const outEnv = fadeOutS > 1e-6 && tRemS < fadeOutS ? clampNum(tRemS / fadeOutS, 0, 1) : 1.0;
+  return clampNum(inEnv * outEnv, 0, 1);
+}
+
+function isMusicBedTrack(track, allAudioTracks) {
+  if (!track) return false;
+  const name = String(track.name || "").toLowerCase();
+  if (name.includes("music") || name.includes("mx") || name.includes("bed") || name.includes("bgm")) {
+    return true;
+  }
+  return Array.isArray(allAudioTracks) && allAudioTracks.length > 1 && Number(track.index) > 1;
+}
+
+export function evaluateTimelineAudioLevels(doc, frame, opts = {}) {
+  const isPlaying = Boolean(opts.isPlaying);
+  const phaseSec = Number.isFinite(Number(opts.phaseSec)) ? Number(opts.phaseSec) : 0;
+  const autoDuck = normalizeAutoDuckParams(opts.autoDuck);
+  const tracks = doc && Array.isArray(doc.tracks) ? doc.tracks : [];
+  const audioTracks = tracks.filter((trk) => trk && trk.kind === "audio");
+  const fpsRate =
+    doc && doc.fps ? Math.max(1, Number(doc.fps.num || 25) / Math.max(1, Number(doc.fps.den || 1))) : 25;
+
+  const audibleAudioTracks = audioTracks.filter((trk) => !isTrackAudiblyMuted(trk, tracks));
+  const allAudioMuted = audioTracks.length > 0 && audibleAudioTracks.length === 0;
+
+  if (!doc || !isPlaying || audibleAudioTracks.length === 0) {
+    return {
+      leftDb: -60,
+      rightDb: -60,
+      peakDb: -60,
+      leftLin: 0,
+      rightLin: 0,
+      duckReductionDb: 0,
+      activeClipCount: 0,
+      allAudioMuted
+    };
+  }
+
+  let fgLeft = 0;
+  let fgRight = 0;
+  let bgLeft = 0;
+  let bgRight = 0;
+  let activeClipCount = 0;
+  const tBase = frame / fpsRate + phaseSec * 0.15;
+
+  for (const trk of audibleAudioTracks) {
+    const isBed = isMusicBedTrack(trk, audioTracks);
+    for (const clip of trk.clips || []) {
+      if (clip.enabled === false) continue;
+      if (frame < clip.start_frame || frame >= clip.start_frame + clip.duration_frames) continue;
+      const env = evaluateClipFadeEnvelope(clip, frame, fpsRate);
+      if (env <= 1e-6) continue;
+      activeClipCount += 1;
+      const norm = normalizeClipAudio(clip);
+      const gainLin = Math.pow(10, norm.gainDb / 20);
+      const seed = (Number(trk.index) || 1) * 1.37 + (Number(clip.start_frame) || 0) * 0.03;
+
+      let modL;
+      let modR;
+      if (isBed) {
+        // Music stem: steady groove with gentle stereo width modulation
+        const beat = 0.62 + 0.24 * Math.abs(Math.sin(tBase * 3.1 + seed)) + 0.14 * Math.sin(tBase * 6.2 + seed);
+        modL = clampNum(0.21 * beat * (0.94 + 0.08 * Math.sin(tBase * 4.9 + seed)), 0.02, 0.55);
+        modR = clampNum(0.21 * beat * (0.94 + 0.08 * Math.cos(tBase * 5.3 + seed + 0.6)), 0.02, 0.55);
+      } else {
+        // Dialogue / VO stem: natural syllabic speech cadence with slight stereo presence
+        const speechGate = Math.max(0.18, 0.55 + 0.45 * Math.sin(tBase * 4.4 + seed));
+        const syllabic = 0.52 + 0.34 * Math.sin(tBase * 9.7 + seed) + 0.14 * Math.cos(tBase * 14.3 + seed);
+        const baseVo = clampNum(0.28 * speechGate * Math.max(0.2, syllabic), 0.02, 0.72);
+        modL = baseVo * (0.97 + 0.04 * Math.sin(tBase * 7.1 + seed));
+        modR = baseVo * (0.97 + 0.04 * Math.cos(tBase * 6.8 + seed + 0.35));
+      }
+
+      const clipL = modL * gainLin * env;
+      const clipR = modR * gainLin * env;
+      if (isBed) {
+        bgLeft += clipL;
+        bgRight += clipR;
+      } else {
+        fgLeft += clipL;
+        fgRight += clipR;
+      }
+    }
+  }
+
+  let duckReductionDb = 0;
+  if (autoDuck.enabled && (fgLeft > 1e-6 || fgRight > 1e-6) && (bgLeft > 1e-6 || bgRight > 1e-6)) {
+    const fgPeakLin = Math.max(fgLeft, fgRight);
+    const fgDb = 20 * Math.log10(Math.max(1e-5, fgPeakLin));
+    if (fgDb > autoDuck.threshold_db) {
+      const overshoot = fgDb - autoDuck.threshold_db;
+      const reduction = Math.min(24, overshoot * (1 - 1 / autoDuck.ratio));
+      if (reduction > 0.05) {
+        duckReductionDb = -Number(reduction.toFixed(1));
+        const duckScale = Math.pow(10, duckReductionDb / 20);
+        bgLeft *= duckScale;
+        bgRight *= duckScale;
+      }
+    }
+  }
+
+  const totalL = clampNum(fgLeft + bgLeft, 0, 1.0);
+  const totalR = clampNum(fgRight + bgRight, 0, 1.0);
+  const leftDb = totalL > 1e-3 ? clampNum(20 * Math.log10(totalL), -60, 0) : -60;
+  const rightDb = totalR > 1e-3 ? clampNum(20 * Math.log10(totalR), -60, 0) : -60;
+  const peakDb = Math.max(leftDb, rightDb);
+
+  return {
+    leftDb,
+    rightDb,
+    peakDb,
+    leftLin: totalL,
+    rightLin: totalR,
+    duckReductionDb,
+    activeClipCount,
+    allAudioMuted
   };
 }
 

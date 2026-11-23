@@ -4,6 +4,7 @@ import {
   DELIVERY_PRESETS,
   TRANSITION_PRESETS,
   compileAudioFilterClient,
+  compileAutoDuckFilterClient,
   compileFramingFilterClient,
   compileRetimeFilterClient,
   compileTransformFilterClient,
@@ -1130,6 +1131,12 @@ export function createApiClient() {
         );
       }
       return requestJson("/api/audio/compile", { method: "POST", body: payload });
+    },
+    async compileAutoDuckFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileAutoDuckFilterClient(payload.auto_duck || payload, payload);
+      }
+      return requestJson("/api/audio/duck/compile", { method: "POST", body: payload });
     },
     async compileRetimeFilter(payload) {
       if (resolvedMode === "static-demo") {

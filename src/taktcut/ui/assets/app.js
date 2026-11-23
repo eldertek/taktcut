@@ -5,6 +5,7 @@ import {
   drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
   drawProgramMonitorCanvas,
+  drawStereoVuMeterCanvas,
   drawTimelineCanvas,
   findActiveSubtitleCue,
   framesToSmpte
@@ -17,6 +18,18 @@ import {
   AUDIO_FADE_S_MIN,
   AUDIO_GAIN_DB_MAX,
   AUDIO_GAIN_DB_MIN,
+  AUTO_DUCK_ATTACK_MS_DEFAULT,
+  AUTO_DUCK_ATTACK_MS_MAX,
+  AUTO_DUCK_ATTACK_MS_MIN,
+  AUTO_DUCK_RATIO_DEFAULT,
+  AUTO_DUCK_RATIO_MAX,
+  AUTO_DUCK_RATIO_MIN,
+  AUTO_DUCK_RELEASE_MS_DEFAULT,
+  AUTO_DUCK_RELEASE_MS_MAX,
+  AUTO_DUCK_RELEASE_MS_MIN,
+  AUTO_DUCK_THRESHOLD_DB_DEFAULT,
+  AUTO_DUCK_THRESHOLD_DB_MAX,
+  AUTO_DUCK_THRESHOLD_DB_MIN,
   BPM_DEFAULT,
   BPM_MAX,
   BPM_MIN,
@@ -46,11 +59,13 @@ import {
   cloneTimelineDoc,
   collectSnapTargets,
   compileAudioFilterClient,
+  compileAutoDuckFilterClient,
   compileRetimeFilterClient,
   compileTransitionFilterClient,
   computeInOutRangeMetrics,
   computeTimelineMaxFrame,
   deleteMarkerInDocument,
+  evaluateTimelineAudioLevels,
   findAdjacentCutForClip,
   findClipIndex,
   findMagneticSnap,
@@ -65,6 +80,7 @@ import {
   hasSplittableClipAtFrame,
   isClipTransformIdentity,
   isTrackAudiblyMuted,
+  normalizeAutoDuckParams,
   normalizeClipAudio,
   normalizeClipRetime,
   normalizeClipTransform,
@@ -260,6 +276,25 @@ const state = {
   playbackRafId: null,
   playbackLastTs: 0,
   playbackAccumFrames: 0,
+  autoDuck: {
+    enabled: false,
+    threshold_db: AUTO_DUCK_THRESHOLD_DB_DEFAULT,
+    ratio: AUTO_DUCK_RATIO_DEFAULT,
+    attack_ms: AUTO_DUCK_ATTACK_MS_DEFAULT,
+    release_ms: AUTO_DUCK_RELEASE_MS_DEFAULT
+  },
+  vuMeter: {
+    leftDb: -60,
+    rightDb: -60,
+    holdL: -60,
+    holdR: -60,
+    holdAgeL: 0,
+    holdAgeR: 0,
+    duckReductionDb: 0,
+    allMuted: false,
+    decayRafId: null,
+    lastTs: 0
+  },
   colorGrade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
   colorActivePresetId: "rec709_clean",
   colorScopeMode: "parade",
@@ -632,6 +667,15 @@ function redrawActiveCanvases() {
     state.timelineStartFrame = tlDraw.startFrame;
     state.timelineRulerHeight = tlDraw.rulerHeight;
     state.timelineLabelColW = tlDraw.labelColW;
+    drawStereoVuMeterCanvas(byId("timeline-vu-meter"), {
+      leftDb: state.vuMeter.leftDb,
+      rightDb: state.vuMeter.rightDb,
+      holdL: state.vuMeter.holdL,
+      holdR: state.vuMeter.holdR,
+      allMuted: state.vuMeter.allMuted,
+      duckEnabled: Boolean(state.autoDuck.enabled),
+      duckThresholdDb: state.autoDuck.threshold_db
+    });
   } else if (state.activeTab === "fx") {
     drawProgramMonitorCanvas(
       byId("fx-program-canvas"),
@@ -972,6 +1016,8 @@ function renderTimelineAudioInspector() {
       afBadge.textContent = "NO CLIP";
       afBadge.className = "nle-tag mono";
     }
+    renderAutoDuckInspector();
+    updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
     return;
   }
 
@@ -996,6 +1042,185 @@ function renderTimelineAudioInspector() {
       afBadge.textContent = "UNITY 0.0 dB";
       afBadge.className = "nle-tag mono";
     }
+  }
+  renderAutoDuckInspector();
+  updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
+}
+
+function renderAutoDuckInspector() {
+  const duck = normalizeAutoDuckParams(state.autoDuck);
+  state.autoDuck = duck;
+
+  const toggleBtn = byId("btn-auto-duck-toggle");
+  const badge = byId("auto-duck-badge");
+  const ctrlBox = byId("auto-duck-controls");
+  const threshRange = byId("auto-duck-threshold-range");
+  const threshNum = byId("auto-duck-threshold-num");
+  const ratioNum = byId("auto-duck-ratio-num");
+  const attackNum = byId("auto-duck-attack-num");
+  const releaseNum = byId("auto-duck-release-num");
+  const fgPreview = byId("auto-duck-fg-preview");
+
+  if (toggleBtn) {
+    toggleBtn.textContent = duck.enabled ? t("timeline.duck.on") : t("timeline.duck.off");
+    toggleBtn.setAttribute("aria-pressed", duck.enabled ? "true" : "false");
+    toggleBtn.classList.toggle("is-active", duck.enabled);
+  }
+  if (ctrlBox) {
+    ctrlBox.classList.toggle("is-dimmed", !duck.enabled);
+  }
+  if (threshRange) threshRange.value = String(duck.threshold_db);
+  if (threshNum && document.activeElement !== threshNum) {
+    threshNum.value = String(Math.round(duck.threshold_db));
+  }
+  if (ratioNum && document.activeElement !== ratioNum) {
+    ratioNum.value = duck.ratio.toFixed(1);
+  }
+  if (attackNum && document.activeElement !== attackNum) {
+    attackNum.value = String(Math.round(duck.attack_ms));
+  }
+  if (releaseNum && document.activeElement !== releaseNum) {
+    releaseNum.value = String(Math.round(duck.release_ms));
+  }
+
+  const compiled = compileAutoDuckFilterClient(duck, { mix_sidechain: true });
+  if (badge) {
+    if (!duck.enabled) {
+      badge.textContent = `${Math.round(duck.threshold_db)} dB | ${duck.ratio.toFixed(1)}:1`;
+      badge.className = "nle-tag mono";
+    } else {
+      badge.textContent = `${Math.round(duck.threshold_db)} dB | ${duck.ratio.toFixed(1)}:1`;
+      badge.className = "nle-tag mono is-pass";
+    }
+  }
+  if (fgPreview) {
+    fgPreview.textContent = duck.enabled ? compiled.filtergraph : t("timeline.duck.bypassed");
+  }
+}
+
+function renderVuMeterReadout() {
+  const vm = state.vuMeter;
+  const peakBadge = byId("timeline-vu-peak-badge");
+  const duckPill = byId("timeline-vu-duck-pill");
+  const peakDb = Math.max(vm.leftDb, vm.rightDb);
+
+  if (peakBadge) {
+    if (vm.allMuted) {
+      peakBadge.textContent = "MUTED";
+      peakBadge.className = "nle-tag mono is-fail";
+    } else if (peakDb <= -59.5) {
+      peakBadge.textContent = "-inf dBFS";
+      peakBadge.className = "nle-tag mono";
+    } else {
+      peakBadge.textContent = `${peakDb.toFixed(1)} dBFS`;
+      peakBadge.className =
+        peakDb >= -1.5
+          ? "nle-tag mono is-fail"
+          : peakDb >= -9.0
+            ? "nle-tag mono is-warn"
+            : "nle-tag mono is-pass";
+    }
+  }
+  if (duckPill) {
+    const showGr = Boolean(state.autoDuck.enabled && vm.duckReductionDb < -0.05 && !vm.allMuted);
+    duckPill.classList.toggle("is-hidden", !showGr);
+    if (showGr) {
+      duckPill.textContent = `GR ${vm.duckReductionDb.toFixed(1)} dB`;
+      duckPill.className = "nle-tag mono is-warn";
+    }
+  }
+  if (state.activeTab === "timeline") {
+    drawStereoVuMeterCanvas(byId("timeline-vu-meter"), {
+      leftDb: vm.leftDb,
+      rightDb: vm.rightDb,
+      holdL: vm.holdL,
+      holdR: vm.holdR,
+      allMuted: vm.allMuted,
+      duckEnabled: Boolean(state.autoDuck.enabled),
+      duckThresholdDb: state.autoDuck.threshold_db
+    });
+  }
+}
+
+function updateVuMeterInstant(ts, isPlaying) {
+  const vm = state.vuMeter;
+  const dtSec = vm.lastTs > 0 ? Math.min(0.1, Math.max(0.008, (ts - vm.lastTs) / 1000)) : 0.016;
+  vm.lastTs = ts;
+
+  const evalRes = evaluateTimelineAudioLevels(state.timelineDoc, state.playheadFrame, {
+    isPlaying,
+    phaseSec: ts / 1000,
+    autoDuck: state.autoDuck
+  });
+  vm.allMuted = evalRes.allAudioMuted;
+  vm.duckReductionDb = evalRes.duckReductionDb;
+
+  const smoothChannel = (curDb, targetDb, holdDb, holdAge) => {
+    const attackAlpha = Math.min(1, dtSec * 24);
+    const releaseAlpha = Math.min(1, dtSec * 8.5);
+    const nextDb =
+      targetDb > curDb
+        ? curDb + (targetDb - curDb) * attackAlpha
+        : curDb + (targetDb - curDb) * releaseAlpha;
+    const clampedDb = nextDb < -59.6 && targetDb <= -59.9 ? -60 : Math.max(-60, Math.min(0, nextDb));
+    let nextHold = holdDb;
+    let nextAge = holdAge + dtSec;
+    if (clampedDb >= holdDb) {
+      nextHold = clampedDb;
+      nextAge = 0;
+    } else if (nextAge > 0.65) {
+      nextHold = Math.max(clampedDb, holdDb - dtSec * 26);
+    }
+    return { db: clampedDb, hold: nextHold, age: nextAge };
+  };
+
+  const resL = smoothChannel(vm.leftDb, evalRes.leftDb, vm.holdL, vm.holdAgeL);
+  const resR = smoothChannel(vm.rightDb, evalRes.rightDb, vm.holdR, vm.holdAgeR);
+  vm.leftDb = resL.db;
+  vm.holdL = resL.hold;
+  vm.holdAgeL = resL.age;
+  vm.rightDb = resR.db;
+  vm.holdR = resR.hold;
+  vm.holdAgeR = resR.age;
+
+  renderVuMeterReadout();
+}
+
+function stopVuMeterDecay() {
+  if (state.vuMeter.decayRafId !== null) {
+    window.cancelAnimationFrame(state.vuMeter.decayRafId);
+    state.vuMeter.decayRafId = null;
+  }
+}
+
+function startVuMeterDecay() {
+  stopVuMeterDecay();
+  const stepDecay = (ts) => {
+    if (state.playbackSpeed !== 0) {
+      state.vuMeter.decayRafId = null;
+      return;
+    }
+    updateVuMeterInstant(ts, false);
+    const vm = state.vuMeter;
+    const settled =
+      vm.leftDb <= -59.5 && vm.rightDb <= -59.5 && vm.holdL <= -59.5 && vm.holdR <= -59.5;
+    if (settled) {
+      vm.leftDb = -60;
+      vm.rightDb = -60;
+      vm.holdL = -60;
+      vm.holdR = -60;
+      vm.duckReductionDb = 0;
+      vm.decayRafId = null;
+      renderVuMeterReadout();
+      return;
+    }
+    state.vuMeter.decayRafId = window.requestAnimationFrame(stepDecay);
+  };
+  const vm = state.vuMeter;
+  if (vm.leftDb > -59.5 || vm.rightDb > -59.5 || vm.holdL > -59.5 || vm.holdR > -59.5) {
+    state.vuMeter.decayRafId = window.requestAnimationFrame(stepDecay);
+  } else {
+    updateVuMeterInstant(performance.now(), false);
   }
 }
 
@@ -1585,6 +1810,7 @@ function serializeFullProjectState() {
       bpm: Number(state.bpmGrid.bpm ?? BPM_DEFAULT),
       offset_s: Number(state.bpmGrid.offset_s ?? 0.0)
     },
+    auto_duck: normalizeAutoDuckParams(state.autoDuck),
     color: {
       grade: {
         ...cloneGradeParams(state.colorGrade),
@@ -1671,6 +1897,7 @@ function applyFullProjectState(project, validation) {
     bpm: Number(bpm.bpm ?? BPM_DEFAULT),
     offset_s: Number(bpm.offset_s ?? 0.0)
   };
+  state.autoDuck = normalizeAutoDuckParams(project.auto_duck);
   setPlayhead(Number(project.playhead_frame ?? 0));
 
   // Color state
@@ -4312,6 +4539,7 @@ function stopPlayback() {
   state.playbackLastTs = 0;
   state.playbackAccumFrames = 0;
   updateTransportStatusUI();
+  startVuMeterDecay();
 }
 
 function playbackTick(ts) {
@@ -4349,6 +4577,7 @@ function playbackTick(ts) {
       return;
     }
   }
+  updateVuMeterInstant(ts, true);
   state.playbackRafId = window.requestAnimationFrame(playbackTick);
 }
 
@@ -4357,6 +4586,7 @@ function startShuttle(speed) {
     stopPlayback();
     return;
   }
+  stopVuMeterDecay();
   const minF = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
   const metrics = computeInOutRangeMetrics(
     state.ioRange,
@@ -4377,6 +4607,7 @@ function startShuttle(speed) {
   state.playbackLastTs = 0;
   state.playbackAccumFrames = 0;
   updateTransportStatusUI();
+  updateVuMeterInstant(performance.now(), true);
   if (state.playbackRafId === null) {
     state.playbackRafId = window.requestAnimationFrame(playbackTick);
   }
@@ -5669,6 +5900,84 @@ function wireClipAudioInspector() {
       if (chk) chk.checked = true;
       switchTab("render");
       showBanner("Selected clip audio gain, fades & track mute/solo linked to Deliver page.", "success");
+    });
+  }
+
+  wireAutoDuckInspector();
+}
+
+function wireAutoDuckInspector() {
+  const toggleBtn = byId("btn-auto-duck-toggle");
+  const threshRange = byId("auto-duck-threshold-range");
+  const threshNum = byId("auto-duck-threshold-num");
+  const resetBtn = byId("btn-auto-duck-reset");
+  const ratioNum = byId("auto-duck-ratio-num");
+  const attackNum = byId("auto-duck-attack-num");
+  const releaseNum = byId("auto-duck-release-num");
+
+  const updateDuckState = (patch) => {
+    state.autoDuck = normalizeAutoDuckParams({ ...state.autoDuck, ...patch });
+    renderAutoDuckInspector();
+    updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
+  };
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      updateDuckState({ enabled: !state.autoDuck.enabled });
+    });
+  }
+
+  if (threshRange) {
+    threshRange.addEventListener("input", () => {
+      const val = Number.parseFloat(threshRange.value);
+      if (Number.isFinite(val)) {
+        updateDuckState({ threshold_db: val });
+      }
+    });
+  }
+
+  const bindDuckNumeric = (el, field, minVal, maxVal, decimals) => {
+    if (!el) return;
+    el.addEventListener("input", () => {
+      const val = Number.parseFloat(el.value);
+      if (Number.isFinite(val) && val >= minVal && val <= maxVal) {
+        updateDuckState({ [field]: val });
+      }
+    });
+    el.addEventListener("change", () => {
+      const raw = Number.parseFloat(el.value);
+      if (!Number.isFinite(raw)) {
+        renderAutoDuckInspector();
+        return;
+      }
+      const clamped = Math.min(maxVal, Math.max(minVal, raw));
+      updateDuckState({ [field]: clamped });
+      el.value = decimals > 0 ? clamped.toFixed(decimals) : String(Math.round(clamped));
+    });
+  };
+
+  bindDuckNumeric(
+    threshNum,
+    "threshold_db",
+    AUTO_DUCK_THRESHOLD_DB_MIN,
+    AUTO_DUCK_THRESHOLD_DB_MAX,
+    0
+  );
+  bindDuckNumeric(ratioNum, "ratio", AUTO_DUCK_RATIO_MIN, AUTO_DUCK_RATIO_MAX, 1);
+  bindDuckNumeric(attackNum, "attack_ms", AUTO_DUCK_ATTACK_MS_MIN, AUTO_DUCK_ATTACK_MS_MAX, 0);
+  bindDuckNumeric(releaseNum, "release_ms", AUTO_DUCK_RELEASE_MS_MIN, AUTO_DUCK_RELEASE_MS_MAX, 0);
+
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      state.autoDuck = normalizeAutoDuckParams({
+        enabled: false,
+        threshold_db: AUTO_DUCK_THRESHOLD_DB_DEFAULT,
+        ratio: AUTO_DUCK_RATIO_DEFAULT,
+        attack_ms: AUTO_DUCK_ATTACK_MS_DEFAULT,
+        release_ms: AUTO_DUCK_RELEASE_MS_DEFAULT
+      });
+      renderAutoDuckInspector();
+      updateVuMeterInstant(performance.now(), state.playbackSpeed !== 0);
     });
   }
 }

@@ -21,6 +21,7 @@ from taktcut.models import (
 )
 from taktcut.qa import audit_loudness, check_mp4_faststart, probe_media, run_qa_gate
 from taktcut.render import (
+    AutoDuckParams,
     ClipAudioParams,
     ClipRetimeParams,
     FramingParams,
@@ -28,6 +29,8 @@ from taktcut.render import (
     build_render_plan,
     compile_audio_filter,
     compile_audio_filter_result,
+    compile_auto_duck_filter,
+    compile_auto_duck_filter_result,
     compile_framing_filter,
     compile_framing_filter_result,
     compile_retime_filter,
@@ -692,3 +695,103 @@ def test_compile_transform_filter_and_real_ffmpeg_smoke(tmp_path: Path) -> None:
     assert probe.video_codec == "h264"
     assert probe.pix_fmt == "yuv420p"
     assert probe.is_cfr is True
+
+
+def test_compile_auto_duck_filter_and_strict_bounds(tmp_path: Path) -> None:
+    default_duck = AutoDuckParams()
+    assert default_duck.enabled is False
+    assert default_duck.threshold_db == -24.0
+    assert default_duck.ratio == 6.0
+    assert default_duck.attack_ms == 40.0
+    assert default_duck.release_ms == 400.0
+    assert default_duck.is_identity() is True
+    assert compile_auto_duck_filter(default_duck) is None
+
+    idle_res = compile_auto_duck_filter_result(default_duck)
+    assert idle_res.is_identity is True
+    assert idle_res.filtergraph == ""
+    assert idle_res.ffmpeg_args == []
+
+    active = AutoDuckParams(
+        enabled=True,
+        threshold_db=-24.0,
+        ratio=6.0,
+        attack_ms=40.0,
+        release_ms=400.0,
+    )
+    assert active.is_identity() is False
+    expected_thresh = 10.0 ** (-24.0 / 20.0)
+    assert math.isclose(active.threshold_linear(), expected_thresh, rel_tol=1e-9)
+
+    fg = compile_auto_duck_filter(active)
+    assert fg == (
+        f"[0:a][1:a]sidechaincompress=threshold={expected_thresh:.6f}:"
+        "ratio=6.00:attack=40.0:release=400.0[aout]"
+    )
+
+    mixed_res = compile_auto_duck_filter_result(
+        AutoDuckParams(
+            enabled=True,
+            threshold_db=-18.0,
+            ratio=8.0,
+            attack_ms=25.0,
+            release_ms=650.0,
+        ),
+        music_pad="mx",
+        sidechain_pad="vo",
+        output_pad="mix_out",
+        mix_sidechain=True,
+    )
+    assert mixed_res.is_identity is False
+    assert mixed_res.ffmpeg_args[0] == "-filter_complex"
+    assert mixed_res.ffmpeg_args[2:] == ["-map", "[mix_out]"]
+    assert "[vo]asplit[sc_trig][sc_vo]" in mixed_res.filtergraph
+    assert "[mx][sc_trig]sidechaincompress=" in mixed_res.filtergraph
+    assert "ratio=8.00:attack=25.0:release=650.0" in mixed_res.filtergraph
+    assert "amix=inputs=2:duration=longest:normalize=0[mix_out]" in mixed_res.filtergraph
+
+    # Strict bounds and type checks
+    for bad_kwargs in (
+        {"enabled": "true"},
+        {"enabled": 1},
+        {"threshold_db": -40.1},
+        {"threshold_db": -5.9},
+        {"threshold_db": math.nan},
+        {"threshold_db": True},
+        {"ratio": 1.9},
+        {"ratio": 12.1},
+        {"ratio": math.inf},
+        {"attack_ms": 9.9},
+        {"attack_ms": 200.1},
+        {"release_ms": 99.9},
+        {"release_ms": 1500.1},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            AutoDuckParams(**bad_kwargs)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="pad label"):
+        compile_auto_duck_filter(active, music_pad="0:a;evil")
+
+    # Real FFmpeg integration test with synthetic music + VO sidechain
+    ducked_wav = tmp_path / "ducked_mix.wav"
+    exec_res = compile_auto_duck_filter_result(active, mix_sidechain=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=220:sample_rate=48000:duration=1.5",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=880:sample_rate=48000:duration=1.5",
+        *exec_res.ffmpeg_args,
+        "-c:a",
+        "pcm_s16le",
+        str(ducked_wav),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert ducked_wav.is_file() and ducked_wav.stat().st_size > 1000

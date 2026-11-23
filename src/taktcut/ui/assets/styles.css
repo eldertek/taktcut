@@ -2055,6 +2055,93 @@ input[type="range"] {
   color: #ffd166;
 }
 
+.vu-meter-bridge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.vu-meter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vu-meter-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.vu-meter-canvas {
+  display: block;
+  width: 100%;
+  height: 56px;
+  border-radius: 2px;
+  background: #141416;
+}
+
+.auto-duck-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 4px;
+  min-width: 0;
+}
+
+.audio-ctrl-grid.is-dimmed {
+  opacity: 0.72;
+}
+
+.duck-toggle-btn.is-active {
+  background: rgba(57, 197, 207, 0.16);
+  border-color: #39c5cf;
+  color: #7ee8f0;
+}
+
+.duck-params-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.duck-mini-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.duck-mini-field label {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.duck-mini-field .input-num {
+  width: 100%;
+  min-width: 0;
+}
+
+#auto-duck-fg-preview {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* CLIP MOTION TRANSFORM INSPECTOR */
 .transform-inspector-dock {
   display: flex;
@@ -2787,7 +2874,8 @@ input[type="range"] {
     min-height: 44px;
   }
   .mixer-btn,
-  .btn-shortcuts-help {
+  .btn-shortcuts-help,
+  .audio-ctrl-row .btn-mini {
     min-width: 44px;
   }
   .shortcuts-grid {
@@ -2863,6 +2951,10 @@ input[type="range"] {
   }
   .audio-ctrl-row label {
     grid-column: 1 / -1;
+  }
+  .duck-params-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
   }
   .retime-preset-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));

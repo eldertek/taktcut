@@ -319,6 +319,48 @@
                   <span id="track-mixer-summary" class="nle-tag mono">ALL ACTIVE</span>
                 </div>
                 <div id="track-mixer-strip" class="track-mixer-strip" role="group" aria-label="Track Mute and Solo Mixer"></div>
+                <div class="vu-meter-bridge" role="region" aria-label="Stereo L/R Peak Meter Bridge">
+                  <div class="vu-meter-head">
+                    <span class="vu-meter-title" data-i18n="timeline.meter.title">Stereo Peak Meter (L/R)</span>
+                    <div class="viewer-controls">
+                      <span id="timeline-vu-duck-pill" class="nle-tag mono is-hidden">GR 0.0 dB</span>
+                      <span id="timeline-vu-peak-badge" class="nle-tag mono">-inf dBFS</span>
+                    </div>
+                  </div>
+                  <canvas id="timeline-vu-meter" class="vu-meter-canvas" aria-label="Stereo L/R peak level meter"></canvas>
+                </div>
+                <div id="timeline-auto-duck-dock" class="auto-duck-dock">
+                  <div class="pane-subheader">
+                    <span data-i18n="timeline.duck.title">Music Auto-Ducking (Sidechain)</span>
+                    <div class="viewer-controls">
+                      <button type="button" id="btn-auto-duck-toggle" class="btn btn-mini duck-toggle-btn" aria-pressed="false" data-i18n="timeline.duck.off">OFF</button>
+                      <span id="auto-duck-badge" class="nle-tag mono">-24 dB | 6:1</span>
+                    </div>
+                  </div>
+                  <div id="auto-duck-controls" class="audio-ctrl-grid mono is-dimmed">
+                    <div class="audio-ctrl-row">
+                      <label for="auto-duck-threshold-range" data-i18n="timeline.duck.threshold">Threshold (dB)</label>
+                      <input type="range" id="auto-duck-threshold-range" min="-40" max="-6" step="1" value="-24">
+                      <input type="number" id="auto-duck-threshold-num" class="input-num" min="-40" max="-6" step="1" value="-24" aria-label="Auto-ducking threshold in dB">
+                      <button type="button" id="btn-auto-duck-reset" class="btn btn-mini" aria-label="Reset auto-ducking">Rst</button>
+                    </div>
+                    <div class="duck-params-row">
+                      <div class="duck-mini-field">
+                        <label for="auto-duck-ratio-num" data-i18n="timeline.duck.ratio">Ratio</label>
+                        <input type="number" id="auto-duck-ratio-num" class="input-num" min="2" max="12" step="0.5" value="6.0" aria-label="Auto-ducking compression ratio">
+                      </div>
+                      <div class="duck-mini-field">
+                        <label for="auto-duck-attack-num" data-i18n="timeline.duck.attack">Attack (ms)</label>
+                        <input type="number" id="auto-duck-attack-num" class="input-num" min="10" max="200" step="5" value="40" aria-label="Auto-ducking attack in milliseconds">
+                      </div>
+                      <div class="duck-mini-field">
+                        <label for="auto-duck-release-num" data-i18n="timeline.duck.release">Release (ms)</label>
+                        <input type="number" id="auto-duck-release-num" class="input-num" min="100" max="1500" step="25" value="400" aria-label="Auto-ducking release in milliseconds">
+                      </div>
+                    </div>
+                    <div id="auto-duck-fg-preview" class="telemetry-note mono" data-i18n="timeline.duck.bypassed">Sidechain auto-ducking bypassed.</div>
+                  </div>
+                </div>
               </div>
 
               <div id="timeline-retime-inspector" class="retime-inspector-dock">
