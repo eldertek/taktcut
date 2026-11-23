@@ -186,6 +186,7 @@ TransitionPresetId = Literal["fade", "fadeblack", "wipeleft", "slideright", "zoo
 LoudnessPresetId = Literal["off", "youtube_14", "reels_16", "broadcast_23"]
 DialogueEqPresetId = Literal["off", "voice_clarity", "podcast_warm", "derumble"]
 TimecodeBurnInPosition = Literal["off", "top_left", "bottom_center", "bottom_right"]
+LowerThirdPosition = Literal["bottom_left", "bottom_center", "top_left"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
 
@@ -194,6 +195,11 @@ ALLOWED_TIMECODE_BURNIN: tuple[TimecodeBurnInPosition, ...] = (
     "top_left",
     "bottom_center",
     "bottom_right",
+)
+ALLOWED_LOWER_THIRD_POSITIONS: tuple[LowerThirdPosition, ...] = (
+    "bottom_left",
+    "bottom_center",
+    "top_left",
 )
 ALLOWED_EXPORT_FPS: tuple[ExportFpsOption, ...] = ("source", "24", "25", "30", "60")
 ALLOWED_AUDIO_ONLY_FORMATS: tuple[AudioOnlyFormatId, ...] = (
@@ -208,6 +214,16 @@ REVIEW_WATERMARK_MAX_LEN: int = 40
 REVIEW_WATERMARK_OPACITY_MIN: float = 0.15
 REVIEW_WATERMARK_OPACITY_MAX: float = 0.80
 REVIEW_WATERMARK_OPACITY_DEFAULT: float = 0.35
+
+LOWER_THIRD_TEXT_MAX_LEN: int = 120
+LOWER_THIRD_FONT_SIZE_MIN: int = 16
+LOWER_THIRD_FONT_SIZE_MAX: int = 96
+LOWER_THIRD_FONT_SIZE_DEFAULT: int = 36
+LOWER_THIRD_BOX_OPACITY_MIN: float = 0.0
+LOWER_THIRD_BOX_OPACITY_MAX: float = 1.0
+LOWER_THIRD_BOX_OPACITY_DEFAULT: float = 0.65
+LOWER_THIRD_TIME_MAX_S: float = 86400.0
+LOWER_THIRD_DURATION_MIN_S: float = 0.1
 
 ALLOWED_TRANSITION_PRESETS: frozenset[str] = frozenset(
     {"fade", "fadeblack", "wipeleft", "slideright", "zoomin"}
@@ -515,6 +531,10 @@ class RenderPlan(BaseModel):
     timecode_burnin: TimecodeBurnInPosition = "off"
     review_watermark_text: str = ""
     review_watermark_opacity: float = REVIEW_WATERMARK_OPACITY_DEFAULT
+    lower_third_enabled: bool = False
+    lower_third_title: str = ""
+    lower_third_subtitle: str = ""
+    lower_third_position: LowerThirdPosition = "bottom_left"
     export_fps: ExportFpsOption = "source"
     deinterlace: bool = False
     audio_only_format: AudioOnlyFormatId = "off"

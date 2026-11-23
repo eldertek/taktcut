@@ -242,6 +242,16 @@ def test_remote_node_client_and_ui_proxy_render_roundtrip(
             "timecode_burnin": "bottom_right",
             "review_watermark_text": "CONFIDENTIAL",
             "review_watermark_opacity": 0.45,
+            "lower_third": {
+                "enabled": True,
+                "title": "Claire Laurent",
+                "subtitle": "Studio Paris",
+                "position": "bottom_left",
+                "font_size": 36,
+                "box_opacity": 0.65,
+                "start_s": 0.0,
+                "duration_s": 4.0,
+            },
             "export_fps": "30",
             "deinterlace": True,
             "prefer_hw": False,
@@ -292,6 +302,9 @@ def test_remote_node_client_and_ui_proxy_render_roundtrip(
         "text='CONFIDENTIAL':fontsize=42:fontcolor=white@0.45:x=(w-text_w)/2:y=(h-text_h)/2"
         in polled_data["job"]["plan"]["video_filter"]
     )
+    assert polled_data["job"]["plan"]["lower_third_enabled"] is True
+    assert polled_data["job"]["plan"]["lower_third_title"] == "Claire Laurent"
+    assert "enable='between(t,0.00,4.00)'" in polled_data["job"]["plan"]["video_filter"]
     assert polled_data["downloaded"] is True
     assert polled_data["local_output_path"] == "renders/remote_fx_out.mp4"
     local_rendered = studio_ws / "renders" / "remote_fx_out.mp4"

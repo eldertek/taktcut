@@ -105,10 +105,12 @@ from taktcut.render import (
     ClipVideoFadeParams,
     FairlightAudioParams,
     FramingParams,
+    LowerThirdParams,
     build_render_plan,
     compile_audio_filter_result,
     compile_auto_duck_filter_result,
     compile_framing_filter_result,
+    compile_lower_third_filter_result,
     compile_retime_filter_result,
     compile_transform_filter_result,
     compile_video_fade_filter_result,
@@ -654,6 +656,34 @@ def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayPa
         "enabled": bool(source.get("enabled", base.enabled)),
     }
     return TitleOverlayParams.model_validate(merged)
+
+
+def _build_lower_third_from_payload(
+    payload: dict[str, Any],
+    *,
+    allow_top_level: bool = False,
+) -> LowerThirdParams | None:
+    if "lower_third" in payload:
+        raw_lt = payload.get("lower_third")
+        if raw_lt is None:
+            return None
+        if not isinstance(raw_lt, dict):
+            raise ValueError("'lower_third' must be a JSON object")
+        return LowerThirdParams.model_validate(raw_lt)
+    if allow_top_level:
+        allowed_keys = (
+            "enabled",
+            "title",
+            "subtitle",
+            "position",
+            "font_size",
+            "box_opacity",
+            "start_s",
+            "duration_s",
+        )
+        subset = {k: payload[k] for k in allowed_keys if k in payload and payload[k] is not None}
+        return LowerThirdParams.model_validate(subset)
+    return None
 
 
 def _build_subtitle_track_from_payload(payload: dict[str, Any]) -> SubtitleTrackParams:
@@ -1622,6 +1652,8 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     {"subtitle_track": raw_subtitle_track}
                 )
 
+            lower_third_obj = _build_lower_third_from_payload(payload)
+
             plan = build_render_plan(
                 input_path=in_file,
                 output_path=out_file,
@@ -1632,6 +1664,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 chroma_key=chroma_key_obj,
                 fx_filtergraph=fx_filtergraph,
                 title_overlay=title_overlay_obj,
+                lower_third=lower_third_obj,
                 subtitle_track=subtitle_track_obj,
                 audio_params=audio_params,
                 video_fade=video_fade,
@@ -1759,6 +1792,13 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
             compiled_subs = compile_subtitles(sub_params, pix_fmt=pix_fmt)
             self._send_json(HTTPStatus.OK, compiled_subs.model_dump(mode="json"))
+            return
+
+        if route == "/api/lower-third/compile":
+            lt_params = _build_lower_third_from_payload(payload, allow_top_level=True)
+            assert lt_params is not None
+            compiled_lt = compile_lower_third_filter_result(lt_params)
+            self._send_json(HTTPStatus.OK, compiled_lt.model_dump(mode="json"))
             return
 
         if route == "/api/audio/compile":
@@ -2086,6 +2126,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 subtitle_track_remote = _build_subtitle_track_from_payload(
                     {"subtitle_track": payload["subtitle_track"]}
                 )
+            lower_third_remote = _build_lower_third_from_payload(payload)
 
             job_req = RemoteRenderJobRequest(
                 input_filename=in_file.name,
@@ -2101,6 +2142,7 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 chroma_key=chroma_key_remote,
                 lut_cube_text=lut_cube_text,
                 title_overlay=title_overlay_remote,
+                lower_third=lower_third_remote,
                 subtitle_track=subtitle_track_remote,
                 audio_params=audio_params,
                 video_fade=video_fade,

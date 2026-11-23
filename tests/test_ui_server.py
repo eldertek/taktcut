@@ -3473,6 +3473,75 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert page.locator("#render-crf").is_disabled() is False
                 assert (page.locator("#render-output-path").input_value() or "").endswith(".mp4")
 
+                # Verify Deliver Lower-Third / Title Overlay panel, presets, touch targets & plan
+                lt_chk = page.locator("#render-lower-third-enabled")
+                lt_toggle_lbl = page.locator("label:has(#render-lower-third-enabled)")
+                lt_preset_interview = page.locator('[data-lt-preset="interview"]')
+                lt_title = page.locator("#render-lower-third-title")
+                lt_sub = page.locator("#render-lower-third-subtitle")
+                lt_pos = page.locator("#render-lower-third-position")
+                lt_fs = page.locator("#render-lower-third-font-size")
+                lt_op = page.locator("#render-lower-third-box-opacity")
+                lt_start = page.locator("#render-lower-third-start")
+                lt_dur = page.locator("#render-lower-third-duration")
+                assert lt_chk.is_visible() is True
+                assert lt_preset_interview.is_visible() is True
+                assert lt_title.is_visible() is True
+                assert lt_pos.is_visible() is True
+                if width <= 820:
+                    for lt_loc in (
+                        lt_toggle_lbl,
+                        lt_preset_interview,
+                        lt_title,
+                        lt_sub,
+                        lt_pos,
+                        lt_fs,
+                        lt_op,
+                        lt_start,
+                        lt_dur,
+                    ):
+                        lt_box = lt_loc.bounding_box()
+                        assert lt_box is not None and lt_box["height"] >= 44
+                lt_preset_interview.click()
+                assert lt_chk.is_checked() is True
+                assert lt_title.input_value() == "Claire Laurent"
+                assert lt_pos.input_value() == "bottom_left"
+                assert lt_preset_interview.get_attribute("aria-pressed") == "true"
+                page.wait_for_function(
+                    "() => (document.getElementById('render-lower-third-preview')"
+                    ".textContent || '').includes('between(t,0.00,5.00)')"
+                )
+                lt_pos.select_option("top_left")
+                assert lt_pos.input_value() == "top_left"
+                page.locator("#btn-build-render-plan").click()
+                page.wait_for_function(
+                    "() => (document.getElementById('render-argv-output').textContent || '')"
+                    ".includes('Claire Laurent')"
+                )
+                lt_argv = page.locator("#render-argv-output").text_content() or ""
+                lt_kv = page.locator("#render-plan-kv").text_content() or ""
+                assert "drawtext=" in lt_argv
+                assert "between(t,0.00,5.00)" in lt_argv
+                assert "top_left" in lt_kv
+                lt_overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert lt_overflow <= 0, (
+                    f"Deliver lower_third overflow at {width}x{height}: {lt_overflow}px"
+                )
+                page.locator("#tab-timeline").click()
+                prog_with_lt = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                page.locator("#tab-render").click()
+                lt_chk.uncheck()
+                page.locator("#tab-timeline").click()
+                prog_without_lt = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                assert prog_with_lt != prog_without_lt
+                page.locator("#tab-render").click()
+
                 # Verify Deliver Timeline Chapters & YouTube/FFMETADATA/EDL/FCPXML exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
@@ -4740,6 +4809,7 @@ def test_ui_render_plan_export_fps_and_deinterlace_endpoint_and_assets(
                 f"En/em dash found in {asset_file.name}"
             )
 
+
 def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
     assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
     html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
@@ -4779,6 +4849,7 @@ def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
             assert "\u2013" not in content and "\u2014" not in content, (
                 f"En/em dash found in {asset_file.name}"
             )
+
 
 def test_ui_deliver_size_estimate_assets() -> None:
     assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
@@ -4890,6 +4961,148 @@ def test_ui_render_plan_audio_only_format_endpoint_and_assets(
         "render.plan.audioOnly",
     ):
         assert i18n_text.count(f'"{key}"') == 2
+
+    for asset_file in assets_dir.iterdir():
+        if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:
+            content = asset_file.read_text(encoding="utf-8")
+            assert "innerHTML" not in content, f"innerHTML sink found in {asset_file.name}"
+            assert "\u2013" not in content and "\u2014" not in content, (
+                f"En/em dash found in {asset_file.name}"
+            )
+
+
+def test_ui_lower_third_compile_and_render_plan_endpoints(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, _ = ui_server
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/lower-third/compile",
+        method="POST",
+        payload={
+            "enabled": True,
+            "title": "Guest: 'Marc' \\ Cam; 1",
+            "subtitle": "Lead Editor: Paris",
+            "position": "bottom_center",
+            "font_size": 42,
+            "box_opacity": 0.70,
+            "start_s": 1.5,
+            "duration_s": 5.0,
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["is_active"] is True
+    assert "drawtext=" in compiled["filtergraph"]
+    assert "box=1:boxcolor=black@0.70:boxborderw=10" in compiled["filtergraph"]
+    assert "enable='between(t,1.50,6.50)'" in compiled["filtergraph"]
+    assert "\\:" in compiled["escaped_title"]
+    assert "\\\\" in compiled["escaped_title"]
+    assert "'\\\\\\''" in compiled["escaped_title"]
+
+    off_status, _, off_raw = _http_call(
+        f"{base_url}/api/lower-third/compile",
+        method="POST",
+        payload={"enabled": False, "title": "Hidden"},
+    )
+    assert off_status == 200
+    assert json.loads(off_raw.decode("utf-8"))["is_active"] is False
+
+    for bad_lt in (
+        {"enabled": True, "title": "A" * 121},
+        {"enabled": True, "position": "top_right"},
+        {"enabled": True, "font_size": 10},
+        {"enabled": True, "box_opacity": 1.5},
+        {"enabled": True, "duration_s": 0.0},
+    ):
+        bad_c_status, _, _ = _http_call(
+            f"{base_url}/api/lower-third/compile",
+            method="POST",
+            payload=bad_lt,
+        )
+        assert bad_c_status == 400
+
+    rp_status, _, rp_raw = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/lt_dryrun.mp4",
+            "profile": "web_h264",
+            "fps": "25",
+            "lower_third": {
+                "enabled": True,
+                "title": "Claire Laurent",
+                "subtitle": "Studio Paris",
+                "position": "top_left",
+                "font_size": 36,
+                "box_opacity": 0.65,
+                "start_s": 2.0,
+                "duration_s": 4.0,
+            },
+            "prefer_hw": False,
+            "execute": False,
+        },
+    )
+    assert rp_status == 200
+    plan = json.loads(rp_raw.decode("utf-8"))["plan"]
+    assert plan["lower_third_enabled"] is True
+    assert plan["lower_third_title"] == "Claire Laurent"
+    assert plan["lower_third_position"] == "top_left"
+    assert "box=1:boxcolor=black@0.65:boxborderw=10" in plan["video_filter"]
+    assert "enable='between(t,2.00,6.00)'" in plan["video_filter"]
+
+    bad_rp_status, _, _ = _http_call(
+        f"{base_url}/api/render/plan",
+        method="POST",
+        payload={
+            "input_path": ".taktcut-samples/sample_rec709.mp4",
+            "output_path": "renders/lt_bad.mp4",
+            "lower_third": {"enabled": True, "position": "bad_pos"},
+            "execute": False,
+        },
+    )
+    assert bad_rp_status == 400
+
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    html_text = (assets_dir / "index.html").read_text(encoding="utf-8")
+    for elem_id in (
+        "render-lower-third-enabled",
+        "render-lower-third-title",
+        "render-lower-third-subtitle",
+        "render-lower-third-position",
+        "render-lower-third-font-size",
+        "render-lower-third-box-opacity",
+        "render-lower-third-start",
+        "render-lower-third-duration",
+        "render-lower-third-preview",
+    ):
+        assert f'id="{elem_id}"' in html_text
+
+    i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+    for key in (
+        "render.lowerThird.title",
+        "render.lowerThird.toggle",
+        "render.lowerThird.preset.interview",
+        "render.lowerThird.preset.youtubeIntro",
+        "render.lowerThird.preset.broadcastTag",
+        "render.lowerThird.label.title",
+        "render.lowerThird.label.subtitle",
+        "render.lowerThird.label.position",
+        "render.lowerThird.pos.bottomLeft",
+        "render.lowerThird.pos.bottomCenter",
+        "render.lowerThird.pos.topLeft",
+        "render.lowerThird.label.fontSize",
+        "render.lowerThird.label.boxOpacity",
+        "render.lowerThird.label.start",
+        "render.lowerThird.label.duration",
+        "render.plan.lowerThird",
+    ):
+        assert i18n_text.count(f'"{key}"') == 2
+
+    demo_text = (assets_dir / "demo_adapter.js").read_text(encoding="utf-8")
+    assert "compileLowerThirdClient" in demo_text
+    assert "/api/lower-third/compile" in demo_text
 
     for asset_file in assets_dir.iterdir():
         if asset_file.is_file() and asset_file.suffix in {".html", ".js", ".css"}:

@@ -27,6 +27,7 @@ from taktcut.render import (
     ClipVideoFadeParams,
     FairlightAudioParams,
     FramingParams,
+    LowerThirdParams,
     build_atempo_stages,
     build_render_plan,
     compile_audio_filter,
@@ -42,6 +43,8 @@ from taktcut.render import (
     compile_framing_filter,
     compile_framing_filter_result,
     compile_loudness_preset_filter,
+    compile_lower_third_filter,
+    compile_lower_third_filter_result,
     compile_retime_filter,
     compile_retime_filter_result,
     compile_review_watermark_filter,
@@ -1525,3 +1528,111 @@ def test_real_render_with_video_and_audio_fades(tmp_path: Path) -> None:
     )
     assert muted_plan.video_filter == "fade=t=in:st=0.000:d=0.500,fade=t=out:st=1.500:d=0.500"
     assert muted_plan.audio_filter == "volume=0"
+
+
+def test_lower_third_params_validation_and_filter_compile() -> None:
+    default_lt = LowerThirdParams()
+    assert default_lt.enabled is False
+    assert default_lt.title == ""
+    assert default_lt.subtitle == ""
+    assert default_lt.position == "bottom_left"
+    assert default_lt.font_size == 36
+    assert default_lt.box_opacity == pytest.approx(0.65)
+    assert default_lt.start_s == pytest.approx(0.0)
+    assert default_lt.duration_s == pytest.approx(5.0)
+    assert default_lt.is_active() is False
+    assert compile_lower_third_filter(default_lt) is None
+
+    empty_enabled = LowerThirdParams(enabled=True, title="   ", subtitle="")
+    assert empty_enabled.is_active() is False
+    assert compile_lower_third_filter(empty_enabled) is None
+
+    for pos in ("bottom_left", "bottom_center", "top_left"):
+        lt = LowerThirdParams(
+            enabled=True,
+            title="Claire Laurent",
+            subtitle="Lead Cinematographer",
+            position=pos,  # type: ignore[arg-type]
+            font_size=40,
+            box_opacity=0.65,
+            start_s=1.25,
+            duration_s=3.50,
+        )
+        res = compile_lower_third_filter_result(lt)
+        assert res.is_active is True
+        assert "drawtext=" in res.filtergraph
+        assert "box=1:boxcolor=black@0.65:boxborderw=10" in res.filtergraph
+        assert "enable='between(t,1.25,4.75)'" in res.filtergraph
+        assert "fontsize=40" in res.filtergraph
+        assert res.ffmpeg_vf_args == ["-vf", res.filtergraph]
+        if pos == "bottom_center":
+            assert "x=(w-tw)/2" in res.filtergraph
+        else:
+            assert "x=round(w*0.05)" in res.filtergraph
+
+    title_only = LowerThirdParams(enabled=True, title="Solo Title", subtitle="")
+    fg_title_only = compile_lower_third_filter(title_only)
+    assert fg_title_only is not None
+    assert fg_title_only.count("drawtext=") == 1
+    assert "enable='between(t,0.00,5.00)'" in fg_title_only
+
+    for bad_kwargs in (
+        {"enabled": "yes"},
+        {"title": 123},
+        {"title": "A" * 121},
+        {"subtitle": "B" * 121},
+        {"position": "top_right"},
+        {"font_size": 15},
+        {"font_size": 97},
+        {"font_size": True},
+        {"box_opacity": -0.05},
+        {"box_opacity": 1.05},
+        {"start_s": -0.1},
+        {"start_s": math.nan},
+        {"duration_s": 0.0},
+        {"duration_s": -1.0},
+        {"duration_s": math.inf},
+        {"unknown_field": 1},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            LowerThirdParams(**bad_kwargs)  # type: ignore[arg-type]
+
+
+def test_lower_third_escaping_and_real_ffmpeg_render(tmp_path: Path) -> None:
+    lt = LowerThirdParams(
+        enabled=True,
+        title="Host: 'Live' \\ Cam; [1]",
+        subtitle="Paris: 'Studio' \\ 25p; OK",
+        position="bottom_left",
+        font_size=36,
+        box_opacity=0.65,
+        start_s=0.4,
+        duration_s=1.0,
+    )
+    compiled = compile_lower_third_filter_result(lt)
+    assert compiled.is_active is True
+    assert "\\:" in compiled.escaped_title
+    assert "\\\\" in compiled.escaped_title
+    assert "'\\\\\\''" in compiled.escaped_title
+    assert "expansion=none" in compiled.filtergraph
+    assert "enable='between(t,0.40,1.40)'" in compiled.filtergraph
+
+    src = tmp_path / "lt_src.mp4"
+    _generate_synthetic_clip(src)
+    out = tmp_path / "lt_out.mp4"
+    plan = build_render_plan(
+        input_path=src,
+        output_path=out,
+        profile=RenderProfile.WEB_H264,
+        fps=RationalFrameRate(num=25, den=1),
+        lower_third=lt,
+        prefer_hw=False,
+    )
+    assert plan.lower_third_enabled is True
+    assert plan.lower_third_position == "bottom_left"
+    assert plan.video_filter is not None
+    assert "between(t,0.40,1.40)" in plan.video_filter
+
+    result = execute_render_plan(plan)
+    assert result.success is True, result.stderr_tail
+    assert result.bytes_written > 0

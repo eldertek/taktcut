@@ -951,3 +951,37 @@ def test_project_delivery_audio_only_format_roundtrip(tmp_path: Path) -> None:
         bad_payload["delivery"]["audio_only_format"] = bad_fmt
         with pytest.raises((ValueError, ValidationError)):
             validate_project_payload(bad_payload)
+
+
+def test_project_delivery_lower_third_roundtrip(tmp_path: Path) -> None:
+    from taktcut.render import LowerThirdParams
+
+    proj = _build_full_test_project()
+    assert proj.delivery.lower_third.enabled is False
+
+    proj.delivery.lower_third = LowerThirdParams(
+        enabled=True,
+        title="Claire Laurent",
+        subtitle="Director | Studio Paris",
+        position="bottom_center",
+        font_size=40,
+        box_opacity=0.70,
+        start_s=1.0,
+        duration_s=4.5,
+    )
+    raw_json = export_project_json(proj)
+    loaded = parse_project_json(raw_json)
+    assert loaded.delivery.lower_third.enabled is True
+    assert loaded.delivery.lower_third.title == "Claire Laurent"
+    assert loaded.delivery.lower_third.position == "bottom_center"
+
+    proj_path = tmp_path / "lower_third_proj.taktcut.json"
+    save_project_file(proj, proj_path)
+    disk_loaded = load_project_file(proj_path)
+    assert disk_loaded.delivery.lower_third.duration_s == pytest.approx(4.5)
+
+    for bad_pos in ("top_right", "center", 123):
+        bad_payload = export_project_dict(disk_loaded)
+        bad_payload["delivery"]["lower_third"]["position"] = bad_pos
+        with pytest.raises((ValueError, ValidationError)):
+            validate_project_payload(bad_payload)

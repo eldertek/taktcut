@@ -516,6 +516,104 @@ function compileTitleClient(payload, opts = {}) {
   };
 }
 
+function compileLowerThirdClient(payload) {
+  const src = payload && payload.lower_third ? payload.lower_third : payload || {};
+  const enabled = Boolean(src.enabled);
+  const title = typeof src.title === "string" ? src.title : "";
+  const subtitle = typeof src.subtitle === "string" ? src.subtitle : "";
+  if (title.length > 120) {
+    throw new Error("title exceeds maximum length of 120 characters");
+  }
+  if (subtitle.length > 120) {
+    throw new Error("subtitle exceeds maximum length of 120 characters");
+  }
+  const rawPos = typeof src.position === "string" ? src.position.trim().toLowerCase() : "bottom_left";
+  if (!["bottom_left", "bottom_center", "top_left"].includes(rawPos)) {
+    throw new Error(`Unsupported lower_third position '${src.position}'`);
+  }
+  const fontSize = src.font_size !== undefined && src.font_size !== null ? Number(src.font_size) : 36;
+  if (!Number.isInteger(fontSize) || fontSize < 16 || fontSize > 96) {
+    throw new Error("font_size must be an integer within [16, 96]");
+  }
+  const boxOpacity = src.box_opacity !== undefined && src.box_opacity !== null ? Number(src.box_opacity) : 0.65;
+  if (!Number.isFinite(boxOpacity) || boxOpacity < 0 || boxOpacity > 1) {
+    throw new Error("box_opacity must be within [0, 1]");
+  }
+  const startS = src.start_s !== undefined && src.start_s !== null ? Number(src.start_s) : 0.0;
+  if (!Number.isFinite(startS) || startS < 0 || startS > 86400) {
+    throw new Error("start_s must be within [0, 86400]");
+  }
+  const durationS = src.duration_s !== undefined && src.duration_s !== null ? Number(src.duration_s) : 5.0;
+  if (!Number.isFinite(durationS) || durationS < 0.1 || durationS > 86400) {
+    throw new Error("duration_s must be within [0.1, 86400]");
+  }
+
+  const escTitle = escapeDrawtextClient(title);
+  const escSub = escapeDrawtextClient(subtitle);
+  const cleanTitle = title.replace(/[\r\n\t]+/g, " ").replace(/[\x00-\x1f\x7f]/g, " ").trim();
+  const cleanSub = subtitle.replace(/[\r\n\t]+/g, " ").replace(/[\x00-\x1f\x7f]/g, " ").trim();
+  const params = {
+    enabled,
+    title,
+    subtitle,
+    position: rawPos,
+    font_size: fontSize,
+    box_opacity: boxOpacity,
+    start_s: startS,
+    duration_s: durationS
+  };
+  if (!enabled || (!cleanTitle && !cleanSub)) {
+    return {
+      filtergraph: "",
+      ffmpeg_vf_args: [],
+      is_active: false,
+      escaped_title: escTitle,
+      escaped_subtitle: escSub,
+      params
+    };
+  }
+
+  const endS = startS + durationS;
+  const en = `enable='between(t,${startS.toFixed(2)},${endS.toFixed(2)})'`;
+  const boxOpts = `box=1:boxcolor=black@${boxOpacity.toFixed(2)}:boxborderw=10`;
+  const subFs = Math.max(14, Math.round(fontSize * 0.65));
+  const xExpr = rawPos === "bottom_center" ? "x=(w-tw)/2" : "x=round(w*0.05)";
+
+  let titleCoords = "";
+  let subCoords = "";
+  if (rawPos === "top_left") {
+    titleCoords = `${xExpr}:y=round(h*0.06)`;
+    subCoords = escTitle && escSub ? `${xExpr}:y=round(h*0.06)+${fontSize + 18}` : titleCoords;
+  } else if (escTitle && escSub) {
+    titleCoords = `${xExpr}:y=h-round(h*0.08)-th-${subFs + 16}`;
+    subCoords = `${xExpr}:y=h-round(h*0.08)-th`;
+  } else {
+    titleCoords = `${xExpr}:y=h-round(h*0.08)-th`;
+    subCoords = titleCoords;
+  }
+
+  const segs = [];
+  if (escTitle) {
+    segs.push(
+      `drawtext=expansion=none:text='${escTitle}':fontsize=${fontSize}:fontcolor=white:${boxOpts}:${titleCoords}:${en}`
+    );
+  }
+  if (escSub) {
+    segs.push(
+      `drawtext=expansion=none:text='${escSub}':fontsize=${subFs}:fontcolor=0xd8d8de:${boxOpts}:${subCoords}:${en}`
+    );
+  }
+  const fg = segs.join(",");
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: fg ? ["-vf", fg] : [],
+    is_active: Boolean(fg),
+    escaped_title: escTitle,
+    escaped_subtitle: escSub,
+    params
+  };
+}
+
 const CAPTION_STYLE_SPECS = [
   {
     id: "clean_white",
@@ -1127,6 +1225,13 @@ export function createApiClient() {
             vfParts.push(compiledSubs.filtergraph);
           }
         }
+        let compiledLowerThird = null;
+        if (body.lower_third) {
+          compiledLowerThird = compileLowerThirdClient(body.lower_third);
+          if (compiledLowerThird.is_active && compiledLowerThird.filtergraph) {
+            vfParts.push(compiledLowerThird.filtergraph);
+          }
+        }
         const tcModeRaw = typeof body.timecode_burnin === "string" ? body.timecode_burnin.trim().toLowerCase() : "off";
         const tcCoords = {
           top_left: "x=24:y=24",
@@ -1244,6 +1349,10 @@ export function createApiClient() {
               timecode_burnin: tcModeRaw,
               review_watermark_text: rawWmText,
               review_watermark_opacity: rawWmOpacity,
+              lower_third_enabled: false,
+              lower_third_title: "",
+              lower_third_subtitle: "",
+              lower_third_position: "bottom_left",
               export_fps: rawExportFps,
               deinterlace,
               audio_only_format: rawAudioOnly,
@@ -1308,6 +1417,10 @@ export function createApiClient() {
             timecode_burnin: tcModeRaw,
             review_watermark_text: rawWmText,
             review_watermark_opacity: rawWmOpacity,
+            lower_third_enabled: Boolean(compiledLowerThird && compiledLowerThird.is_active),
+            lower_third_title: compiledLowerThird ? compiledLowerThird.params.title.trim() : "",
+            lower_third_subtitle: compiledLowerThird ? compiledLowerThird.params.subtitle.trim() : "",
+            lower_third_position: compiledLowerThird ? compiledLowerThird.params.position : "bottom_left",
             export_fps: rawExportFps,
             deinterlace,
             audio_only_format: "off",
@@ -1522,6 +1635,12 @@ export function createApiClient() {
         return compileTitleClient(payload, payload);
       }
       return requestJson("/api/titles/compile", { method: "POST", body: payload });
+    },
+    async compileLowerThird(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileLowerThirdClient(payload);
+      }
+      return requestJson("/api/lower-third/compile", { method: "POST", body: payload });
     },
     async getSubtitleStyles() {
       if (resolvedMode === "static-demo") {

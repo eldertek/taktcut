@@ -377,6 +377,18 @@ const state = {
   titleLastCompile: null,
   titleCompileTimer: null,
   titleCompileSeq: 0,
+  lowerThird: {
+    enabled: false,
+    title: "",
+    subtitle: "",
+    position: "bottom_left",
+    font_size: 36,
+    box_opacity: 0.65,
+    start_s: 0.0,
+    duration_s: 5.0
+  },
+  lowerThirdCompileSeq: 0,
+  lowerThirdCompileTimer: null,
   subtitleTrack: {
     enabled: true,
     style: "clean_white",
@@ -596,6 +608,7 @@ function switchTab(tabName) {
     const isMatch = panel.id === `panel-${tabName}`;
     panel.classList.toggle("is-hidden", !isMatch);
   }
+  redrawActiveCanvases();
   window.requestAnimationFrame(redrawActiveCanvases);
 }
 
@@ -714,7 +727,10 @@ function redrawActiveCanvases() {
       getEffectiveFxState(),
       getEffectiveTitleState(false),
       getEffectiveFramingState(),
-      getEffectiveSubtitleState(false)
+      getEffectiveSubtitleState(false),
+      null,
+      null,
+      { lowerThird: { ...state.lowerThird } }
     );
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
@@ -773,7 +789,8 @@ function redrawActiveCanvases() {
         isDragging: Boolean(state.fxSplitWipe.isDragging),
         beforeLabel: t("wipe.pill.before"),
         afterLabel: t("wipe.pill.after")
-      }
+      },
+      { lowerThird: { ...state.lowerThird } }
     );
     redrawFxKeyframeCanvases();
   } else if (state.activeTab === "titles") {
@@ -785,7 +802,10 @@ function redrawActiveCanvases() {
       getEffectiveFxState(),
       getEffectiveTitleState(true),
       getEffectiveFramingState(),
-      getEffectiveSubtitleState(true)
+      getEffectiveSubtitleState(true),
+      null,
+      null,
+      { lowerThird: { ...state.lowerThird } }
     );
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
@@ -2318,6 +2338,7 @@ function serializeFullProjectState() {
       timecode_burnin: txt("render-timecode-burnin", "off") || "off",
       review_watermark_text: txt("render-watermark-text", ""),
       review_watermark_opacity: Number(byId("render-watermark-opacity")?.value ?? 0.35),
+      lower_third: { ...state.lowerThird },
       export_fps: txt("render-export-fps", "source") || "source",
       deinterlace: chk("render-deinterlace", false),
       audio_only_format: txt("render-audio-only-format", "off") || "off",
@@ -2506,6 +2527,29 @@ function applyFullProjectState(project, validation) {
     Number.isFinite(wmOpacityVal) ? wmOpacityVal.toFixed(2) : "0.35"
   );
   syncReviewWatermarkControlsUI();
+  if (del.lower_third && typeof del.lower_third === "object") {
+    state.lowerThird = {
+      enabled: Boolean(del.lower_third.enabled),
+      title: typeof del.lower_third.title === "string" ? del.lower_third.title : "",
+      subtitle: typeof del.lower_third.subtitle === "string" ? del.lower_third.subtitle : "",
+      position: ["bottom_left", "bottom_center", "top_left"].includes(del.lower_third.position)
+        ? del.lower_third.position
+        : "bottom_left",
+      font_size: Number.isInteger(Number(del.lower_third.font_size))
+        ? Math.min(96, Math.max(16, Number(del.lower_third.font_size)))
+        : 36,
+      box_opacity: Number.isFinite(Number(del.lower_third.box_opacity))
+        ? Math.min(1, Math.max(0, Number(del.lower_third.box_opacity)))
+        : 0.65,
+      start_s: Number.isFinite(Number(del.lower_third.start_s))
+        ? Math.max(0, Number(del.lower_third.start_s))
+        : 0.0,
+      duration_s: Number.isFinite(Number(del.lower_third.duration_s))
+        ? Math.max(0.1, Number(del.lower_third.duration_s))
+        : 5.0
+    };
+  }
+  syncLowerThirdControlsUI({ syncInputs: true });
   setVal("render-input-path", del.input_path || ".taktcut-samples/sample_rec709.mp4");
   setVal("render-output-path", del.output_path || "renders/delivery_web.mp4");
   setVal("render-resolution", `${state.renderConfig.targetWidth}x${state.renderConfig.targetHeight}`);
@@ -4960,6 +5004,150 @@ function syncReviewWatermarkControlsUI() {
   }
 }
 
+const LOWER_THIRD_PRESETS = {
+  interview: {
+    enabled: true,
+    title: "Claire Laurent",
+    subtitle: "Lead Cinematographer | Studio Paris",
+    position: "bottom_left",
+    font_size: 36,
+    box_opacity: 0.7,
+    start_s: 0.0,
+    duration_s: 5.0
+  },
+  youtube_intro: {
+    enabled: true,
+    title: "EPISODE 12: COLOR GRADING",
+    subtitle: "Subscribe & Hit the Bell",
+    position: "bottom_center",
+    font_size: 44,
+    box_opacity: 0.75,
+    start_s: 0.0,
+    duration_s: 4.0
+  },
+  broadcast_tag: {
+    enabled: true,
+    title: "LIVE | PARIS STUDIO",
+    subtitle: "REC.709 25P FEED",
+    position: "top_left",
+    font_size: 28,
+    box_opacity: 0.65,
+    start_s: 0.0,
+    duration_s: 6.0
+  }
+};
+
+function getNormalizedLowerThirdPayload() {
+  const lt = state.lowerThird;
+  return {
+    enabled: Boolean(lt.enabled),
+    title: String(lt.title || ""),
+    subtitle: String(lt.subtitle || ""),
+    position: ["bottom_left", "bottom_center", "top_left"].includes(lt.position)
+      ? lt.position
+      : "bottom_left",
+    font_size: Math.min(96, Math.max(16, Math.round(Number(lt.font_size || 36)))),
+    box_opacity: Math.min(1, Math.max(0, Number.isFinite(Number(lt.box_opacity)) ? Number(lt.box_opacity) : 0.65)),
+    start_s: Math.min(86400, Math.max(0, Number.isFinite(Number(lt.start_s)) ? Number(lt.start_s) : 0.0)),
+    duration_s: Math.min(86400, Math.max(0.1, Number.isFinite(Number(lt.duration_s)) ? Number(lt.duration_s) : 5.0))
+  };
+}
+
+function syncLowerThirdPresetButtons() {
+  const lt = state.lowerThird;
+  for (const btn of document.querySelectorAll(".lower-third-preset-btn[data-lt-preset]")) {
+    const pid = btn.getAttribute("data-lt-preset");
+    const preset = pid ? LOWER_THIRD_PRESETS[pid] : null;
+    const isMatch = Boolean(
+      preset &&
+      lt.enabled &&
+      lt.title === preset.title &&
+      lt.subtitle === preset.subtitle &&
+      lt.position === preset.position
+    );
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+}
+
+function syncLowerThirdControlsUI(opts = {}) {
+  const lt = state.lowerThird;
+  const syncInputs = Boolean(opts.syncInputs);
+  const enabledEl = byId("render-lower-third-enabled");
+  if (enabledEl && enabledEl.checked !== Boolean(lt.enabled)) {
+    enabledEl.checked = Boolean(lt.enabled);
+  }
+  if (syncInputs) {
+    const titleEl = byId("render-lower-third-title");
+    const subEl = byId("render-lower-third-subtitle");
+    const posEl = byId("render-lower-third-position");
+    const fsEl = byId("render-lower-third-font-size");
+    const opEl = byId("render-lower-third-box-opacity");
+    const startEl = byId("render-lower-third-start");
+    const durEl = byId("render-lower-third-duration");
+    if (titleEl) titleEl.value = lt.title;
+    if (subEl) subEl.value = lt.subtitle;
+    if (posEl) posEl.value = lt.position;
+    if (fsEl) fsEl.value = String(lt.font_size);
+    if (opEl) opEl.value = Number(lt.box_opacity).toFixed(2);
+    if (startEl) startEl.value = Number(lt.start_s).toFixed(1);
+    if (durEl) durEl.value = Number(lt.duration_s).toFixed(1);
+  }
+  const opValEl = byId("render-lower-third-box-opacity-value");
+  if (opValEl) {
+    opValEl.textContent = Number(lt.box_opacity).toFixed(2);
+  }
+  const hasText = Boolean(String(lt.title || "").trim() || String(lt.subtitle || "").trim());
+  const badgeEl = byId("render-lower-third-badge");
+  if (badgeEl) {
+    if (!lt.enabled) {
+      badgeEl.textContent = "OFF";
+      badgeEl.className = "nle-tag mono";
+    } else if (hasText) {
+      badgeEl.textContent = "ACTIVE";
+      badgeEl.className = "nle-tag is-active mono";
+    } else {
+      badgeEl.textContent = "EMPTY";
+      badgeEl.className = "nle-tag mono";
+    }
+  }
+  syncLowerThirdPresetButtons();
+  scheduleLowerThirdCompile();
+}
+
+function applyLowerThirdPreset(presetId) {
+  const preset = LOWER_THIRD_PRESETS[presetId];
+  if (!preset) return;
+  state.lowerThird = { ...preset };
+  syncLowerThirdControlsUI({ syncInputs: true });
+  redrawActiveCanvases();
+}
+
+function scheduleLowerThirdCompile() {
+  if (state.lowerThirdCompileTimer) {
+    window.clearTimeout(state.lowerThirdCompileTimer);
+  }
+  const seq = ++state.lowerThirdCompileSeq;
+  state.lowerThirdCompileTimer = window.setTimeout(async () => {
+    const previewEl = byId("render-lower-third-preview");
+    const payload = getNormalizedLowerThirdPayload();
+    if (!payload.enabled || (!payload.title.trim() && !payload.subtitle.trim())) {
+      if (previewEl) previewEl.textContent = "(off)";
+      return;
+    }
+    try {
+      const compiled = await api.compileLowerThird({ lower_third: payload });
+      if (seq !== state.lowerThirdCompileSeq) return;
+      if (previewEl) {
+        previewEl.textContent = compiled.filtergraph || "(off)";
+      }
+    } catch (err) {
+      if (seq !== state.lowerThirdCompileSeq) return;
+      if (previewEl) previewEl.textContent = `Error: ${err.message}`;
+    }
+  }, 80);
+}
+
 function applyDeliveryPreset(presetId) {
   const presets = getDeliveryPresetsList();
   const preset = presets.find((p) => p.id === presetId);
@@ -5235,6 +5423,7 @@ async function buildOrExecuteRender(execute) {
     const reviewWatermarkText = wmTextEl ? wmTextEl.value.trim() : "";
     const wmOpacityEl = byId("render-watermark-opacity");
     const reviewWatermarkOpacity = wmOpacityEl ? Number(wmOpacityEl.value) : 0.35;
+    const lowerThirdPayload = getNormalizedLowerThirdPayload();
     const exportFpsEl = byId("render-export-fps");
     const exportFps = exportFpsEl ? exportFpsEl.value : "source";
     const deinterlaceEl = byId("render-deinterlace");
@@ -5257,6 +5446,7 @@ async function buildOrExecuteRender(execute) {
         chroma_key: chromaKeyPayload,
         fx_stack: fxPayload,
         title_overlay: titlePayload,
+        lower_third: lowerThirdPayload.enabled ? lowerThirdPayload : null,
         subtitle_track: subtitlePayload,
         audio_params: audioParamsPayload,
         video_fade: videoFadePayload,
@@ -5318,6 +5508,7 @@ async function buildOrExecuteRender(execute) {
       chroma_key: chromaKeyPayload,
       fx_stack: fxPayload,
       title_overlay: titlePayload,
+      lower_third: lowerThirdPayload.enabled ? lowerThirdPayload : null,
       subtitle_track: subtitlePayload,
       audio_params: audioParamsPayload,
       video_fade: videoFadePayload,
@@ -5398,6 +5589,12 @@ async function buildOrExecuteRender(execute) {
         t("render.plan.reviewWatermark"),
         plan.review_watermark_text
           ? `${plan.review_watermark_text} (${Math.round((plan.review_watermark_opacity ?? 0.35) * 100)}%)`
+          : "off"
+      ],
+      [
+        t("render.plan.lowerThird"),
+        plan.lower_third_enabled
+          ? `${plan.lower_third_title || plan.lower_third_subtitle} (${plan.lower_third_position})`
           : "off"
       ],
       ["Video Filter", plan.video_filter || t("common.none")],
@@ -9218,6 +9415,115 @@ function wireEvents() {
     });
   }
   syncReviewWatermarkControlsUI();
+  const ltEnabledEl = byId("render-lower-third-enabled");
+  if (ltEnabledEl) {
+    ltEnabledEl.addEventListener("change", () => {
+      state.lowerThird.enabled = Boolean(ltEnabledEl.checked);
+      syncLowerThirdControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  for (const btn of document.querySelectorAll(".lower-third-preset-btn[data-lt-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-lt-preset");
+      if (pid) applyLowerThirdPreset(pid);
+    });
+  }
+  const ltTitleEl = byId("render-lower-third-title");
+  if (ltTitleEl) {
+    ltTitleEl.addEventListener("input", () => {
+      state.lowerThird.title = ltTitleEl.value;
+      syncLowerThirdControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const ltSubEl = byId("render-lower-third-subtitle");
+  if (ltSubEl) {
+    ltSubEl.addEventListener("input", () => {
+      state.lowerThird.subtitle = ltSubEl.value;
+      syncLowerThirdControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const ltPosEl = byId("render-lower-third-position");
+  if (ltPosEl) {
+    ltPosEl.addEventListener("change", () => {
+      state.lowerThird.position = ltPosEl.value;
+      syncLowerThirdControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const ltFontSizeEl = byId("render-lower-third-font-size");
+  if (ltFontSizeEl) {
+    ltFontSizeEl.addEventListener("input", () => {
+      const val = Number.parseInt(ltFontSizeEl.value, 10);
+      if (Number.isInteger(val) && val >= 16 && val <= 96) {
+        state.lowerThird.font_size = val;
+        syncLowerThirdControlsUI();
+        redrawActiveCanvases();
+      }
+    });
+    ltFontSizeEl.addEventListener("blur", () => {
+      const raw = Number.parseInt(ltFontSizeEl.value, 10);
+      const clamped = Number.isFinite(raw) ? Math.min(96, Math.max(16, raw)) : state.lowerThird.font_size;
+      state.lowerThird.font_size = clamped;
+      ltFontSizeEl.value = String(clamped);
+      syncLowerThirdControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const ltOpacityEl = byId("render-lower-third-box-opacity");
+  if (ltOpacityEl) {
+    const onOpacityChange = () => {
+      const val = Number(ltOpacityEl.value);
+      if (Number.isFinite(val) && val >= 0 && val <= 1) {
+        state.lowerThird.box_opacity = val;
+        syncLowerThirdControlsUI();
+        redrawActiveCanvases();
+      }
+    };
+    ltOpacityEl.addEventListener("input", onOpacityChange);
+    ltOpacityEl.addEventListener("change", onOpacityChange);
+  }
+  const ltStartEl = byId("render-lower-third-start");
+  if (ltStartEl) {
+    ltStartEl.addEventListener("input", () => {
+      const val = Number.parseFloat(ltStartEl.value);
+      if (Number.isFinite(val) && val >= 0 && val <= 86400) {
+        state.lowerThird.start_s = val;
+        syncLowerThirdControlsUI();
+        redrawActiveCanvases();
+      }
+    });
+    ltStartEl.addEventListener("blur", () => {
+      const raw = Number.parseFloat(ltStartEl.value);
+      const clamped = Number.isFinite(raw) ? Math.min(86400, Math.max(0, raw)) : state.lowerThird.start_s;
+      state.lowerThird.start_s = clamped;
+      ltStartEl.value = clamped.toFixed(1);
+      syncLowerThirdControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  const ltDurEl = byId("render-lower-third-duration");
+  if (ltDurEl) {
+    ltDurEl.addEventListener("input", () => {
+      const val = Number.parseFloat(ltDurEl.value);
+      if (Number.isFinite(val) && val >= 0.1 && val <= 86400) {
+        state.lowerThird.duration_s = val;
+        syncLowerThirdControlsUI();
+        redrawActiveCanvases();
+      }
+    });
+    ltDurEl.addEventListener("blur", () => {
+      const raw = Number.parseFloat(ltDurEl.value);
+      const clamped = Number.isFinite(raw) ? Math.min(86400, Math.max(0.1, raw)) : state.lowerThird.duration_s;
+      state.lowerThird.duration_s = clamped;
+      ltDurEl.value = clamped.toFixed(1);
+      syncLowerThirdControlsUI();
+      redrawActiveCanvases();
+    });
+  }
+  syncLowerThirdControlsUI({ syncInputs: true });
   byId("btn-build-render-plan").addEventListener("click", () => buildOrExecuteRender(false));
   byId("btn-execute-render").addEventListener("click", () => buildOrExecuteRender(true));
   byId("btn-copy-ffmpeg-cmd").addEventListener("click", async () => {

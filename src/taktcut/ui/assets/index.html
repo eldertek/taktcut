@@ -1610,6 +1610,65 @@
                   </div>
                 </div>
               </div>
+              <div id="deliver-lower-third-card" class="lower-third-card">
+                <div class="lower-third-head">
+                  <span class="lower-third-title" data-i18n="render.lowerThird.title">Lower-Third / Title Overlay</span>
+                  <div class="lower-third-head-actions">
+                    <span id="render-lower-third-badge" class="nle-tag mono">OFF</span>
+                    <label class="check-label lower-third-toggle-label">
+                      <input type="checkbox" id="render-lower-third-enabled">
+                      <span data-i18n="render.lowerThird.toggle">Enable</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="lower-third-preset-row" role="group" aria-label="Lower-Third Presets">
+                  <button type="button" class="lower-third-preset-btn" data-lt-preset="interview" aria-pressed="false" data-i18n="render.lowerThird.preset.interview">Interview</button>
+                  <button type="button" class="lower-third-preset-btn" data-lt-preset="youtube_intro" aria-pressed="false" data-i18n="render.lowerThird.preset.youtubeIntro">YouTube Intro</button>
+                  <button type="button" class="lower-third-preset-btn" data-lt-preset="broadcast_tag" aria-pressed="false" data-i18n="render.lowerThird.preset.broadcastTag">Broadcast Tag</button>
+                </div>
+                <div class="form-row-two">
+                  <div class="form-row">
+                    <label for="render-lower-third-title" data-i18n="render.lowerThird.label.title">Title</label>
+                    <input type="text" id="render-lower-third-title" class="input-control" maxlength="120" placeholder="Claire Laurent">
+                  </div>
+                  <div class="form-row">
+                    <label for="render-lower-third-subtitle" data-i18n="render.lowerThird.label.subtitle">Subtitle</label>
+                    <input type="text" id="render-lower-third-subtitle" class="input-control" maxlength="120" placeholder="Lead Cinematographer | Studio Paris">
+                  </div>
+                </div>
+                <div class="form-row-three">
+                  <div class="form-row">
+                    <label for="render-lower-third-position" data-i18n="render.lowerThird.label.position">Position</label>
+                    <select id="render-lower-third-position" class="input-control mono">
+                      <option value="bottom_left" data-i18n="render.lowerThird.pos.bottomLeft" selected>Bottom Left</option>
+                      <option value="bottom_center" data-i18n="render.lowerThird.pos.bottomCenter">Bottom Center</option>
+                      <option value="top_left" data-i18n="render.lowerThird.pos.topLeft">Top Left</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label for="render-lower-third-font-size" data-i18n="render.lowerThird.label.fontSize">Font Size (px)</label>
+                    <input type="number" id="render-lower-third-font-size" class="input-control mono" min="16" max="96" step="1" value="36">
+                  </div>
+                  <div class="form-row">
+                    <label for="render-lower-third-box-opacity" data-i18n="render.lowerThird.label.boxOpacity">Box Opacity</label>
+                    <div class="watermark-opacity-row">
+                      <input type="range" id="render-lower-third-box-opacity" class="watermark-opacity-slider" min="0" max="1" step="0.05" value="0.65">
+                      <span id="render-lower-third-box-opacity-value" class="mono watermark-opacity-val">0.65</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-row-two">
+                  <div class="form-row">
+                    <label for="render-lower-third-start" data-i18n="render.lowerThird.label.start">Start (s)</label>
+                    <input type="number" id="render-lower-third-start" class="input-control mono" min="0" max="86400" step="0.1" value="0.0">
+                  </div>
+                  <div class="form-row">
+                    <label for="render-lower-third-duration" data-i18n="render.lowerThird.label.duration">Duration (s)</label>
+                    <input type="number" id="render-lower-third-duration" class="input-control mono" min="0.1" max="86400" step="0.1" value="5.0">
+                  </div>
+                </div>
+                <div id="render-lower-third-preview" class="code-box lower-third-preview mono" aria-live="polite">(off)</div>
+              </div>
               <div class="form-row-three">
                 <div class="form-row">
                   <label for="render-aspect-preset" data-i18n="render.label.aspectPreset">Aspect Ratio Preset</label>

@@ -51,6 +51,7 @@ from taktcut.render import (
     ClipRetimeParams,
     ClipVideoFadeParams,
     FramingParams,
+    LowerThirdParams,
     build_render_plan,
     execute_render_plan,
     probe_hardware_capabilities,
@@ -250,6 +251,7 @@ class RemoteRenderJobRequest(BaseModel):
     color_grade: ColorGradeParams | None = None
     lut_cube_text: str | None = None
     title_overlay: TitleOverlayParams | None = None
+    lower_third: LowerThirdParams | None = None
     subtitle_track: SubtitleTrackParams | None = None
     audio_params: ClipAudioParams | None = None
     video_fade: ClipVideoFadeParams | None = None
@@ -569,6 +571,7 @@ class RemoteRenderState:
             chroma_key=req.chroma_key,
             fx_filtergraph=fx_filtergraph,
             title_overlay=req.title_overlay,
+            lower_third=req.lower_third,
             subtitle_track=req.subtitle_track,
             audio_params=req.audio_params,
             video_fade=req.video_fade,

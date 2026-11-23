@@ -688,6 +688,96 @@ export function drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState,
   return true;
 }
 
+export function drawLowerThirdOverlayOnFrame(ctx, fx, fy, frameW, frameH, ltState, tSec) {
+  if (!ltState || !ltState.enabled) return false;
+  const rawTitle = typeof ltState.title === "string"
+    ? ltState.title.replace(/[\r\n\t]+/g, " ").replace(/[\x00-\x1f\x7f]/g, " ").trim()
+    : "";
+  const rawSub = typeof ltState.subtitle === "string"
+    ? ltState.subtitle.replace(/[\r\n\t]+/g, " ").replace(/[\x00-\x1f\x7f]/g, " ").trim()
+    : "";
+  if (!rawTitle && !rawSub) return false;
+
+  const startS = Number.isFinite(Number(ltState.start_s)) ? Math.max(0, Number(ltState.start_s)) : 0;
+  const durationS = Number.isFinite(Number(ltState.duration_s)) ? Math.max(0.1, Number(ltState.duration_s)) : 5;
+  if (tSec < startS || tSec > startS + durationS) return false;
+
+  const rawPos = typeof ltState.position === "string" ? ltState.position.trim().toLowerCase() : "bottom_left";
+  const pos = rawPos === "bottom_center" || rawPos === "top_left" ? rawPos : "bottom_left";
+  const fontSize = Math.max(16, Math.min(96, Number.isFinite(Number(ltState.font_size)) ? Number(ltState.font_size) : 36));
+  const boxOpacity = Math.max(0, Math.min(1, Number.isFinite(Number(ltState.box_opacity)) ? Number(ltState.box_opacity) : 0.65));
+
+  const titlePx = Math.max(10, Math.round(frameH * (fontSize / 1080)));
+  const subPx = Math.max(8, Math.round(frameH * (Math.max(14, Math.round(fontSize * 0.65)) / 1080)));
+  const padX = Math.max(6, Math.round(frameH * (12 / 1080)));
+  const padY = Math.max(4, Math.round(frameH * (10 / 1080)));
+  const lineGap = rawTitle && rawSub ? Math.max(3, Math.round(frameH * (6 / 1080))) : 0;
+
+  const safeX = frameW * 0.05;
+  const safeBottom = frameH * 0.08;
+  const safeTop = frameH * 0.06;
+  const maxTextW = Math.max(40, (pos === "bottom_center" ? frameW * 0.84 : frameW * 0.72) - padX * 2);
+
+  ctx.save();
+  ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+  const fittedTitle = rawTitle ? fitCanvasText(ctx, rawTitle, maxTextW) : "";
+  const titleW = fittedTitle ? ctx.measureText(fittedTitle).width : 0;
+
+  ctx.font = `500 ${subPx}px system-ui, -apple-system, sans-serif`;
+  const fittedSub = rawSub ? fitCanvasText(ctx, rawSub, maxTextW) : "";
+  const subW = fittedSub ? ctx.measureText(fittedSub).width : 0;
+
+  const contentW = Math.max(titleW, subW);
+  const contentH = (fittedTitle ? titlePx : 0) + (fittedSub ? subPx : 0) + lineGap;
+  const boxW = Math.min(frameW * 0.90, contentW + padX * 2);
+  const boxH = contentH + padY * 2;
+
+  let boxX = fx + safeX;
+  let boxY = fy + frameH - safeBottom - boxH;
+  if (pos === "bottom_center") {
+    boxX = fx + (frameW - boxW) * 0.5;
+    boxY = fy + frameH - safeBottom - boxH;
+  } else if (pos === "top_left") {
+    boxX = fx + safeX;
+    boxY = fy + safeTop;
+  }
+
+  if (boxOpacity > 0) {
+    ctx.fillStyle = `rgba(0, 0, 0, ${boxOpacity.toFixed(3)})`;
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+  }
+  ctx.fillStyle = "#e68442";
+  if (pos === "bottom_center") {
+    ctx.fillRect(boxX, boxY + boxH - Math.max(2, Math.round(frameH * 0.003)), boxW, Math.max(2, Math.round(frameH * 0.003)));
+  } else {
+    ctx.fillRect(boxX, boxY, Math.max(2, Math.round(frameW * 0.0035)), boxH);
+  }
+
+  ctx.textBaseline = "top";
+  ctx.textAlign = pos === "bottom_center" ? "center" : "left";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.72)";
+  ctx.shadowBlur = 2;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+
+  const textX = pos === "bottom_center" ? boxX + boxW * 0.5 : boxX + padX;
+  let cursorY = boxY + padY;
+  if (fittedTitle) {
+    ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(fittedTitle, textX, cursorY);
+    cursorY += titlePx + lineGap;
+  }
+  if (fittedSub) {
+    ctx.font = `500 ${subPx}px system-ui, -apple-system, sans-serif`;
+    ctx.fillStyle = "#d8d8de";
+    ctx.fillText(fittedSub, textX, cursorY);
+  }
+
+  ctx.restore();
+  return true;
+}
+
 function sanitizeCanvasCaptionText(raw) {
   let cur = String(raw || "").replace(/\r\n|\r/g, "\n").replace(/\t/g, " ");
   for (let i = 0; i < 6; i += 1) {
@@ -2109,11 +2199,16 @@ export function drawProgramMonitorCanvas(
       ? false
       : drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, passTitleState, tSec);
 
+    const lowerThirdState = renderOpts && renderOpts.lowerThird ? renderOpts.lowerThird : null;
+    const lowerThirdOnAir = suppressForKeyer
+      ? false
+      : drawLowerThirdOverlayOnFrame(ctx, fx, fy, frameW, frameH, lowerThirdState, tSec);
+
     const activeSubCue = suppressForKeyer
       ? null
       : drawSubtitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, passSubState, tSec);
 
-    return { titleOnAir, activeSubCue };
+    return { titleOnAir, lowerThirdOnAir, activeSubCue };
   };
 
   ctx.save();
@@ -2122,6 +2217,7 @@ export function drawProgramMonitorCanvas(
   ctx.clip();
 
   let titleOnAir = false;
+  let lowerThirdOnAir = false;
   let activeSubCue = null;
   let wipeGeom = null;
 
@@ -2152,6 +2248,7 @@ export function drawProgramMonitorCanvas(
       ctx.clip();
       const afterMeta = renderScenePass(cdl, fxState, titleState, subtitleState, chromaKeyState);
       titleOnAir = afterMeta.titleOnAir;
+      lowerThirdOnAir = afterMeta.lowerThirdOnAir;
       activeSubCue = afterMeta.activeSubCue;
       ctx.restore();
     }
@@ -2163,6 +2260,7 @@ export function drawProgramMonitorCanvas(
   } else {
     const passMeta = renderScenePass(cdl, fxState, titleState, subtitleState, chromaKeyState);
     titleOnAir = passMeta.titleOnAir;
+    lowerThirdOnAir = passMeta.lowerThirdOnAir;
     activeSubCue = passMeta.activeSubCue;
     canvas._splitWipeGeom = null;
   }
@@ -2181,6 +2279,17 @@ export function drawProgramMonitorCanvas(
     ctx.fillRect(fx + 8, leftPillY, tw, 17);
     ctx.fillStyle = titleOnAir ? "#111114" : "#a4a4ae";
     ctx.fillText(label, fx + 14, leftPillY + 12);
+    leftPillY += 20;
+  }
+
+  if (lowerThirdOnAir) {
+    const ltLabel = "LT: ON AIR";
+    ctx.font = "700 10px ui-monospace, monospace";
+    const tw = Math.min(frameW - 20, ctx.measureText(ltLabel).width + 12);
+    ctx.fillStyle = "rgba(230, 132, 66, 0.92)";
+    ctx.fillRect(fx + 8, leftPillY, tw, 17);
+    ctx.fillStyle = "#111114";
+    ctx.fillText(ltLabel, fx + 14, leftPillY + 12);
     leftPillY += 20;
   }
 

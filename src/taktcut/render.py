@@ -26,7 +26,17 @@ from taktcut.models import (
     ALLOWED_AUDIO_ONLY_FORMATS,
     ALLOWED_DYNAMIC_ZOOM_PRESETS,
     ALLOWED_EXPORT_FPS,
+    ALLOWED_LOWER_THIRD_POSITIONS,
     ALLOWED_TIMECODE_BURNIN,
+    LOWER_THIRD_BOX_OPACITY_DEFAULT,
+    LOWER_THIRD_BOX_OPACITY_MAX,
+    LOWER_THIRD_BOX_OPACITY_MIN,
+    LOWER_THIRD_DURATION_MIN_S,
+    LOWER_THIRD_FONT_SIZE_DEFAULT,
+    LOWER_THIRD_FONT_SIZE_MAX,
+    LOWER_THIRD_FONT_SIZE_MIN,
+    LOWER_THIRD_TEXT_MAX_LEN,
+    LOWER_THIRD_TIME_MAX_S,
     REVIEW_WATERMARK_MAX_LEN,
     REVIEW_WATERMARK_OPACITY_DEFAULT,
     REVIEW_WATERMARK_OPACITY_MAX,
@@ -39,6 +49,7 @@ from taktcut.models import (
     ExportFpsOption,
     HardwareCapabilities,
     LoudnessPresetId,
+    LowerThirdPosition,
     RationalFrameRate,
     RenderPlan,
     RenderProfile,
@@ -51,6 +62,7 @@ from taktcut.titles import (
     compile_title_filter,
     escape_ffmpeg_drawtext_text,
     resolve_default_fontfile,
+    sanitize_title_text,
 )
 
 AUDIO_GAIN_DB_MIN: float = -24.0
@@ -316,6 +328,179 @@ def compile_review_watermark_filter(
     return (
         f"drawtext={font_opt}text='{escaped_text}':fontsize=42"
         f":fontcolor=white@{opacity:.2f}:x=(w-text_w)/2:y=(h-text_h)/2"
+    )
+
+
+class LowerThirdParams(BaseModel):
+    """Broadcast Lower-Third & Title Overlay parameters with strict bounds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    title: str = ""
+    subtitle: str = ""
+    position: LowerThirdPosition = "bottom_left"
+    font_size: int = LOWER_THIRD_FONT_SIZE_DEFAULT
+    box_opacity: float = LOWER_THIRD_BOX_OPACITY_DEFAULT
+    start_s: float = 0.0
+    duration_s: float = 5.0
+
+    @field_validator("enabled", mode="before")
+    @classmethod
+    def _validate_enabled(cls, raw: Any) -> bool:
+        if not isinstance(raw, bool):
+            raise ValueError(f"enabled must be a boolean, got {raw!r}")
+        return raw
+
+    @field_validator("title", "subtitle", mode="before")
+    @classmethod
+    def _validate_text(cls, raw: Any, info: Any) -> str:
+        if not isinstance(raw, str):
+            raise ValueError(f"{info.field_name} must be a string, got {raw!r}")
+        if len(raw) > LOWER_THIRD_TEXT_MAX_LEN:
+            raise ValueError(
+                f"{info.field_name} exceeds maximum length of {LOWER_THIRD_TEXT_MAX_LEN} characters"
+            )
+        return raw
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def _validate_position(cls, raw: Any) -> LowerThirdPosition:
+        if not isinstance(raw, str):
+            raise ValueError(f"position must be a string, got {raw!r}")
+        cleaned = raw.strip().lower()
+        if cleaned not in ALLOWED_LOWER_THIRD_POSITIONS:
+            allowed = ", ".join(ALLOWED_LOWER_THIRD_POSITIONS)
+            raise ValueError(
+                f"Unsupported lower_third position {raw!r}; expected one of: {allowed}"
+            )
+        return cleaned
+
+    @field_validator("font_size", mode="before")
+    @classmethod
+    def _validate_font_size(cls, raw: Any) -> int:
+        return _validate_bounded_int(
+            raw,
+            "font_size",
+            LOWER_THIRD_FONT_SIZE_MIN,
+            LOWER_THIRD_FONT_SIZE_MAX,
+        )
+
+    @field_validator("box_opacity", mode="before")
+    @classmethod
+    def _validate_box_opacity(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "box_opacity",
+            LOWER_THIRD_BOX_OPACITY_MIN,
+            LOWER_THIRD_BOX_OPACITY_MAX,
+        )
+
+    @field_validator("start_s", mode="before")
+    @classmethod
+    def _validate_start_s(cls, raw: Any) -> float:
+        return _validate_bounded_float(raw, "start_s", 0.0, LOWER_THIRD_TIME_MAX_S)
+
+    @field_validator("duration_s", mode="before")
+    @classmethod
+    def _validate_duration_s(cls, raw: Any) -> float:
+        return _validate_bounded_float(
+            raw,
+            "duration_s",
+            LOWER_THIRD_DURATION_MIN_S,
+            LOWER_THIRD_TIME_MAX_S,
+        )
+
+    def is_active(self) -> bool:
+        """Return True when enabled and at least one of title or subtitle is non-empty."""
+        return bool(
+            self.enabled
+            and (sanitize_title_text(self.title) != "" or sanitize_title_text(self.subtitle) != "")
+        )
+
+
+class LowerThirdCompileResult(BaseModel):
+    """Compiled FFmpeg drawtext filtergraph for a Lower-Third overlay."""
+
+    filtergraph: str
+    ffmpeg_vf_args: list[str]
+    is_active: bool
+    escaped_title: str
+    escaped_subtitle: str
+    params: LowerThirdParams
+
+
+def compile_lower_third_filter(
+    params: LowerThirdParams,
+    *,
+    fontfile: Path | str | None = None,
+) -> str | None:
+    """Compile LowerThirdParams into an FFmpeg drawtext filtergraph with safe escaping."""
+    if not params.is_active():
+        return None
+
+    clean_title = sanitize_title_text(params.title)
+    clean_subtitle = sanitize_title_text(params.subtitle)
+    esc_title = escape_ffmpeg_drawtext_text(clean_title) if clean_title else ""
+    esc_subtitle = escape_ffmpeg_drawtext_text(clean_subtitle) if clean_subtitle else ""
+
+    resolved_font = _resolve_burnin_fontfile(fontfile, resolve_default_fontfile)
+    font_opt = f"fontfile='{escape_ffmpeg_filter_path(resolved_font)}':" if resolved_font else ""
+
+    start = params.start_s
+    end = params.start_s + params.duration_s
+    enable_expr = f"enable='between(t,{start:.2f},{end:.2f})'"
+    box_opts = f"box=1:boxcolor=black@{params.box_opacity:.2f}:boxborderw=10"
+
+    sub_fs = max(14, round(params.font_size * 0.65))
+    x_expr = "x=(w-tw)/2" if params.position == "bottom_center" else "x=round(w*0.05)"
+
+    parts: list[str] = []
+    if params.position == "top_left":
+        if esc_title and esc_subtitle:
+            title_coords = f"{x_expr}:y=round(h*0.06)"
+            sub_coords = f"{x_expr}:y=round(h*0.06)+{params.font_size + 18}"
+        else:
+            title_coords = f"{x_expr}:y=round(h*0.06)"
+            sub_coords = title_coords
+    else:
+        if esc_title and esc_subtitle:
+            title_coords = f"{x_expr}:y=h-round(h*0.08)-th-{sub_fs + 16}"
+            sub_coords = f"{x_expr}:y=h-round(h*0.08)-th"
+        else:
+            title_coords = f"{x_expr}:y=h-round(h*0.08)-th"
+            sub_coords = title_coords
+
+    if esc_title:
+        parts.append(
+            f"drawtext={font_opt}expansion=none:text='{esc_title}'"
+            f":fontsize={params.font_size}:fontcolor=white:{box_opts}:{title_coords}:{enable_expr}"
+        )
+    if esc_subtitle:
+        parts.append(
+            f"drawtext={font_opt}expansion=none:text='{esc_subtitle}'"
+            f":fontsize={sub_fs}:fontcolor=0xd8d8de:{box_opts}:{sub_coords}:{enable_expr}"
+        )
+
+    return ",".join(parts) if parts else None
+
+
+def compile_lower_third_filter_result(
+    params: LowerThirdParams,
+    *,
+    fontfile: Path | str | None = None,
+) -> LowerThirdCompileResult:
+    """Compile LowerThirdParams into a structured filtergraph and argv slice."""
+    clean_title = sanitize_title_text(params.title)
+    clean_subtitle = sanitize_title_text(params.subtitle)
+    fg = compile_lower_third_filter(params, fontfile=fontfile) or ""
+    return LowerThirdCompileResult(
+        filtergraph=fg,
+        ffmpeg_vf_args=["-vf", fg] if fg else [],
+        is_active=(fg != ""),
+        escaped_title=escape_ffmpeg_drawtext_text(clean_title) if clean_title else "",
+        escaped_subtitle=escape_ffmpeg_drawtext_text(clean_subtitle) if clean_subtitle else "",
+        params=params,
     )
 
 
@@ -1569,6 +1754,7 @@ def build_render_plan(
     deinterlace: bool = False,
     audio_only_format: AudioOnlyFormatId | None = None,
     video_fade: ClipVideoFadeParams | None = None,
+    lower_third: LowerThirdParams | None = None,
 ) -> RenderPlan:
     """Compile a deterministic FFmpeg command plan with CFR lock, GOP=2*fps, and Rec.709 tags."""
     preset_obj = get_delivery_preset(delivery_preset) if delivery_preset is not None else None
@@ -1790,6 +1976,9 @@ def build_render_plan(
         sub_fg = compile_subtitles_filter(subtitle_track, pix_fmt=pix_fmt)
         if sub_fg:
             vf_parts.append(sub_fg)
+    lt_vf = compile_lower_third_filter(lower_third) if lower_third is not None else None
+    if lt_vf is not None:
+        vf_parts.append(lt_vf)
     tc_vf = compile_timecode_burnin_filter(resolved_timecode_burnin, target_fps)
     if tc_vf is not None:
         vf_parts.append(tc_vf)
@@ -1863,6 +2052,10 @@ def build_render_plan(
             timecode_burnin=resolved_timecode_burnin,
             review_watermark_text=resolved_watermark_text,
             review_watermark_opacity=resolved_watermark_opacity,
+            lower_third_enabled=False,
+            lower_third_title="",
+            lower_third_subtitle="",
+            lower_third_position="bottom_left",
             export_fps=resolved_export_fps,
             deinterlace=resolved_deinterlace,
             audio_only_format=resolved_audio_only,
@@ -1957,6 +2150,12 @@ def build_render_plan(
         timecode_burnin=resolved_timecode_burnin,
         review_watermark_text=resolved_watermark_text,
         review_watermark_opacity=resolved_watermark_opacity,
+        lower_third_enabled=bool(lt_vf is not None),
+        lower_third_title=sanitize_title_text(lower_third.title) if lower_third is not None else "",
+        lower_third_subtitle=(
+            sanitize_title_text(lower_third.subtitle) if lower_third is not None else ""
+        ),
+        lower_third_position=lower_third.position if lower_third is not None else "bottom_left",
         export_fps=resolved_export_fps,
         deinterlace=resolved_deinterlace,
         audio_only_format=resolved_audio_only,
