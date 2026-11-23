@@ -1,20 +1,23 @@
 # taktcut
 
 [![CI](https://github.com/eldertek/taktcut/actions/workflows/ci.yml/badge.svg)](https://github.com/eldertek/taktcut/actions/workflows/ci.yml)
-[![Release v0.1.22](https://img.shields.io/badge/release-v0.1.22-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.22)
+[![Release v0.1.23](https://img.shields.io/badge/release-v0.1.23-e68442.svg)](https://github.com/eldertek/taktcut/releases/tag/v0.1.23)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-e68442.svg)](LICENSE)
 
-Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, Auto-Reframe & Social Aspect Ratio Crop (`9:16`, `1:1`, `4:5`, `4:3`, `16:9`), Clip Retime Speed & Reverse (`0.25x` to `4.0x` + Reverse + Audio Pitch), Clip Video & Audio Fades (Dip-to-Black & Ramp), Lower-Third & Title Overlay, DaVinci Timeline Index (Clip Search & Color Filter), Clip Color Labels (A-Roll / B-Roll / VFX / Review / Audio), ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, SMPTE Timecode Burn-In & Client-Review Watermark, Deliver `export_fps` + Broadcast Deinterlace (`yadif`), Live Estimated Export File Size, Audio-Only Master Export (WAV24 / MP3-320 / AAC-256), FCPXML 1.10 Round-Trip Export (`.fcpxml`), CMX 3600 EDL Round-Trip Export (`.edl`), YouTube Chapters / FFMETADATA export, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
+Clean-room OpenTimelineIO interchange, DaVinci-style NLE Studio GUI, Sapphire Film Grain (`35mm`, `16mm`, `Super 8`), Cinematic Vignette, Auto-Reframe & Social Aspect Ratio Crop (`9:16`, `1:1`, `4:5`, `4:3`, `16:9`), Clip Retime Speed & Reverse (`0.25x` to `4.0x` + Reverse + Audio Pitch), Clip Video & Audio Fades (Dip-to-Black & Ramp), Lower-Third & Title Overlay, DaVinci Timeline Index (Clip Search & Color Filter), Clip Color Labels (A-Roll / B-Roll / VFX / Review / Audio), ASC CDL / `.cube` color pipeline, 20 Boris FX Sapphire-inspired FX, Fairlight Loudness & Dialogue EQ, SMPTE Timecode Burn-In & Client-Review Watermark, Deliver `export_fps` + Broadcast Deinterlace (`yadif`), Live Estimated Export File Size, Audio-Only Master Export (WAV24 / MP3-320 / AAC-256), FCPXML 1.10 Round-Trip Export (`.fcpxml`), CMX 3600 EDL Round-Trip Export (`.edl`), YouTube Chapters / FFMETADATA export, deterministic FFmpeg/NVENC rendering, and broadcast QA toolkit with local/remote execution, CLI, and MCP server.
 
-`taktcut` (`v0.1.22`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
+`taktcut` (`v0.1.23`) inspects `.drp`, `.drt`, `.fcpxml`, and `.otio`/`.otioz` exports, provides a 6-page NLE workstation (**Timeline**, **FX**, **Titles**, **Color**, **Deliver**, **Broadcast QA**), bakes ASC CDL grades into `.cube` 3D LUTs, renders Rec.709 deliverables via local FFmpeg/`NVENC` or a **Remote GPU Render Node (`NVENC`)**, and runs an EBU R128 + faststart QA gate without opening a proprietary desktop NLE.
 
 - **1-Click Desktop Download (Windows / macOS / Linux)**: [https://eclipse-technology.eu/taktcut/](https://eclipse-technology.eu/taktcut/)
 - **Live Browser Demo**: [https://eclipse-technology.eu/demos/taktcut/](https://eclipse-technology.eu/demos/taktcut/)
 
 ![taktcut Web Studio GUI](docs/screenshot-desktop.png)
 
-## What's New in v0.1.22
+## What's New in v0.1.23
+
+- **Sapphire Film Grain (`35mm`, `16mm`, `Super 8`)**: Deliver `FilmGrainParams` controls (`stock` preset `35mm` / `16mm` / `super8`, `strength` `0` to `100`, `chroma` toggle) compiling deterministic FFmpeg `noise` filtergraph expressions with live Program Monitor grain overlay preview, Remote GPU Render Node parity, demo adapter parity, and `.taktcut.json` project persistence.
+- **Cinematic Vignette**: Deliver `VignetteParams` controls (`intensity` `0` to `100`, `radius` `0.2` to `1.0`, `feather` `0.1` to `1.0`, `aspect` `16:9` / `circular` / `anamorphic`) compiling deterministic FFmpeg `vignette` filtergraph expressions with live Program Monitor radial overlay preview, Remote GPU Render Node parity, demo adapter parity, and `.taktcut.json` project persistence.
 
 - **Auto-Reframe & Social Aspect Ratio Crop (`9:16`, `1:1`, `4:5`, `4:3`, `16:9`)**: Deliver Auto-Reframe controls (`aspect_ratio`, horizontal/vertical focal offset `pan_x` / `pan_y`, zoom scale, optional blurred pillarbox/letterbox background) with live Program Monitor crop guide preview, deterministic FFmpeg `crop`/`scale` filter compilation, Remote GPU Render Node parity, and `.taktcut.json` project persistence.
 - **Clip Retime Speed & Reverse (`0.25x` to `4.0x` + Reverse)**: Dedicated Deliver & Inspector `RetimeParams` controls (`speed` factor `0.25x` to `4.0x`, reverse playback toggle, audio pitch/tempo preservation via chained `atempo` + `areverse`) compiling deterministic FFmpeg `setpts`/`reverse` video and audio filtergraphs with Remote GPU Render Node support, demo adapter parity, and `.taktcut.json` persistence.
