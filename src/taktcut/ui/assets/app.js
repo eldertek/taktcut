@@ -83,6 +83,7 @@ import {
   findClipIndex,
   findMagneticSnap,
   findTrackAndClip,
+  formatCmx3600Edl,
   formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
@@ -4669,11 +4670,27 @@ function applyDeliveryPreset(presetId) {
   showBanner(`${getDeliveryPresetLabel(preset)} (${preset.width}x${preset.height}, ${preset.container.toUpperCase()})`, "info");
 }
 
+function countTimelineVideoClips(doc) {
+  if (!doc || !Array.isArray(doc.tracks)) return 0;
+  let count = 0;
+  for (const trk of doc.tracks) {
+    if (!trk || trk.kind !== "video" || !Array.isArray(trk.clips)) continue;
+    for (const clip of trk.clips) {
+      if (!clip || clip.enabled === false) continue;
+      if ((Number(clip.duration_frames) || 0) > 0) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
 function renderDeliverChaptersPreview() {
   const previewEl = byId("deliver-chapters-preview");
   const countEl = byId("deliver-chapters-count");
   const ytBtn = byId("btn-export-yt-chapters");
   const ffBtn = byId("btn-export-ffmetadata");
+  const edlBtn = byId("btn-export-cmx-edl");
   if (!previewEl) return;
 
   const { markers } = timelineDocToChapterInputs(state.timelineDoc);
@@ -4689,6 +4706,7 @@ function renderDeliverChaptersPreview() {
   }
   if (ytBtn) ytBtn.disabled = !hasChapters;
   if (ffBtn) ffBtn.disabled = !hasChapters;
+  if (edlBtn) edlBtn.disabled = countTimelineVideoClips(state.timelineDoc) === 0;
 }
 
 function getSafeTimelineStem() {
@@ -4726,6 +4744,25 @@ function exportFfmetadataChapters() {
   const msg = t("render.chapters.exportedFfmeta")
     .replace("{filename}", filename)
     .replace("{count}", String(markers.length));
+  const feedbackEl = byId("deliver-chapters-feedback");
+  if (feedbackEl) feedbackEl.textContent = msg;
+  showBanner(msg, "success");
+}
+
+function exportCmx3600Edl() {
+  const clipCount = countTimelineVideoClips(state.timelineDoc);
+  if (clipCount === 0) {
+    showBanner(t("render.chapters.emptyEdl"), "error");
+    return;
+  }
+  const edlTitle =
+    state.timelineDoc && state.timelineDoc.name ? state.timelineDoc.name : "TAKTCUT_TIMELINE";
+  const content = formatCmx3600Edl(state.timelineDoc, edlTitle);
+  const filename = `${getSafeTimelineStem()}.edl`;
+  triggerBlobDownload(new Blob([content], { type: "text/plain; charset=utf-8" }), filename);
+  const msg = t("render.chapters.exportedEdl")
+    .replace("{filename}", filename)
+    .replace("{count}", String(clipCount));
   const feedbackEl = byId("deliver-chapters-feedback");
   if (feedbackEl) feedbackEl.textContent = msg;
   showBanner(msg, "success");
@@ -8691,6 +8728,8 @@ function wireEvents() {
   if (exportYtBtn) exportYtBtn.addEventListener("click", exportYoutubeChapters);
   const exportFfmetaBtn = byId("btn-export-ffmetadata");
   if (exportFfmetaBtn) exportFfmetaBtn.addEventListener("click", exportFfmetadataChapters);
+  const exportEdlBtn = byId("btn-export-cmx-edl");
+  if (exportEdlBtn) exportEdlBtn.addEventListener("click", exportCmx3600Edl);
 
   // QA page events
   byId("qa-media-select").addEventListener("change", () => {

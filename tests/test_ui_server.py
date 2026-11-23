@@ -965,10 +965,12 @@ import {{
   findAdjacentCutForClip,
   findAllCutJunctions,
   findMagneticSnap,
+  formatCmx3600Edl,
   formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatShuttleSpeedLabel,
   formatYoutubeChaptersFromMarkers,
+  framesToSmpteTimecode,
   getDeliveryPresetClient,
   isPointerOnSplitWipeDivider,
   isTrackAudiblyMuted,
@@ -1783,6 +1785,102 @@ const hugeProres = estimateRenderFileSize({{
 }});
 assert.equal(hugeProres.warning, "large_file");
 assert.ok(hugeProres.formattedSize.endsWith(" GB"));
+
+// framesToSmpteTimecode unit tests
+assert.equal(framesToSmpteTimecode(0, 25), "00:00:00:00");
+assert.equal(framesToSmpteTimecode(-42, 25), "00:00:00:00");
+assert.equal(framesToSmpteTimecode(NaN, 25), "00:00:00:00");
+assert.equal(framesToSmpteTimecode(null, 25), "00:00:00:00");
+assert.equal(framesToSmpteTimecode(24, 24), "00:00:01:00");
+assert.equal(framesToSmpteTimecode(25, 25), "00:00:01:00");
+assert.equal(framesToSmpteTimecode(30, 30), "00:00:01:00");
+assert.equal(framesToSmpteTimecode(60, 60), "00:00:01:00");
+assert.equal(framesToSmpteTimecode(149, 25), "00:00:05:24");
+assert.equal(framesToSmpteTimecode(91537, 25), "01:01:01:12");
+assert.equal(framesToSmpteTimecode(24, {{ num: 24000, den: 1001 }}), "00:00:01:00");
+assert.equal(framesToSmpteTimecode(50, 0), "00:00:02:00");
+
+// formatCmx3600Edl unit tests
+assert.equal(
+  formatCmx3600Edl(null),
+  "TITLE: TAKTCUT_TIMELINE\\nFCM: NON-DROP FRAME\\n"
+);
+assert.equal(
+  formatCmx3600Edl({{ tracks: [] }}, "EMPTY\\nCUT"),
+  "TITLE: EMPTY CUT\\nFCM: NON-DROP FRAME\\n"
+);
+
+const edlDoc = {{
+  name: "Master Edit",
+  fps: {{ num: 25, den: 1 }},
+  start_frame: 0,
+  tracks: [
+    {{
+      index: 1,
+      kind: "video",
+      name: "V1",
+      clips: [
+        {{
+          name: "B_Roll_Two",
+          start_frame: 100,
+          duration_frames: 50,
+          source_in_frame: 25,
+          source_path: "media/b_roll_two.mov",
+          enabled: true
+        }},
+        {{
+          name: "Disabled_Clip",
+          start_frame: 50,
+          duration_frames: 25,
+          source_in_frame: 0,
+          enabled: false
+        }},
+        {{
+          name: "",
+          start_frame: 0,
+          duration_frames: 100,
+          source_in_frame: 12,
+          source_path: "/Volumes/Media/A001_C001.mov"
+        }},
+        {{
+          name: "Zero_Dur",
+          start_frame: 150,
+          duration_frames: 0,
+          source_in_frame: 0
+        }}
+      ]
+    }},
+    {{
+      index: 1,
+      kind: "audio",
+      name: "A1",
+      clips: [
+        {{
+          name: "Narration_WAV",
+          start_frame: 0,
+          duration_frames: 150,
+          source_in_frame: 0
+        }}
+      ]
+    }}
+  ]
+}};
+
+const edlOut = formatCmx3600Edl(edlDoc, "TAKTCUT_MASTER");
+assert.equal(
+  edlOut,
+  [
+    "TITLE: TAKTCUT_MASTER",
+    "FCM: NON-DROP FRAME",
+    "",
+    "001  AX       V     C        00:00:00:12 00:00:04:12 00:00:00:00 00:00:04:00",
+    "* FROM CLIP NAME: A001_C001.mov",
+    "",
+    "002  AX       V     C        00:00:01:00 00:00:03:00 00:00:04:00 00:00:06:00",
+    "* FROM CLIP NAME: B_Roll_Two",
+    ""
+  ].join("\\n")
+);
 """
     proc = subprocess.run(
         [node, "--input-type=module", "-e", script],
@@ -2737,13 +2835,15 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     f"{deint_render_overflow}px"
                 )
 
-                # Verify Deliver Timeline Chapters preview & 1-click YouTube/FFMETADATA exports
+                # Verify Deliver Timeline Chapters preview & 1-click YouTube/FFMETADATA/EDL exports
                 chapters_preview = page.locator("#deliver-chapters-preview")
                 btn_yt = page.locator("#btn-export-yt-chapters")
                 btn_ff = page.locator("#btn-export-ffmetadata")
+                btn_edl = page.locator("#btn-export-cmx-edl")
                 assert chapters_preview.is_visible() is True
                 assert btn_yt.is_visible() is True
                 assert btn_ff.is_visible() is True
+                assert btn_edl.is_visible() is True
                 chapters_text = chapters_preview.text_content() or ""
                 assert "00:00 Intro" in chapters_text
                 assert "00:01 Intro Title Cue" in chapters_text
@@ -2753,7 +2853,7 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                     page.locator("#deliver-chapters-count").text_content() or ""
                 ) == expected_chp
                 if width <= 820:
-                    for chp_btn in (btn_yt, btn_ff):
+                    for chp_btn in (btn_yt, btn_ff, btn_edl):
                         chp_box = chp_btn.bounding_box()
                         assert chp_box is not None and chp_box["height"] >= 44
 
@@ -2777,6 +2877,20 @@ def test_ui_responsive_playwright_viewports(ui_server: tuple[str, Path]) -> None
                 assert "[CHAPTER]" in ff_dl_content
                 assert "TIMEBASE=1/1000" in ff_dl_content
                 assert "title=Intro Title Cue" in ff_dl_content
+
+                with page.expect_download() as edl_dl_info:
+                    btn_edl.click()
+                edl_dl = edl_dl_info.value
+                assert edl_dl.suggested_filename.endswith(".edl")
+                edl_dl_path = edl_dl.path()
+                assert edl_dl_path is not None
+                edl_dl_content = Path(edl_dl_path).read_text(encoding="utf-8")
+                assert edl_dl_content.startswith("TITLE: ")
+                assert "FCM: NON-DROP FRAME\n" in edl_dl_content
+                assert "001  AX       V     C        " in edl_dl_content
+                assert "* FROM CLIP NAME: " in edl_dl_content
+                edl_feedback = page.locator("#deliver-chapters-feedback").text_content() or ""
+                assert ".edl" in edl_feedback
 
                 chapters_overflow = page.evaluate(
                     "() => document.documentElement.scrollWidth - window.innerWidth"
@@ -3970,6 +4084,7 @@ def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
         "deliver-chapters-feedback",
         "btn-export-yt-chapters",
         "btn-export-ffmetadata",
+        "btn-export-cmx-edl",
     ):
         assert f'id="{elem_id}"' in html_text
 
@@ -3979,9 +4094,12 @@ def test_ui_deliver_chapters_and_ffmetadata_assets() -> None:
         "render.chapters.previewLabel",
         "render.chapters.exportYt",
         "render.chapters.exportFfmeta",
+        "render.chapters.exportEdl",
         "render.chapters.empty",
+        "render.chapters.emptyEdl",
         "render.chapters.exportedYt",
         "render.chapters.exportedFfmeta",
+        "render.chapters.exportedEdl",
     ):
         assert i18n_text.count(f'"{key}"') == 2
 

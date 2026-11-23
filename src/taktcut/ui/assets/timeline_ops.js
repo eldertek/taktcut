@@ -2432,3 +2432,92 @@ export function estimateRenderFileSize(params = {}) {
     warning
   };
 }
+
+export function framesToSmpteTimecode(frames, fps = 25) {
+  const rawFps = parseRenderFpsValue(fps, 25);
+  const fpsInt = Math.max(1, Math.round(rawFps));
+  const numFrames = Number(frames);
+  const safeFrames = Number.isFinite(numFrames) ? Math.max(0, Math.round(numFrames)) : 0;
+  const ff = safeFrames % fpsInt;
+  const totalSeconds = Math.floor(safeFrames / fpsInt);
+  const ss = totalSeconds % 60;
+  const mm = Math.floor(totalSeconds / 60) % 60;
+  const hh = Math.floor(totalSeconds / 3600);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}:${pad2(ff)}`;
+}
+
+export function formatCmx3600Edl(timelineDoc, title = "TAKTCUT_TIMELINE") {
+  const rawTitle = typeof title === "string" ? title.replace(/[\r\n]+/g, " ").trim() : "";
+  const edlTitle = rawTitle || "TAKTCUT_TIMELINE";
+  const lines = [`TITLE: ${edlTitle}`, "FCM: NON-DROP FRAME"];
+
+  if (!timelineDoc || !Array.isArray(timelineDoc.tracks)) {
+    return `${lines.join("\n")}\n`;
+  }
+
+  const fps = timelineDoc.fps !== undefined ? timelineDoc.fps : 25;
+  const videoClips = [];
+  for (const trk of timelineDoc.tracks) {
+    if (!trk || trk.kind !== "video" || !Array.isArray(trk.clips)) continue;
+    const trackIndex = Number.isFinite(Number(trk.index)) ? Number(trk.index) : 1;
+    trk.clips.forEach((clip, clipIdx) => {
+      if (!clip || clip.enabled === false) return;
+      const durFrames = Math.round(Number(clip.duration_frames) || 0);
+      if (!Number.isFinite(durFrames) || durFrames <= 0) return;
+      const recInFrame = Math.max(0, Math.round(Number(clip.start_frame) || 0));
+      const rawSrcIn =
+        clip.source_in_frame !== undefined
+          ? clip.source_in_frame
+          : clip.source_start_frame !== undefined
+            ? clip.source_start_frame
+            : 0;
+      const srcInFrame = Math.max(0, Math.round(Number(rawSrcIn) || 0));
+      videoClips.push({
+        clip,
+        trackIndex,
+        clipIdx,
+        recInFrame,
+        recOutFrame: recInFrame + durFrames,
+        srcInFrame,
+        srcOutFrame: srcInFrame + durFrames
+      });
+    });
+  }
+
+  videoClips.sort(
+    (a, b) =>
+      a.recInFrame - b.recInFrame ||
+      a.trackIndex - b.trackIndex ||
+      a.clipIdx - b.clipIdx
+  );
+
+  if (videoClips.length === 0) {
+    return `${lines.join("\n")}\n`;
+  }
+
+  lines.push("");
+  videoClips.forEach((item, idx) => {
+    const eventNum = String(idx + 1).padStart(3, "0");
+    const srcIn = framesToSmpteTimecode(item.srcInFrame, fps);
+    const srcOut = framesToSmpteTimecode(item.srcOutFrame, fps);
+    const recIn = framesToSmpteTimecode(item.recInFrame, fps);
+    const recOut = framesToSmpteTimecode(item.recOutFrame, fps);
+    const { clip } = item;
+    const fallbackPath =
+      typeof clip.source_path === "string" && clip.source_path.trim()
+        ? clip.source_path.trim().split(/[\\/]/).pop()
+        : typeof clip.media_ref === "string" && clip.media_ref.trim()
+          ? clip.media_ref.trim().split(/[\\/]/).pop()
+          : "";
+    const rawClipName =
+      typeof clip.name === "string" && clip.name.trim() ? clip.name : fallbackPath;
+    const clipName =
+      String(rawClipName || "").replace(/[\r\n]+/g, " ").trim() || `CLIP_${eventNum}`;
+    lines.push(`${eventNum}  AX       V     C        ${srcIn} ${srcOut} ${recIn} ${recOut}`);
+    lines.push(`* FROM CLIP NAME: ${clipName}`);
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}

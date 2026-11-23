@@ -3177,6 +3177,10 @@ input[type="range"] {
   gap: 6px;
 }
 
+.deliver-chapters-actions .btn {
+  max-width: 100%;
+}
+
 /* RESPONSIVE BREAKPOINTS */
 @media (max-width: 1180px) {
   .deliver-preset-strip {
