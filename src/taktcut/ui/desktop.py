@@ -75,6 +75,8 @@ def build_desktop_app_command(browser_bin: Path, url: str, profile_dir: Path) ->
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
+        "--disable-translate",
+        "--disable-features=Translate,TranslateUI,msTranslate,EdgeTranslate",
     ]
 
 
