@@ -13318,3 +13318,320 @@ def test_ui_playwright_qualifier_keyer_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_ui_multicam_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/edit/multicam/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 4
+    assert "audio_waveform" in meta["sync_modes"]
+    assert "slate_marker" in meta["sync_modes"]
+    assert "program_stitch" in meta["compile_modes"]
+
+    s_status, _, s_raw = _http_call(
+        f"{base_url}/api/edit/multicam/sync",
+        method="POST",
+        payload={
+            "config": {
+                "preset_id": "concert_3cam_audio_lock",
+                "sync_mode": "audio_waveform",
+            }
+        },
+    )
+    assert s_status == 200
+    sync_payload = json.loads(s_raw.decode("utf-8"))
+    assert len(sync_payload["sync"]["angles"]) == 3
+    assert sync_payload["sync"]["mean_confidence"] >= 0.5
+
+    as_status, _, as_raw = _http_call(
+        f"{base_url}/api/edit/multicam/auto-switch",
+        method="POST",
+        payload={
+            "config": {
+                "preset_id": "podcast_4cam_interview",
+                "min_hold_ms": 600,
+                "duration_s": 16.0,
+            }
+        },
+    )
+    assert as_status == 200
+    as_payload = json.loads(as_raw.decode("utf-8"))
+    assert len(as_payload["segments"]) >= 3
+    assert as_payload["short_cut_count"] == 0
+
+    c_prog_status, _, c_prog_raw = _http_call(
+        f"{base_url}/api/edit/multicam/compile",
+        method="POST",
+        payload={
+            "config": as_payload["config"],
+            "mode": "program_stitch",
+        },
+    )
+    assert c_prog_status == 200
+    c_prog = json.loads(c_prog_raw.decode("utf-8"))
+    assert "concat=n=" in c_prog["filter_complex"]
+
+    c_quad_status, _, c_quad_raw = _http_call(
+        f"{base_url}/api/edit/multicam/compile",
+        method="POST",
+        payload={
+            "config": as_payload["config"],
+            "mode": "quad_view",
+        },
+    )
+    assert c_quad_status == 200
+    c_quad = json.loads(c_quad_raw.decode("utf-8"))
+    assert "xstack=inputs=4" in c_quad["filter_complex"]
+    assert "#e53935" in c_quad["filter_complex"]
+
+    e_status, _, e_raw = _http_call(
+        f"{base_url}/api/edit/multicam/export-edl",
+        method="POST",
+        payload={
+            "config": as_payload["config"],
+            "format": "edl",
+            "title": "Podcast Cut",
+            "out_path": "exports/podcast_cut.edl",
+        },
+    )
+    assert e_status == 200
+    exported = json.loads(e_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/podcast_cut.edl"
+    assert (workspace / "exports" / "podcast_cut.edl").is_file()
+    assert "TITLE: PODCAST_CUT" in exported["edl_text"]
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/edit/multicam/export-edl",
+        method="POST",
+        payload={
+            "config": as_payload["config"],
+            "format": "edl",
+            "out_path": "../escape_mc.edl",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    d_status, d_headers, d_raw = _http_call(
+        f"{base_url}/api/edit/multicam/download",
+        method="POST",
+        payload={
+            "config": as_payload["config"],
+            "format": "edl",
+            "title": "DL Test",
+            "filename": "../../evil_name.edl",
+        },
+    )
+    assert d_status == 200
+    disp = d_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "TITLE: DL_TEST" in d_raw.decode("utf-8")
+
+    # Node.js static-demo parity check via demo_adapter.js
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getMulticamStudioPresets();
+assert.equal(pre.presets.length, 4);
+const synced = await api.syncMulticamStudio({{
+  config: {{ preset_id: "concert_3cam_audio_lock", sync_mode: "audio_waveform" }}
+}});
+assert.equal(synced.sync.angles.length, 3);
+assert.ok(synced.sync.mean_confidence >= 0.5);
+const sw = await api.autoSwitchMulticamStudio({{
+  config: {{ preset_id: "podcast_4cam_interview", min_hold_ms: 600, duration_s: 16 }}
+}});
+assert.ok(sw.segments.length >= 3);
+assert.equal(sw.short_cut_count, 0);
+const compQ = await api.compileMulticamStudio({{ config: sw.config, mode: "quad_view" }});
+assert.ok(compQ.filter_complex.includes("xstack=inputs=4"));
+assert.ok(compQ.filter_complex.includes("#e53935"));
+const edl = await api.exportMulticamEdl({{
+  config: sw.config,
+  format: "edl",
+  title: "Demo Switch"
+}});
+assert.ok(edl.edl_text.includes("TITLE: DEMO_SWITCH"));
+const blob = await api.downloadMulticamStudioBlob({{
+  config: sw.config,
+  format: "edl",
+  title: "Demo DL"
+}});
+assert.ok((await blob.text()).includes("TITLE: DEMO_DL"));
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_multicam_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#tab-timeline")
+            page.click("#tab-timeline")
+            page.wait_for_selector("#btn-timeline-multicam-studio")
+
+            # Open Multi-Cam Studio via Shift+V shortcut
+            page.keyboard.press("Shift+V")
+            page.wait_for_selector("#mc-studio-dialog[open]")
+
+            # Switch preset to Concert 3-Cam Audio Lock
+            page.click(".mc-preset-btn[data-mc-preset='concert_3cam_audio_lock']")
+            page.wait_for_function(
+                "() => (document.getElementById('mc-active-preset-badge')?.textContent || '')"
+                ".includes('CONCERT 3CAM')"
+            )
+
+            # Sync Angles via Audio Waveform
+            page.select_option("#mc-sync-mode", "audio_waveform")
+            page.click("#btn-mc-studio-sync")
+            page.wait_for_function(
+                "() => document.querySelectorAll('#mc-sync-readout-grid .mc-sync-card')"
+                ".length === 3"
+            )
+
+            # Switch back to Podcast 4-Cam and run Auto-Switch Speaker
+            page.click(".mc-preset-btn[data-mc-preset='podcast_4cam_interview']")
+            page.wait_for_function(
+                "() => document.querySelectorAll('#mc-sync-readout-grid .mc-sync-card')"
+                ".length === 4"
+            )
+            page.click("#btn-mc-auto-switch")
+            page.wait_for_function(
+                "() => (document.getElementById('mc-status-note')?.textContent || '')"
+                ".includes('Auto-Switch')"
+            )
+
+            # Scrub playhead to 1.0s and press key '3' to record live Angle 3 cut
+            page.click("#btn-mc-step-fwd")
+            quad_before = page.evaluate(
+                "() => document.getElementById('mc-quad-canvas').toDataURL()"
+            )
+            page.keyboard.press("3")
+            page.wait_for_function(
+                "() => (document.getElementById('mc-active-tally-badge')?.textContent || '')"
+                " === 'ON AIR: CAM 3'"
+            )
+            quad_after = page.evaluate(
+                "() => document.getElementById('mc-quad-canvas').toDataURL()"
+            )
+            assert quad_after != quad_before
+
+            # Click Quad-View canvas tile directly to switch back to Angle 2
+            quad_box = page.locator("#mc-quad-canvas").bounding_box()
+            assert quad_box is not None
+            page.mouse.click(
+                quad_box["x"] + quad_box["width"] * 0.75,
+                quad_box["y"] + quad_box["height"] * 0.25,
+            )
+            page.wait_for_function(
+                "() => (document.getElementById('mc-active-tally-badge')?.textContent || '')"
+                " === 'ON AIR: CAM 2'"
+            )
+
+            # Export EDL & inspect Filtergraph
+            page.click("#btn-mc-export-edl")
+            page.wait_for_function(
+                "() => (document.getElementById('mc-edl-preview')?.textContent || '')"
+                ".includes('TITLE:')"
+            )
+
+            # Apply to Timeline and verify Multi-Cam Bank created on V1
+            page.click("#btn-mc-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('mc-status-note')?.textContent || '')"
+                ".includes('Timeline')"
+            )
+
+            # Use in Deliver stages filtergraph and switches to Deliver tab
+            page.click("#btn-mc-send-deliver")
+            page.wait_for_function(
+                "() => !document.getElementById('mc-studio-dialog')?.open"
+            )
+            assert page.locator("#tab-render").get_attribute("aria-selected") == "true"
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#lang-fr")
+            page.click("#tab-timeline")
+            page.click("#btn-timeline-multicam-studio")
+            page.wait_for_selector("#mc-studio-dialog[open]")
+            fr_txt = page.locator("#mc-studio-dialog").text_content() or ""
+            assert "Auto-Switch Orateur" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-mc-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-timeline-multicam-studio")
+            page.wait_for_selector("#mc-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('mc-studio-dialog').getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-timeline-multicam-studio",
+                "btn-mc-studio-sync",
+                "btn-mc-auto-switch",
+                "btn-mc-apply-timeline",
+                "btn-mc-send-deliver",
+                "btn-close-mc-studio",
+                "mc-angle-pad-1",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-mc-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

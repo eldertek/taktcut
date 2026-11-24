@@ -17,6 +17,9 @@ import {
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
+  drawMulticamStudioProgramCanvas,
+  drawMulticamStudioQuadCanvas,
+  drawMulticamStudioTimelineCanvas,
   drawProgramMonitorCanvas,
   drawQualifierKeyerHistogramCanvas,
   drawQualifierKeyerHslBarCanvas,
@@ -100,6 +103,7 @@ import {
   MAX_COMPOUND_NESTING_DEPTH,
   MAX_CURVE_POINTS,
   MULTICAM_CUT_MODES,
+  MULTICAM_STUDIO_PRESETS_CLIENT,
   MULTICAM_SYNC_MODES,
   PLANAR_TRACKER_PRESETS_CLIENT,
   PRECOMP_BLEND_MODES,
@@ -168,8 +172,10 @@ import {
   appendClipToTrackInDocument,
   appendStillBounded,
   applyFairlightRackPresetClient,
+  applyMulticamStudioToDocumentClient,
   applySplitEditJlInDocument,
   auditMediaPoolLinksClient,
+  autoSwitchMulticamSpeakersClient,
   buildFourUpTrimMonitorState,
   buildSourceTapeSegments,
   classifyMediaPoolEntry,
@@ -187,6 +193,7 @@ import {
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
   compileMulticamFiltergraphClient,
+  compileMulticamStudioFiltergraphClient,
   compileProxyPlanClient,
   compileRetimeFilterClient,
   compileRoughcutSelectFiltergraphClient,
@@ -213,6 +220,7 @@ import {
   createDefaultColorWarper,
   createDefaultCstConfigClient,
   createDefaultHslCurves,
+  createDefaultMulticamStudioConfigClient,
   createDefaultPowerWindow,
   createDefaultQualifier,
   createDefaultQualifierKeyerConfigClient,
@@ -236,8 +244,12 @@ import {
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
+  exportMulticamEdlClient,
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
+  normalizeMulticamStudioConfigClient,
+  resolveMulticamStudioSegmentsClient,
+  syncMulticamStudioAnglesClient,
   filterTimelineClips,
   findAdjacentCutForClip,
   findAdjacentRollTarget,
@@ -655,6 +667,22 @@ const state = {
     lastCubeText: "",
     compileSeq: 0
   },
+  mcStudio: {
+    isOpen: false,
+    config: createDefaultMulticamStudioConfigClient("podcast_4cam_interview"),
+    syncReport: null,
+    segments: [],
+    shortCutWarnings: [],
+    compiled: null,
+    edlExport: null,
+    activeTimeS: 0,
+    selectedCutTimeS: null,
+    hoveredAngleIndex: 0,
+    playing: false,
+    rafId: null,
+    lastTs: 0,
+    syncSeq: 0
+  },
   autoReframeStudio: {
     isOpen: false,
     previewOnProgram: true,
@@ -1063,6 +1091,7 @@ function setLanguage(lang) {
   if (typeof syncAutoReframeUI === "function") syncAutoReframeUI();
   if (typeof syncCstStudioUI === "function") syncCstStudioUI();
   if (typeof syncQualifierKeyerStudioUI === "function") syncQualifierKeyerStudioUI();
+  if (typeof syncMulticamStudioUI === "function") syncMulticamStudioUI();
   renderTimelineUI();
   renderMediaPool();
   const teSearch = byId("text-edit-search");
@@ -13173,6 +13202,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+L", descKey: "shortcuts.key.cstStudio" },
       { kbd: "Shift+Q", descKey: "shortcuts.key.qualifierKeyerStudio" },
       { kbd: "Shift+R", descKey: "shortcuts.key.autoReframe" },
+      { kbd: "Shift+V", descKey: "shortcuts.key.multicamStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13258,6 +13288,30 @@ function handleTransportKeydown(ev) {
     } else if (ev.key === "Escape") {
       ev.preventDefault();
       closeShortcutsDialog();
+    }
+    return;
+  }
+
+  const mcStudioDlg = byId("mc-studio-dialog");
+  if (mcStudioDlg && mcStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeMulticamStudioDialog();
+      return;
+    }
+    if (isEditableTarget(ev.target)) return;
+    if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ["1", "2", "3", "4"].includes(ev.key)) {
+      const targetAngle = Number.parseInt(ev.key, 10);
+      if ((state.mcStudio.config.angles || []).some((a) => a.angle_index === targetAngle)) {
+        ev.preventDefault();
+        recordMulticamStudioCutAction(targetAngle);
+        return;
+      }
+    }
+    if ((ev.code === "Space" || ev.key === " ") && !(ev.target instanceof Element && ev.target.tagName === "BUTTON")) {
+      ev.preventDefault();
+      toggleMulticamStudioPlay();
+      return;
     }
     return;
   }
@@ -13377,6 +13431,11 @@ function handleTransportKeydown(ev) {
     if (lower === "q") {
       ev.preventDefault();
       openQualifierKeyerDialog();
+      return;
+    }
+    if (lower === "v") {
+      ev.preventDefault();
+      openMulticamStudioDialog();
       return;
     }
   }
@@ -20058,6 +20117,7 @@ function wireEvents() {
   wireAutoReframeEvents();
   wireCstStudioEvents();
   wireQualifierKeyerStudioEvents();
+  wireMulticamStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -20523,6 +20583,7 @@ async function bootstrap() {
   syncAutoReframeUI();
   syncCstStudioUI();
   syncQualifierKeyerStudioUI();
+  syncMulticamStudioUI();
   syncSplitWipeControls("color");
   syncSplitWipeControls("fx");
   renderStillsGallery();
@@ -24962,6 +25023,733 @@ function wireQualifierKeyerStudioEvents() {
     state.qkStudio.pickedPoint = null;
     state.qkStudio.pickMode = false;
     updateQualifierKeyerConfig(createDefaultQualifierKeyerConfigClient());
+  });
+}
+
+// =============================================================================
+// MULTI-CAM ANGLE SYNC & LIVE QUAD-VIEW SWITCHER STUDIO (CYCLE #106)
+// =============================================================================
+
+function setMcStudioStatus(text) {
+  const el = byId("mc-status-note");
+  if (el) el.textContent = text;
+}
+
+function getActiveMcStudioSegment(timeS = state.mcStudio.activeTimeS) {
+  const segs = state.mcStudio.segments || [];
+  if (segs.length === 0) {
+    return { angle_index: 1, audio_angle_index: 1, cut_mode: "video_only", is_short_cut: false };
+  }
+  let chosen = segs[0];
+  for (const seg of segs) {
+    if (timeS >= Number(seg.start_s || 0) - 1e-4) chosen = seg;
+    else break;
+  }
+  return chosen;
+}
+
+function refreshMcStudioLocalDerived() {
+  const st = state.mcStudio;
+  st.config = normalizeMulticamStudioConfigClient(st.config);
+  st.syncReport = syncMulticamStudioAnglesClient(st.config);
+  const resolved = resolveMulticamStudioSegmentsClient(st.config);
+  st.segments = resolved.segments;
+  st.shortCutWarnings = resolved.short_cut_warnings;
+  st.compiled = compileMulticamStudioFiltergraphClient(st.config, st.config.compile_mode);
+  st.edlExport = exportMulticamEdlClient(st.config, { format: "edl", title: "TAKTCUT_MULTICAM" });
+}
+
+function renderMulticamStudioSyncReadouts() {
+  const grid = byId("mc-sync-readout-grid");
+  if (!grid) return;
+  const st = state.mcStudio;
+  const report = st.syncReport || syncMulticamStudioAnglesClient(st.config);
+  const activeSeg = getActiveMcStudioSegment(st.activeTimeS);
+  const cards = [];
+
+  for (const r of report.angles || []) {
+    const isLive = Number(activeSeg.angle_index) === Number(r.angle_index);
+    const card = dom("div", isLive ? "mc-sync-card is-live" : "mc-sync-card");
+    card.style.borderLeftColor = r.color_tag || "#3b82f6";
+    const title = dom("div", "mc-sync-card-title", `CAM ${r.angle_index} ${r.name}`);
+    const sign = r.offset_frames >= 0 ? "+" : "";
+    const meta1 = dom(
+      "div",
+      "mc-sync-card-meta mono",
+      `Offset: ${sign}${r.offset_frames}f (${sign}${Number(r.offset_s).toFixed(3)}s) | Trim ${r.micro_trim_ms}ms`
+    );
+    const meta2 = dom(
+      "div",
+      "mc-sync-card-meta mono",
+      `Conf: ${(Number(r.confidence) * 100).toFixed(1)}% | Peak ${r.peak_db}dB | RMS ${r.rms_db}dB`
+    );
+    card.appendChild(title);
+    card.appendChild(meta1);
+    card.appendChild(meta2);
+    cards.push(card);
+  }
+  grid.replaceChildren(...cards);
+}
+
+function renderMulticamStudioCanvases() {
+  const st = state.mcStudio;
+  const quadCanvas = byId("mc-quad-canvas");
+  const pgmCanvas = byId("mc-program-canvas");
+  const tlCanvas = byId("mc-timeline-canvas");
+  if (quadCanvas) {
+    drawMulticamStudioQuadCanvas(
+      quadCanvas,
+      st.config,
+      st.syncReport,
+      st.segments,
+      st.activeTimeS,
+      st.hoveredAngleIndex
+    );
+  }
+  if (pgmCanvas) {
+    drawMulticamStudioProgramCanvas(
+      pgmCanvas,
+      st.config,
+      st.syncReport,
+      st.segments,
+      st.activeTimeS
+    );
+  }
+  if (tlCanvas) {
+    drawMulticamStudioTimelineCanvas(
+      tlCanvas,
+      st.config,
+      st.syncReport,
+      st.segments,
+      st.activeTimeS,
+      st.selectedCutTimeS
+    );
+  }
+}
+
+function syncMulticamStudioUI() {
+  const st = state.mcStudio;
+  if (!st.syncReport || !st.compiled) {
+    refreshMcStudioLocalDerived();
+  }
+  const cfg = st.config;
+  const activeSeg = getActiveMcStudioSegment(st.activeTimeS);
+
+  const presetBadge = byId("mc-active-preset-badge");
+  if (presetBadge) {
+    presetBadge.textContent = String(cfg.preset_id || "custom").toUpperCase().replace(/_/g, " ");
+  }
+  const tallyBadge = byId("mc-active-tally-badge");
+  if (tallyBadge) {
+    tallyBadge.textContent = `ON AIR: CAM ${activeSeg.angle_index}`;
+  }
+
+  for (const btn of document.querySelectorAll(".mc-preset-btn[data-mc-preset]")) {
+    const pid = btn.getAttribute("data-mc-preset");
+    const active = pid === cfg.preset_id;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const syncSel = byId("mc-sync-mode");
+  if (syncSel) syncSel.value = cfg.sync_mode;
+
+  const cutModeSel = byId("mc-cut-mode");
+  if (cutModeSel) cutModeSel.value = cfg.cut_mode;
+
+  const afvToggle = byId("mc-afv-toggle");
+  if (afvToggle) {
+    afvToggle.checked = Boolean(cfg.audio_follow_video);
+    afvToggle.disabled = cfg.cut_mode === "video_only";
+  }
+
+  const masterSel = byId("mc-master-audio");
+  if (masterSel) {
+    const opts = (cfg.angles || []).map((a) => {
+      const opt = document.createElement("option");
+      opt.value = String(a.angle_index);
+      opt.textContent = `CAM ${a.angle_index}`;
+      return opt;
+    });
+    masterSel.replaceChildren(...opts);
+    masterSel.value = String(cfg.master_audio_angle);
+  }
+
+  const minHoldInput = byId("mc-min-hold-num");
+  if (minHoldInput && document.activeElement !== minHoldInput) {
+    minHoldInput.value = String(cfg.min_hold_ms);
+  }
+
+  const compileSel = byId("mc-compile-mode");
+  if (compileSel) compileSel.value = cfg.compile_mode;
+
+  const slider = byId("mc-playhead-slider");
+  if (slider) {
+    slider.max = String(cfg.duration_s);
+    slider.value = String(st.activeTimeS.toFixed(2));
+  }
+  const tcEl = byId("mc-playhead-tc");
+  if (tcEl) {
+    const fps = Math.max(1, Number(cfg.fps || 25));
+    tcEl.textContent = framesToSmpte(Math.round(st.activeTimeS * fps), fps);
+  }
+
+  const segSummary = byId("mc-segments-summary");
+  if (segSummary) {
+    const sc = (st.shortCutWarnings || []).length;
+    segSummary.textContent = `${(st.segments || []).length} cuts | ${sc} short`;
+  }
+
+  const validAngleSet = new Set((cfg.angles || []).map((a) => Number(a.angle_index)));
+  for (let idx = 1; idx <= 4; idx += 1) {
+    const padBtn = byId(`mc-angle-pad-${idx}`);
+    if (!padBtn) continue;
+    const exists = validAngleSet.has(idx);
+    const isLive = Number(activeSeg.angle_index) === idx;
+    padBtn.disabled = !exists;
+    padBtn.classList.toggle("is-live", exists && isLive);
+    padBtn.setAttribute("aria-pressed", exists && isLive ? "true" : "false");
+  }
+
+  const fgOut = byId("mc-fg-output");
+  if (fgOut && st.compiled) {
+    fgOut.textContent = st.compiled.filter_complex || "";
+  }
+  const edlOut = byId("mc-edl-preview");
+  if (edlOut && st.edlExport) {
+    edlOut.textContent = st.edlExport.edl_text || "";
+  }
+
+  const playBtn = byId("btn-mc-play");
+  if (playBtn) {
+    playBtn.setAttribute("aria-pressed", st.playing ? "true" : "false");
+  }
+
+  renderMulticamStudioSyncReadouts();
+  if (st.isOpen) {
+    renderMulticamStudioCanvases();
+  }
+}
+
+async function syncMulticamStudioServer() {
+  const st = state.mcStudio;
+  const seq = (st.syncSeq += 1);
+  refreshMcStudioLocalDerived();
+  syncMulticamStudioUI();
+  try {
+    const [syncRes, compileRes] = await Promise.all([
+      api.syncMulticamStudio({ config: st.config }),
+      api.compileMulticamStudio({ config: st.config, mode: st.config.compile_mode })
+    ]);
+    if (seq !== state.mcStudio.syncSeq) return;
+    if (syncRes && syncRes.sync) {
+      st.syncReport = syncRes.sync;
+    }
+    if (compileRes && compileRes.filter_complex) {
+      st.compiled = compileRes;
+      if (Array.isArray(compileRes.segments)) st.segments = compileRes.segments;
+      if (Array.isArray(compileRes.short_cut_warnings)) {
+        st.shortCutWarnings = compileRes.short_cut_warnings;
+      }
+    }
+    syncMulticamStudioUI();
+    if (st.syncReport) {
+      setMcStudioStatus(
+        t("mcStudio.status.synced")
+          .replace("{count}", String((st.syncReport.angles || []).length))
+          .replace("{mode}", String(st.config.sync_mode))
+          .replace("{conf}", String((Number(st.syncReport.mean_confidence || 0.95) * 100).toFixed(1)))
+      );
+    }
+  } catch (err) {
+    setMcStudioStatus(`Multi-Cam sync warning: ${err.message || err}`);
+  }
+}
+
+async function autoSwitchMulticamStudioAction() {
+  const st = state.mcStudio;
+  try {
+    const res = await api.autoSwitchMulticamStudio({ config: st.config });
+    if (res && res.config) {
+      st.config = normalizeMulticamStudioConfigClient(res.config);
+      st.syncReport = res.sync_report || syncMulticamStudioAnglesClient(st.config);
+      st.segments = res.segments || resolveMulticamStudioSegmentsClient(st.config).segments;
+      st.shortCutWarnings = res.short_cut_warnings || [];
+      st.compiled = compileMulticamStudioFiltergraphClient(st.config, st.config.compile_mode);
+      st.edlExport = exportMulticamEdlClient(st.config, { format: "edl", title: "TAKTCUT_MULTICAM" });
+    } else {
+      const local = autoSwitchMulticamSpeakersClient(st.config);
+      st.config = local.config;
+      refreshMcStudioLocalDerived();
+    }
+    const compiled = await api.compileMulticamStudio({
+      config: st.config,
+      mode: st.config.compile_mode
+    });
+    if (compiled && compiled.filter_complex) st.compiled = compiled;
+    syncMulticamStudioUI();
+    setMcStudioStatus(
+      t("mcStudio.status.autoSwitched")
+        .replace("{cuts}", String((st.segments || []).length))
+        .replace("{warns}", String((st.shortCutWarnings || []).length))
+    );
+  } catch (err) {
+    setMcStudioStatus(`Auto-Switch Speaker failed: ${err.message || err}`);
+  }
+}
+
+async function recordMulticamStudioCutAction(angleIndex) {
+  const st = state.mcStudio;
+  const targetIdx = Number(angleIndex);
+  if (!Number.isInteger(targetIdx)) return;
+  if (!(st.config.angles || []).some((a) => a.angle_index === targetIdx)) return;
+
+  const tCut = Number(Math.max(0, Math.min(st.config.duration_s - 0.04, st.activeTimeS)).toFixed(3));
+  const nextCuts = [...(st.config.cuts || [])].filter((c) => Math.abs(Number(c.time_s) - tCut) >= 0.04);
+  nextCuts.push({
+    time_s: tCut,
+    angle_index: targetIdx,
+    cut_mode: st.config.cut_mode,
+    source: "manual",
+    confidence: 1.0
+  });
+  st.config = normalizeMulticamStudioConfigClient({ ...st.config, cuts: nextCuts });
+  st.selectedCutTimeS = tCut;
+  refreshMcStudioLocalDerived();
+  syncMulticamStudioUI();
+  setMcStudioStatus(
+    t("mcStudio.status.cutRecorded")
+      .replace("{angle}", String(targetIdx))
+      .replace("{time}", tCut.toFixed(2))
+  );
+  try {
+    const compiled = await api.compileMulticamStudio({
+      config: st.config,
+      mode: st.config.compile_mode
+    });
+    if (compiled && compiled.filter_complex) {
+      st.compiled = compiled;
+      syncMulticamStudioUI();
+    }
+  } catch {
+    // Keep local compilation on offline error
+  }
+}
+
+function deleteSelectedMulticamStudioCutAction() {
+  const st = state.mcStudio;
+  let targetTime = st.selectedCutTimeS;
+  if (targetTime === null || targetTime <= 0.04) {
+    const nonZero = (st.config.cuts || []).filter((c) => Number(c.time_s) > 0.04);
+    if (nonZero.length === 0) return;
+    targetTime = nonZero[nonZero.length - 1].time_s;
+  }
+  const nextCuts = (st.config.cuts || []).filter(
+    (c) => Number(c.time_s) === 0 || Math.abs(Number(c.time_s) - Number(targetTime)) > 0.04
+  );
+  st.selectedCutTimeS = null;
+  st.config = normalizeMulticamStudioConfigClient({ ...st.config, cuts: nextCuts });
+  refreshMcStudioLocalDerived();
+  syncMulticamStudioUI();
+}
+
+function resetMulticamStudioCutsAction() {
+  const st = state.mcStudio;
+  st.selectedCutTimeS = null;
+  st.config = normalizeMulticamStudioConfigClient({
+    ...st.config,
+    cuts: [
+      {
+        time_s: 0.0,
+        angle_index: st.config.angles[0] ? st.config.angles[0].angle_index : 1,
+        cut_mode: st.config.cut_mode,
+        source: "initial",
+        confidence: 1.0
+      }
+    ]
+  });
+  refreshMcStudioLocalDerived();
+  syncMulticamStudioUI();
+}
+
+async function applyMulticamStudioToTimelineAction() {
+  if (!state.timelineDoc) return;
+  const st = state.mcStudio;
+  const selInfo = getSelectedClipTrack();
+  const trackIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyMulticamStudio({
+      document: state.timelineDoc,
+      config: st.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      pushTimelineUndoSnapshot("Apply Multi-Cam Studio");
+      applyTimelineMutationResponse(res, { syncClipSelection: true });
+      setMcStudioStatus(t("mcStudio.status.applied"));
+    }
+  } catch (err) {
+    try {
+      const localDoc = applyMulticamStudioToDocumentClient(state.timelineDoc, st.config, {
+        track_index: trackIndex,
+        clip_index: clipIndex
+      });
+      pushTimelineUndoSnapshot("Apply Multi-Cam Studio");
+      state.timelineDoc = localDoc;
+      renderTimelineUI();
+      setMcStudioStatus(t("mcStudio.status.applied"));
+    } catch {
+      setMcStudioStatus(`Apply failed: ${err.message || err}`);
+    }
+  }
+}
+
+async function sendMulticamStudioToDeliverAction() {
+  const st = state.mcStudio;
+  let compiled = st.compiled;
+  try {
+    compiled = await api.compileMulticamStudio({
+      config: st.config,
+      mode: st.config.compile_mode
+    });
+    if (compiled) st.compiled = compiled;
+  } catch {
+    compiled = compileMulticamStudioFiltergraphClient(st.config, st.config.compile_mode);
+  }
+  const outEl = byId("render-filtergraph-preview") || byId("color-filtergraph-output");
+  if (outEl && compiled && compiled.filter_complex) {
+    outEl.textContent = compiled.filter_complex;
+  }
+  state.multicamCompileMode = st.config.compile_mode === "quad_view" ? "quad_view" : "active_cuts";
+  closeMulticamStudioDialog();
+  switchTab("render");
+  setMcStudioStatus(`Staged Multi-Cam (${st.config.compile_mode}) for Deliver.`);
+}
+
+async function exportMulticamStudioEdlAction() {
+  const st = state.mcStudio;
+  try {
+    const res = await api.exportMulticamEdl({
+      config: st.config,
+      format: "edl",
+      title: `TAKTCUT_${st.config.preset_id}`
+    });
+    st.edlExport = res;
+    const drawer = byId("mc-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncMulticamStudioUI();
+    setMcStudioStatus(
+      t("mcStudio.status.exportedEdl").replace("{count}", String(res.segment_count || 0))
+    );
+  } catch (err) {
+    setMcStudioStatus(`EDL export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadMulticamStudioAction(format) {
+  const st = state.mcStudio;
+  const fmt = format === "timeline_json" ? "timeline_json" : "edl";
+  const ext = fmt === "timeline_json" ? ".json" : ".edl";
+  const filename = `taktcut_${st.config.preset_id}${ext}`;
+  try {
+    const blob = await api.downloadMulticamStudioBlob({
+      config: st.config,
+      format: fmt,
+      title: `TAKTCUT_${st.config.preset_id}`,
+      filename
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setMcStudioStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+function stopMulticamStudioPlay() {
+  const st = state.mcStudio;
+  st.playing = false;
+  if (st.rafId) {
+    cancelAnimationFrame(st.rafId);
+    st.rafId = null;
+  }
+  const playBtn = byId("btn-mc-play");
+  if (playBtn) playBtn.setAttribute("aria-pressed", "false");
+}
+
+function toggleMulticamStudioPlay() {
+  const st = state.mcStudio;
+  if (st.playing) {
+    stopMulticamStudioPlay();
+    return;
+  }
+  st.playing = true;
+  st.lastTs = performance.now();
+  const step = (ts) => {
+    if (!state.mcStudio.playing || !state.mcStudio.isOpen) {
+      stopMulticamStudioPlay();
+      return;
+    }
+    const dt = Math.min(0.1, Math.max(0, (ts - state.mcStudio.lastTs) / 1000));
+    state.mcStudio.lastTs = ts;
+    state.mcStudio.activeTimeS += dt;
+    if (state.mcStudio.activeTimeS >= state.mcStudio.config.duration_s) {
+      state.mcStudio.activeTimeS = 0;
+    }
+    syncMulticamStudioUI();
+    state.mcStudio.rafId = requestAnimationFrame(step);
+  };
+  syncMulticamStudioUI();
+  state.mcStudio.rafId = requestAnimationFrame(step);
+}
+
+function openMulticamStudioDialog() {
+  const dlg = byId("mc-studio-dialog");
+  if (!dlg) return;
+  const st = state.mcStudio;
+  st.isOpen = true;
+  refreshMcStudioLocalDerived();
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  syncMulticamStudioUI();
+  requestAnimationFrame(() => {
+    renderMulticamStudioCanvases();
+  });
+  syncMulticamStudioServer();
+}
+
+function closeMulticamStudioDialog() {
+  stopMulticamStudioPlay();
+  const dlg = byId("mc-studio-dialog");
+  if (dlg) {
+    if (typeof dlg.close === "function" && dlg.open) dlg.close();
+    else dlg.removeAttribute("open");
+  }
+  state.mcStudio.isOpen = false;
+}
+
+function wireMulticamStudioEvents() {
+  byId("btn-timeline-multicam-studio")?.addEventListener("click", openMulticamStudioDialog);
+  byId("btn-program-multicam-studio")?.addEventListener("click", openMulticamStudioDialog);
+  byId("btn-close-mc-studio")?.addEventListener("click", closeMulticamStudioDialog);
+
+  const dlg = byId("mc-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeMulticamStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeMulticamStudioDialog();
+    });
+    dlg.addEventListener("close", () => {
+      stopMulticamStudioPlay();
+      state.mcStudio.isOpen = false;
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".mc-preset-btn[data-mc-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-mc-preset") || "podcast_4cam_interview";
+      state.mcStudio.config = createDefaultMulticamStudioConfigClient(pid);
+      state.mcStudio.selectedCutTimeS = null;
+      state.mcStudio.activeTimeS = 0;
+      syncMulticamStudioServer();
+    });
+  }
+
+  byId("mc-sync-mode")?.addEventListener("change", (ev) => {
+    state.mcStudio.config = normalizeMulticamStudioConfigClient({
+      ...state.mcStudio.config,
+      sync_mode: ev.target.value
+    });
+    syncMulticamStudioServer();
+  });
+
+  byId("btn-mc-studio-sync")?.addEventListener("click", syncMulticamStudioServer);
+
+  byId("mc-cut-mode")?.addEventListener("change", (ev) => {
+    const cm = ev.target.value === "video_and_audio" ? "video_and_audio" : "video_only";
+    state.mcStudio.config = normalizeMulticamStudioConfigClient({
+      ...state.mcStudio.config,
+      cut_mode: cm,
+      audio_follow_video: cm === "video_and_audio"
+    });
+    refreshMcStudioLocalDerived();
+    syncMulticamStudioUI();
+  });
+
+  byId("mc-afv-toggle")?.addEventListener("change", (ev) => {
+    const checked = Boolean(ev.target.checked);
+    state.mcStudio.config = normalizeMulticamStudioConfigClient({
+      ...state.mcStudio.config,
+      cut_mode: checked ? "video_and_audio" : "video_only",
+      audio_follow_video: checked
+    });
+    refreshMcStudioLocalDerived();
+    syncMulticamStudioUI();
+  });
+
+  byId("mc-master-audio")?.addEventListener("change", (ev) => {
+    const val = Number.parseInt(ev.target.value, 10) || 1;
+    state.mcStudio.config = normalizeMulticamStudioConfigClient({
+      ...state.mcStudio.config,
+      master_audio_angle: val
+    });
+    refreshMcStudioLocalDerived();
+    syncMulticamStudioUI();
+  });
+
+  const minHoldEl = byId("mc-min-hold-num");
+  if (minHoldEl) {
+    minHoldEl.addEventListener("input", () => {
+      const v = Number.parseInt(minHoldEl.value, 10);
+      if (Number.isFinite(v) && v >= 100 && v <= 5000) {
+        state.mcStudio.config = normalizeMulticamStudioConfigClient({
+          ...state.mcStudio.config,
+          min_hold_ms: v
+        });
+        refreshMcStudioLocalDerived();
+        syncMulticamStudioUI();
+      }
+    });
+    minHoldEl.addEventListener("change", () => {
+      const v = Number.parseInt(minHoldEl.value, 10);
+      const clamped = Number.isFinite(v) ? Math.max(100, Math.min(5000, v)) : 450;
+      state.mcStudio.config = normalizeMulticamStudioConfigClient({
+        ...state.mcStudio.config,
+        min_hold_ms: clamped
+      });
+      refreshMcStudioLocalDerived();
+      syncMulticamStudioUI();
+    });
+  }
+
+  byId("mc-compile-mode")?.addEventListener("change", (ev) => {
+    const cm = ev.target.value === "quad_view" ? "quad_view" : "program_stitch";
+    state.mcStudio.config = normalizeMulticamStudioConfigClient({
+      ...state.mcStudio.config,
+      compile_mode: cm
+    });
+    refreshMcStudioLocalDerived();
+    syncMulticamStudioUI();
+  });
+
+  for (const pad of document.querySelectorAll(".mc-angle-pad[data-mc-angle]")) {
+    pad.addEventListener("click", () => {
+      const angle = Number.parseInt(pad.getAttribute("data-mc-angle") || "1", 10);
+      recordMulticamStudioCutAction(angle);
+    });
+  }
+
+  const quadCanvas = byId("mc-quad-canvas");
+  if (quadCanvas) {
+    const hitTile = (ev) => {
+      const rect = quadCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      for (const tile of quadCanvas._mcStudioQuadTiles || []) {
+        if (x >= tile.x && x <= tile.x + tile.w && y >= tile.y && y <= tile.y + tile.h) {
+          return tile.angle_index;
+        }
+      }
+      return 0;
+    };
+    quadCanvas.addEventListener("pointermove", (ev) => {
+      const hovered = hitTile(ev);
+      if (hovered !== state.mcStudio.hoveredAngleIndex) {
+        state.mcStudio.hoveredAngleIndex = hovered;
+        renderMulticamStudioCanvases();
+      }
+    });
+    quadCanvas.addEventListener("pointerleave", () => {
+      if (state.mcStudio.hoveredAngleIndex !== 0) {
+        state.mcStudio.hoveredAngleIndex = 0;
+        renderMulticamStudioCanvases();
+      }
+    });
+    quadCanvas.addEventListener("pointerdown", (ev) => {
+      const angle = hitTile(ev);
+      if (angle >= 1) {
+        recordMulticamStudioCutAction(angle);
+      }
+    });
+  }
+
+  const tlCanvas = byId("mc-timeline-canvas");
+  if (tlCanvas) {
+    const scrubTimeline = (ev) => {
+      const geom = tlCanvas._mcTimelineGeom;
+      if (!geom) return;
+      const rect = tlCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const u = Math.max(0, Math.min(1, (x - geom.labelW) / Math.max(1, geom.plotW)));
+      const nextT = Number((u * geom.durationS).toFixed(2));
+      state.mcStudio.activeTimeS = nextT;
+      let hitCut = null;
+      for (const ch of geom.cutHitboxes || []) {
+        if (Math.abs(x - ch.x) <= 7) {
+          hitCut = ch.time_s;
+          break;
+        }
+      }
+      if (hitCut !== null) state.mcStudio.selectedCutTimeS = hitCut;
+      syncMulticamStudioUI();
+    };
+    tlCanvas.addEventListener("pointerdown", (ev) => {
+      stopMulticamStudioPlay();
+      scrubTimeline(ev);
+    });
+  }
+
+  byId("btn-mc-play")?.addEventListener("click", toggleMulticamStudioPlay);
+  byId("btn-mc-step-back")?.addEventListener("click", () => {
+    stopMulticamStudioPlay();
+    state.mcStudio.activeTimeS = Math.max(0, Number((state.mcStudio.activeTimeS - 1).toFixed(2)));
+    syncMulticamStudioUI();
+  });
+  byId("btn-mc-step-fwd")?.addEventListener("click", () => {
+    stopMulticamStudioPlay();
+    state.mcStudio.activeTimeS = Math.min(
+      state.mcStudio.config.duration_s,
+      Number((state.mcStudio.activeTimeS + 1).toFixed(2))
+    );
+    syncMulticamStudioUI();
+  });
+  byId("mc-playhead-slider")?.addEventListener("input", (ev) => {
+    stopMulticamStudioPlay();
+    const v = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(v)) {
+      state.mcStudio.activeTimeS = Math.max(0, Math.min(state.mcStudio.config.duration_s, v));
+      syncMulticamStudioUI();
+    }
+  });
+
+  byId("btn-mc-auto-switch")?.addEventListener("click", autoSwitchMulticamStudioAction);
+  byId("btn-mc-delete-cut")?.addEventListener("click", deleteSelectedMulticamStudioCutAction);
+  byId("btn-mc-clear-cuts")?.addEventListener("click", resetMulticamStudioCutsAction);
+  byId("btn-mc-apply-timeline")?.addEventListener("click", applyMulticamStudioToTimelineAction);
+  byId("btn-mc-send-deliver")?.addEventListener("click", sendMulticamStudioToDeliverAction);
+  byId("btn-mc-export-edl")?.addEventListener("click", exportMulticamStudioEdlAction);
+  byId("btn-mc-download-edl")?.addEventListener("click", () => downloadMulticamStudioAction("edl"));
+  byId("btn-mc-download-json")?.addEventListener("click", () => downloadMulticamStudioAction("timeline_json"));
+  byId("btn-mc-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.mcStudio.compiled || compileMulticamStudioFiltergraphClient(state.mcStudio.config);
+    try {
+      await navigator.clipboard.writeText(compiled.filter_complex || "");
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    setMcStudioStatus(t("mcStudio.status.copied"));
   });
 }
 

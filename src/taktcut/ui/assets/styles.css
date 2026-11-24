@@ -10169,3 +10169,275 @@ input[type="range"] {
     min-height: 45px;
   }
 }
+
+/* ========================================================================== */
+/* MULTI-CAM ANGLE SYNC & LIVE QUAD-VIEW SWITCHER STUDIO (CYCLE #106)         */
+/* ========================================================================== */
+
+.mc-studio-btn {
+  border-color: rgba(229, 57, 53, 0.55);
+}
+
+dialog.nle-dialog.mc-studio-dialog {
+  width: min(1160px, calc(100vw - 24px));
+  max-width: min(1160px, calc(100vw - 24px));
+  max-height: min(92vh, 860px);
+}
+
+.mc-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.mc-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.mc-dialog-body .code-box,
+.mc-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.mc-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mc-tally-pill {
+  background: rgba(229, 57, 53, 0.22);
+  border-color: #e53935;
+  color: #fecaca;
+  font-weight: 800;
+}
+
+.mc-preset-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mc-preset-btn.is-active {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+
+.mc-control-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.mc-ctrl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mc-ctrl-field label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.mc-ctrl-narrow .input-control {
+  width: 96px;
+}
+
+.mc-afv-check {
+  padding-bottom: 6px;
+}
+
+.mc-monitors-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.mc-monitor-card,
+.mc-timeline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.mc-quad-canvas {
+  display: block;
+  width: 100%;
+  height: 240px;
+  cursor: pointer;
+}
+
+.mc-program-canvas {
+  display: block;
+  width: 100%;
+  height: 204px;
+}
+
+.mc-timeline-canvas {
+  display: block;
+  width: 100%;
+  height: 158px;
+  cursor: ew-resize;
+}
+
+.mc-angle-pads {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mc-angle-pad {
+  min-width: 30px;
+  font-weight: 800;
+}
+
+.mc-angle-pad.is-live {
+  background: #e53935;
+  border-color: #f87171;
+  color: #ffffff;
+}
+
+.mc-transport-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mc-playhead-slider {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: #f59e0b;
+}
+
+.mc-sync-readout-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.mc-sync-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-left: 3px solid #3b82f6;
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.mc-sync-card.is-live {
+  border-color: rgba(229, 57, 53, 0.7);
+  background: rgba(229, 57, 53, 0.08);
+}
+
+.mc-sync-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-sync-card-meta {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.mc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mc-compile-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.mc-compile-mode-row label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+#mc-studio-dialog .btn:focus-visible,
+#mc-studio-dialog .input-control:focus-visible,
+#mc-studio-dialog input[type="range"]:focus-visible,
+.mc-studio-btn:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 1px;
+}
+
+@media (max-width: 900px) {
+  .mc-monitors-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mc-sync-readout-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  dialog.nle-dialog.mc-studio-dialog {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: min(94vh, 780px);
+  }
+  .mc-sync-readout-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mc-ctrl-field {
+    width: 100%;
+  }
+  .mc-ctrl-narrow .input-control {
+    width: 100%;
+  }
+  .mc-studio-btn,
+  .mc-preset-btn,
+  .mc-angle-pad,
+  .mc-actions .btn,
+  .mc-transport-bar .btn,
+  #btn-mc-studio-sync,
+  #btn-mc-auto-switch,
+  #btn-close-mc-studio,
+  #mc-studio-dialog .input-control {
+    min-height: 45px;
+  }
+  .mc-angle-pad {
+    min-width: 44px;
+  }
+}

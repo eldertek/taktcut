@@ -2,6 +2,10 @@ import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ALLOWED_CST_GAMUT_MAPPING_MODES,
   ALLOWED_CST_TONE_MAPPING_MODES,
+  ALLOWED_MULTICAM_STUDIO_COMPILE_MODES,
+  ALLOWED_MULTICAM_STUDIO_CUT_MODES,
+  ALLOWED_MULTICAM_STUDIO_PRESET_IDS,
+  ALLOWED_MULTICAM_STUDIO_SYNC_MODES,
   ALLOWED_QUALIFIER_CUBE_MODES,
   ALLOWED_QUALIFIER_DESPILL_MODES,
   ALLOWED_QUALIFIER_HIGHLIGHT_MODES,
@@ -22,6 +26,7 @@ import {
   DELIVERY_PRESETS,
   HSL_CURVE_PRESETS,
   LOUDNESS_PRESET_LUFS,
+  MULTICAM_STUDIO_PRESETS_CLIENT,
   PLANAR_TRACKER_PRESETS_CLIENT,
   QUALIFIER_KEYER_PRESETS_CLIENT,
   QUALIFIER_PRESETS,
@@ -59,10 +64,12 @@ import {
   applyAutoReframeToDocumentClient,
   applyAvSyncInDocumentClient,
   applyBroadcastLegalClampClient,
+  applyMulticamStudioToDocumentClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
   autoRelinkAllInDocumentClient,
+  autoSwitchMulticamSpeakersClient,
   clearAutoReframeFromDocumentClient,
   clearProxiesInDocument,
   generateCstCubeTextClient,
@@ -77,6 +84,7 @@ import {
   compileColorNodeChainClient,
   compileCompoundFiltergraphClient,
   compileCstFiltergraphClient,
+  compileMulticamStudioFiltergraphClient,
   compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
@@ -100,6 +108,7 @@ import {
   createColorNode,
   createCompoundClipInDocument,
   createDefaultCstConfigClient,
+  createDefaultMulticamStudioConfigClient,
   createDefaultQualifierKeyerConfigClient,
   createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
@@ -108,6 +117,7 @@ import {
   detectAudioTransientsClient,
   estimateRenderFileSize,
   evaluateTitleMotionState,
+  exportMulticamEdlClient,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
   generateStudioLutPresetClient,
@@ -116,8 +126,10 @@ import {
   listStudioLutPresetsClient,
   normalizeBroadcastConfigClient,
   normalizeFairlightAudioParams,
+  normalizeMulticamStudioConfigClient,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
+  syncMulticamStudioAnglesClient,
   parseCubeLutTextClient,
   resolveRetimeRampPointsForPreset,
   rippleDeleteClipInDocument,
@@ -4098,6 +4110,100 @@ export function createApiClient() {
         throw new Error(err.error || `HTTP ${resp.status}`);
       }
       return resp.blob();
+    },
+    async getMulticamStudioPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: MULTICAM_STUDIO_PRESETS_CLIENT,
+          preset_ids: ALLOWED_MULTICAM_STUDIO_PRESET_IDS,
+          sync_modes: ALLOWED_MULTICAM_STUDIO_SYNC_MODES,
+          cut_modes: ALLOWED_MULTICAM_STUDIO_CUT_MODES,
+          compile_modes: ALLOWED_MULTICAM_STUDIO_COMPILE_MODES,
+          default_config: createDefaultMulticamStudioConfigClient()
+        };
+      }
+      return requestJson("/api/edit/multicam/presets");
+    },
+    async syncMulticamStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const cfg = normalizeMulticamStudioConfigClient(
+          payload && payload.config ? payload.config : payload
+        );
+        return {
+          config: cfg,
+          sync: syncMulticamStudioAnglesClient(cfg)
+        };
+      }
+      return requestJson("/api/edit/multicam/sync", { method: "POST", body: payload });
+    },
+    async autoSwitchMulticamStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const cfg = normalizeMulticamStudioConfigClient(
+          payload && payload.config ? payload.config : payload
+        );
+        return autoSwitchMulticamSpeakersClient(cfg);
+      }
+      return requestJson("/api/edit/multicam/auto-switch", { method: "POST", body: payload });
+    },
+    async compileMulticamStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeMulticamStudioConfigClient(p.config ? p.config : p);
+        return compileMulticamStudioFiltergraphClient(cfg, p.mode || null);
+      }
+      return requestJson("/api/edit/multicam/compile", { method: "POST", body: payload });
+    },
+    async exportMulticamEdl(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeMulticamStudioConfigClient(p.config ? p.config : p);
+        return exportMulticamEdlClient(cfg, {
+          format: p.format === "timeline_json" ? "timeline_json" : "edl",
+          title: p.title || "TAKTCUT_MULTICAM"
+        });
+      }
+      return requestJson("/api/edit/multicam/export-edl", { method: "POST", body: payload });
+    },
+    async downloadMulticamStudioBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeMulticamStudioConfigClient(p.config ? p.config : p);
+        const fmt = p.format === "timeline_json" ? "timeline_json" : "edl";
+        const exp = exportMulticamEdlClient(cfg, {
+          format: fmt,
+          title: p.title || "TAKTCUT_MULTICAM"
+        });
+        const text = fmt === "timeline_json" ? exp.timeline_json : exp.edl_text;
+        const mime = fmt === "timeline_json" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8";
+        return new Blob([text], { type: mime });
+      }
+      const resp = await fetch(`${apiBase}/api/edit/multicam/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyMulticamStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyMulticamStudioToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc)
+        };
+      }
+      return requestJson("/api/edit/multicam/apply", { method: "POST", body: payload });
     }
   };
 }

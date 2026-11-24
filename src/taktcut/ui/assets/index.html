@@ -331,6 +331,7 @@
                   <button type="button" id="btn-program-zebra" class="btn btn-mini bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.zebra" title="Toggle Dual Zebra Clipping Stripes (Shift+Z)">Zebra</button>
                   <button type="button" id="btn-program-broadcast-studio" class="btn btn-mini bm-studio-btn" data-i18n="broadcast.btn.studio" title="Open False Color, Zebra &amp; EBU R103 Broadcast Safe Studio (Shift+G)">IRE / Safe</button>
                   <button type="button" id="btn-program-auto-reframe" class="btn btn-mini ar-studio-btn" data-i18n="autoReframe.btn.studio" title="Open Auto Reframe Subject Tracking Studio (Shift+R)">Auto Reframe</button>
+                  <button type="button" id="btn-program-multicam-studio" class="btn btn-mini mc-studio-btn" data-i18n="mcStudio.btn.program" title="Open Multi-Cam Angle Sync &amp; Live Quad Switcher Studio (Shift+V)">Multi-Cam Studio</button>
                 </div>
               </div>
               <div id="timeline-viewer-well" class="viewer-well">
@@ -1472,6 +1473,16 @@
                     <rect x="9" y="9" width="5.5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>
                   </svg>
                   <span data-i18n="timeline.tool.multicam">+ Multi-Cam</span>
+                </button>
+                <button type="button" id="btn-timeline-multicam-studio" class="btn btn-mini tl-mc-studio-btn mc-studio-btn" title="Open Multi-Cam Angle Sync &amp; Live Quad-View Switcher Studio (Shift+V)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <rect x="1.5" y="2" width="5.5" height="5" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                    <rect x="9" y="2" width="5.5" height="5" rx="0.8" fill="#ef4444" stroke="#ef4444" stroke-width="0.8"/>
+                    <rect x="1.5" y="9" width="5.5" height="5" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                    <rect x="9" y="9" width="5.5" height="5" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                  </svg>
+                  <span data-i18n="mcStudio.btn.toolbar">Multi-Cam</span>
+                  <span class="kbd-chip mono">Shift+V</span>
                 </button>
                 <button type="button" id="btn-timeline-scene-cut" class="btn btn-mini tl-scenecut-btn" title="Scene Cut Detection &amp; Auto-Split (Shift+C)">
                   <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -4801,6 +4812,148 @@
         <div class="fg-drawer-body">
           <pre id="qk-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="qk-cube-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="mc-studio-dialog" class="nle-dialog mc-studio-dialog" aria-labelledby="mc-studio-title" aria-describedby="mc-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="mc-studio-title" data-i18n="mcStudio.dialog.title">Multi-Cam Angle Sync &amp; Live Quad-View Switcher Studio</h2>
+        <p id="mc-studio-subtitle" class="nle-dialog-subtitle" data-i18n="mcStudio.dialog.subtitle">Audio Waveform Cross-Correlation, SMPTE Timecode / Slate Alignment, Active Speaker Auto-Switch &amp; CMX 3600 EDL</p>
+      </div>
+      <div class="mc-header-actions">
+        <span id="mc-active-preset-badge" class="nle-tag mono">PODCAST 4-CAM</span>
+        <span id="mc-active-tally-badge" class="nle-tag mono mc-tally-pill">ON AIR: CAM 1</span>
+        <button type="button" id="btn-close-mc-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body mc-dialog-body">
+      <div class="mc-preset-strip" id="mc-preset-strip" role="group" aria-label="Multi-Cam studio presets">
+        <span class="pill-label" data-i18n="mcStudio.presetsLabel">MULTI-CAM PRESETS</span>
+        <button type="button" class="btn btn-chip mc-preset-btn is-active" data-mc-preset="podcast_4cam_interview" aria-pressed="true" data-i18n="mcStudio.preset.podcast_4cam_interview">Podcast 4-Cam</button>
+        <button type="button" class="btn btn-chip mc-preset-btn" data-mc-preset="concert_3cam_audio_lock" aria-pressed="false" data-i18n="mcStudio.preset.concert_3cam_audio_lock">Concert 3-Cam</button>
+        <button type="button" class="btn btn-chip mc-preset-btn" data-mc-preset="tutorial_2cam_pip_switch" aria-pressed="false" data-i18n="mcStudio.preset.tutorial_2cam_pip_switch">Tutorial 2-Cam</button>
+        <button type="button" class="btn btn-chip mc-preset-btn" data-mc-preset="custom" aria-pressed="false" data-i18n="mcStudio.preset.custom">Custom</button>
+      </div>
+
+      <div class="mc-control-bar">
+        <div class="mc-ctrl-field">
+          <label for="mc-sync-mode" data-i18n="mcStudio.syncMode">Sync Method</label>
+          <select id="mc-sync-mode" class="input-control mono">
+            <option value="audio_waveform" selected data-i18n="mcStudio.sync.audio_waveform">Audio Waveform Cross-Corr</option>
+            <option value="timecode" data-i18n="mcStudio.sync.timecode">SMPTE Timecode</option>
+            <option value="slate_marker" data-i18n="mcStudio.sync.slate_marker">Slate / Clap Marker</option>
+          </select>
+        </div>
+        <button type="button" id="btn-mc-studio-sync" class="btn btn-secondary" data-i18n="mcStudio.btn.sync">Sync Angles</button>
+
+        <div class="mc-ctrl-field">
+          <label for="mc-cut-mode" data-i18n="mcStudio.cutMode">Switch Mode</label>
+          <select id="mc-cut-mode" class="input-control mono">
+            <option value="video_only" data-i18n="mcStudio.cut.video_only">Video Only (Master Audio Lock)</option>
+            <option value="video_and_audio" selected data-i18n="mcStudio.cut.video_and_audio">Video + Audio (AFV)</option>
+          </select>
+        </div>
+
+        <label class="inline-check mc-afv-check" for="mc-afv-toggle">
+          <input type="checkbox" id="mc-afv-toggle" checked>
+          <span data-i18n="mcStudio.afvLabel">Audio Follow Video</span>
+        </label>
+
+        <div class="mc-ctrl-field mc-ctrl-narrow">
+          <label for="mc-master-audio" data-i18n="mcStudio.masterAudio">Master Mic</label>
+          <select id="mc-master-audio" class="input-control mono">
+            <option value="1" selected>CAM 1</option>
+            <option value="2">CAM 2</option>
+            <option value="3">CAM 3</option>
+            <option value="4">CAM 4</option>
+          </select>
+        </div>
+
+        <div class="mc-ctrl-field mc-ctrl-narrow">
+          <label for="mc-min-hold-num" data-i18n="mcStudio.minHoldMs">Min Hold (ms)</label>
+          <input type="number" id="mc-min-hold-num" class="input-control input-num mono" min="100" max="5000" step="50" value="650">
+        </div>
+
+        <button type="button" id="btn-mc-auto-switch" class="btn btn-primary" data-i18n="mcStudio.btn.autoSwitch">Auto-Switch Speaker</button>
+      </div>
+
+      <div class="mc-monitors-grid">
+        <div class="mc-monitor-card">
+          <div class="pane-subheader">
+            <span data-i18n="mcStudio.quadTitle">2x2 Quad-View Bank (Click Tile or Press 1-4 to Cut Live)</span>
+            <div class="mc-angle-pads" id="mc-angle-pads" role="group" aria-label="Live angle switcher keys 1 to 4">
+              <button type="button" id="mc-angle-pad-1" class="btn btn-mini mc-angle-pad is-live" data-mc-angle="1" aria-pressed="true">1</button>
+              <button type="button" id="mc-angle-pad-2" class="btn btn-mini mc-angle-pad" data-mc-angle="2" aria-pressed="false">2</button>
+              <button type="button" id="mc-angle-pad-3" class="btn btn-mini mc-angle-pad" data-mc-angle="3" aria-pressed="false">3</button>
+              <button type="button" id="mc-angle-pad-4" class="btn btn-mini mc-angle-pad" data-mc-angle="4" aria-pressed="false">4</button>
+            </div>
+          </div>
+          <div class="viewer-well">
+            <canvas id="mc-quad-canvas" class="studio-canvas mc-quad-canvas" aria-label="2x2 Multi-Cam Quad-View live switcher monitor"></canvas>
+          </div>
+        </div>
+
+        <div class="mc-monitor-card">
+          <div class="pane-subheader">
+            <span data-i18n="mcStudio.programTitle">Program Output Monitor (Live Switched)</span>
+            <span id="mc-playhead-tc" class="nle-tag mono">00:00:00:00</span>
+          </div>
+          <div class="viewer-well">
+            <canvas id="mc-program-canvas" class="studio-canvas mc-program-canvas" aria-label="Program Output Monitor"></canvas>
+          </div>
+          <div class="mc-transport-bar">
+            <button type="button" id="btn-mc-step-back" class="btn btn-mini mono" title="Step -1s">-1s</button>
+            <button type="button" id="btn-mc-play" class="btn btn-mini btn-primary" aria-pressed="false" data-i18n="mcStudio.btn.play">Play / Pause</button>
+            <button type="button" id="btn-mc-step-fwd" class="btn btn-mini mono" title="Step +1s">+1s</button>
+            <input type="range" id="mc-playhead-slider" class="scrub-slider mc-playhead-slider" min="0" max="24" step="0.04" value="0" aria-label="Multi-Cam Studio timeline playhead">
+          </div>
+        </div>
+      </div>
+
+      <div class="mc-timeline-card">
+        <div class="pane-subheader">
+          <span data-i18n="mcStudio.timelineTitle">Multi-Cam Cut Track &amp; Aligned Angle Waveforms</span>
+          <span id="mc-segments-summary" class="nle-tag mono">6 cuts | 0 short</span>
+        </div>
+        <div class="viewer-well">
+          <canvas id="mc-timeline-canvas" class="studio-canvas mc-timeline-canvas" aria-label="Multi-Cam angle waveforms and cut segments timeline"></canvas>
+        </div>
+      </div>
+
+      <div id="mc-sync-readout-grid" class="mc-sync-readout-grid" aria-live="polite"></div>
+
+      <div id="mc-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="mcStudio.status.idle">Click any Quad-View camera tile (or press 1-4) to record a live cut, or run Auto-Switch Speaker.</div>
+
+      <div class="btn-row mc-actions">
+        <button type="button" id="btn-mc-delete-cut" class="btn btn-mini" data-i18n="mcStudio.btn.deleteCut">Delete Cut</button>
+        <button type="button" id="btn-mc-clear-cuts" class="btn btn-mini" data-i18n="mcStudio.btn.clearCuts">Reset Cuts</button>
+        <button type="button" id="btn-mc-apply-timeline" class="btn btn-primary" data-i18n="mcStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-mc-send-deliver" class="btn btn-secondary" data-i18n="mcStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-mc-export-edl" class="btn btn-secondary" data-i18n="mcStudio.btn.exportEdl">Export EDL</button>
+        <button type="button" id="btn-mc-download-edl" class="btn btn-secondary" data-i18n="mcStudio.btn.downloadEdl">Download .edl</button>
+        <button type="button" id="btn-mc-download-json" class="btn btn-secondary" data-i18n="mcStudio.btn.downloadJson">Download JSON</button>
+        <button type="button" id="btn-mc-copy-fg" class="btn btn-mini" data-i18n="mcStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="mc-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="mcStudio.drawerTitle">FFmpeg Multi-Cam Filtergraph &amp; CMX 3600 EDL Preview</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <div class="mc-compile-mode-row">
+            <label for="mc-compile-mode" data-i18n="mcStudio.compileMode">FFmpeg Target</label>
+            <select id="mc-compile-mode" class="input-control mono">
+              <option value="program_stitch" selected data-i18n="mcStudio.compile.program_stitch">Program Stitch (concat)</option>
+              <option value="quad_view" data-i18n="mcStudio.compile.quad_view">Quad-View 2x2 (xstack + Tally)</option>
+            </select>
+          </div>
+          <pre id="mc-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="mc-edl-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

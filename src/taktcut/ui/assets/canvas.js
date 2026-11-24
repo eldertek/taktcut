@@ -11625,3 +11625,440 @@ export function drawQualifierKeyerHistogramCanvas(canvas, metrics, rawQkConfig) 
     ctx.fillText(`MATTE: ${metrics.quality_grade}`, padL + plotW, 11);
   }
 }
+
+// =============================================================================
+// MULTI-CAM ANGLE SYNC & LIVE QUAD-VIEW SWITCHER STUDIO CANVASES (CYCLE #106)
+// =============================================================================
+
+function resolveMulticamStudioActiveSegment(segments, timeS) {
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return { angle_index: 1, audio_angle_index: 1, cut_mode: "video_only", is_short_cut: false };
+  }
+  let chosen = segments[0];
+  for (const seg of segments) {
+    if (timeS >= Number(seg.start_s || 0) - 1e-4) {
+      chosen = seg;
+    } else {
+      break;
+    }
+  }
+  return chosen;
+}
+
+function drawStudioCameraFeed(ctx, x, y, w, h, angle, syncEntry, timeS, opts = {}) {
+  const idx = angle ? Number(angle.angle_index || 1) : 1;
+  const presets = [
+    { scale: 0.95, cx: 0.5, cy: 0.54, top: "#16243a", bot: "#0e131b", accent: "#3b82f6" },
+    { scale: 1.28, cx: 0.46, cy: 0.48, top: "#122b29", bot: "#0e1717", accent: "#10b981" },
+    { scale: 1.68, cx: 0.54, cy: 0.44, top: "#2f2213", bot: "#17120c", accent: "#f59e0b" },
+    { scale: 1.12, cx: 0.5, cy: 0.62, top: "#27182d", bot: "#140e19", accent: "#ec4899" }
+  ];
+  const look = presets[(idx - 1) % presets.length];
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+
+  const grad = ctx.createLinearGradient(x, y, x, y + h);
+  grad.addColorStop(0, look.top);
+  grad.addColorStop(0.62, "#12151d");
+  grad.addColorStop(1, look.bot);
+  ctx.fillStyle = grad;
+  ctx.fillRect(x, y, w, h);
+
+  // Subtle broadcast grid & horizon
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.lineWidth = 1;
+  const hy = y + h * (idx === 4 ? 0.44 : 0.6);
+  ctx.beginPath();
+  ctx.moveTo(x, hy);
+  ctx.lineTo(x + w, hy);
+  ctx.stroke();
+
+  // Animated studio subject silhouette + key light rim
+  const env = syncEntry && Array.isArray(syncEntry.waveform_envelope) ? syncEntry.waveform_envelope : [];
+  const offS = syncEntry ? Number(syncEntry.offset_s || 0) : 0;
+  const sampleIdx = env.length > 0 ? Math.max(0, Math.min(env.length - 1, Math.round(Math.max(0, timeS - offS) * 20))) : 0;
+  const audioAmp = env.length > 0 ? Number(env[sampleIdx] || 0.15) : 0.25;
+
+  const driftX = Math.sin(timeS * 1.15 + idx * 1.1) * (w * 0.025);
+  const driftY = Math.cos(timeS * 0.9 + idx * 0.7) * (h * 0.015);
+  const sx = x + w * look.cx + driftX;
+  const sy = y + h * look.cy + driftY;
+  const r = Math.min(w, h) * 0.115 * look.scale;
+
+  ctx.fillStyle = "rgba(248, 250, 252, 0.18)";
+  ctx.beginPath();
+  ctx.arc(sx, sy - r * 0.55, r * 0.44, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(sx, sy + r * 0.56, r * 0.74, r * 0.58, 0, Math.PI, 0);
+  ctx.fill();
+
+  // Speaking halo around active microphone energy
+  if (audioAmp > 0.35) {
+    ctx.strokeStyle = angle ? angle.color_tag || look.accent : look.accent;
+    ctx.globalAlpha = Math.min(0.7, audioAmp * 0.65);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy - r * 0.2, r * (0.85 + audioAmp * 0.28), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Vertical live audio level meter on right edge
+  const meterW = Math.max(5, Math.round(w * 0.025));
+  const meterH = Math.max(24, h - 24);
+  const mx = x + w - meterW - 6;
+  const my = y + 12;
+  ctx.fillStyle = "rgba(9, 11, 16, 0.75)";
+  ctx.fillRect(mx, my, meterW, meterH);
+  const fillH = Math.max(2, Math.round(meterH * Math.min(1, audioAmp)));
+  ctx.fillStyle = audioAmp > 0.82 ? "#ef4444" : audioAmp > 0.55 ? "#f59e0b" : "#22c55e";
+  ctx.fillRect(mx, my + meterH - fillH, meterW, fillH);
+
+  ctx.restore();
+}
+
+export function drawMulticamStudioQuadCanvas(
+  canvas,
+  config,
+  syncReport,
+  segments,
+  activeTimeS,
+  hoveredAngleIndex = 0
+) {
+  if (!canvas || !config) return { tiles: [] };
+  const { ctx, width, height } = setupCanvas(canvas, 240);
+  ctx.fillStyle = "#0b0d12";
+  ctx.fillRect(0, 0, width, height);
+  const angles = Array.isArray(config.angles) ? config.angles : [];
+  const syncMap = new Map(((syncReport && syncReport.angles) || []).map((r) => [r.angle_index, r]));
+  const activeSeg = resolveMulticamStudioActiveSegment(segments, activeTimeS);
+  const fps = Math.max(1, Number(config.fps || 25));
+
+  const pad = 6;
+  const gap = 6;
+  const cellW = Math.max(60, Math.floor((width - pad * 2 - gap) / 2));
+  const cellH = Math.max(44, Math.floor((height - pad * 2 - gap) / 2));
+  const tiles = [];
+
+  for (let slot = 0; slot < 4; slot += 1) {
+    const col = slot % 2;
+    const row = Math.floor(slot / 2);
+    const tx = pad + col * (cellW + gap);
+    const ty = pad + row * (cellH + gap);
+    const angle = angles[slot] || null;
+
+    if (!angle) {
+      ctx.fillStyle = "#12151d";
+      ctx.fillRect(tx, ty, cellW, cellH);
+      ctx.strokeStyle = "#242936";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tx + 0.5, ty + 0.5, cellW - 1, cellH - 1);
+      ctx.fillStyle = "#64748b";
+      ctx.font = "700 10px ui-monospace, monospace";
+      ctx.fillText(`CAM ${slot + 1} UNASSIGNED`, tx + 10, ty + 20);
+      continue;
+    }
+
+    const syncEntry = syncMap.get(angle.angle_index) || null;
+    const isLive = Number(activeSeg.angle_index) === Number(angle.angle_index);
+    const isAudioMaster = Number(activeSeg.audio_angle_index) === Number(angle.angle_index);
+    const isHovered = Number(hoveredAngleIndex) === Number(angle.angle_index);
+
+    drawStudioCameraFeed(ctx, tx, ty, cellW, cellH, angle, syncEntry, activeTimeS, { isLive });
+
+    // Top-left Angle pill
+    const badgeTxt = `${angle.angle_index} ${String(angle.name || "").slice(0, 18)}`;
+    ctx.font = "700 10px ui-monospace, monospace";
+    const bw = Math.min(cellW - 66, ctx.measureText(badgeTxt).width + 12);
+    ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
+    roundRectPath(ctx, tx + 6, ty + 6, bw, 18, 2);
+    ctx.fill();
+    ctx.fillStyle = angle.color_tag || "#93c5fd";
+    ctx.fillText(badgeTxt, tx + 11, ty + 18, bw - 8);
+
+    // Top-right ON AIR red tally or KEY shortcut
+    if (isLive) {
+      ctx.fillStyle = "#e53935";
+      roundRectPath(ctx, tx + cellW - 58, ty + 6, 48, 18, 2);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "800 9.5px ui-monospace, monospace";
+      ctx.fillText("ON AIR", tx + cellW - 53, ty + 18);
+    } else {
+      ctx.fillStyle = "rgba(15, 18, 25, 0.86)";
+      roundRectPath(ctx, tx + cellW - 44, ty + 6, 34, 18, 2);
+      ctx.fill();
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = "700 9px ui-monospace, monospace";
+      ctx.fillText(`CAM ${angle.angle_index}`, tx + cellW - 40, ty + 18);
+    }
+
+    // Bottom-left sync offset + audio badge
+    const offF = syncEntry ? Number(syncEntry.offset_frames || 0) : 0;
+    const confPct = syncEntry ? Math.round(Number(syncEntry.confidence || 0.95) * 100) : 95;
+    const tcStr = framesToSmpte(Math.round(activeTimeS * fps) + offF, fps);
+    const metaTxt = `${offF >= 0 ? "+" : ""}${offF}f (${confPct}%) ${isAudioMaster ? "[MIC]" : ""}`;
+    ctx.font = "600 9px ui-monospace, monospace";
+    const mw = Math.min(cellW - 22, ctx.measureText(metaTxt).width + 10);
+    ctx.fillStyle = "rgba(10, 12, 18, 0.85)";
+    ctx.fillRect(tx + 6, ty + cellH - 22, mw, 16);
+    ctx.fillStyle = isAudioMaster ? "#fde68a" : "#cbd5e1";
+    ctx.fillText(metaTxt, tx + 10, ty + cellH - 11, mw - 6);
+
+    // Tally border: crisp broadcast Red when active, Sky on hover, subtle angle border otherwise
+    ctx.strokeStyle = isLive ? "#e53935" : isHovered ? "#f59e0b" : (angle.color_tag || "#334155");
+    ctx.lineWidth = isLive ? 3.5 : isHovered ? 2 : 1.25;
+    ctx.strokeRect(tx + 1, ty + 1, cellW - 2, cellH - 2);
+
+    tiles.push({
+      angle_index: angle.angle_index,
+      x: tx,
+      y: ty,
+      w: cellW,
+      h: cellH,
+      tcStr
+    });
+  }
+
+  canvas._mcStudioQuadTiles = tiles;
+  return { tiles };
+}
+
+export function drawMulticamStudioProgramCanvas(
+  canvas,
+  config,
+  syncReport,
+  segments,
+  activeTimeS
+) {
+  if (!canvas || !config) return;
+  const { ctx, width, height } = setupCanvas(canvas, 204);
+  ctx.fillStyle = "#090b10";
+  ctx.fillRect(0, 0, width, height);
+  const angles = Array.isArray(config.angles) ? config.angles : [];
+  const activeSeg = resolveMulticamStudioActiveSegment(segments, activeTimeS);
+  const activeAngle = angles.find((a) => a.angle_index === activeSeg.angle_index) || angles[0] || null;
+  const syncMap = new Map(((syncReport && syncReport.angles) || []).map((r) => [r.angle_index, r]));
+  const syncEntry = activeAngle ? syncMap.get(activeAngle.angle_index) : null;
+  const fps = Math.max(1, Number(config.fps || 25));
+
+  const pad = 8;
+  const frameW = Math.max(80, width - pad * 2);
+  const frameH = Math.max(50, height - pad * 2);
+  drawStudioCameraFeed(ctx, pad, pad, frameW, frameH, activeAngle, syncEntry, activeTimeS, { isLive: true });
+
+  // Program Tally Frame
+  ctx.strokeStyle = "#e53935";
+  ctx.lineWidth = 2.5;
+  ctx.strokeRect(pad, pad, frameW, frameH);
+
+  // Top bar: PGM ON AIR + Camera Name + SMPTE TC
+  ctx.fillStyle = "#e53935";
+  roundRectPath(ctx, pad + 8, pad + 8, 62, 20, 2);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "800 10px ui-monospace, monospace";
+  ctx.fillText("PGM LIVE", pad + 14, pad + 21);
+
+  const camLabel = activeAngle ? `CAM ${activeAngle.angle_index}: ${activeAngle.name}` : "CAM 1";
+  ctx.font = "700 10.5px ui-monospace, monospace";
+  const lw = Math.min(frameW - 170, ctx.measureText(camLabel).width + 14);
+  ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
+  roundRectPath(ctx, pad + 76, pad + 8, lw, 20, 2);
+  ctx.fill();
+  ctx.fillStyle = "#f8fafc";
+  ctx.fillText(camLabel, pad + 82, pad + 21, lw - 10);
+
+  const tc = framesToSmpte(Math.round(activeTimeS * fps), fps);
+  ctx.fillStyle = "rgba(10, 12, 18, 0.9)";
+  roundRectPath(ctx, pad + frameW - 92, pad + 8, 84, 20, 2);
+  ctx.fill();
+  ctx.fillStyle = "#fbbf24";
+  ctx.font = "700 10.5px ui-monospace, monospace";
+  ctx.fillText(tc, pad + frameW - 86, pad + 21);
+
+  // Bottom bar: Audio mode & Short-Cut Alert
+  const afvTxt = config.audio_follow_video && config.cut_mode === "video_and_audio"
+    ? `AUDIO: AFV (CAM ${activeSeg.audio_angle_index})`
+    : `AUDIO: MASTER LOCK (CAM ${config.master_audio_angle})`;
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  const aw = Math.min(frameW - 20, ctx.measureText(afvTxt).width + 14);
+  ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
+  ctx.fillRect(pad + 8, pad + frameH - 26, aw, 18);
+  ctx.fillStyle = "#a7f3d0";
+  ctx.fillText(afvTxt, pad + 14, pad + frameH - 14, aw - 8);
+
+  if (activeSeg.is_short_cut) {
+    const warnTxt = `SHORT CUT ${activeSeg.duration_ms}ms < ${config.min_hold_ms}ms`;
+    const ww = Math.min(frameW - 20, ctx.measureText(warnTxt).width + 12);
+    ctx.fillStyle = "rgba(217, 119, 6, 0.92)";
+    ctx.fillRect(pad + frameW - ww - 8, pad + frameH - 26, ww, 18);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(warnTxt, pad + frameW - ww - 2, pad + frameH - 14);
+  }
+}
+
+export function drawMulticamStudioTimelineCanvas(
+  canvas,
+  config,
+  syncReport,
+  segments,
+  activeTimeS,
+  selectedCutTimeS = null
+) {
+  if (!canvas || !config) return;
+  const { ctx, width, height } = setupCanvas(canvas, 158);
+  ctx.fillStyle = "#0b0d12";
+  ctx.fillRect(0, 0, width, height);
+  const angles = Array.isArray(config.angles) ? config.angles : [];
+  const syncMap = new Map(((syncReport && syncReport.angles) || []).map((r) => [r.angle_index, r]));
+  const durationS = Math.max(1, Number(config.duration_s || 24));
+
+  const labelW = width < 480 ? 74 : 112;
+  const padR = 10;
+  const rulerH = 18;
+  const pgmH = 26;
+  const plotW = Math.max(60, width - labelW - padR);
+  const trackAreaH = Math.max(60, height - rulerH - pgmH - 8);
+  const laneH = Math.max(20, Math.floor(trackAreaH / Math.max(1, angles.length)));
+
+  const timeToX = (t) => labelW + (Math.max(0, Math.min(durationS, t)) / durationS) * plotW;
+
+  // Time Ruler
+  ctx.fillStyle = "#12151f";
+  ctx.fillRect(0, 0, width, rulerH);
+  ctx.strokeStyle = "#262c3a";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, rulerH);
+  ctx.lineTo(width, rulerH);
+  ctx.stroke();
+
+  const tickStep = durationS <= 12 ? 2 : durationS <= 30 ? 4 : 8;
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  for (let t = 0; t <= durationS + 0.001; t += tickStep) {
+    const tx = timeToX(t);
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.25)";
+    ctx.beginPath();
+    ctx.moveTo(tx, rulerH - 5);
+    ctx.lineTo(tx, rulerH);
+    ctx.stroke();
+    ctx.fillText(`${t.toFixed(0)}s`, Math.min(width - 24, tx + 2), 12);
+  }
+
+  // Program Cut Strip
+  const pgmY = rulerH + 2;
+  ctx.fillStyle = "#151924";
+  ctx.fillRect(0, pgmY, labelW - 2, pgmH);
+  ctx.fillStyle = "#f8fafc";
+  ctx.font = "800 9.5px ui-monospace, monospace";
+  ctx.fillText("PGM CUTS", 8, pgmY + 16);
+
+  const cutHitboxes = [];
+  for (const seg of segments || []) {
+    const sx = timeToX(seg.start_s);
+    const ex = timeToX(seg.end_s);
+    const sw = Math.max(3, ex - sx);
+    ctx.fillStyle = seg.color_tag || "#3b82f6";
+    ctx.globalAlpha = seg.is_short_cut ? 0.55 : 0.85;
+    ctx.fillRect(sx, pgmY + 2, sw - 1, pgmH - 4);
+    ctx.globalAlpha = 1;
+
+    if (seg.is_short_cut) {
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(sx + 0.5, pgmY + 2.5, Math.max(2, sw - 2), pgmH - 5);
+    }
+
+    if (sw > 24) {
+      ctx.fillStyle = "#0b0d12";
+      ctx.font = "800 9.5px ui-monospace, monospace";
+      ctx.fillText(`C${seg.angle_index}`, sx + 4, pgmY + 16);
+    }
+
+    const isSel = selectedCutTimeS !== null && Math.abs(Number(selectedCutTimeS) - Number(seg.start_s)) < 0.05;
+    if (seg.start_s > 0.001) {
+      ctx.fillStyle = isSel ? "#ffffff" : "#ef4444";
+      ctx.fillRect(sx - 1.5, pgmY, 3, pgmH);
+      cutHitboxes.push({ time_s: seg.start_s, x: sx, angle_index: seg.angle_index });
+    }
+  }
+
+  // Angle Waveform Tracks
+  angles.forEach((angle, idx) => {
+    const ly = pgmY + pgmH + 4 + idx * laneH;
+    const syncEntry = syncMap.get(angle.angle_index);
+    const offS = syncEntry ? Number(syncEntry.offset_s || 0) : 0;
+    const offF = syncEntry ? Number(syncEntry.offset_frames || 0) : 0;
+
+    ctx.fillStyle = idx % 2 === 0 ? "#11141d" : "#0e1118";
+    ctx.fillRect(0, ly, width, laneH - 2);
+
+    // Header badge
+    ctx.fillStyle = angle.color_tag || "#3b82f6";
+    ctx.fillRect(0, ly, 4, laneH - 2);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "700 9.5px ui-monospace, monospace";
+    ctx.fillText(`CAM ${angle.angle_index}`, 8, ly + Math.min(14, laneH * 0.52));
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "600 8.5px ui-monospace, monospace";
+    ctx.fillText(`${offF >= 0 ? "+" : ""}${offF}f`, 8, ly + Math.min(laneH - 4, 24));
+
+    // Audio Waveform Bars
+    const env = syncEntry && Array.isArray(syncEntry.waveform_envelope) ? syncEntry.waveform_envelope : [];
+    const barCount = Math.min(140, Math.max(24, Math.floor(plotW / 4)));
+    const barW = plotW / barCount;
+    const midY = ly + (laneH - 2) * 0.55;
+    const maxAmpH = Math.max(5, (laneH - 6) * 0.42);
+
+    ctx.fillStyle = angle.color_tag || "#3b82f6";
+    ctx.globalAlpha = 0.72;
+    for (let b = 0; b < barCount; b += 1) {
+      const t = (b / barCount) * durationS;
+      const alignedT = Math.max(0, t - offS);
+      const eIdx = env.length > 0 ? Math.max(0, Math.min(env.length - 1, Math.round(alignedT * 20))) : 0;
+      const amp = env.length > 0 ? Number(env[eIdx] || 0.08) : 0.15;
+      const hVal = Math.max(2, amp * maxAmpH);
+      ctx.fillRect(labelW + b * barW, midY - hVal, Math.max(1.5, barW - 1), hVal * 2);
+    }
+    ctx.globalAlpha = 1;
+
+    // Slate marker indicator
+    const slateT = Number(angle.slate_marker_frame || 0) / Math.max(1, Number(config.fps || 25)) + offS;
+    if (slateT >= 0 && slateT <= durationS) {
+      const slX = timeToX(slateT);
+      ctx.fillStyle = "#fbbf24";
+      ctx.beginPath();
+      ctx.moveTo(slX, ly + 2);
+      ctx.lineTo(slX + 4, ly + 6);
+      ctx.lineTo(slX, ly + 10);
+      ctx.lineTo(slX - 4, ly + 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+  });
+
+  // Playhead line
+  const phX = timeToX(activeTimeS);
+  ctx.strokeStyle = "#f59e0b";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(phX, 0);
+  ctx.lineTo(phX, height);
+  ctx.stroke();
+
+  ctx.fillStyle = "#f59e0b";
+  ctx.beginPath();
+  ctx.moveTo(phX - 5, 0);
+  ctx.lineTo(phX + 5, 0);
+  ctx.lineTo(phX, 8);
+  ctx.closePath();
+  ctx.fill();
+
+  canvas._mcTimelineGeom = { labelW, plotW, durationS, cutHitboxes };
+}

@@ -203,6 +203,21 @@ from taktcut.multicam import (
     sync_multicam_clip,
     update_multicam_angle,
 )
+from taktcut.multicam_studio import (
+    ALLOWED_MULTICAM_STUDIO_COMPILE_MODES,
+    ALLOWED_MULTICAM_STUDIO_CUT_MODES,
+    ALLOWED_MULTICAM_STUDIO_PRESET_IDS,
+    ALLOWED_MULTICAM_STUDIO_SYNC_MODES,
+    MulticamStudioCompileMode,
+    MulticamStudioConfig,
+    apply_multicam_studio_to_document,
+    auto_switch_multicam_speakers,
+    compile_multicam_studio_filtergraph,
+    export_multicam_edl,
+    list_multicam_studio_presets,
+    normalize_multicam_studio_config,
+    sync_multicam_studio_angles,
+)
 from taktcut.project import (
     PROJECT_FILE_SUFFIX,
     PROJECT_SCHEMA_VERSION,
@@ -1995,6 +2010,20 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/edit/multicam/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_multicam_studio_presets()],
+                    "preset_ids": list(ALLOWED_MULTICAM_STUDIO_PRESET_IDS),
+                    "sync_modes": list(ALLOWED_MULTICAM_STUDIO_SYNC_MODES),
+                    "cut_modes": list(ALLOWED_MULTICAM_STUDIO_CUT_MODES),
+                    "compile_modes": list(ALLOWED_MULTICAM_STUDIO_COMPILE_MODES),
+                    "default_config": MulticamStudioConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
         if route == "/api/transform/presets":
             self._send_json(
                 HTTPStatus.OK,
@@ -2813,6 +2842,148 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "active_angle": mc_res.active_angle,
                     "detail": mc_res.detail,
                     "document": mc_res.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/edit/multicam/sync":
+            mc_studio_cfg = normalize_multicam_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            mc_sync_res = sync_multicam_studio_angles(mc_studio_cfg)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "config": mc_studio_cfg.model_dump(mode="json"),
+                    "sync": mc_sync_res.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/edit/multicam/auto-switch":
+            mc_studio_cfg = normalize_multicam_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            mc_switch_res = auto_switch_multicam_speakers(mc_studio_cfg)
+            self._send_json(HTTPStatus.OK, mc_switch_res.model_dump(mode="json"))
+            return
+
+        if route == "/api/edit/multicam/compile":
+            mc_studio_cfg = normalize_multicam_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_mc_mode = payload.get("mode")
+            mc_compile_mode: MulticamStudioCompileMode | None = None
+            if raw_mc_mode is not None:
+                mode_clean = str(raw_mc_mode).strip().lower()
+                if mode_clean == "quad_view":
+                    mc_compile_mode = "quad_view"
+                elif mode_clean == "program_stitch":
+                    mc_compile_mode = "program_stitch"
+                else:
+                    allowed_cm = ", ".join(ALLOWED_MULTICAM_STUDIO_COMPILE_MODES)
+                    raise ValueError(
+                        f"Unsupported compile mode {raw_mc_mode!r}; expected one of: {allowed_cm}"
+                    )
+            mc_compiled_res = compile_multicam_studio_filtergraph(
+                mc_studio_cfg, mode=mc_compile_mode
+            )
+            self._send_json(HTTPStatus.OK, mc_compiled_res.model_dump(mode="json"))
+            return
+
+        if route == "/api/edit/multicam/export-edl":
+            mc_studio_cfg = normalize_multicam_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            fmt_raw = str(payload.get("format", "edl")).strip().lower()
+            if fmt_raw not in ("edl", "timeline_json"):
+                raise ValueError(
+                    f"Unsupported format {fmt_raw!r}; expected 'edl' or 'timeline_json'"
+                )
+            export_fmt: Literal["edl", "timeline_json"] = (
+                "timeline_json" if fmt_raw == "timeline_json" else "edl"
+            )
+            mc_title = str(payload.get("title", "TAKTCUT_MULTICAM")).strip() or "TAKTCUT_MULTICAM"
+            mc_exported = export_multicam_edl(mc_studio_cfg, title=mc_title, fmt=export_fmt)
+            raw_mc_out = payload.get("out_path")
+            mc_saved_rel: str | None = None
+            if raw_mc_out is not None and str(raw_mc_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_mc_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".edl", ".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                mc_content = (
+                    mc_exported.timeline_json
+                    if export_fmt == "timeline_json"
+                    else mc_exported.edl_text
+                )
+                out_file.write_text(mc_content, encoding="utf-8")
+                mc_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                mc_exported.model_copy(update={"saved_path": mc_saved_rel}).model_dump(mode="json"),
+            )
+            return
+
+        if route == "/api/edit/multicam/download":
+            mc_studio_cfg = normalize_multicam_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            fmt_raw = str(payload.get("format", "edl")).strip().lower()
+            if fmt_raw not in ("edl", "timeline_json"):
+                raise ValueError(
+                    f"Unsupported format {fmt_raw!r}; expected 'edl' or 'timeline_json'"
+                )
+            dl_fmt: Literal["edl", "timeline_json"] = (
+                "timeline_json" if fmt_raw == "timeline_json" else "edl"
+            )
+            mc_title = str(payload.get("title", "TAKTCUT_MULTICAM")).strip() or "TAKTCUT_MULTICAM"
+            mc_exported_dl = export_multicam_edl(mc_studio_cfg, title=mc_title, fmt=dl_fmt)
+            suffix = ".json" if dl_fmt == "timeline_json" else ".edl"
+            mc_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or mc_exported_dl.filename),
+                "taktcut_multicam",
+                suffix,
+            )
+            body_text = (
+                mc_exported_dl.timeline_json
+                if dl_fmt == "timeline_json"
+                else mc_exported_dl.edl_text
+            )
+            mime = (
+                "application/json; charset=utf-8"
+                if dl_fmt == "timeline_json"
+                else "text/plain; charset=utf-8"
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                mime,
+                body_text.encode("utf-8"),
+                extra_headers={"Content-Disposition": f'attachment; filename="{mc_dl_filename}"'},
+            )
+            return
+
+        if route == "/api/edit/multicam/apply":
+            mc_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            mc_studio_cfg = normalize_multicam_studio_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_doc = apply_multicam_studio_to_document(
+                mc_doc,
+                mc_studio_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            val = validate_timeline(updated_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_doc.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                 },
             )

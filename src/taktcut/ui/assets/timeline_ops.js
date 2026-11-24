@@ -16485,3 +16485,956 @@ export function generateQualifierCubeTextClient(
   }
   return `${lines.join("\n")}\n`;
 }
+
+// =============================================================================
+// MULTI-CAM ANGLE SYNC & LIVE QUAD-VIEW SWITCHER STUDIO (CYCLE #106)
+// =============================================================================
+
+export const ALLOWED_MULTICAM_STUDIO_PRESET_IDS = Object.freeze([
+  "podcast_4cam_interview",
+  "concert_3cam_audio_lock",
+  "tutorial_2cam_pip_switch",
+  "custom"
+]);
+
+export const ALLOWED_MULTICAM_STUDIO_SYNC_MODES = Object.freeze([
+  "audio_waveform",
+  "timecode",
+  "slate_marker"
+]);
+
+export const ALLOWED_MULTICAM_STUDIO_CUT_MODES = Object.freeze([
+  "video_only",
+  "video_and_audio"
+]);
+
+export const ALLOWED_MULTICAM_STUDIO_COMPILE_MODES = Object.freeze([
+  "program_stitch",
+  "quad_view"
+]);
+
+const MC_STUDIO_SAMPLE_RATE_HZ = 20;
+const MC_STUDIO_ANGLE_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ec4899"];
+const MC_STUDIO_BANK_COLORS = ["amber", "violet", "teal", "blue"];
+
+function mcAmpToDbClient(amp) {
+  return Number((20 * Math.log10(Math.max(1e-4, Math.min(1, Number(amp) || 0.0001)))).toFixed(2));
+}
+
+function mcSmpteToFramesClient(tc, fpsInt) {
+  const parts = String(tc || "00:00:00:00").trim().split(":");
+  if (parts.length !== 4) return 0;
+  const hh = Number.parseInt(parts[0], 10) || 0;
+  const mm = Number.parseInt(parts[1], 10) || 0;
+  const ss = Number.parseInt(parts[2], 10) || 0;
+  const ff = Number.parseInt(parts[3], 10) || 0;
+  const rate = Math.max(1, fpsInt);
+  return ((hh * 3600 + mm * 60 + ss) * rate) + Math.min(rate - 1, Math.max(0, ff));
+}
+
+function mcFramesToSmpteClient(frames, fpsInt) {
+  const rate = Math.max(1, fpsInt);
+  const total = Math.max(0, Math.round(frames));
+  const ff = total % rate;
+  const totalS = Math.floor(total / rate);
+  const ss = totalS % 60;
+  const mm = Math.floor(totalS / 60) % 60;
+  const hh = Math.floor(totalS / 3600);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}:${pad2(ff)}`;
+}
+
+export function synthesizeAngleWaveformClient(
+  angleIndex,
+  durationS = 24,
+  opts = {}
+) {
+  const sampleRateHz = Number(opts.sampleRateHz || MC_STUDIO_SAMPLE_RATE_HZ);
+  const shiftFrames = Number(opts.shiftFrames || 0);
+  const fps = Math.max(1, Number(opts.fps || 25));
+  const presetId = String(opts.presetId || "podcast_4cam_interview");
+  const slateFrame = Number(opts.slateFrame ?? 12);
+  const totalSamples = Math.max(20, Math.min(4096, Math.round(durationS * sampleRateHz)));
+  const shiftS = shiftFrames / fps;
+  const slateT = slateFrame / fps;
+  const out = [];
+
+  for (let i = 0; i < totalSamples; i += 1) {
+    const t = i / sampleRateHz;
+    const tRef = t + shiftS;
+    const noise = 0.045 + 0.015 * Math.sin(tRef * 13.7 + angleIndex * 1.1);
+    const clapDist = Math.abs(t - slateT);
+    const clap = 0.94 * Math.exp(-((clapDist / 0.055) ** 2));
+
+    let speech = 0;
+    if (presetId === "concert_3cam_audio_lock") {
+      const beat = 0.38 + 0.28 * Math.max(0, Math.sin(tRef * 1.45));
+      const solo = 0.28 * Math.max(0, Math.sin(tRef * 0.43 + 0.5));
+      const bridge = 0.16 * Math.max(0, Math.cos(tRef * 2.17));
+      const prox = angleIndex === 1 ? 1.0 : angleIndex === 2 ? 0.88 : 0.80;
+      speech = (beat + solo + bridge) * prox;
+    } else if (presetId === "tutorial_2cam_pip_switch") {
+      const cycle = ((tRef % 8) + 8) % 8;
+      const active =
+        angleIndex === 1
+          ? cycle < 4.5 || cycle > 6.8
+            ? 1.0
+            : 0.18
+          : cycle >= 4.2 && cycle <= 7.1
+            ? 0.88
+            : 0.16;
+      const cadence = 0.55 + 0.35 * Math.abs(Math.sin(tRef * 4.3 + angleIndex * 0.4));
+      speech = active * cadence * 0.82;
+    } else {
+      const slot = Math.floor(Math.max(0, tRef) / 3) % 4;
+      const dominant = slot + 1 === angleIndex;
+      const baseEnergy = dominant ? 0.82 : 0.14;
+      const syllable = 0.58 + 0.36 * Math.abs(Math.sin(tRef * 5.2 + angleIndex * 0.7));
+      speech = baseEnergy * syllable;
+    }
+
+    const val = Math.max(0.01, Math.min(1, noise + clap + speech * 0.72));
+    out.push(Number(val.toFixed(4)));
+  }
+  return out;
+}
+
+export function correlateAudioEnvelopesClient(refEnv, candEnv, opts = {}) {
+  const sampleRateHz = Number(opts.sampleRateHz || MC_STUDIO_SAMPLE_RATE_HZ);
+  const fps = Math.max(1, Number(opts.fps || 25));
+  const maxLagFrames = Number(opts.maxLagFrames || 75);
+  const nRef = Array.isArray(refEnv) ? refEnv.length : 0;
+  const nCand = Array.isArray(candEnv) ? candEnv.length : 0;
+  if (nRef < 4 || nCand < 4) {
+    return { offset_frames: 0, micro_trim_ms: 0, confidence: 0.5 };
+  }
+
+  const maxSampleLag = Math.max(
+    1,
+    Math.min(Math.floor(nRef / 2), Math.round((maxLagFrames / fps) * sampleRateHz))
+  );
+  let sumRef = 0;
+  let sumCand = 0;
+  for (let i = 0; i < nRef; i += 1) sumRef += Number(refEnv[i] || 0);
+  for (let j = 0; j < nCand; j += 1) sumCand += Number(candEnv[j] || 0);
+  const meanRef = sumRef / nRef;
+  const meanCand = sumCand / nCand;
+
+  const scores = [];
+  for (let lag = -maxSampleLag; lag <= maxSampleLag; lag += 1) {
+    let num = 0;
+    let denA = 0;
+    let denB = 0;
+    let overlap = 0;
+    for (let i = 0; i < nRef; i += 1) {
+      const j = i - lag;
+      if (j >= 0 && j < nCand) {
+        const a = Number(refEnv[i] || 0) - meanRef;
+        const b = Number(candEnv[j] || 0) - meanCand;
+        num += a * b;
+        denA += a * a;
+        denB += b * b;
+        overlap += 1;
+      }
+    }
+    const corr = overlap >= 4 && denA > 1e-9 && denB > 1e-9 ? num / Math.sqrt(denA * denB) : 0;
+    scores.push([lag, Math.max(0, Math.min(1, corr))]);
+  }
+
+  let bestIdx = 0;
+  for (let idx = 1; idx < scores.length; idx += 1) {
+    if (scores[idx][1] > scores[bestIdx][1]) bestIdx = idx;
+  }
+  const [bestLagSamples, bestCorr] = scores[bestIdx];
+  let fracSamples = 0;
+  if (bestIdx > 0 && bestIdx < scores.length - 1) {
+    const yL = scores[bestIdx - 1][1];
+    const yC = scores[bestIdx][1];
+    const yR = scores[bestIdx + 1][1];
+    const denom = 2 * (yL - 2 * yC + yR);
+    if (Math.abs(denom) > 1e-9) {
+      fracSamples = Math.max(-0.5, Math.min(0.5, (yL - yR) / denom));
+    }
+  }
+  const exactShiftS = (bestLagSamples + fracSamples) / sampleRateHz;
+  const offsetFrames = Math.round(exactShiftS * fps);
+  const residualS = exactShiftS - offsetFrames / fps;
+  return {
+    offset_frames: offsetFrames,
+    micro_trim_ms: Number((residualS * 1000).toFixed(2)),
+    confidence: Number(Math.max(0.15, Math.min(0.99, bestCorr)).toFixed(3))
+  };
+}
+
+function buildDefaultMulticamStudioAnglesClient(presetId, fps = 25, durationS = 24) {
+  const fpsInt = Math.max(1, Math.round(fps));
+  const baseTc = mcSmpteToFramesClient("01:00:00:00", fpsInt);
+  let specs;
+  if (presetId === "tutorial_2cam_pip_switch") {
+    specs = [
+      ["CAM 1 - Presenter A-Cam", "media/cam1_presenter.mov", "#3b82f6", 0, 12],
+      ["CAM 2 - Desk / Screen PiP", "media/cam2_overhead_desk.mov", "#10b981", 10, 22]
+    ];
+  } else if (presetId === "concert_3cam_audio_lock") {
+    specs = [
+      ["CAM 1 - Stage Wide FOH", "media/concert_foh_wide.mov", "#3b82f6", 0, 14],
+      ["CAM 2 - Lead Vocal Close", "media/concert_vocal_close.mov", "#10b981", 18, 32],
+      ["CAM 3 - Guitar / Drum Pit", "media/concert_stage_pit.mov", "#f59e0b", -9, 5]
+    ];
+  } else {
+    specs = [
+      ["CAM 1 - Host Wide", "media/podcast_cam1_host.mov", "#3b82f6", 0, 12],
+      ["CAM 2 - Guest A Medium", "media/podcast_cam2_guest_a.mov", "#10b981", 14, 26],
+      ["CAM 3 - Guest B Close", "media/podcast_cam3_guest_b.mov", "#f59e0b", -7, 5],
+      ["CAM 4 - Table Two-Shot", "media/podcast_cam4_twoshot.mov", "#ec4899", 21, 33]
+    ];
+  }
+
+  return specs.map(([name, sourcePath, colorTag, tcOff, slateFrame], idx) => {
+    const angleIndex = idx + 1;
+    return {
+      angle_index: angleIndex,
+      name,
+      source_path: sourcePath,
+      color_tag: colorTag,
+      timecode_start: mcFramesToSmpteClient(Math.max(0, baseTc + tcOff), fpsInt),
+      slate_marker_frame: slateFrame,
+      manual_offset_frames: 0,
+      audio_gain_db: 0,
+      waveform_envelope: synthesizeAngleWaveformClient(angleIndex, durationS, {
+        shiftFrames: 12 - slateFrame,
+        fps,
+        presetId,
+        slateFrame
+      }),
+      enabled: true
+    };
+  });
+}
+
+export const MULTICAM_STUDIO_PRESETS_CLIENT = Object.freeze([
+  {
+    preset_id: "podcast_4cam_interview",
+    label: "Podcast 4-Cam Interview",
+    description: "4-angle studio interview with waveform cross-correlation and Audio-Follow-Video switching.",
+    angle_count: 4,
+    default_sync_mode: "audio_waveform",
+    default_cut_mode: "video_and_audio",
+    default_audio_follow_video: true,
+    min_hold_ms: 650,
+    default_config: {
+      preset_id: "podcast_4cam_interview",
+      sync_mode: "audio_waveform",
+      cut_mode: "video_and_audio",
+      audio_follow_video: true,
+      master_audio_angle: 1,
+      compile_mode: "program_stitch",
+      fps: 25,
+      duration_s: 24,
+      width: 1920,
+      height: 1080,
+      min_hold_ms: 650,
+      speaker_threshold_db: -26,
+      speaker_hysteresis_db: 3,
+      angles: buildDefaultMulticamStudioAnglesClient("podcast_4cam_interview", 25, 24),
+      cuts: [
+        { time_s: 0.0, angle_index: 1, cut_mode: "video_and_audio", source: "initial", confidence: 1 },
+        { time_s: 3.0, angle_index: 2, cut_mode: "video_and_audio", source: "auto_speaker", confidence: 0.94 },
+        { time_s: 6.0, angle_index: 3, cut_mode: "video_and_audio", source: "auto_speaker", confidence: 0.92 },
+        { time_s: 9.0, angle_index: 4, cut_mode: "video_and_audio", source: "auto_speaker", confidence: 0.91 },
+        { time_s: 12.0, angle_index: 1, cut_mode: "video_and_audio", source: "auto_speaker", confidence: 0.95 },
+        { time_s: 16.5, angle_index: 2, cut_mode: "video_and_audio", source: "auto_speaker", confidence: 0.93 }
+      ]
+    }
+  },
+  {
+    preset_id: "concert_3cam_audio_lock",
+    label: "Concert 3-Cam Audio Lock",
+    description: "3-angle live stage switching locked to Master FOH audio via SMPTE timecode.",
+    angle_count: 3,
+    default_sync_mode: "timecode",
+    default_cut_mode: "video_only",
+    default_audio_follow_video: false,
+    min_hold_ms: 500,
+    default_config: {
+      preset_id: "concert_3cam_audio_lock",
+      sync_mode: "timecode",
+      cut_mode: "video_only",
+      audio_follow_video: false,
+      master_audio_angle: 1,
+      compile_mode: "quad_view",
+      fps: 25,
+      duration_s: 24,
+      width: 1920,
+      height: 1080,
+      min_hold_ms: 500,
+      speaker_threshold_db: -30,
+      speaker_hysteresis_db: 4,
+      angles: buildDefaultMulticamStudioAnglesClient("concert_3cam_audio_lock", 25, 24),
+      cuts: [
+        { time_s: 0.0, angle_index: 1, cut_mode: "video_only", source: "initial", confidence: 1 },
+        { time_s: 4.0, angle_index: 2, cut_mode: "video_only", source: "manual", confidence: 1 },
+        { time_s: 8.5, angle_index: 3, cut_mode: "video_only", source: "manual", confidence: 1 },
+        { time_s: 14.0, angle_index: 1, cut_mode: "video_only", source: "manual", confidence: 1 }
+      ]
+    }
+  },
+  {
+    preset_id: "tutorial_2cam_pip_switch",
+    label: "Tutorial 2-Cam Desk Switch",
+    description: "2-angle presenter and overhead desk switching synced on clap/slate marker.",
+    angle_count: 2,
+    default_sync_mode: "slate_marker",
+    default_cut_mode: "video_only",
+    default_audio_follow_video: false,
+    min_hold_ms: 550,
+    default_config: {
+      preset_id: "tutorial_2cam_pip_switch",
+      sync_mode: "slate_marker",
+      cut_mode: "video_only",
+      audio_follow_video: false,
+      master_audio_angle: 1,
+      compile_mode: "program_stitch",
+      fps: 25,
+      duration_s: 24,
+      width: 1920,
+      height: 1080,
+      min_hold_ms: 550,
+      speaker_threshold_db: -27,
+      speaker_hysteresis_db: 3.5,
+      angles: buildDefaultMulticamStudioAnglesClient("tutorial_2cam_pip_switch", 25, 24),
+      cuts: [
+        { time_s: 0.0, angle_index: 1, cut_mode: "video_only", source: "initial", confidence: 1 },
+        { time_s: 4.5, angle_index: 2, cut_mode: "video_only", source: "manual", confidence: 1 },
+        { time_s: 11.0, angle_index: 1, cut_mode: "video_only", source: "manual", confidence: 1 },
+        { time_s: 17.0, angle_index: 2, cut_mode: "video_only", source: "manual", confidence: 1 }
+      ]
+    }
+  },
+  {
+    preset_id: "custom",
+    label: "Custom Multi-Cam Bank",
+    description: "Custom 2 to 4 camera configuration with manual offsets and custom hold thresholds.",
+    angle_count: 4,
+    default_sync_mode: "audio_waveform",
+    default_cut_mode: "video_only",
+    default_audio_follow_video: false,
+    min_hold_ms: 450,
+    default_config: {
+      preset_id: "custom",
+      sync_mode: "audio_waveform",
+      cut_mode: "video_only",
+      audio_follow_video: false,
+      master_audio_angle: 1,
+      compile_mode: "program_stitch",
+      fps: 25,
+      duration_s: 24,
+      width: 1920,
+      height: 1080,
+      min_hold_ms: 450,
+      speaker_threshold_db: -26,
+      speaker_hysteresis_db: 3,
+      angles: buildDefaultMulticamStudioAnglesClient("podcast_4cam_interview", 25, 24),
+      cuts: [
+        { time_s: 0.0, angle_index: 1, cut_mode: "video_only", source: "initial", confidence: 1 },
+        { time_s: 4.0, angle_index: 2, cut_mode: "video_only", source: "manual", confidence: 1 },
+        { time_s: 9.0, angle_index: 3, cut_mode: "video_only", source: "manual", confidence: 1 }
+      ]
+    }
+  }
+]);
+
+export function createDefaultMulticamStudioConfigClient(presetId = "podcast_4cam_interview") {
+  const found =
+    MULTICAM_STUDIO_PRESETS_CLIENT.find((p) => p.preset_id === presetId) ||
+    MULTICAM_STUDIO_PRESETS_CLIENT[0];
+  return JSON.parse(JSON.stringify(found.default_config));
+}
+
+export function normalizeMulticamStudioConfigClient(raw) {
+  if (!raw || typeof raw !== "object") {
+    return createDefaultMulticamStudioConfigClient("podcast_4cam_interview");
+  }
+  const presetId = ALLOWED_MULTICAM_STUDIO_PRESET_IDS.includes(raw.preset_id)
+    ? raw.preset_id
+    : "podcast_4cam_interview";
+  const base = createDefaultMulticamStudioConfigClient(presetId);
+  const fps = clampNum(raw.fps ?? base.fps, 1, 120);
+  const durationS = clampNum(raw.duration_s ?? base.duration_s, 1, 86400);
+  const width = Math.max(320, Math.min(7680, Math.round(Number(raw.width ?? base.width) || 1920)));
+  const height = Math.max(180, Math.min(4320, Math.round(Number(raw.height ?? base.height) || 1080)));
+  const syncMode = ALLOWED_MULTICAM_STUDIO_SYNC_MODES.includes(raw.sync_mode)
+    ? raw.sync_mode
+    : base.sync_mode;
+  const cutMode = ALLOWED_MULTICAM_STUDIO_CUT_MODES.includes(raw.cut_mode)
+    ? raw.cut_mode
+    : base.cut_mode;
+  const compileMode = ALLOWED_MULTICAM_STUDIO_COMPILE_MODES.includes(raw.compile_mode)
+    ? raw.compile_mode
+    : base.compile_mode;
+  const audioFollowVideo = cutMode === "video_only" ? false : Boolean(raw.audio_follow_video ?? base.audio_follow_video);
+  const minHoldMs = Math.max(100, Math.min(5000, Math.round(Number(raw.min_hold_ms ?? base.min_hold_ms) || 450)));
+  const speakerThresholdDb = clampNum(raw.speaker_threshold_db ?? base.speaker_threshold_db, -60, 0);
+  const speakerHysteresisDb = clampNum(raw.speaker_hysteresis_db ?? base.speaker_hysteresis_db, 0, 24);
+
+  const rawAngles = Array.isArray(raw.angles) && raw.angles.length >= 2 ? raw.angles : base.angles;
+  const angles = rawAngles.slice(0, 4).map((a, idx) => {
+    const fallback = base.angles[idx] || base.angles[0];
+    const angleIdx = Math.max(1, Math.min(4, Math.round(Number(a.angle_index ?? idx + 1) || idx + 1)));
+    return {
+      angle_index: angleIdx,
+      name: String(a.name || fallback.name).slice(0, 64),
+      source_path: String(a.source_path ?? fallback.source_path ?? ""),
+      color_tag: String(a.color_tag || MC_STUDIO_ANGLE_COLORS[(angleIdx - 1) % 4]),
+      timecode_start: String(a.timecode_start || fallback.timecode_start || "01:00:00:00"),
+      slate_marker_frame: Math.max(0, Math.round(Number(a.slate_marker_frame ?? fallback.slate_marker_frame ?? 12))),
+      manual_offset_frames: Math.max(-100000, Math.min(100000, Math.round(Number(a.manual_offset_frames ?? 0) || 0))),
+      audio_gain_db: clampNum(a.audio_gain_db ?? 0, -24, 24),
+      waveform_envelope: Array.isArray(a.waveform_envelope) && a.waveform_envelope.length >= 8
+        ? a.waveform_envelope.map((v) => clampNum(v, 0, 1))
+        : synthesizeAngleWaveformClient(angleIdx, durationS, {
+            shiftFrames: 12 - Number(a.slate_marker_frame ?? fallback.slate_marker_frame ?? 12),
+            fps,
+            presetId,
+            slateFrame: Number(a.slate_marker_frame ?? fallback.slate_marker_frame ?? 12)
+          }),
+      enabled: a.enabled !== false
+    };
+  });
+  angles.sort((a, b) => a.angle_index - b.angle_index);
+  const validIndices = new Set(angles.map((a) => a.angle_index));
+  const masterAudioAngle = validIndices.has(Number(raw.master_audio_angle))
+    ? Number(raw.master_audio_angle)
+    : angles[0].angle_index;
+
+  const byTime = new Map();
+  const rawCuts = Array.isArray(raw.cuts) && raw.cuts.length > 0 ? raw.cuts : base.cuts;
+  for (const c of rawCuts) {
+    if (!c || !validIndices.has(Number(c.angle_index))) continue;
+    const tClamped = Number(clampNum(c.time_s ?? 0, 0, Math.max(0, durationS - 0.04)).toFixed(3));
+    byTime.set(tClamped, {
+      time_s: tClamped,
+      angle_index: Number(c.angle_index),
+      cut_mode: ALLOWED_MULTICAM_STUDIO_CUT_MODES.includes(c.cut_mode) ? c.cut_mode : cutMode,
+      source: ["initial", "manual", "auto_speaker"].includes(c.source) ? c.source : "manual",
+      confidence: clampNum(c.confidence ?? 1, 0, 1)
+    });
+  }
+  if (!byTime.has(0)) {
+    byTime.set(0, {
+      time_s: 0,
+      angle_index: angles[0].angle_index,
+      cut_mode: cutMode,
+      source: "initial",
+      confidence: 1
+    });
+  }
+  const cuts = [];
+  for (const tKey of Array.from(byTime.keys()).sort((a, b) => a - b)) {
+    const ev = byTime.get(tKey);
+    if (cuts.length > 0 && cuts[cuts.length - 1].angle_index === ev.angle_index && ev.time_s > 0) {
+      continue;
+    }
+    cuts.push(ev);
+  }
+
+  return {
+    preset_id: presetId,
+    sync_mode: syncMode,
+    cut_mode: cutMode,
+    audio_follow_video: audioFollowVideo,
+    master_audio_angle: masterAudioAngle,
+    compile_mode: compileMode,
+    fps,
+    duration_s: durationS,
+    width,
+    height,
+    min_hold_ms: minHoldMs,
+    speaker_threshold_db: speakerThresholdDb,
+    speaker_hysteresis_db: speakerHysteresisDb,
+    angles,
+    cuts
+  };
+}
+
+export function syncMulticamStudioAnglesClient(rawConfig) {
+  const cfg = normalizeMulticamStudioConfigClient(rawConfig);
+  const fps = cfg.fps;
+  const fpsInt = Math.max(1, Math.round(fps));
+  const refAngle = cfg.angles[0];
+  const refEnv = refAngle.waveform_envelope;
+  const refTc = mcSmpteToFramesClient(refAngle.timecode_start, fpsInt);
+  const refSlate = refAngle.slate_marker_frame;
+
+  const angles = cfg.angles.map((angle) => {
+    const env = angle.waveform_envelope;
+    let peakIdx = 0;
+    let sumSq = 0;
+    for (let i = 0; i < env.length; i += 1) {
+      if (env[i] > env[peakIdx]) peakIdx = i;
+      sumSq += env[i] * env[i];
+    }
+    const peakAmp = env[peakIdx] || 0.1;
+    const rmsAmp = Math.sqrt(sumSq / Math.max(1, env.length));
+    const peakFrame = Math.round((peakIdx / MC_STUDIO_SAMPLE_RATE_HZ) * fps);
+
+    let offsetFrames = 0;
+    let microTrimMs = 0;
+    let confidence = 0.99;
+
+    if (cfg.sync_mode === "audio_waveform") {
+      if (angle.angle_index === refAngle.angle_index) {
+        offsetFrames = angle.manual_offset_frames;
+      } else {
+        const corr = correlateAudioEnvelopesClient(refEnv, env, {
+          sampleRateHz: MC_STUDIO_SAMPLE_RATE_HZ,
+          fps
+        });
+        offsetFrames = corr.offset_frames + angle.manual_offset_frames;
+        microTrimMs = corr.micro_trim_ms;
+        confidence = corr.confidence;
+      }
+    } else if (cfg.sync_mode === "timecode") {
+      offsetFrames = (mcSmpteToFramesClient(angle.timecode_start, fpsInt) - refTc) + angle.manual_offset_frames;
+      confidence = 1.0;
+    } else {
+      offsetFrames = (refSlate - angle.slate_marker_frame) + angle.manual_offset_frames;
+      confidence = 0.97;
+    }
+
+    return {
+      angle_index: angle.angle_index,
+      name: angle.name,
+      color_tag: angle.color_tag,
+      offset_frames: offsetFrames,
+      offset_s: Number((offsetFrames / fps).toFixed(4)),
+      micro_trim_ms: microTrimMs,
+      confidence,
+      peak_frame: peakFrame,
+      peak_db: mcAmpToDbClient(peakAmp),
+      rms_db: mcAmpToDbClient(rmsAmp),
+      waveform_envelope: env
+    };
+  });
+
+  const meanConf = Number(
+    (angles.reduce((acc, r) => acc + r.confidence, 0) / Math.max(1, angles.length)).toFixed(3)
+  );
+  return {
+    preset_id: cfg.preset_id,
+    sync_mode: cfg.sync_mode,
+    fps,
+    duration_s: cfg.duration_s,
+    duration_frames: Math.max(1, Math.round(cfg.duration_s * fps)),
+    reference_angle: refAngle.angle_index,
+    mean_confidence: meanConf,
+    angles,
+    notes: [
+      `Synchronized ${angles.length} camera angles using ${cfg.sync_mode} (mean confidence ${(meanConf * 100).toFixed(1)}%).`
+    ]
+  };
+}
+
+export function resolveMulticamStudioSegmentsClient(rawConfig) {
+  const cfg = normalizeMulticamStudioConfigClient(rawConfig);
+  const angleMap = new Map(cfg.angles.map((a) => [a.angle_index, a]));
+  const ordered = [...cfg.cuts].sort((a, b) => a.time_s - b.time_s);
+  const fps = cfg.fps;
+  const totalFrames = Math.max(1, Math.round(cfg.duration_s * fps));
+  const segments = [];
+  const warnings = [];
+
+  for (let idx = 0; idx < ordered.length; idx += 1) {
+    const cut = ordered[idx];
+    const startS = Number(Math.max(0, Math.min(cfg.duration_s - 0.04, cut.time_s)).toFixed(3));
+    const endS = idx + 1 < ordered.length
+      ? Number(Math.max(startS + 0.04, Math.min(cfg.duration_s, ordered[idx + 1].time_s)).toFixed(3))
+      : Number(cfg.duration_s.toFixed(3));
+    const durS = Number(Math.max(0.04, endS - startS).toFixed(3));
+    const durMs = Math.max(1, Math.round(durS * 1000));
+    const startF = Math.max(0, Math.min(totalFrames - 1, Math.round(startS * fps)));
+    const endF = Math.max(startF + 1, Math.min(totalFrames, Math.round(endS * fps)));
+    const angle = angleMap.get(cut.angle_index) || cfg.angles[0];
+    const effCutMode =
+      cfg.cut_mode === "video_only" && !cfg.audio_follow_video
+        ? "video_only"
+        : cfg.cut_mode === "video_and_audio" || cfg.audio_follow_video
+          ? "video_and_audio"
+          : cut.cut_mode;
+    const audioAngle =
+      effCutMode === "video_and_audio" && cfg.audio_follow_video
+        ? angle.angle_index
+        : cfg.master_audio_angle;
+    const isShort = durMs < cfg.min_hold_ms;
+    if (isShort) {
+      warnings.push(
+        `Segment #${idx + 1} (${angle.name}) at ${startS.toFixed(2)}s is ${durMs}ms (< min hold ${cfg.min_hold_ms}ms).`
+      );
+    }
+    segments.push({
+      segment_index: idx,
+      start_s: startS,
+      end_s: endS,
+      duration_s: durS,
+      duration_ms: durMs,
+      start_frame: startF,
+      end_frame: endF,
+      duration_frames: Math.max(1, endF - startF),
+      angle_index: angle.angle_index,
+      angle_name: angle.name,
+      color_tag: angle.color_tag,
+      cut_mode: effCutMode,
+      audio_angle_index: audioAngle,
+      is_short_cut: isShort,
+      source: cut.source || "manual"
+    });
+  }
+  return { segments, short_cut_warnings: warnings };
+}
+
+export function autoSwitchMulticamSpeakersClient(rawConfig) {
+  const cfg = normalizeMulticamStudioConfigClient(rawConfig);
+  const syncReport = syncMulticamStudioAnglesClient(cfg);
+  const envelopes = new Map(syncReport.angles.map((r) => [r.angle_index, r.waveform_envelope]));
+  const offsetsS = new Map(syncReport.angles.map((r) => [r.angle_index, r.offset_s]));
+  const gainsDb = new Map(cfg.angles.map((a) => [a.angle_index, a.audio_gain_db]));
+
+  const stepS = 0.1;
+  const minHoldS = Math.max(0.1, cfg.min_hold_ms / 1000);
+  const totalSteps = Math.max(1, Math.round(cfg.duration_s / stepS));
+  let currentAngle = cfg.angles[0].angle_index;
+  let lastSwitchS = 0;
+  const generatedCuts = [
+    { time_s: 0, angle_index: currentAngle, cut_mode: cfg.cut_mode, source: "initial", confidence: 1 }
+  ];
+  const counts = {};
+  for (const a of cfg.angles) counts[a.angle_index] = 0;
+
+  for (let step = 0; step < totalSteps; step += 1) {
+    const t = Number((step * stepS).toFixed(3));
+    if (t < 0.8) {
+      counts[currentAngle] += 1;
+      continue;
+    }
+    let bestAngle = currentAngle;
+    let bestDb = -999;
+    let curDb = -999;
+
+    for (const angle of cfg.angles) {
+      if (!angle.enabled) continue;
+      const env = envelopes.get(angle.angle_index) || [];
+      const alignedT = Math.max(0, t - (offsetsS.get(angle.angle_index) || 0));
+      const idx = Math.max(0, Math.min(env.length - 1, Math.round(alignedT * MC_STUDIO_SAMPLE_RATE_HZ)));
+      const db = mcAmpToDbClient(env[idx] || 0.01) + (gainsDb.get(angle.angle_index) || 0);
+      if (angle.angle_index === currentAngle) curDb = db;
+      if (db > bestDb) {
+        bestDb = db;
+        bestAngle = angle.angle_index;
+      }
+    }
+
+    if (
+      bestAngle !== currentAngle &&
+      bestDb >= cfg.speaker_threshold_db &&
+      bestDb - curDb >= cfg.speaker_hysteresis_db &&
+      t - lastSwitchS >= minHoldS &&
+      cfg.duration_s - t >= minHoldS
+    ) {
+      currentAngle = bestAngle;
+      lastSwitchS = t;
+      generatedCuts.push({
+        time_s: t,
+        angle_index: bestAngle,
+        cut_mode: cfg.cut_mode,
+        source: "auto_speaker",
+        confidence: Number(Math.max(0.55, Math.min(0.99, (bestDb + 60) / 60)).toFixed(3))
+      });
+    }
+    counts[currentAngle] = (counts[currentAngle] || 0) + 1;
+  }
+
+  const nextCfg = normalizeMulticamStudioConfigClient({ ...cfg, cuts: generatedCuts });
+  const { segments, short_cut_warnings } = resolveMulticamStudioSegmentsClient(nextCfg);
+  const ratio = {};
+  for (const [k, v] of Object.entries(counts)) {
+    ratio[k] = Number((v / totalSteps).toFixed(3));
+  }
+  return {
+    config: nextCfg,
+    sync_report: syncReport,
+    segments,
+    short_cut_count: short_cut_warnings.length,
+    short_cut_warnings,
+    speaker_activity_ratio: ratio
+  };
+}
+
+export function compileMulticamStudioFiltergraphClient(rawConfig, modeOverride = null) {
+  const cfg = normalizeMulticamStudioConfigClient(rawConfig);
+  const mode = ALLOWED_MULTICAM_STUDIO_COMPILE_MODES.includes(modeOverride)
+    ? modeOverride
+    : cfg.compile_mode;
+  const syncReport = syncMulticamStudioAnglesClient(cfg);
+  const offsetsS = new Map(syncReport.angles.map((r) => [r.angle_index, Math.max(0, r.offset_s)]));
+  const angleToIn = new Map(cfg.angles.map((a, idx) => [a.angle_index, idx]));
+  const { segments, short_cut_warnings } = resolveMulticamStudioSegmentsClient(cfg);
+
+  const w = cfg.width;
+  const h = cfg.height;
+  const stages = [];
+  const ffmpegArgs = [];
+  for (const angle of cfg.angles) {
+    ffmpegArgs.push("-i", angle.source_path || `cam${angle.angle_index}.mov`);
+  }
+
+  if (mode === "quad_view") {
+    const cellW = Math.max(160, Math.floor(w / 2));
+    const cellH = Math.max(90, Math.floor(h / 2));
+    const cellLabels = [];
+    const quadCoords = [
+      [0, 0],
+      [cellW, 0],
+      [0, cellH],
+      [cellW, cellH]
+    ];
+    for (let slot = 0; slot < 4; slot += 1) {
+      const lbl = `[mc_q${slot}]`;
+      if (slot < cfg.angles.length) {
+        const angle = cfg.angles[slot];
+        const inIdx = angleToIn.get(angle.angle_index) || 0;
+        const offS = offsetsS.get(angle.angle_index) || 0;
+        const endS = offS + cfg.duration_s;
+        const safeTitle = String(angle.name || "").replace(/[:'\\]/g, "").slice(0, 24);
+        stages.push(
+          `[${inIdx}:v]trim=start=${offS.toFixed(3)}:end=${endS.toFixed(3)},` +
+            `setpts=PTS-STARTPTS,scale=${cellW}:${cellH}:force_original_aspect_ratio=decrease,` +
+            `pad=${cellW}:${cellH}:(ow-iw)/2:(oh-ih)/2:color=#101116,` +
+            `drawtext=text='CAM ${angle.angle_index} ${safeTitle}':x=12:y=12:` +
+            `fontsize=18:fontcolor=white:box=1:boxcolor=#0b0d12@0.75${lbl}`
+        );
+      } else {
+        stages.push(`color=c=#101116:s=${cellW}x${cellH}:d=${cfg.duration_s.toFixed(3)}${lbl}`);
+      }
+      cellLabels.push(lbl);
+    }
+    stages.push(`${cellLabels.join("")}xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[mc_stack]`);
+    let curLbl = "[mc_stack]";
+    for (let sIdx = 0; sIdx < segments.length; sIdx += 1) {
+      const seg = segments[sIdx];
+      const slotIdx = Math.max(0, Math.min(3, seg.angle_index - 1));
+      const [qx, qy] = quadCoords[slotIdx];
+      const nextLbl = sIdx === segments.length - 1 ? "[v_mc_quad]" : `[mc_tally_${sIdx}]`;
+      stages.push(
+        `${curLbl}drawbox=x=${qx}:y=${qy}:w=${cellW}:h=${cellH}:` +
+          `color=#e53935@0.95:t=6:enable='between(t,${seg.start_s.toFixed(3)},${seg.end_s.toFixed(3)})'${nextLbl}`
+      );
+      curLbl = nextLbl;
+    }
+    const masterIn = angleToIn.get(cfg.master_audio_angle) || 0;
+    const masterOff = offsetsS.get(cfg.master_audio_angle) || 0;
+    stages.push(
+      `[${masterIn}:a]atrim=start=${masterOff.toFixed(3)}:end=${(masterOff + cfg.duration_s).toFixed(3)},asetpts=PTS-STARTPTS[a_mc_quad]`
+    );
+    const filterComplex = stages.join(";");
+    ffmpegArgs.push("-filter_complex", filterComplex, "-map", "[v_mc_quad]", "-map", "[a_mc_quad]");
+    return {
+      preset_id: cfg.preset_id,
+      mode: "quad_view",
+      duration_s: Number(cfg.duration_s.toFixed(3)),
+      fps: cfg.fps,
+      width: w,
+      height: h,
+      angle_count: cfg.angles.length,
+      segment_count: segments.length,
+      short_cut_count: short_cut_warnings.length,
+      segments,
+      short_cut_warnings,
+      filter_complex: filterComplex,
+      ffmpeg_args: ffmpegArgs,
+      video_map_label: "[v_mc_quad]",
+      audio_map_label: "[a_mc_quad]"
+    };
+  }
+
+  const vLabels = [];
+  const aLabels = [];
+  for (let idx = 0; idx < segments.length; idx += 1) {
+    const seg = segments[idx];
+    const vIn = angleToIn.get(seg.angle_index) || 0;
+    const vOff = offsetsS.get(seg.angle_index) || 0;
+    const vLbl = `[mc_v${idx}]`;
+    stages.push(
+      `[${vIn}:v]trim=start=${(vOff + seg.start_s).toFixed(3)}:end=${(vOff + seg.end_s).toFixed(3)},` +
+        `setpts=PTS-STARTPTS,scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+        `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2${vLbl}`
+    );
+    vLabels.push(vLbl);
+
+    const aIn = angleToIn.get(seg.audio_angle_index) || 0;
+    const aOff = offsetsS.get(seg.audio_angle_index) || 0;
+    const aLbl = `[mc_a${idx}]`;
+    stages.push(
+      `[${aIn}:a]atrim=start=${(aOff + seg.start_s).toFixed(3)}:end=${(aOff + seg.end_s).toFixed(3)},asetpts=PTS-STARTPTS${aLbl}`
+    );
+    aLabels.push(aLbl);
+  }
+  if (vLabels.length === 1) {
+    stages.push(`${vLabels[0]}copy[v_mc]`);
+    stages.push(`${aLabels[0]}acopy[a_mc]`);
+  } else {
+    stages.push(`${vLabels.join("")}concat=n=${vLabels.length}:v=1:a=0[v_mc]`);
+    stages.push(`${aLabels.join("")}concat=n=${aLabels.length}:v=0:a=1[a_mc]`);
+  }
+  const filterComplex = stages.join(";");
+  ffmpegArgs.push("-filter_complex", filterComplex, "-map", "[v_mc]", "-map", "[a_mc]");
+  return {
+    preset_id: cfg.preset_id,
+    mode: "program_stitch",
+    duration_s: Number(cfg.duration_s.toFixed(3)),
+    fps: cfg.fps,
+    width: w,
+    height: h,
+    angle_count: cfg.angles.length,
+    segment_count: segments.length,
+    short_cut_count: short_cut_warnings.length,
+    segments,
+    short_cut_warnings,
+    filter_complex: filterComplex,
+    ffmpeg_args: ffmpegArgs,
+    video_map_label: "[v_mc]",
+    audio_map_label: "[a_mc]"
+  };
+}
+
+export function exportMulticamEdlClient(rawConfig, opts = {}) {
+  const cfg = normalizeMulticamStudioConfigClient(rawConfig);
+  const format = opts.format === "timeline_json" ? "timeline_json" : "edl";
+  const cleanTitle =
+    String(opts.title || "TAKTCUT_MULTICAM").trim().toUpperCase().replace(/[^A-Z0-9_]+/g, "_").replace(/^_+|_+$/g, "") ||
+    "TAKTCUT_MULTICAM";
+  const fpsInt = Math.max(1, Math.round(cfg.fps));
+  const { segments, short_cut_warnings } = resolveMulticamStudioSegmentsClient(cfg);
+  const syncReport = syncMulticamStudioAnglesClient(cfg);
+  const offsetsF = new Map(syncReport.angles.map((r) => [r.angle_index, Math.max(0, r.offset_frames)]));
+  const angleMap = new Map(cfg.angles.map((a) => [a.angle_index, a]));
+  const baseSrcTc = mcSmpteToFramesClient("01:00:00:00", fpsInt);
+
+  const lines = [`TITLE: ${cleanTitle}`, "FCM: NON-DROP FRAME", ""];
+  const vClips = [];
+  const aClips = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    const angle = angleMap.get(seg.angle_index) || cfg.angles[0];
+    const off = offsetsF.get(angle.angle_index) || 0;
+    const reel = `CAM_${angle.angle_index}`.padEnd(8, " ").slice(0, 8);
+    const trackCode = seg.cut_mode === "video_and_audio" ? "AA/V" : "V   ";
+    lines.push(
+      `${String(i + 1).padStart(3, "0")}  ${reel} ${trackCode}  C        ` +
+        `${mcFramesToSmpteClient(baseSrcTc + off + seg.start_frame, fpsInt)} ` +
+        `${mcFramesToSmpteClient(baseSrcTc + off + seg.end_frame, fpsInt)} ` +
+        `${mcFramesToSmpteClient(seg.start_frame, fpsInt)} ` +
+        `${mcFramesToSmpteClient(seg.end_frame, fpsInt)}`
+    );
+    lines.push(`* FROM CLIP NAME: ${angle.name}`);
+    if (angle.source_path) lines.push(`* SOURCE FILE: ${angle.source_path}`);
+    lines.push("");
+
+    vClips.push({
+      name: angle.name,
+      track_index: 1,
+      media_type: "video",
+      start_frame: seg.start_frame,
+      duration_frames: seg.duration_frames,
+      source_in_frame: off + seg.start_frame,
+      source_path: angle.source_path || `cam${angle.angle_index}.mov`
+    });
+    const aAngle = angleMap.get(seg.audio_angle_index) || cfg.angles[0];
+    const aOff = offsetsF.get(aAngle.angle_index) || 0;
+    aClips.push({
+      name: `${aAngle.name} Audio`,
+      track_index: 1,
+      media_type: "audio",
+      start_frame: seg.start_frame,
+      duration_frames: seg.duration_frames,
+      source_in_frame: aOff + seg.start_frame,
+      source_path: aAngle.source_path || `cam${aAngle.angle_index}.mov`,
+      audio_gain_db: aAngle.audio_gain_db
+    });
+  }
+
+  const timelineDoc = {
+    name: cleanTitle,
+    source_format: "otio",
+    fps: { num: fpsInt, den: 1 },
+    width: cfg.width,
+    height: cfg.height,
+    start_frame: 0,
+    tracks: [
+      { index: 1, kind: "video", name: "V1 Multi-Cam Program", clips: vClips },
+      { index: 1, kind: "audio", name: "A1 Multi-Cam Mix", clips: aClips }
+    ]
+  };
+  return {
+    format,
+    title: cleanTitle,
+    fps: cfg.fps,
+    segment_count: segments.length,
+    short_cut_count: short_cut_warnings.length,
+    edl_text: `${lines.join("\n").trimEnd()}\n`,
+    timeline_json: `${JSON.stringify(timelineDoc, null, 2)}\n`,
+    saved_path: null,
+    filename: `${cleanTitle.toLowerCase()}${format === "timeline_json" ? ".json" : ".edl"}`
+  };
+}
+
+export function applyMulticamStudioToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const cfg = normalizeMulticamStudioConfigClient(rawConfig);
+  const syncReport = syncMulticamStudioAnglesClient(cfg);
+  const offsetsMap = new Map(syncReport.angles.map((r) => [r.angle_index, r.offset_frames]));
+  const trackIndex = Number(opts.track_index || 1);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === "video" && t.index === trackIndex);
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error(`Video track V${trackIndex} has no clips`);
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, Number(opts.clip_index || 0)));
+  const targetClip = trk.clips[safeIdx];
+  const bankDur = Math.max(1, Number(targetClip.duration_frames || 100));
+  const fpsNum = nextDoc.fps && nextDoc.fps.num ? nextDoc.fps.num : Math.round(cfg.fps);
+  const fpsDen = nextDoc.fps && nextDoc.fps.den ? nextDoc.fps.den : 1;
+
+  const bank = {
+    id: `mc_studio_${cfg.preset_id}`,
+    name: `Multi-Cam (${cfg.preset_id})`,
+    fps: { num: fpsNum, den: fpsDen },
+    width: cfg.width,
+    height: cfg.height,
+    duration_frames: bankDur,
+    sync_mode: cfg.sync_mode === "slate_marker" ? "marker" : cfg.sync_mode,
+    audio_follow_angle: cfg.master_audio_angle,
+    angles: cfg.angles.map((a) => ({
+      angle_index: a.angle_index,
+      name: a.name,
+      source_path: a.source_path,
+      source_in_frame: 0,
+      duration_frames: bankDur,
+      sync_offset_frames: offsetsMap.get(a.angle_index) || 0,
+      timecode_start: a.timecode_start,
+      audio_peak_frame: a.slate_marker_frame,
+      color_tag: MC_STUDIO_BANK_COLORS[(a.angle_index - 1) % MC_STUDIO_BANK_COLORS.length],
+      audio_follow: a.angle_index === cfg.master_audio_angle,
+      enabled: a.enabled
+    })),
+    cuts: cfg.cuts.map((c) => ({
+      frame: Math.max(0, Math.min(bankDur - 1, Math.round((c.time_s / Math.max(0.001, cfg.duration_s)) * bankDur))),
+      angle_index: c.angle_index,
+      cut_mode: c.cut_mode === "video_and_audio" || cfg.audio_follow_video ? "audio_video" : "video_only"
+    }))
+  };
+  trk.clips[safeIdx] = {
+    ...targetClip,
+    name: bank.name,
+    multicam_bank: bank
+  };
+  return nextDoc;
+}
