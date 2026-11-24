@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from taktcut.models import RationalFrameRate, TimelineClip, TimelineDocument, TimelineTrack
 from taktcut.timeline_edit import (
+    align_av_split,
+    apply_split_edit_jl,
     apply_timeline_edit,
+    compile_split_edit_ffmpeg,
+    compute_av_split_info,
+    link_av_clips,
     ripple_delete_clip,
     ripple_trim_clip,
     roll_edit_cut,
@@ -12,6 +17,7 @@ from taktcut.timeline_edit import (
     slide_clip,
     slip_clip,
     toggle_track_sync_lock,
+    unlink_av_clips,
 )
 from taktcut.ui.samples import build_sample_timeline
 
@@ -195,3 +201,81 @@ def test_sync_lock_toggles_and_ripple_delete() -> None:
     assert del_nosync.changed is True
     assert del_nosync.document.tracks[0].clips[1].start_frame == 100
     assert del_nosync.document.tracks[1].clips[1].start_frame == 200
+
+
+def test_av_link_unlink_jl_cut_split_edit_and_ffmpeg_compile() -> None:
+    doc = _make_two_track_doc(sync_a1=True)
+    # Give VO_2 (at frame 200) source_in_frame=30 so it has pre-lap headroom for J-Cut
+    doc.tracks[1].clips[1].source_in_frame = 30
+
+    # Link Shot_C (V1[2] at 200..300) with VO_2 (A1[1] at 200..300)
+    linked = link_av_clips(doc, "video", 1, 2)
+    assert linked.changed is True
+    assert linked.op == "link_av"
+    v_c = linked.document.tracks[0].clips[2]
+    a_c = linked.document.tracks[1].clips[1]
+    assert v_c.link_group_id != ""
+    assert v_c.link_group_id == a_c.link_group_id
+
+    info0 = compute_av_split_info(linked.document, "video", 1, 2)
+    assert info0.linked is True
+    assert info0.cut_type == "aligned"
+    assert info0.in_offset_frames == 0
+    assert info0.out_offset_frames == 0
+
+    # J-Cut: audio pre-lap -15f (start 200 -> 185, dur 100 -> 115, srcIn 30 -> 15)
+    jcut = apply_split_edit_jl(
+        linked.document, "video", 1, 2, edge="left", delta_frames=-15, target_kind="audio"
+    )
+    assert jcut.changed is True
+    assert jcut.delta_applied == -15
+    assert jcut.document.tracks[1].clips[1].start_frame == 185
+    assert jcut.document.tracks[1].clips[1].duration_frames == 115
+    assert jcut.document.tracks[1].clips[1].source_in_frame == 15
+    # Video stays anchored at 200..300
+    assert jcut.document.tracks[0].clips[2].start_frame == 200
+    assert jcut.document.tracks[0].clips[2].duration_frames == 100
+
+    j_info = compute_av_split_info(jcut.document, "video", 1, 2)
+    assert j_info.cut_type == "j_cut"
+    assert j_info.in_offset_frames == -15
+
+    # L-Cut: audio post-lap +20f (dur 115 -> 135)
+    jlcut = apply_split_edit_jl(
+        jcut.document, "video", 1, 2, edge="right", delta_frames=20, target_kind="audio"
+    )
+    assert jlcut.changed is True
+    jl_info = compute_av_split_info(jlcut.document, "video", 1, 2)
+    assert jl_info.cut_type == "jl_cut"
+    assert jl_info.in_offset_frames == -15
+    assert jl_info.out_offset_frames == 20
+
+    # FFmpeg split-edit filtergraph compile
+    fg = compile_split_edit_ffmpeg(jlcut.document, "video", 1, 2)
+    assert fg.linked is True
+    assert fg.is_identity is False
+    assert "tpad=start_duration=0.600" in fg.video_filter
+    assert "tpad=stop_duration=0.800" in fg.video_filter
+    assert "[0:v]" in fg.filter_complex and "[1:a]" in fg.filter_complex
+
+    # Ripple trim with respect_av_link=True trims both V & A together
+    rip_av = ripple_trim_clip(
+        jlcut.document, "video", 1, 2, "right", 10, respect_av_link=True
+    )
+    assert rip_av.changed is True
+    assert rip_av.document.tracks[0].clips[2].duration_frames == 110
+    assert rip_av.document.tracks[1].clips[1].duration_frames == 145
+
+    # Align A/V split resets audio back flush with video
+    aligned = align_av_split(rip_av.document, "video", 1, 2)
+    assert aligned.changed is True
+    al_info = compute_av_split_info(aligned.document, "video", 1, 2)
+    assert al_info.cut_type == "aligned"
+    assert al_info.in_offset_frames == 0
+    assert al_info.out_offset_frames == 0
+
+    # Unlink clears group on both clips
+    unlinked = unlink_av_clips(aligned.document, "video", 1, 2)
+    assert unlinked.changed is True
+    assert unlinked.document.tracks[0].clips[2].link_group_id == ""
+    assert unlinked.document.tracks[1].clips[1].link_group_id == ""

@@ -1233,6 +1233,7 @@ class TimelineClip(BaseModel):
     media_ref: str = ""
     source_fps: RationalFrameRate | None = None
     enabled: bool = True
+    link_group_id: str = ""
     audio_gain_db: float = Field(default=0.0, ge=-24.0, le=12.0)
     fade_in_s: float = Field(default=0.0, ge=0.0, le=5.0)
     fade_out_s: float = Field(default=0.0, ge=0.0, le=5.0)
@@ -1245,6 +1246,16 @@ class TimelineClip(BaseModel):
     transform: ClipTransformParams | None = None
     compound_subsequence: CompoundSubSequence | None = None
     multicam_bank: MulticamBank | None = None
+
+    @field_validator("link_group_id", mode="before")
+    @classmethod
+    def _validate_link_group_id(cls, raw: Any) -> str:
+        if raw is None:
+            return ""
+        cleaned = str(raw).strip()
+        if len(cleaned) > 64:
+            raise ValueError("link_group_id must be <= 64 characters")
+        return cleaned
 
     @field_validator("audio_gain_db", "fade_in_s", "fade_out_s", "speed_rate", mode="before")
     @classmethod
@@ -1303,6 +1314,10 @@ class TimelineClip(BaseModel):
     @property
     def is_multicam(self) -> bool:
         return self.multicam_bank is not None
+
+    @property
+    def is_av_linked(self) -> bool:
+        return bool(self.link_group_id)
 
 
 MAX_COMPOUND_NESTING_DEPTH: int = 4

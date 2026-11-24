@@ -29,7 +29,9 @@ import {
   TRANSITION_PRESETS,
   bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
+  alignAvSplitInDocument,
   analyzeAudioSpectrumClient,
+  applySplitEditJlInDocument,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileColorNodeChainClient,
@@ -43,10 +45,12 @@ import {
   compilePlanarTrackerFilterClient,
   compileRetimeFilterClient,
   compileRetimeRampSetptsClient,
+  compileSplitEditFiltergraphClient,
   compileStabilizerFilterClient,
   compileTransformFilterClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
+  computeAvSplitEditInfo,
   computeRetimeRampSummary,
   countMulticamClipsInDocument,
   countSyncLockedTracks,
@@ -61,6 +65,7 @@ import {
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
   getDeliveryPresetClient,
+  linkAvClipsInDocument,
   normalizeFairlightAudioParams,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
@@ -75,6 +80,7 @@ import {
   switchMulticamAngleInDocument,
   syncMulticamClipInDocument,
   toggleTrackSyncLockInDocument,
+  unlinkAvClipsInDocument,
   updateCompoundSubsequenceInDocument,
   updateMulticamAngleInDocument,
   validateTimelineClient
@@ -136,10 +142,10 @@ function buildDemoTimeline(preset) {
         name: "V1 Main Picture",
         sync_locked: true,
         clips: [
-          { name: "A001_Opening_Wide", track_index: 1, media_type: "video", start_frame: 0, duration_frames: 125, source_in_frame: 24, source_path: "media/A001_Opening_Wide.mov", source_fps: fps25, enabled: true, transition_out: { preset: "fade", duration_s: 0.5, include_audio: true, audio_curve: "tri" } },
+          { name: "A001_Opening_Wide", track_index: 1, media_type: "video", start_frame: 0, duration_frames: 125, source_in_frame: 24, source_path: "media/A001_Opening_Wide.mov", source_fps: fps25, enabled: true, link_group_id: "av-01", transition_out: { preset: "fade", duration_s: 0.5, include_audio: true, audio_curve: "tri" } },
           { name: "A002_Studio_Detail", track_index: 1, media_type: "video", start_frame: 125, duration_frames: 100, source_in_frame: 10, source_path: "media/A002_Studio_Detail.mov", source_fps: fps25, enabled: true, speed_rate: 0.5 },
           { name: "A003_Talent_Close", track_index: 1, media_type: "video", start_frame: 225, duration_frames: 150, source_in_frame: 48, source_path: "media/A003_Talent_Close.mov", source_fps: fps25, enabled: true, transition_out: { preset: "wipeleft", duration_s: 0.8, include_audio: true, audio_curve: "tri" } },
-          { name: "A004_End_Packshot", track_index: 1, media_type: "video", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "media/A004_End_Packshot.mov", source_fps: fps25, enabled: true, speed_rate: 2.0, reverse: true }
+          { name: "A004_End_Packshot", track_index: 1, media_type: "video", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "media/A004_End_Packshot.mov", source_fps: fps25, enabled: true, link_group_id: "av-03", speed_rate: 2.0, reverse: true }
         ]
       },
       {
@@ -156,9 +162,9 @@ function buildDemoTimeline(preset) {
         name: "A1 Dialogue / VO",
         sync_locked: true,
         clips: [
-          { name: "VO_Intro_Clean", track_index: 1, media_type: "audio", start_frame: 0, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_intro.wav", enabled: true, audio_gain_db: 1.5, fade_in_s: 0.4, fade_out_s: 0.0 },
+          { name: "VO_Intro_Clean", track_index: 1, media_type: "audio", start_frame: 0, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_intro.wav", enabled: true, link_group_id: "av-01", audio_gain_db: 1.5, fade_in_s: 0.4, fade_out_s: 0.0 },
           { name: "VO_Feature_Main", track_index: 1, media_type: "audio", start_frame: 125, duration_frames: 250, source_in_frame: 0, source_path: "audio/vo_feature.wav", enabled: true },
-          { name: "VO_Tagline_End", track_index: 1, media_type: "audio", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_tagline.wav", enabled: true, fade_out_s: 0.6 }
+          { name: "VO_Tagline_End", track_index: 1, media_type: "audio", start_frame: 375, duration_frames: 125, source_in_frame: 0, source_path: "audio/vo_tagline.wav", enabled: true, link_group_id: "av-03", fade_out_s: 0.6 }
         ]
       },
       {
@@ -3144,9 +3150,11 @@ export function createApiClient() {
         const cIdx = Number.isInteger(payload && payload.clip_index) ? payload.clip_index : 0;
         const edge = payload && payload.edge === "left" ? "left" : "right";
         const delta = Math.round(Number((payload && payload.delta_frames) || 0));
+        const respectAvLink = Boolean(payload && payload.respect_av_link);
+        const targetKind = payload && payload.target_kind === "video" ? "video" : "audio";
         let res;
         if (op === "ripple_trim") {
-          res = rippleTrimClipInDocument(doc, tkKind, tkIdx, cIdx, edge, delta);
+          res = rippleTrimClipInDocument(doc, tkKind, tkIdx, cIdx, edge, delta, { respectAvLink });
         } else if (op === "roll") {
           res = rollEditCutInDocument(doc, tkKind, tkIdx, cIdx, delta);
         } else if (op === "slip") {
@@ -3154,11 +3162,23 @@ export function createApiClient() {
         } else if (op === "slide") {
           res = slideClipInDocument(doc, tkKind, tkIdx, cIdx, delta);
         } else if (op === "ripple_delete") {
-          res = rippleDeleteClipInDocument(doc, tkKind, tkIdx, cIdx);
+          res = rippleDeleteClipInDocument(doc, tkKind, tkIdx, cIdx, { respectAvLink });
         } else if (op === "toggle_sync_lock") {
           res = toggleTrackSyncLockInDocument(doc, tkKind, tkIdx);
         } else if (op === "set_all_sync_lock") {
           res = setAllTracksSyncLockInDocument(doc, Boolean(payload && payload.enabled));
+        } else if (op === "link_av") {
+          res = linkAvClipsInDocument(doc, tkKind, tkIdx, cIdx, payload || {});
+        } else if (op === "unlink_av") {
+          res = unlinkAvClipsInDocument(doc, tkKind, tkIdx, cIdx);
+        } else if (op === "split_edit_jl") {
+          res = applySplitEditJlInDocument(doc, tkKind, tkIdx, cIdx, {
+            edge,
+            delta_frames: delta,
+            target_kind: targetKind
+          });
+        } else if (op === "align_av_split") {
+          res = alignAvSplitInDocument(doc, tkKind, tkIdx, cIdx);
         } else {
           throw new Error(`Unsupported timeline edit op: ${op}`);
         }
@@ -3170,11 +3190,27 @@ export function createApiClient() {
           shifted_count: res.shiftedCount !== undefined ? res.shiftedCount : 0,
           sync_locked_tracks: countSyncLockedTracks(nextDoc),
           detail: res.detail || "",
+          split_info: computeAvSplitEditInfo(nextDoc, tkKind, tkIdx, cIdx),
+          split_compile: compileSplitEditFiltergraphClient(nextDoc, tkKind, tkIdx, cIdx),
           document: nextDoc,
           validation: validateTimelineClient(nextDoc)
         };
       }
       return requestJson("/api/timeline/edit", { method: "POST", body: payload });
+    },
+    async compileSplitEdit(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const tkKind = payload && payload.track_kind === "audio" ? "audio" : "video";
+        const tkIdx = Number.isInteger(payload && payload.track_index) ? payload.track_index : 1;
+        const cIdx = Number.isInteger(payload && payload.clip_index) ? payload.clip_index : 0;
+        return {
+          split_info: computeAvSplitEditInfo(doc, tkKind, tkIdx, cIdx),
+          compile: compileSplitEditFiltergraphClient(doc, tkKind, tkIdx, cIdx)
+        };
+      }
+      return requestJson("/api/timeline/split-edit/compile", { method: "POST", body: payload });
     },
     async compoundTimeline(payload) {
       if (resolvedMode === "static-demo") {

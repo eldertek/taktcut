@@ -2982,7 +2982,7 @@ export function splitClipsAtPlayhead(doc, playheadFrame, selectedClip = null) {
   };
 }
 
-export function rippleDeleteClipInDocument(doc, trackKind, trackIndex, clipIndex) {
+export function rippleDeleteClipInDocument(doc, trackKind, trackIndex, clipIndex, opts = {}) {
   const foundOrig = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
   if (!foundOrig) {
     return { doc, deletedClip: null, shiftedCount: 0, focusClip: null, changed: false };
@@ -2995,12 +2995,17 @@ export function rippleDeleteClipInDocument(doc, trackKind, trackIndex, clipIndex
   }
 
   const { trk, clip: deletedClip } = found;
+  const respectAvLink = Boolean(opts && opts.respectAvLink);
+  const partnerInfo = respectAvLink ? _findLinkedPartnerInDoc(nextDoc, deletedClip) : null;
   const docStart = nextDoc.start_frame || 0;
   const delStart = deletedClip.start_frame;
   const delDur = Math.max(0, deletedClip.duration_frames || 0);
   const delEnd = delStart + delDur;
 
   trk.clips.splice(clipIndex, 1);
+  if (partnerInfo && partnerInfo.trk !== trk && partnerInfo.clipIndex >= 0 && partnerInfo.clipIndex < partnerInfo.trk.clips.length) {
+    partnerInfo.trk.clips.splice(partnerInfo.clipIndex, 1);
+  }
 
   let shiftedCount = 0;
   let nextFocusClip = null;
@@ -7776,7 +7781,7 @@ function _minTlDeltaForSourceIn(currentSourceIn, sourceFps, timelineFps, candida
   return best;
 }
 
-function _syncLockNegativeFloor(doc, sourceTrack, anchorFrame, proposedShift) {
+function _syncLockNegativeFloor(doc, sourceTrack, anchorFrame, proposedShift, excludeClips = []) {
   if (proposedShift >= 0 || !Boolean(sourceTrack && sourceTrack.sync_locked)) {
     return proposedShift;
   }
@@ -7787,6 +7792,10 @@ function _syncLockNegativeFloor(doc, sourceTrack, anchorFrame, proposedShift) {
     let upstreamEnd = docStart;
     let earliestDown = null;
     for (const c of trk.clips || []) {
+      if (excludeClips.includes(c)) {
+        upstreamEnd = Math.max(upstreamEnd, c.start_frame + (c.duration_frames || 0));
+        continue;
+      }
       if (c.start_frame >= anchorFrame) {
         if (earliestDown === null || c.start_frame < earliestDown) {
           earliestDown = c.start_frame;
@@ -7803,15 +7812,20 @@ function _syncLockNegativeFloor(doc, sourceTrack, anchorFrame, proposedShift) {
   return Math.min(0, clamped);
 }
 
-function _applySyncLockedRipple(doc, sourceTrack, anchorFrame, shiftFrames, excludeClip = null) {
+function _applySyncLockedRipple(doc, sourceTrack, anchorFrame, shiftFrames, excludeClipOrList = null) {
   if (shiftFrames === 0) return 0;
+  const excludeList = Array.isArray(excludeClipOrList)
+    ? excludeClipOrList
+    : excludeClipOrList
+      ? [excludeClipOrList]
+      : [];
   let shifted = 0;
   const docStart = doc.start_frame || 0;
   const srcLocked = Boolean(sourceTrack && sourceTrack.sync_locked);
   for (const trk of doc.tracks || []) {
     if (trk !== sourceTrack && !(srcLocked && Boolean(trk.sync_locked))) continue;
     for (const c of trk.clips || []) {
-      if (excludeClip && c === excludeClip) continue;
+      if (excludeList.includes(c)) continue;
       if (c.start_frame >= anchorFrame) {
         c.start_frame = Math.max(docStart, c.start_frame + shiftFrames);
         shifted += 1;
@@ -7824,7 +7838,7 @@ function _applySyncLockedRipple(doc, sourceTrack, anchorFrame, shiftFrames, excl
   return shifted;
 }
 
-export function rippleTrimClipInDocument(doc, trackKind, trackIndex, clipIndex, edge, deltaFrames) {
+export function rippleTrimClipInDocument(doc, trackKind, trackIndex, clipIndex, edge, deltaFrames, opts = {}) {
   const delta = Math.round(Number(deltaFrames) || 0);
   if (delta === 0) {
     return {
@@ -7863,14 +7877,21 @@ export function rippleTrimClipInDocument(doc, trackKind, trackIndex, clipIndex, 
     };
   }
   const { trk, clip } = found;
+  const respectAvLink = Boolean(opts && opts.respectAvLink);
+  const partnerInfo = respectAvLink ? _findLinkedPartnerInDoc(nextDoc, clip) : null;
+  const partnerClip = partnerInfo ? partnerInfo.clip : null;
+  const excludeList = partnerClip ? [clip, partnerClip] : [clip];
   const origDur = clip.duration_frames;
   const origEnd = clip.start_frame + origDur;
 
   if (edge === "right") {
-    const minDelta = 1 - origDur;
+    let minDelta = 1 - origDur;
+    if (partnerClip) {
+      minDelta = Math.max(minDelta, 1 - partnerClip.duration_frames);
+    }
     let effDelta = Math.max(minDelta, delta);
     if (effDelta < 0) {
-      effDelta = _syncLockNegativeFloor(nextDoc, trk, origEnd, effDelta);
+      effDelta = _syncLockNegativeFloor(nextDoc, trk, origEnd, effDelta, excludeList);
     }
     if (effDelta === 0) {
       return {
@@ -7884,7 +7905,10 @@ export function rippleTrimClipInDocument(doc, trackKind, trackIndex, clipIndex, 
       };
     }
     clip.duration_frames = origDur + effDelta;
-    const shiftedCount = _applySyncLockedRipple(nextDoc, trk, origEnd, effDelta, clip);
+    if (partnerClip) {
+      partnerClip.duration_frames += effDelta;
+    }
+    const shiftedCount = _applySyncLockedRipple(nextDoc, trk, origEnd, effDelta, excludeList);
     return {
       doc: nextDoc,
       clip,
@@ -7897,17 +7921,29 @@ export function rippleTrimClipInDocument(doc, trackKind, trackIndex, clipIndex, 
   }
 
   if (edge === "left") {
-    const maxPosDelta = origDur - 1;
-    const minNegDelta = _minTlDeltaForSourceIn(
+    let maxPosDelta = origDur - 1;
+    if (partnerClip) {
+      maxPosDelta = Math.min(maxPosDelta, partnerClip.duration_frames - 1);
+    }
+    let minNegDelta = _minTlDeltaForSourceIn(
       clip.source_in_frame || 0,
       clip.source_fps,
       nextDoc.fps,
       delta
     );
+    if (partnerClip) {
+      const pMinNeg = _minTlDeltaForSourceIn(
+        partnerClip.source_in_frame || 0,
+        partnerClip.source_fps,
+        nextDoc.fps,
+        delta
+      );
+      minNegDelta = Math.max(minNegDelta, pMinNeg);
+    }
     let effDelta = Math.max(minNegDelta, Math.min(maxPosDelta, delta));
     let rippleShift = -effDelta;
     if (rippleShift < 0) {
-      rippleShift = _syncLockNegativeFloor(nextDoc, trk, origEnd, rippleShift);
+      rippleShift = _syncLockNegativeFloor(nextDoc, trk, origEnd, rippleShift, excludeList);
       effDelta = -rippleShift;
     }
     if (effDelta === 0) {
@@ -7924,7 +7960,12 @@ export function rippleTrimClipInDocument(doc, trackKind, trackIndex, clipIndex, 
     const srcDelta = computeSourceFrameDelta(effDelta, clip.source_fps, nextDoc.fps);
     clip.source_in_frame = Math.max(0, (clip.source_in_frame || 0) + srcDelta);
     clip.duration_frames = origDur - effDelta;
-    const shiftedCount = _applySyncLockedRipple(nextDoc, trk, origEnd, rippleShift, clip);
+    if (partnerClip) {
+      const pSrcDelta = computeSourceFrameDelta(effDelta, partnerClip.source_fps, nextDoc.fps);
+      partnerClip.source_in_frame = Math.max(0, (partnerClip.source_in_frame || 0) + pSrcDelta);
+      partnerClip.duration_frames -= effDelta;
+    }
+    const shiftedCount = _applySyncLockedRipple(nextDoc, trk, origEnd, rippleShift, excludeList);
     return {
       doc: nextDoc,
       clip,
@@ -10413,5 +10454,513 @@ export function compileMulticamFiltergraphClient(bank, opts = {}) {
     video_map_label: "[v_mc]",
     audio_map_label: "[a_mc]",
     warnings: []
+  };
+}
+
+// ============================================================================
+// Dynamic Trim Pro: A/V Link / Unlink, J/L-Cut Split-Edit & 4-Up Trim Monitor
+// ============================================================================
+
+export function normalizeClipLinkGroupId(raw) {
+  if (raw === null || raw === undefined) return "";
+  return String(raw).trim().slice(0, 64);
+}
+
+function _findLinkedPartnerInDoc(doc, sourceClip) {
+  const gid = normalizeClipLinkGroupId(sourceClip && sourceClip.link_group_id);
+  if (!gid || !doc || !Array.isArray(doc.tracks)) return null;
+  let fallback = null;
+  for (const trk of doc.tracks) {
+    const clips = trk.clips || [];
+    for (let idx = 0; idx < clips.length; idx++) {
+      const cand = clips[idx];
+      if (cand === sourceClip) continue;
+      if (normalizeClipLinkGroupId(cand.link_group_id) !== gid) continue;
+      if (cand.media_type !== sourceClip.media_type) {
+        return { trk, clipIndex: idx, clip: cand };
+      }
+      if (!fallback) {
+        fallback = { trk, clipIndex: idx, clip: cand };
+      }
+    }
+  }
+  return fallback;
+}
+
+export function findLinkedPartnerClip(doc, trackKind, trackIndex, clipIndex) {
+  const found = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!found) return null;
+  return _findLinkedPartnerInDoc(doc, found.clip);
+}
+
+export function computeAvSplitEditInfo(doc, trackKind, trackIndex, clipIndex) {
+  const found = findTrackAndClip(doc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return { linked: false, link_group_id: "", cut_type: "unlinked", in_offset_frames: 0, out_offset_frames: 0 };
+  }
+  const { trk, clip } = found;
+  const gid = normalizeClipLinkGroupId(clip.link_group_id);
+  const partner = _findLinkedPartnerInDoc(doc, clip);
+  if (!gid || !partner) {
+    return { linked: false, link_group_id: gid, cut_type: "unlinked", in_offset_frames: 0, out_offset_frames: 0 };
+  }
+
+  let vTrk, vIdx, vClip, aTrk, aIdx, aClip;
+  if (trk.kind === "video" && partner.trk.kind === "audio") {
+    vTrk = trk;
+    vIdx = clipIndex;
+    vClip = clip;
+    aTrk = partner.trk;
+    aIdx = partner.clipIndex;
+    aClip = partner.clip;
+  } else if (trk.kind === "audio" && partner.trk.kind === "video") {
+    vTrk = partner.trk;
+    vIdx = partner.clipIndex;
+    vClip = partner.clip;
+    aTrk = trk;
+    aIdx = clipIndex;
+    aClip = clip;
+  } else {
+    return { linked: true, link_group_id: gid, cut_type: "aligned", in_offset_frames: 0, out_offset_frames: 0 };
+  }
+
+  const inOff = (aClip.start_frame || 0) - (vClip.start_frame || 0);
+  const outOff =
+    (aClip.start_frame + (aClip.duration_frames || 0)) -
+    (vClip.start_frame + (vClip.duration_frames || 0));
+  let cutType = "aligned";
+  if (inOff !== 0 && outOff !== 0) cutType = "jl_cut";
+  else if (inOff !== 0) cutType = "j_cut";
+  else if (outOff !== 0) cutType = "l_cut";
+
+  return {
+    linked: true,
+    link_group_id: gid,
+    cut_type: cutType,
+    in_offset_frames: inOff,
+    out_offset_frames: outOff,
+    video_track_index: vTrk.index,
+    video_clip_index: vIdx,
+    video_name: vClip.name,
+    audio_track_index: aTrk.index,
+    audio_clip_index: aIdx,
+    audio_name: aClip.name
+  };
+}
+
+export function compileSplitEditFiltergraphClient(doc, trackKind, trackIndex, clipIndex) {
+  const info = computeAvSplitEditInfo(doc, trackKind, trackIndex, clipIndex);
+  if (
+    !info.linked ||
+    info.video_track_index == null ||
+    info.video_clip_index == null ||
+    info.audio_track_index == null ||
+    info.audio_clip_index == null
+  ) {
+    return {
+      linked: false,
+      link_group_id: "",
+      cut_type: "unlinked",
+      in_offset_frames: 0,
+      out_offset_frames: 0,
+      video_filter: "",
+      audio_filter: "",
+      filter_complex: "",
+      is_identity: true
+    };
+  }
+  const vFound = findTrackAndClip(doc, "video", info.video_track_index, info.video_clip_index);
+  const aFound = findTrackAndClip(doc, "audio", info.audio_track_index, info.audio_clip_index);
+  if (!vFound || !aFound) {
+    return {
+      linked: false,
+      link_group_id: "",
+      cut_type: "unlinked",
+      in_offset_frames: 0,
+      out_offset_frames: 0,
+      video_filter: "",
+      audio_filter: "",
+      filter_complex: "",
+      is_identity: true
+    };
+  }
+  const vClip = vFound.clip;
+  const aClip = aFound.clip;
+  const fps = doc && doc.fps ? Math.max(1.0, doc.fps.num / Math.max(1, doc.fps.den)) : 25.0;
+
+  const vSrcIn = Math.max(0, vClip.source_in_frame || 0);
+  const vSrcEnd = vSrcIn + Math.max(1, vClip.duration_frames || 1);
+  const aSrcInS = Math.max(0, aClip.source_in_frame || 0) / fps;
+  const aSrcEndS = (Math.max(0, aClip.source_in_frame || 0) + Math.max(1, aClip.duration_frames || 1)) / fps;
+
+  const vParts = [`trim=start_frame=${vSrcIn}:end_frame=${vSrcEnd}`, "setpts=PTS-STARTPTS"];
+  const aParts = [`atrim=start=${aSrcInS.toFixed(3)}:end=${aSrcEndS.toFixed(3)}`, "asetpts=PTS-STARTPTS"];
+
+  const inOff = info.in_offset_frames;
+  const outOff = info.out_offset_frames;
+  if (inOff < 0) {
+    const preLapS = Math.abs(inOff) / fps;
+    vParts.push(`tpad=start_duration=${preLapS.toFixed(3)}:start_mode=clone`);
+  } else if (inOff > 0) {
+    const delayMs = Math.round((inOff / fps) * 1000);
+    aParts.push(`adelay=${delayMs}|${delayMs}`);
+  }
+  if (outOff > 0) {
+    const postLapS = outOff / fps;
+    vParts.push(`tpad=stop_duration=${postLapS.toFixed(3)}:stop_mode=clone`);
+  } else if (outOff < 0) {
+    const padS = Math.abs(outOff) / fps;
+    aParts.push(`apad=pad_dur=${padS.toFixed(3)}`);
+  }
+
+  const vFilter = `[0:v]${vParts.join(",")}[v_split]`;
+  const aFilter = `[1:a]${aParts.join(",")}[a_split]`;
+  return {
+    linked: true,
+    link_group_id: info.link_group_id,
+    cut_type: info.cut_type,
+    in_offset_frames: inOff,
+    out_offset_frames: outOff,
+    video_filter: vFilter,
+    audio_filter: aFilter,
+    filter_complex: `${vFilter};${aFilter}`,
+    is_identity: inOff === 0 && outOff === 0
+  };
+}
+
+function _nextAvLinkGroupIdClient(doc) {
+  const used = new Set();
+  for (const trk of doc.tracks || []) {
+    for (const c of trk.clips || []) {
+      const gid = normalizeClipLinkGroupId(c.link_group_id);
+      if (gid) used.add(gid);
+    }
+  }
+  let idx = 1;
+  while (true) {
+    const cand = `av-${String(idx).padStart(2, "0")}`;
+    if (!used.has(cand)) return cand;
+    idx += 1;
+  }
+}
+
+export function linkAvClipsInDocument(doc, trackKind, trackIndex, clipIndex, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return { doc, clip: null, changed: false, detail: "Target clip not found." };
+  }
+  const { trk, clip } = found;
+  const existingGid = normalizeClipLinkGroupId(clip.link_group_id);
+  if (existingGid && _findLinkedPartnerInDoc(nextDoc, clip)) {
+    return { doc, clip, changed: false, detail: `Clip already linked (${existingGid}).` };
+  }
+
+  let partnerClip = null;
+  if (
+    opts &&
+    opts.partner_track_kind &&
+    opts.partner_track_index != null &&
+    opts.partner_clip_index != null
+  ) {
+    const pFound = findTrackAndClip(
+      nextDoc,
+      opts.partner_track_kind,
+      opts.partner_track_index,
+      opts.partner_clip_index
+    );
+    if (pFound && pFound.clip !== clip) {
+      partnerClip = pFound.clip;
+    }
+  } else {
+    const wantKind = trk.kind === "video" ? "audio" : "video";
+    const cStart = clip.start_frame || 0;
+    const cEnd = cStart + (clip.duration_frames || 0);
+    let bestScore = null;
+    for (const candTrk of nextDoc.tracks || []) {
+      if (candTrk.kind !== wantKind) continue;
+      const candClips = candTrk.clips || [];
+      for (let idx = 0; idx < candClips.length; idx++) {
+        const cand = candClips[idx];
+        if (cand === clip || normalizeClipLinkGroupId(cand.link_group_id)) continue;
+        const ov = Math.min(cEnd, cand.start_frame + (cand.duration_frames || 0)) - Math.max(cStart, cand.start_frame);
+        const dist = Math.abs(cand.start_frame - cStart);
+        const score = [-Math.max(0, ov), dist, candTrk.index, idx];
+        if (
+          !bestScore ||
+          score[0] < bestScore[0] ||
+          (score[0] === bestScore[0] &&
+            (score[1] < bestScore[1] ||
+              (score[1] === bestScore[1] &&
+                (score[2] < bestScore[2] || (score[2] === bestScore[2] && score[3] < bestScore[3])))))
+        ) {
+          bestScore = score;
+          partnerClip = cand;
+        }
+      }
+    }
+  }
+
+  if (!partnerClip) {
+    return { doc, clip, changed: false, detail: "No unlinked opposite-media clip found to link." };
+  }
+
+  const gid = _nextAvLinkGroupIdClient(nextDoc);
+  clip.link_group_id = gid;
+  partnerClip.link_group_id = gid;
+  return {
+    doc: nextDoc,
+    clip,
+    changed: true,
+    detail: `Linked ${clip.name} + ${partnerClip.name} (${gid})`
+  };
+}
+
+export function unlinkAvClipsInDocument(doc, trackKind, trackIndex, clipIndex) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  if (!found) {
+    return { doc, clip: null, changed: false, detail: "Target clip not found." };
+  }
+  const { clip } = found;
+  const gid = normalizeClipLinkGroupId(clip.link_group_id);
+  if (!gid) {
+    return { doc, clip, changed: false, detail: "Clip is already unlinked." };
+  }
+  clip.link_group_id = "";
+  const remaining = [];
+  for (const t of nextDoc.tracks || []) {
+    for (const c of t.clips || []) {
+      if (normalizeClipLinkGroupId(c.link_group_id) === gid) remaining.push(c);
+    }
+  }
+  if (remaining.length <= 1) {
+    for (const rem of remaining) rem.link_group_id = "";
+  }
+  return {
+    doc: nextDoc,
+    clip,
+    changed: true,
+    detail: `Unlinked ${clip.name} (${gid})`
+  };
+}
+
+export function applySplitEditJlInDocument(doc, trackKind, trackIndex, clipIndex, opts = {}) {
+  const delta = Math.round(Number(opts.delta_frames ?? opts.deltaFrames) || 0);
+  if (delta === 0) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Zero split-edit delta." };
+  }
+  const edge = opts.edge === "right" ? "right" : "left";
+  const targetKind = opts.target_kind === "video" || opts.targetKind === "video" ? "video" : "audio";
+  const nextDoc = cloneTimelineDoc(doc);
+  const info = computeAvSplitEditInfo(nextDoc, trackKind, trackIndex, clipIndex);
+  if (
+    !info.linked ||
+    info.video_track_index == null ||
+    info.video_clip_index == null ||
+    info.audio_track_index == null ||
+    info.audio_clip_index == null
+  ) {
+    return {
+      doc,
+      clip: null,
+      changed: false,
+      deltaApplied: 0,
+      detail: "Select an A/V linked clip pair for J/L-Cut split edit."
+    };
+  }
+  const tIdx = targetKind === "audio" ? info.audio_track_index : info.video_track_index;
+  const cIdx = targetKind === "audio" ? info.audio_clip_index : info.video_clip_index;
+  const found = findTrackAndClip(nextDoc, targetKind, tIdx, cIdx);
+  if (!found) {
+    return { doc, clip: null, changed: false, deltaApplied: 0, detail: "Split-edit target clip not found." };
+  }
+  const { trk, clip: target } = found;
+  const prevClip = cIdx > 0 ? trk.clips[cIdx - 1] : null;
+  const nextClip = cIdx + 1 < trk.clips.length ? trk.clips[cIdx + 1] : null;
+  const origEnd = target.start_frame + target.duration_frames;
+  let effDelta = 0;
+
+  if (edge === "left") {
+    let minDelta = (nextDoc.start_frame || 0) - target.start_frame;
+    if (prevClip) {
+      minDelta = Math.max(minDelta, prevClip.start_frame + prevClip.duration_frames - target.start_frame);
+    }
+    minDelta = _minTlDeltaForSourceIn(target.source_in_frame || 0, target.source_fps, nextDoc.fps, minDelta);
+    const maxDelta = target.duration_frames - 1;
+    effDelta = Math.max(minDelta, Math.min(maxDelta, delta));
+    if (effDelta === 0) {
+      return {
+        doc,
+        clip: null,
+        changed: false,
+        deltaApplied: 0,
+        detail: "Split-edit In edge clamped at neighbor or source start."
+      };
+    }
+    const srcDelta = computeSourceFrameDelta(effDelta, target.source_fps, nextDoc.fps);
+    target.start_frame += effDelta;
+    target.duration_frames -= effDelta;
+    target.source_in_frame = Math.max(0, (target.source_in_frame || 0) + srcDelta);
+  } else {
+    const minDelta = 1 - target.duration_frames;
+    const maxDelta = nextClip ? nextClip.start_frame - origEnd : Math.max(0, delta);
+    effDelta = Math.max(minDelta, Math.min(maxDelta, delta));
+    if (effDelta === 0) {
+      return {
+        doc,
+        clip: null,
+        changed: false,
+        deltaApplied: 0,
+        detail: "Split-edit Out edge clamped at neighbor or min duration."
+      };
+    }
+    target.duration_frames += effDelta;
+  }
+
+  const selFound = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  const updatedInfo = computeAvSplitEditInfo(nextDoc, trackKind, trackIndex, clipIndex);
+  const tag =
+    updatedInfo.in_offset_frames !== 0 && updatedInfo.out_offset_frames === 0
+      ? `J-Cut ${updatedInfo.in_offset_frames > 0 ? `+${updatedInfo.in_offset_frames}` : updatedInfo.in_offset_frames}f`
+      : updatedInfo.out_offset_frames !== 0 && updatedInfo.in_offset_frames === 0
+        ? `L-Cut ${updatedInfo.out_offset_frames > 0 ? `+${updatedInfo.out_offset_frames}` : updatedInfo.out_offset_frames}f`
+        : `Split J:${updatedInfo.in_offset_frames}f L:${updatedInfo.out_offset_frames}f`;
+
+  return {
+    doc: nextDoc,
+    clip: selFound ? selFound.clip : target,
+    changed: true,
+    deltaApplied: effDelta,
+    detail: `${tag} (${targetKind.toUpperCase()} ${edge} ${effDelta > 0 ? `+${effDelta}` : effDelta}f)`
+  };
+}
+
+export function alignAvSplitInDocument(doc, trackKind, trackIndex, clipIndex) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const info = computeAvSplitEditInfo(nextDoc, trackKind, trackIndex, clipIndex);
+  if (
+    !info.linked ||
+    info.video_track_index == null ||
+    info.video_clip_index == null ||
+    info.audio_track_index == null ||
+    info.audio_clip_index == null
+  ) {
+    return { doc, clip: null, changed: false, detail: "Clip is not A/V linked." };
+  }
+  if (info.in_offset_frames === 0 && info.out_offset_frames === 0) {
+    return { doc, clip: null, changed: false, detail: "A/V pair is already aligned." };
+  }
+  const vFound = findTrackAndClip(nextDoc, "video", info.video_track_index, info.video_clip_index);
+  const aFound = findTrackAndClip(nextDoc, "audio", info.audio_track_index, info.audio_clip_index);
+  if (!vFound || !aFound) {
+    return { doc, clip: null, changed: false, detail: "Linked clips not found." };
+  }
+  const vClip = vFound.clip;
+  const aTrk = aFound.trk;
+  const aClip = aFound.clip;
+  const aIdx = info.audio_clip_index;
+  const prevA = aIdx > 0 ? aTrk.clips[aIdx - 1] : null;
+  const nextA = aIdx + 1 < aTrk.clips.length ? aTrk.clips[aIdx + 1] : null;
+
+  let targetStart = vClip.start_frame;
+  let targetEnd = vClip.start_frame + vClip.duration_frames;
+  if (prevA) targetStart = Math.max(targetStart, prevA.start_frame + prevA.duration_frames);
+  targetStart = Math.max(nextDoc.start_frame || 0, targetStart);
+  if (nextA) targetEnd = Math.min(targetEnd, nextA.start_frame);
+  if (targetEnd <= targetStart) {
+    return { doc, clip: null, changed: false, detail: "Cannot align A/V pair without overlapping adjacent audio clip." };
+  }
+  const startShift = targetStart - aClip.start_frame;
+  const srcShift = computeSourceFrameDelta(startShift, aClip.source_fps, nextDoc.fps);
+  aClip.source_in_frame = Math.max(0, (aClip.source_in_frame || 0) + srcShift);
+  aClip.start_frame = targetStart;
+  aClip.duration_frames = targetEnd - targetStart;
+
+  const selFound = findTrackAndClip(nextDoc, trackKind, trackIndex, clipIndex);
+  return {
+    doc: nextDoc,
+    clip: selFound ? selFound.clip : vClip,
+    changed: true,
+    detail: `Aligned ${aClip.name} to ${vClip.name} (${aClip.start_frame}f..${targetEnd}f)`
+  };
+}
+
+export function buildFourUpTrimMonitorState(doc, mode, target, deltaFrames = 0) {
+  if (!doc || !target) return null;
+  const trkKind = target.trackKind === "audio" ? "audio" : "video";
+  const trkIdx = Number(target.trackIndex || 1);
+  const cIdx = Number(target.clipIndex ?? target.leftClipIndex ?? 0);
+  const found = findTrackAndClip(doc, trkKind, trkIdx, cIdx);
+  if (!found) return null;
+  const { trk, clip } = found;
+  const prevClip = cIdx > 0 ? trk.clips[cIdx - 1] : null;
+  const nextClip = cIdx + 1 < trk.clips.length ? trk.clips[cIdx + 1] : null;
+  const splitInfo = computeAvSplitEditInfo(doc, trkKind, trkIdx, cIdx);
+  const edge = target.edge === "left" ? "left" : "right";
+  const normMode = normalizeTimelineTool(mode === "ripple_trim" ? "trim" : mode);
+  const isTwoUp = normMode === "trim" || normMode === "roll";
+
+  const makeTile = (role, tileClip, tlFrame, accent) => {
+    if (!tileClip) {
+      return { role, clip: null, track: `${trkKind === "audio" ? "A" : "V"}${trkIdx}`, frame: 0, sourceFrame: 0, accent };
+    }
+    const localF = Math.max(0, Math.min(Math.max(0, tileClip.duration_frames - 1), tlFrame - tileClip.start_frame));
+    return {
+      role,
+      clip: tileClip,
+      track: `${trkKind === "audio" ? "A" : "V"}${trkIdx}`,
+      frame: tlFrame,
+      sourceFrame: (tileClip.source_in_frame || 0) + localF,
+      accent
+    };
+  };
+
+  let tiles;
+  if (normMode === "roll") {
+    const leftC = target.leftClipIndex != null ? trk.clips[target.leftClipIndex] : clip;
+    const rightC =
+      target.rightClipIndex != null
+        ? trk.clips[target.rightClipIndex]
+        : nextClip || (edge === "left" ? clip : null);
+    const leftOutF = leftC ? leftC.start_frame + Math.max(0, leftC.duration_frames - 1) : 0;
+    const rightInF = rightC ? rightC.start_frame : 0;
+    tiles = [
+      makeTile("OUTGOING", leftC, leftOutF, "#39c5cf"),
+      makeTile("INCOMING", rightC, rightInF, "#f59e0b")
+    ];
+  } else if (normMode === "trim") {
+    if (edge === "left") {
+      const prevOutF = prevClip ? prevClip.start_frame + Math.max(0, prevClip.duration_frames - 1) : 0;
+      tiles = [
+        makeTile("PREV OUT", prevClip, prevOutF, "#8e8e98"),
+        makeTile("CLIP IN", clip, clip.start_frame, "#f59e0b")
+      ];
+    } else {
+      const clipOutF = clip.start_frame + Math.max(0, clip.duration_frames - 1);
+      tiles = [
+        makeTile("CLIP OUT", clip, clipOutF, "#f59e0b"),
+        makeTile("NEXT IN", nextClip, nextClip ? nextClip.start_frame : 0, "#8e8e98")
+      ];
+    }
+  } else {
+    const prevOutF = prevClip ? prevClip.start_frame + Math.max(0, prevClip.duration_frames - 1) : 0;
+    const clipOutF = clip.start_frame + Math.max(0, clip.duration_frames - 1);
+    tiles = [
+      makeTile("PREV OUT", prevClip, prevOutF, "#8e8e98"),
+      makeTile("CLIP IN", clip, clip.start_frame, "#ffd166"),
+      makeTile("CLIP OUT", clip, clipOutF, "#5eead4"),
+      makeTile("NEXT IN", nextClip, nextClip ? nextClip.start_frame : 0, "#8e8e98")
+    ];
+  }
+
+  return {
+    layout: isTwoUp ? "2up" : "4up",
+    mode: normMode,
+    edge,
+    deltaFrames: Math.round(Number(deltaFrames) || 0),
+    clipName: clip.name,
+    splitInfo,
+    tiles
   };
 }

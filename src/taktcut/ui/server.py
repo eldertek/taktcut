@@ -249,6 +249,8 @@ from taktcut.subtitles import (
 from taktcut.timeline_edit import (
     ALLOWED_TIMELINE_EDIT_OPS,
     apply_timeline_edit,
+    compile_split_edit_ffmpeg,
+    compute_av_split_info,
 )
 from taktcut.titles import (
     TITLE_FONT_SIZE_MAX,
@@ -1995,6 +1997,34 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             raw_enabled = payload.get("enabled", True)
             if not isinstance(raw_enabled, bool):
                 raise ValueError("enabled must be a boolean")
+            raw_respect_av = payload.get("respect_av_link", False)
+            if not isinstance(raw_respect_av, bool):
+                raise ValueError("respect_av_link must be a boolean")
+            raw_target_kind = str(payload.get("target_kind", "audio")).strip().lower()
+            if raw_target_kind not in ("video", "audio"):
+                raise ValueError("target_kind must be 'video' or 'audio'")
+            target_kind_val: Literal["video", "audio"] = (
+                "video" if raw_target_kind == "video" else "audio"
+            )
+
+            p_kind_val: Literal["video", "audio"] | None = None
+            p_tidx_val: int | None = None
+            p_cidx_val: int | None = None
+            if payload.get("partner_track_kind") is not None:
+                raw_pk = str(payload.get("partner_track_kind")).strip().lower()
+                if raw_pk not in ("video", "audio"):
+                    raise ValueError("partner_track_kind must be 'video' or 'audio'")
+                p_kind_val = "video" if raw_pk == "video" else "audio"
+            if payload.get("partner_track_index") is not None:
+                raw_pt = payload.get("partner_track_index")
+                if isinstance(raw_pt, bool) or not isinstance(raw_pt, int) or raw_pt < 1:
+                    raise ValueError("partner_track_index must be a positive integer")
+                p_tidx_val = raw_pt
+            if payload.get("partner_clip_index") is not None:
+                raw_pc = payload.get("partner_clip_index")
+                if isinstance(raw_pc, bool) or not isinstance(raw_pc, int) or raw_pc < 0:
+                    raise ValueError("partner_clip_index must be a non-negative integer")
+                p_cidx_val = raw_pc
 
             edit_res = apply_timeline_edit(
                 doc,
@@ -2005,8 +2035,19 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 edge=edge_val,
                 delta_frames=raw_delta,
                 enabled=raw_enabled,
+                respect_av_link=raw_respect_av,
+                target_kind=target_kind_val,
+                partner_track_kind=p_kind_val,
+                partner_track_index=p_tidx_val,
+                partner_clip_index=p_cidx_val,
             )
             val = validate_timeline(edit_res.document)
+            split_info = compute_av_split_info(
+                edit_res.document, track_kind, raw_tidx, raw_cidx
+            )
+            split_compile = compile_split_edit_ffmpeg(
+                edit_res.document, track_kind, raw_tidx, raw_cidx
+            )
             self._send_json(
                 HTTPStatus.OK,
                 {
@@ -2016,8 +2057,33 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "shifted_count": edit_res.shifted_count,
                     "sync_locked_tracks": edit_res.sync_locked_tracks,
                     "detail": edit_res.detail,
+                    "split_info": split_info.model_dump(mode="json"),
+                    "split_compile": split_compile.model_dump(mode="json"),
                     "document": edit_res.document.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/split-edit/compile":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_kind = str(payload.get("track_kind", "video")).strip().lower()
+            if raw_kind not in ("video", "audio"):
+                raise ValueError("track_kind must be 'video' or 'audio'")
+            se_kind: Literal["video", "audio"] = "video" if raw_kind == "video" else "audio"
+            raw_tidx = payload.get("track_index", 1)
+            if isinstance(raw_tidx, bool) or not isinstance(raw_tidx, int) or raw_tidx < 1:
+                raise ValueError("track_index must be a positive integer")
+            raw_cidx = payload.get("clip_index", 0)
+            if isinstance(raw_cidx, bool) or not isinstance(raw_cidx, int) or raw_cidx < 0:
+                raise ValueError("clip_index must be a non-negative integer")
+            split_info = compute_av_split_info(doc, se_kind, raw_tidx, raw_cidx)
+            split_compile = compile_split_edit_ffmpeg(doc, se_kind, raw_tidx, raw_cidx)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "split_info": split_info.model_dump(mode="json"),
+                    "compile": split_compile.model_dump(mode="json"),
                 },
             )
             return

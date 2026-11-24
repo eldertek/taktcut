@@ -378,9 +378,18 @@ from taktcut.subtitles import (
 )
 from taktcut.timeline_edit import (
     ALLOWED_TIMELINE_EDIT_OPS,
+    AvSplitEditInfo,
+    SplitEditCompileResult,
+    SplitEditCutType,
     TimelineEditOp,
     TimelineEditResult,
+    align_av_split,
+    apply_split_edit_jl,
     apply_timeline_edit,
+    compile_split_edit_ffmpeg,
+    compute_av_split_info,
+    find_linked_partner_clip,
+    link_av_clips,
     ripple_delete_clip,
     ripple_trim_clip,
     roll_edit_cut,
@@ -388,6 +397,7 @@ from taktcut.timeline_edit import (
     slide_clip,
     slip_clip,
     toggle_track_sync_lock,
+    unlink_av_clips,
 )
 from taktcut.transitions import (
     CutJunction,
@@ -788,4 +798,14 @@ __all__ = [
     "sync_multicam_bank",
     "sync_multicam_clip",
     "update_multicam_angle",
+    "AvSplitEditInfo",
+    "SplitEditCompileResult",
+    "SplitEditCutType",
+    "align_av_split",
+    "apply_split_edit_jl",
+    "compile_split_edit_ffmpeg",
+    "compute_av_split_info",
+    "find_linked_partner_clip",
+    "link_av_clips",
+    "unlink_av_clips",
 ]

@@ -10458,6 +10458,277 @@ def test_deliver_batch_render_queue_playwright_desktop_and_mobile(
             browser.close()
 
 
+def test_ui_dynamic_trim_jl_cut_av_unlink_4up_monitor_e2e(tmp_path: Path) -> None:
+    """Verify A/V Link/Unlink, J/L-Cut Split-Edit, FFmpeg compile, Node parity, and 4-Up Trim."""
+    import shutil
+    import subprocess
+
+    from taktcut.ui.samples import build_sample_timeline
+    from taktcut.ui.server import ASSETS_DIR
+
+    sample_doc = build_sample_timeline("clean").model_dump(mode="json")
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        # 1. Server API: split_edit_jl (L-Cut +15f on av-03 V1[3] + A1[2]), compile, align, unlink
+        lcut_status, _, lcut_raw = _http_call(
+            f"{base_url}/api/timeline/edit",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "op": "split_edit_jl",
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 3,
+                "edge": "right",
+                "delta_frames": 15,
+                "target_kind": "audio",
+            },
+        )
+        assert lcut_status == 200
+        lcut_res = json.loads(lcut_raw.decode("utf-8"))
+        assert lcut_res["changed"] is True
+        assert lcut_res["split_info"]["cut_type"] == "l_cut"
+        assert lcut_res["split_info"]["out_offset_frames"] == 15
+        assert "tpad=stop_duration=0.600" in lcut_res["split_compile"]["video_filter"]
+
+        comp_status, _, comp_raw = _http_call(
+            f"{base_url}/api/timeline/split-edit/compile",
+            method="POST",
+            payload={
+                "document": lcut_res["document"],
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 3,
+            },
+        )
+        assert comp_status == 200
+        comp_data = json.loads(comp_raw.decode("utf-8"))
+        assert comp_data["compile"]["is_identity"] is False
+        assert comp_data["split_info"]["out_offset_frames"] == 15
+
+        bad_comp, _, _ = _http_call(
+            f"{base_url}/api/timeline/split-edit/compile",
+            method="POST",
+            payload={"document": sample_doc, "track_kind": "bogus"},
+        )
+        assert bad_comp == 400
+
+        unlink_status, _, unlink_raw = _http_call(
+            f"{base_url}/api/timeline/edit",
+            method="POST",
+            payload={
+                "document": lcut_res["document"],
+                "op": "unlink_av",
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 3,
+            },
+        )
+        assert unlink_status == 200
+        unlink_res = json.loads(unlink_raw.decode("utf-8"))
+        assert unlink_res["changed"] is True
+        assert unlink_res["split_info"]["linked"] is False
+
+        relink_status, _, relink_raw = _http_call(
+            f"{base_url}/api/timeline/edit",
+            method="POST",
+            payload={
+                "document": unlink_res["document"],
+                "op": "link_av",
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 3,
+            },
+        )
+        assert relink_status == 200
+        relink_res = json.loads(relink_raw.decode("utf-8"))
+        assert relink_res["changed"] is True
+        assert relink_res["split_info"]["linked"] is True
+
+        # 2. Node.js parity: timeline_ops.js + demo_adapter.js offline mode
+        if shutil.which("node"):
+            ops_url = (ASSETS_DIR / "timeline_ops.js").as_uri()
+            demo_url = (ASSETS_DIR / "demo_adapter.js").as_uri()
+            node_script = (
+                "import assert from 'node:assert/strict';\n"
+                f"import {{ createApiClient }} from '{demo_url}';\n"
+                "import {\n"
+                "  applySplitEditJlInDocument,\n"
+                "  alignAvSplitInDocument,\n"
+                "  buildFourUpTrimMonitorState,\n"
+                "  compileSplitEditFiltergraphClient,\n"
+                "  computeAvSplitEditInfo,\n"
+                "  linkAvClipsInDocument,\n"
+                "  unlinkAvClipsInDocument\n"
+                f"}} from '{ops_url}';\n"
+                f"const doc = {json.dumps(sample_doc)};\n"
+                "const info0 = computeAvSplitEditInfo(doc, 'video', 1, 3);\n"
+                "assert.equal(info0.linked, true);\n"
+                "assert.equal(info0.link_group_id, 'av-03');\n"
+                "const lcut = applySplitEditJlInDocument(\n"
+                "  doc, 'video', 1, 3, { edge: 'right', delta_frames: 15, target_kind: 'audio' }\n"
+                ");\n"
+                "assert.equal(lcut.changed, true);\n"
+                "const fg = compileSplitEditFiltergraphClient(lcut.doc, 'video', 1, 3);\n"
+                "assert.equal(fg.cut_type, 'l_cut');\n"
+                "assert.equal(fg.out_offset_frames, 15);\n"
+                "assert.ok(fg.video_filter.includes('tpad=stop_duration=0.600'));\n"
+                "const mon4 = buildFourUpTrimMonitorState(\n"
+                "  lcut.doc, 'slip', { trackKind: 'video', trackIndex: 1, clipIndex: 1 }, 0\n"
+                ");\n"
+                "assert.equal(mon4.layout, '4up');\n"
+                "assert.equal(mon4.tiles.length, 4);\n"
+                "const mon2 = buildFourUpTrimMonitorState(\n"
+                "  lcut.doc, 'roll',\n"
+                "  { trackKind: 'video', trackIndex: 1, leftClipIndex: 0, rightClipIndex: 1 }, 0\n"
+                ");\n"
+                "assert.equal(mon2.layout, '2up');\n"
+                "assert.equal(mon2.tiles.length, 2);\n"
+                "const aligned = alignAvSplitInDocument(lcut.doc, 'video', 1, 3);\n"
+                "assert.equal(aligned.changed, true);\n"
+                "const unl = unlinkAvClipsInDocument(aligned.doc, 'video', 1, 3);\n"
+                "assert.equal(unl.changed, true);\n"
+                "const rel = linkAvClipsInDocument(unl.doc, 'video', 1, 3);\n"
+                "assert.equal(rel.changed, true);\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const offlineApi = createApiClient();\n"
+                "const apiRes = await offlineApi.editTimeline({\n"
+                "  document: doc, op: 'split_edit_jl', track_kind: 'video', track_index: 1,\n"
+                "  clip_index: 3, edge: 'right', delta_frames: 15, target_kind: 'audio'\n"
+                "});\n"
+                "assert.equal(apiRes.changed, true);\n"
+                "assert.equal(apiRes.split_info.out_offset_frames, 15);\n"
+                "const compRes = await offlineApi.compileSplitEdit({\n"
+                "  document: apiRes.document, track_kind: 'video', track_index: 1, clip_index: 3\n"
+                "});\n"
+                "assert.equal(compRes.compile.out_offset_frames, 15);\n"
+            )
+            proc = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed:\n{proc.stderr}\n{proc.stdout}"
+
+        # 3. Playwright E2E at 1440x900 and 375x812 + EN/FR
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                console_errors: list[str] = []
+                page.on(
+                    "console",
+                    lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+                )
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#timeline-index-list .timeline-index-row")
+
+                # Select A004_End_Packshot (4th clip on V1, index 3, linked av-03)
+                page.locator(
+                    "#timeline-index-list .timeline-index-row", has_text="A004_End_Packshot"
+                ).click()
+                page.wait_for_function(
+                    "() => document.getElementById('clip-av-split-badge')?.textContent"
+                    " === 'LINK av-03'"
+                )
+
+                # Apply L-Cut +15f preset -> badge updates to L-CUT +15f & FFmpeg drawer has tpad
+                page.click("#btn-split-lcut-preset")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-av-split-badge')"
+                    "?.textContent || '').includes('L-CUT +15f')"
+                )
+                assert "tpad=stop_duration=0.600" in (
+                    page.locator("#split-edit-filtergraph-preview").text_content() or ""
+                )
+
+                # Apply J-Cut -15f preset -> trims V1[3] left +15f -> J:-15f L:15f
+                page.click("#btn-split-jcut-preset")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-av-split-badge')"
+                    "?.textContent || '').includes('J:-15f L:15f')"
+                )
+
+                # Toggle 4-Up Trim Monitor via Shift+T
+                page.keyboard.press("Shift+t")
+                trim_mon_btn = page.locator("#btn-trim-monitor-toggle")
+                assert trim_mon_btn.get_attribute("aria-pressed") == "true"
+
+                # Align A/V flush -> badge returns to LINK
+                page.click("#btn-split-align-reset")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-av-split-badge')"
+                    "?.textContent || '').startsWith('LINK ')"
+                )
+
+                # Unlink & Relink via Alt+L
+                page.keyboard.press("Alt+l")
+                page.wait_for_function(
+                    "() => document.getElementById('clip-av-split-badge')?.textContent"
+                    " === 'UNLINKED'"
+                )
+                page.keyboard.press("Alt+l")
+                page.wait_for_function(
+                    "() => (document.getElementById('clip-av-split-badge')"
+                    "?.textContent || '').startsWith('LINK ')"
+                )
+
+                # Verify FR i18n parity without U+2013 / U+2014
+                page.click("#lang-fr")
+                fr_split = page.locator("#timeline-av-split-inspector").text_content() or ""
+                assert "Coupe Split J / L" in fr_split
+                assert "\u2013" not in fr_split and "\u2014" not in fr_split
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in (
+                    "btn-trim-monitor-toggle",
+                    "btn-timeline-av-link",
+                    "btn-av-link-toggle",
+                    "btn-split-jcut-preset",
+                    "btn-split-lcut-preset",
+                    "btn-split-align-reset",
+                    "btn-split-edge-j",
+                    "btn-split-edge-l",
+                    "btn-split-m5",
+                    "btn-split-p5",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+
 
 
 

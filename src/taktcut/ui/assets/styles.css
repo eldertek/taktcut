@@ -8026,3 +8026,79 @@ input[type="range"] {
     padding: 4px 8px;
   }
 }
+
+.tl-avlink-btn.is-active {
+  background: rgba(56, 224, 141, 0.16);
+  border-color: #38e08d;
+  color: #86efac;
+}
+
+#btn-trim-monitor-toggle.is-active {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+.av-split-inspector-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+}
+
+.av-split-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.av-split-action-row .btn {
+  justify-content: center;
+  min-width: 0;
+}
+
+#btn-av-link-toggle.is-linked {
+  border-color: #38e08d;
+  background: rgba(56, 224, 141, 0.16);
+  color: #86efac;
+}
+
+#clip-av-split-badge.is-jcut {
+  border-color: #39c5cf;
+  background: rgba(57, 197, 207, 0.18);
+  color: #a5f3fc;
+}
+
+#clip-av-split-badge.is-lcut {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+#clip-av-split-badge.is-linked {
+  border-color: #38e08d;
+  background: rgba(56, 224, 141, 0.16);
+  color: #86efac;
+}
+
+@media (max-width: 760px) {
+  .av-split-action-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #btn-trim-monitor-toggle,
+  #btn-timeline-av-link,
+  #btn-av-link-toggle,
+  #btn-split-jcut-preset,
+  #btn-split-lcut-preset,
+  #btn-split-align-reset,
+  #btn-split-edge-j,
+  #btn-split-edge-l,
+  .av-split-step-btn {
+    min-height: 45px;
+  }
+}

@@ -135,10 +135,13 @@ import {
   addColorNodeToTree,
   addMarkerInDocument,
   addOutsideColorNodeInTree,
+  alignAvSplitInDocument,
   analyzeAudioSpectrumClient,
   appendClipToTrackInDocument,
   appendStillBounded,
   applyFairlightRackPresetClient,
+  applySplitEditJlInDocument,
+  buildFourUpTrimMonitorState,
   buildSourceTapeSegments,
   classifyMediaPoolEntry,
   clearTransformParamKeyframesInDocument,
@@ -153,9 +156,11 @@ import {
   compileFairlightMixerClient,
   compileMulticamFiltergraphClient,
   compileRetimeFilterClient,
+  compileSplitEditFiltergraphClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
   compoundClipToTimelineDoc,
+  computeAvSplitEditInfo,
   computeCompoundDepthClient,
   computeInOutRangeMetrics,
   computeMulticamSegmentsClient,
@@ -233,6 +238,7 @@ import {
   isPowerWindowActive,
   isQualifierActive,
   isTrackAudiblyMuted,
+  linkAvClipsInDocument,
   moveClipInDocument,
   moveColorNodeInTree,
   normalizeAutoDuckParams,
@@ -293,6 +299,7 @@ import {
   stepShuttleSpeed,
   timelineDocToChapterInputs,
   toggleColorNodeBypassInTree,
+  unlinkAvClipsInDocument,
   toggleTrackArmInDocument,
   toggleTrackMuteInDocument,
   toggleTrackSoloInDocument,
@@ -768,7 +775,10 @@ const state = {
   mediaPoolActiveClipId: null,
   timelineViewStartFrame: 0,
   timelineOverviewDraw: null,
-  sourceTapeState: null
+  sourceTapeState: null,
+  timelineAvLinkEnabled: true,
+  trimMonitorEnabled: false,
+  timelineSplitNudgeEdge: "left"
 };
 
 function byId(id) {
@@ -1168,6 +1178,27 @@ function redrawActiveCanvases() {
   if (state.activeTab === "timeline") {
     const selVideoCtx = getSelectedClipLocalContext();
     const mcCtx = getActiveMulticamClipContext();
+    let trimMonitorState = null;
+    if (state.timelineDoc && !(state.multicamQuadView && mcCtx)) {
+      if (state.timelineActiveTrim && state.timelineActiveEditHud) {
+        trimMonitorState = buildFourUpTrimMonitorState(
+          state.timelineDoc,
+          state.timelineActiveEditHud.op || state.timelineTool,
+          state.timelineActiveTrim,
+          state.timelineActiveEditHud.deltaFrames || 0
+        );
+      } else if (state.trimMonitorEnabled) {
+        const ref = getSelectedClipRef();
+        if (ref) {
+          trimMonitorState = buildFourUpTrimMonitorState(
+            state.timelineDoc,
+            state.timelineTool,
+            { ...ref, edge: state.timelineNudgeEdge },
+            0
+          );
+        }
+      }
+    }
     drawProgramMonitorCanvas(
       byId("timeline-program-canvas"),
       state.timelineDoc,
@@ -1185,10 +1216,11 @@ function redrawActiveCanvases() {
         filmGrain: { ...state.filmGrain },
         vignette: { ...state.vignette },
         showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay),
-        dveOverlay: Boolean(state.dveOverlay) && !(state.multicamQuadView && mcCtx),
+        dveOverlay: Boolean(state.dveOverlay) && !(state.multicamQuadView && mcCtx) && !trimMonitorState,
         dveSplitGrid: Boolean(state.dveSplitGrid),
         selectedDveClip: selVideoCtx ? selVideoCtx.clip : null,
         trimHud: state.timelineActiveEditHud,
+        trimMonitorState,
         multicamQuadView: Boolean(state.multicamQuadView && mcCtx),
         multicamClip: mcCtx ? mcCtx.clip : null,
         multicamHoveredAngle: state.multicamHoveredAngle
@@ -10931,6 +10963,250 @@ function renderTimelineEditNudgeInspector() {
         : base;
     }
   }
+  renderAvSplitEditInspector();
+}
+
+function renderAvSplitEditInspector() {
+  const badge = byId("clip-av-split-badge");
+  const linkBtn = byId("btn-av-link-toggle");
+  const jcutBtn = byId("btn-split-jcut-preset");
+  const lcutBtn = byId("btn-split-lcut-preset");
+  const alignBtn = byId("btn-split-align-reset");
+  const edgeJBtn = byId("btn-split-edge-j");
+  const edgeLBtn = byId("btn-split-edge-l");
+  const stepBtns = document.querySelectorAll(".av-split-step-btn");
+  const readout = byId("timeline-av-split-readout");
+  const fgPre = byId("split-edit-filtergraph-preview");
+
+  if (edgeJBtn) {
+    const isJ = state.timelineSplitNudgeEdge === "left";
+    edgeJBtn.classList.toggle("is-active", isJ);
+    edgeJBtn.setAttribute("aria-pressed", isJ ? "true" : "false");
+  }
+  if (edgeLBtn) {
+    const isL = state.timelineSplitNudgeEdge === "right";
+    edgeLBtn.classList.toggle("is-active", isL);
+    edgeLBtn.setAttribute("aria-pressed", isL ? "true" : "false");
+  }
+
+  const ref = getSelectedClipRef();
+  if (!state.timelineDoc || !ref) {
+    if (badge) {
+      badge.textContent = t("timeline.avSplit.unlinkedBadge");
+      badge.className = "nle-tag mono";
+    }
+    if (linkBtn) {
+      linkBtn.disabled = true;
+      linkBtn.classList.remove("is-linked");
+    }
+    if (jcutBtn) jcutBtn.disabled = true;
+    if (lcutBtn) lcutBtn.disabled = true;
+    if (alignBtn) alignBtn.disabled = true;
+    for (const b of stepBtns) b.disabled = true;
+    if (readout) readout.textContent = t("timeline.avSplit.idleHint");
+    if (fgPre) fgPre.textContent = "--";
+    return;
+  }
+
+  const info = computeAvSplitEditInfo(
+    state.timelineDoc,
+    ref.trackKind,
+    ref.trackIndex,
+    ref.clipIndex
+  );
+  const compiled = compileSplitEditFiltergraphClient(
+    state.timelineDoc,
+    ref.trackKind,
+    ref.trackIndex,
+    ref.clipIndex
+  );
+  const isLinked = Boolean(info && info.linked);
+
+  if (linkBtn) {
+    linkBtn.disabled = false;
+    linkBtn.classList.toggle("is-linked", isLinked);
+    const labelSpan = linkBtn.querySelector("[data-i18n]");
+    if (labelSpan) {
+      labelSpan.textContent = isLinked ? t("timeline.avSplit.unlinkBtn") : t("timeline.avSplit.linkBtn");
+    }
+  }
+  if (jcutBtn) jcutBtn.disabled = !isLinked;
+  if (lcutBtn) lcutBtn.disabled = !isLinked;
+  if (alignBtn) {
+    alignBtn.disabled = !isLinked || (info.in_offset_frames === 0 && info.out_offset_frames === 0);
+  }
+  for (const b of stepBtns) {
+    b.disabled = !isLinked;
+  }
+
+  if (badge) {
+    if (!isLinked) {
+      badge.textContent = t("timeline.avSplit.unlinkedBadge");
+      badge.className = "nle-tag mono";
+    } else if (info.cut_type === "j_cut") {
+      badge.textContent = `J-CUT ${info.in_offset_frames > 0 ? `+${info.in_offset_frames}` : info.in_offset_frames}f`;
+      badge.className = "nle-tag mono is-jcut";
+    } else if (info.cut_type === "l_cut") {
+      badge.textContent = `L-CUT ${info.out_offset_frames > 0 ? `+${info.out_offset_frames}` : info.out_offset_frames}f`;
+      badge.className = "nle-tag mono is-lcut";
+    } else if (info.cut_type === "jl_cut") {
+      badge.textContent = `J:${info.in_offset_frames}f L:${info.out_offset_frames}f`;
+      badge.className = "nle-tag mono is-jcut";
+    } else {
+      badge.textContent = `LINK ${info.link_group_id}`;
+      badge.className = "nle-tag mono is-linked";
+    }
+  }
+
+  if (readout) {
+    if (!isLinked) {
+      readout.textContent = "Unlinked clip. Click Link A/V (Alt+L) to bind a V+A pair.";
+    } else {
+      readout.textContent =
+        `${info.video_name} + ${info.audio_name} (${info.link_group_id}) | ` +
+        `J In: ${info.in_offset_frames >= 0 ? `+${info.in_offset_frames}` : info.in_offset_frames}f | ` +
+        `L Out: ${info.out_offset_frames >= 0 ? `+${info.out_offset_frames}` : info.out_offset_frames}f`;
+    }
+  }
+  if (fgPre) {
+    fgPre.textContent = isLinked && compiled.filter_complex ? compiled.filter_complex : "--";
+  }
+}
+
+function setSplitEditEdge(edge) {
+  state.timelineSplitNudgeEdge = edge === "right" ? "right" : "left";
+  renderAvSplitEditInspector();
+}
+
+function toggleTimelineAvLinkMode() {
+  state.timelineAvLinkEnabled = !state.timelineAvLinkEnabled;
+  updateTimelineToolbarUI();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+}
+
+function toggleTrimMonitorAction() {
+  state.trimMonitorEnabled = !state.trimMonitorEnabled;
+  if (state.trimMonitorEnabled && state.multicamQuadView) {
+    state.multicamQuadView = false;
+  }
+  updateTimelineToolbarUI();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+}
+
+function toggleAvLinkForSelectionAction() {
+  const ref = getSelectedClipRef();
+  if (!ref || !state.timelineDoc) return false;
+  const info = computeAvSplitEditInfo(state.timelineDoc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  const res = info.linked
+    ? unlinkAvClipsInDocument(state.timelineDoc, ref.trackKind, ref.trackIndex, ref.clipIndex)
+    : linkAvClipsInDocument(state.timelineDoc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  if (!res.changed) {
+    showBanner(res.detail || "No unlinked A/V partner found.", "error");
+    return false;
+  }
+  const found = findTrackAndClip(res.doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  commitTimelineMutation(res.doc, found ? { kind: "clip", data: found.clip } : preserveSelectionAcrossDoc(res.doc));
+  showBanner(res.detail, "success");
+  return true;
+}
+
+function applySplitEditJlAction(deltaFrames, opts = {}) {
+  const ref = getSelectedClipRef();
+  if (!ref || !state.timelineDoc) return false;
+  const edge = opts.edge === "right" || opts.edge === "left" ? opts.edge : state.timelineSplitNudgeEdge;
+  const targetKind = opts.targetKind === "video" ? "video" : "audio";
+  const res = applySplitEditJlInDocument(
+    state.timelineDoc,
+    ref.trackKind,
+    ref.trackIndex,
+    ref.clipIndex,
+    { edge, delta_frames: deltaFrames, target_kind: targetKind }
+  );
+  if (!res.changed) {
+    showBanner(res.detail || "Split-edit clamped at boundary.", "error");
+    return false;
+  }
+  const found = findTrackAndClip(res.doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  state.timelineLastEditReadout = res.detail || "";
+  commitTimelineMutation(res.doc, found ? { kind: "clip", data: found.clip } : preserveSelectionAcrossDoc(res.doc));
+  return true;
+}
+
+function applyJCutPresetAction() {
+  const ref = getSelectedClipRef();
+  if (!ref || !state.timelineDoc) return false;
+  // First try extending audio In left by -15f; if blocked by neighbor/sourceIn=0, trim video In +15f
+  let res = applySplitEditJlInDocument(
+    state.timelineDoc,
+    ref.trackKind,
+    ref.trackIndex,
+    ref.clipIndex,
+    { edge: "left", delta_frames: -15, target_kind: "audio" }
+  );
+  if (!res.changed) {
+    res = applySplitEditJlInDocument(
+      state.timelineDoc,
+      ref.trackKind,
+      ref.trackIndex,
+      ref.clipIndex,
+      { edge: "left", delta_frames: 15, target_kind: "video" }
+    );
+  }
+  if (!res.changed) {
+    showBanner(res.detail || "Cannot apply J-Cut -15f at current clip bounds.", "error");
+    return false;
+  }
+  const found = findTrackAndClip(res.doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  state.timelineLastEditReadout = res.detail || "";
+  commitTimelineMutation(res.doc, found ? { kind: "clip", data: found.clip } : preserveSelectionAcrossDoc(res.doc));
+  showBanner(res.detail, "success");
+  return true;
+}
+
+function applyLCutPresetAction() {
+  const ref = getSelectedClipRef();
+  if (!ref || !state.timelineDoc) return false;
+  // First try extending audio Out right by +15f; if blocked by next audio clip, trim video Out -15f
+  let res = applySplitEditJlInDocument(
+    state.timelineDoc,
+    ref.trackKind,
+    ref.trackIndex,
+    ref.clipIndex,
+    { edge: "right", delta_frames: 15, target_kind: "audio" }
+  );
+  if (!res.changed) {
+    res = applySplitEditJlInDocument(
+      state.timelineDoc,
+      ref.trackKind,
+      ref.trackIndex,
+      ref.clipIndex,
+      { edge: "right", delta_frames: -15, target_kind: "video" }
+    );
+  }
+  if (!res.changed) {
+    showBanner(res.detail || "Cannot apply L-Cut +15f at current clip bounds.", "error");
+    return false;
+  }
+  const found = findTrackAndClip(res.doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  state.timelineLastEditReadout = res.detail || "";
+  commitTimelineMutation(res.doc, found ? { kind: "clip", data: found.clip } : preserveSelectionAcrossDoc(res.doc));
+  showBanner(res.detail, "success");
+  return true;
+}
+
+function alignAvSplitAction() {
+  const ref = getSelectedClipRef();
+  if (!ref || !state.timelineDoc) return false;
+  const res = alignAvSplitInDocument(state.timelineDoc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  if (!res.changed) {
+    showBanner(res.detail || "A/V pair already aligned.", "error");
+    return false;
+  }
+  const found = findTrackAndClip(res.doc, ref.trackKind, ref.trackIndex, ref.clipIndex);
+  state.timelineLastEditReadout = res.detail || "";
+  commitTimelineMutation(res.doc, found ? { kind: "clip", data: found.clip } : preserveSelectionAcrossDoc(res.doc));
+  showBanner(res.detail, "success");
+  return true;
 }
 
 function setNudgeEdge(edge) {
@@ -10958,7 +11234,8 @@ function nudgeSelectedClipAction(deltaFrames) {
       ref.trackIndex,
       ref.clipIndex,
       state.timelineNudgeEdge,
-      delta
+      delta,
+      { respectAvLink: Boolean(state.timelineAvLinkEnabled) }
     );
     changed = res.changed;
     nextDoc = res.doc;
@@ -11085,6 +11362,19 @@ function updateTimelineToolbarUI() {
     syncLockBtn.classList.toggle("is-active", anyLocked);
     syncLockBtn.setAttribute("aria-pressed", anyLocked ? "true" : "false");
     syncLockBtn.disabled = !state.timelineDoc;
+  }
+  const avLinkBtn = byId("btn-timeline-av-link");
+  if (avLinkBtn) {
+    avLinkBtn.classList.toggle("is-active", Boolean(state.timelineAvLinkEnabled));
+    avLinkBtn.setAttribute("aria-pressed", state.timelineAvLinkEnabled ? "true" : "false");
+    avLinkBtn.disabled = !state.timelineDoc;
+  }
+  const trimMonBtn = byId("btn-trim-monitor-toggle");
+  if (trimMonBtn) {
+    const activeMon = Boolean(state.trimMonitorEnabled && !state.multicamQuadView);
+    trimMonBtn.classList.toggle("is-active", activeMon);
+    trimMonBtn.setAttribute("aria-pressed", activeMon ? "true" : "false");
+    trimMonBtn.disabled = !state.timelineDoc;
   }
   if (addMarkerBtn) {
     addMarkerBtn.disabled = !state.timelineDoc;
@@ -11359,7 +11649,8 @@ function rippleDeleteSelectedClipAction() {
     state.timelineDoc,
     ref.trackKind,
     ref.trackIndex,
-    ref.clipIndex
+    ref.clipIndex,
+    { respectAvLink: Boolean(state.timelineAvLinkEnabled) }
   );
   if (!res.changed) return false;
   const nextSel = res.focusClip ? { kind: "clip", data: res.focusClip } : null;
@@ -11729,6 +12020,8 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+H", descKey: "shortcuts.key.qualHighlight" },
       { kbd: "Shift+M", descKey: "shortcuts.key.multicamQuad" },
       { kbd: "1 - 4", descKey: "shortcuts.key.multicamCut" },
+      { kbd: "Alt+L", descKey: "shortcuts.key.avLink" },
+      { kbd: "Shift+T", descKey: "shortcuts.key.trimMonitor" },
       { kbd: "Shift+S", descKey: "shortcuts.key.grabStill" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
@@ -11904,6 +12197,9 @@ function handleTransportKeydown(ev) {
     } else if (state.activeTab === "timeline" && !ev.ctrlKey && !ev.metaKey && lower === "g") {
       ev.preventDefault();
       createCompoundClipAction();
+    } else if (state.activeTab === "timeline" && !ev.ctrlKey && !ev.metaKey && lower === "l") {
+      ev.preventDefault();
+      toggleAvLinkForSelectionAction();
     } else if (state.activeTab === "color" && !ev.ctrlKey && !ev.metaKey && lower === "o") {
       ev.preventDefault();
       addOutsideColorNodeAction();
@@ -11966,6 +12262,11 @@ function handleTransportKeydown(ev) {
     if (lower === "m" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       toggleMulticamQuadViewAction();
+      return;
+    }
+    if (lower === "t" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      toggleTrimMonitorAction();
       return;
     }
     if (
@@ -12755,7 +13056,8 @@ function bindTimelineCanvasScrub(canvas) {
           tgt.trackIndex,
           tgt.clipIndex,
           tgt.edge,
-          rawDelta
+          rawDelta,
+          { respectAvLink: Boolean(state.timelineAvLinkEnabled) }
         );
         if (res.changed) nextDoc = res.doc;
         focusClip =
@@ -12763,6 +13065,7 @@ function bindTimelineCanvasScrub(canvas) {
         const syncTag = res.syncLockedTracks > 0 ? ` | SYNC ${res.syncLockedTracks}` : "";
         hud = {
           op: "ripple_trim",
+          deltaFrames: res.deltaApplied,
           label: `RIPPLE ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
           detail: focusClip
             ? `DUR ${focusClip.duration_frames}f | SRC IN ${focusClip.source_in_frame || 0}f${syncTag}`
@@ -12785,6 +13088,7 @@ function bindTimelineCanvasScrub(canvas) {
         focusClip = leftC || rightC || null;
         hud = {
           op: "roll",
+          deltaFrames: res.deltaApplied,
           label: `ROLL ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
           detail: leftC && rightC ? `OUT ${leftC.duration_frames}f | IN ${rightC.duration_frames}f` : res.detail,
           color: "#39c5cf",
@@ -12804,6 +13108,7 @@ function bindTimelineCanvasScrub(canvas) {
           findTrackAndClip(nextDoc, tgt.trackKind, tgt.trackIndex, tgt.clipIndex)?.clip || null;
         hud = {
           op: "slip",
+          deltaFrames: res.deltaApplied,
           label: `SLIP ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
           detail: focusClip ? `SRC IN ${focusClip.source_in_frame || 0}f | DUR ${focusClip.duration_frames}f` : res.detail,
           color: "#ffd166",
@@ -12823,6 +13128,7 @@ function bindTimelineCanvasScrub(canvas) {
           findTrackAndClip(nextDoc, tgt.trackKind, tgt.trackIndex, tgt.clipIndex)?.clip || null;
         hud = {
           op: "slide",
+          deltaFrames: res.deltaApplied,
           label: `SLIDE ${res.deltaApplied >= 0 ? `+${res.deltaApplied}` : res.deltaApplied}f`,
           detail: focusClip ? `START ${focusClip.start_frame}f | DUR ${focusClip.duration_frames}f` : res.detail,
           color: "#5eead4",
@@ -15574,6 +15880,44 @@ function wireEvents() {
   const syncLockBtn = byId("btn-timeline-sync-lock");
   if (syncLockBtn) {
     syncLockBtn.addEventListener("click", toggleAllTracksSyncLockAction);
+  }
+  const avLinkBtn = byId("btn-timeline-av-link");
+  if (avLinkBtn) {
+    avLinkBtn.addEventListener("click", toggleTimelineAvLinkMode);
+  }
+  const trimMonBtn = byId("btn-trim-monitor-toggle");
+  if (trimMonBtn) {
+    trimMonBtn.addEventListener("click", toggleTrimMonitorAction);
+  }
+  const inspAvLinkBtn = byId("btn-av-link-toggle");
+  if (inspAvLinkBtn) {
+    inspAvLinkBtn.addEventListener("click", toggleAvLinkForSelectionAction);
+  }
+  const jcutPresetBtn = byId("btn-split-jcut-preset");
+  if (jcutPresetBtn) {
+    jcutPresetBtn.addEventListener("click", applyJCutPresetAction);
+  }
+  const lcutPresetBtn = byId("btn-split-lcut-preset");
+  if (lcutPresetBtn) {
+    lcutPresetBtn.addEventListener("click", applyLCutPresetAction);
+  }
+  const alignSplitBtn = byId("btn-split-align-reset");
+  if (alignSplitBtn) {
+    alignSplitBtn.addEventListener("click", alignAvSplitAction);
+  }
+  const splitEdgeJBtn = byId("btn-split-edge-j");
+  if (splitEdgeJBtn) {
+    splitEdgeJBtn.addEventListener("click", () => setSplitEditEdge("left"));
+  }
+  const splitEdgeLBtn = byId("btn-split-edge-l");
+  if (splitEdgeLBtn) {
+    splitEdgeLBtn.addEventListener("click", () => setSplitEditEdge("right"));
+  }
+  for (const sBtn of document.querySelectorAll("[data-split-nudge]")) {
+    sBtn.addEventListener("click", () => {
+      const delta = Number.parseInt(sBtn.getAttribute("data-split-nudge") || "0", 10);
+      applySplitEditJlAction(delta);
+    });
   }
   const nudgeEdgeInBtn = byId("btn-nudge-edge-in");
   if (nudgeEdgeInBtn) {

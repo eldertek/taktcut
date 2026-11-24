@@ -22,6 +22,7 @@ import {
   applyColorNodesBeforeTargetClient,
   buildCurveLut256Client,
   clampSplitWipePercent,
+  computeAvSplitEditInfo,
   computeBpmBeatFrames,
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
@@ -58,6 +59,7 @@ import {
   isPowerWindowActive,
   isQualifierActive,
   normalizeClipLabelColor,
+  normalizeClipLinkGroupId,
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
@@ -4024,17 +4026,34 @@ export function drawProgramMonitorCanvas(
     };
   } else {
     canvas._multicamQuadGeom = null;
-    const activeMcEntry = activeClips.find((entry) => entry.clip && entry.clip.multicam_bank);
-    if (activeMcEntry && activeMcEntry.clip && activeMcEntry.clip.multicam_bank) {
-      drawMulticamActiveAngleBadge(
+    if (renderOpts && renderOpts.trimMonitorState) {
+      drawFourUpTrimMonitorOverlay(
         ctx,
         fx,
         fy,
         frameW,
-        activeMcEntry.clip,
-        activeMcEntry.clip.multicam_bank,
-        playheadFrame
+        frameH,
+        doc,
+        cdl,
+        framingMode,
+        srcAspect,
+        targetAspect,
+        renderOpts.trimMonitorState,
+        fps
       );
+    } else {
+      const activeMcEntry = activeClips.find((entry) => entry.clip && entry.clip.multicam_bank);
+      if (activeMcEntry && activeMcEntry.clip && activeMcEntry.clip.multicam_bank) {
+        drawMulticamActiveAngleBadge(
+          ctx,
+          fx,
+          fy,
+          frameW,
+          activeMcEntry.clip,
+          activeMcEntry.clip.multicam_bank,
+          playheadFrame
+        );
+      }
     }
   }
 
@@ -4066,6 +4085,172 @@ export function drawProgramMonitorCanvas(
   ctx.strokeStyle = "#2c2c31";
   ctx.lineWidth = 1;
   ctx.strokeRect(fx, fy, frameW, frameH);
+}
+
+function drawFourUpTrimMonitorOverlay(
+  ctx,
+  fx,
+  fy,
+  frameW,
+  frameH,
+  doc,
+  cdl,
+  framingMode,
+  srcAspect,
+  targetAspect,
+  trimState,
+  fps
+) {
+  const tiles = Array.isArray(trimState && trimState.tiles) ? trimState.tiles : [];
+  if (tiles.length === 0) return;
+  const isTwoUp = trimState.layout === "2up" || tiles.length <= 2;
+  const cols = 2;
+  const rows = isTwoUp ? 1 : 2;
+  const pad = 4;
+  const gap = 4;
+  const headerH = 20;
+  const bodyY = fy + headerH + pad;
+  const bodyH = Math.max(40, frameH - headerH - pad * 2);
+  const cellW = Math.max(40, (frameW - pad * 2 - gap * (cols - 1)) / cols);
+  const cellH = Math.max(30, (bodyH - gap * (rows - 1)) / rows);
+
+  ctx.save();
+  ctx.fillStyle = "#0b0c10";
+  ctx.fillRect(fx, fy, frameW, frameH);
+
+  // Top Trim Monitor Header Strip
+  ctx.fillStyle = "#16171d";
+  ctx.fillRect(fx, fy, frameW, headerH);
+  ctx.strokeStyle = "#2d2e36";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(fx, fy + headerH);
+  ctx.lineTo(fx + frameW, fy + headerH);
+  ctx.stroke();
+
+  const modeTitle = isTwoUp ? "2-UP TRIM MONITOR" : "4-UP TRIM MONITOR";
+  const opTag = String(trimState.mode || "select").toUpperCase();
+  const deltaStr =
+    trimState.deltaFrames !== 0
+      ? ` ${trimState.deltaFrames > 0 ? `+${trimState.deltaFrames}` : trimState.deltaFrames}f`
+      : "";
+  ctx.fillStyle = "#e68442";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.fillText(`${modeTitle} | ${opTag}${deltaStr}`, fx + 8, fy + 13.5);
+
+  const sp = trimState.splitInfo;
+  let syncPillText = "AV UNLINKED";
+  let syncPillColor = "#8e8e98";
+  if (sp && sp.linked) {
+    if (sp.in_offset_frames === 0 && sp.out_offset_frames === 0) {
+      syncPillText = `LINK ${sp.link_group_id} SYNCED`;
+      syncPillColor = "#38e08d";
+    } else if (sp.in_offset_frames !== 0 && sp.out_offset_frames === 0) {
+      syncPillText = `J-CUT ${sp.in_offset_frames > 0 ? `+${sp.in_offset_frames}` : sp.in_offset_frames}f`;
+      syncPillColor = "#39c5cf";
+    } else if (sp.out_offset_frames !== 0 && sp.in_offset_frames === 0) {
+      syncPillText = `L-CUT ${sp.out_offset_frames > 0 ? `+${sp.out_offset_frames}` : sp.out_offset_frames}f`;
+      syncPillColor = "#f59e0b";
+    } else {
+      syncPillText = `J:${sp.in_offset_frames}f L:${sp.out_offset_frames}f`;
+      syncPillColor = "#ffd166";
+    }
+  }
+  ctx.font = "700 9px ui-monospace, monospace";
+  const pillW = Math.ceil(ctx.measureText(syncPillText).width) + 12;
+  const pillX = fx + frameW - pillW - 6;
+  ctx.fillStyle = "rgba(18, 20, 26, 0.92)";
+  roundRectPath(ctx, pillX, fy + 3, pillW, 14, 2);
+  ctx.fill();
+  ctx.strokeStyle = syncPillColor;
+  ctx.stroke();
+  ctx.fillStyle = syncPillColor;
+  ctx.fillText(syncPillText, pillX + 6, fy + 13);
+
+  const maxCells = cols * rows;
+  for (let i = 0; i < maxCells; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = fx + pad + col * (cellW + gap);
+    const cy = bodyY + row * (cellH + gap);
+    const tile = tiles[i] || null;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx, cy, cellW, cellH);
+    ctx.clip();
+
+    if (tile && tile.clip) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      drawFramedBaseScene(
+        ctx,
+        cellW,
+        cellH,
+        doc,
+        tile.frame,
+        cdl,
+        [{ track: tile.track, clip: tile.clip }],
+        framingMode,
+        srcAspect,
+        targetAspect,
+        null
+      );
+      ctx.restore();
+    } else {
+      ctx.fillStyle = "#121318";
+      ctx.fillRect(cx, cy, cellW, cellH);
+      ctx.strokeStyle = "#262730";
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + cellW, cy + cellH);
+      ctx.moveTo(cx + cellW, cy);
+      ctx.lineTo(cx, cy + cellH);
+      ctx.stroke();
+      ctx.fillStyle = "#7a7a86";
+      ctx.font = "700 9.5px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("NO ADJACENT CLIP", cx + cellW * 0.5, cy + cellH * 0.5 + 3);
+      ctx.textAlign = "left";
+    }
+
+    // Role Badge top-left
+    const accent = (tile && tile.accent) || "#8e8e98";
+    const roleLabel = (tile && tile.role) || `PANE ${i + 1}`;
+    ctx.font = "700 8.5px ui-monospace, monospace";
+    const rW = Math.ceil(ctx.measureText(roleLabel).width) + 10;
+    ctx.fillStyle = "rgba(12, 13, 18, 0.88)";
+    roundRectPath(ctx, cx + 5, cy + 5, rW, 14, 2);
+    ctx.fill();
+    ctx.strokeStyle = accent;
+    ctx.stroke();
+    ctx.fillStyle = accent;
+    ctx.fillText(roleLabel, cx + 10, cy + 14.5);
+
+    // Bottom info footer
+    ctx.fillStyle = "rgba(10, 11, 15, 0.84)";
+    ctx.fillRect(cx, cy + cellH - 18, cellW, 18);
+    if (tile && tile.clip) {
+      const tcStr = framesToSmpte(tile.frame, doc.fps?.num || Math.round(fps), doc.fps?.den || 1);
+      ctx.fillStyle = "#e4e4ea";
+      ctx.font = "600 9px system-ui, sans-serif";
+      ctx.fillText(String(tile.clip.name || "").slice(0, 18), cx + 6, cy + cellH - 6);
+      ctx.fillStyle = accent;
+      ctx.font = "700 8.5px ui-monospace, monospace";
+      const rightLabel = `${tcStr} | SRC ${tile.sourceFrame}f`;
+      const rlW = ctx.measureText(rightLabel).width;
+      if (cellW > 130) {
+        ctx.fillText(rightLabel, cx + cellW - rlW - 6, cy + cellH - 6);
+      }
+    }
+
+    ctx.restore();
+    ctx.strokeStyle = (tile && tile.clip) ? accent : "#2c2c34";
+    ctx.lineWidth = 1.25;
+    ctx.strokeRect(cx, cy, cellW, cellH);
+  }
+
+  ctx.restore();
 }
 
 const MULTICAM_PALETTE = {
@@ -5287,6 +5472,20 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           const mcTag = mcBank
             ? ` | MC ${(mcBank.angles || []).length}x/${(mcBank.cuts || []).length}C`
             : "";
+          const avGid = normalizeClipLinkGroupId(clip.link_group_id);
+          const avSplit = avGid ? computeAvSplitEditInfo(doc, trk.kind, trk.index, clipIndex) : null;
+          let avLinkTag = "";
+          if (avSplit && avSplit.linked) {
+            if (avSplit.cut_type === "j_cut") {
+              avLinkTag = ` | J ${avSplit.in_offset_frames > 0 ? `+${avSplit.in_offset_frames}` : avSplit.in_offset_frames}f`;
+            } else if (avSplit.cut_type === "l_cut") {
+              avLinkTag = ` | L ${avSplit.out_offset_frames > 0 ? `+${avSplit.out_offset_frames}` : avSplit.out_offset_frames}f`;
+            } else if (avSplit.cut_type === "jl_cut") {
+              avLinkTag = ` | J:${avSplit.in_offset_frames} L:${avSplit.out_offset_frames}f`;
+            } else {
+              avLinkTag = ` | LINK ${avGid}`;
+            }
+          }
           const retimeTag = hasRetime && speedBadgeW === 0
             ? ` | ${formatRetimeBadgeText(
                 retimeNorm.speedRate,
@@ -5296,11 +5495,27 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
               )}`
             : "";
           ctx.fillText(
-            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${cmpTag}${mcTag}${gainTag}${muteTag}${retimeTag}`,
+            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${avLinkTag}${cmpTag}${mcTag}${gainTag}${muteTag}${retimeTag}`,
             textStartX + 2,
             rowY + 32
           );
           ctx.restore();
+        }
+      }
+
+      // J-Cut / L-Cut visual split-edit edge rails on linked clips
+      const splitEdgeInfo = normalizeClipLinkGroupId(clip.link_group_id)
+        ? computeAvSplitEditInfo(doc, trk.kind, trk.index, clipIndex)
+        : null;
+      if (splitEdgeInfo && splitEdgeInfo.linked && drawW >= 12) {
+        if (splitEdgeInfo.in_offset_frames !== 0) {
+          ctx.fillStyle = "#39c5cf";
+          ctx.fillRect(drawX + 1, clipY + clipH - 3, Math.min(drawW - 2, 16), 2);
+        }
+        if (splitEdgeInfo.out_offset_frames !== 0) {
+          ctx.fillStyle = "#f59e0b";
+          const rw = Math.min(drawW - 2, 16);
+          ctx.fillRect(drawX + drawW - 1 - rw, clipY + clipH - 3, rw, 2);
         }
       }
 
