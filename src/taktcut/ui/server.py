@@ -47,6 +47,18 @@ from taktcut.broadcast_monitor import (
     list_broadcast_standards,
     normalize_broadcast_config,
 )
+from taktcut.camera_shake_studio import (
+    ALLOWED_CAMERA_SHAKE_EDGE_MODES,
+    ALLOWED_CAMERA_SHAKE_PRESETS,
+    CAMERA_SHAKE_CURVE_FRAMES,
+    CameraShakeStudioConfig,
+    apply_camera_shake_to_document,
+    compile_camera_shake_filtergraph,
+    evaluate_camera_shake_studio,
+    export_camera_shake_json,
+    list_camera_shake_presets,
+    normalize_camera_shake_config,
+)
 from taktcut.color import (
     COLOR_BALANCE_MAX,
     COLOR_BALANCE_MIN,
@@ -2030,6 +2042,18 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "preset_ids": list(ALLOWED_OPTICAL_FLARE_PRESETS),
                     "blend_modes": list(ALLOWED_OPTICAL_FLARE_BLEND_MODES),
                     "default_config": OpticalFlareStudioConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/camera-shake/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_camera_shake_presets()],
+                    "preset_ids": list(ALLOWED_CAMERA_SHAKE_PRESETS),
+                    "edge_modes": list(ALLOWED_CAMERA_SHAKE_EDGE_MODES),
+                    "default_config": CameraShakeStudioConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -5598,6 +5622,103 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "document": updated_of_doc.model_dump(mode="json"),
                     "validation": of_val.model_dump(mode="json"),
                     "compiled": of_compiled_apply.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/camera-shake/evaluate":
+            cs_cfg = normalize_camera_shake_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_cs_frames = payload.get("frame_count", CAMERA_SHAKE_CURVE_FRAMES)
+            cs_frame_count = (
+                int(raw_cs_frames)
+                if isinstance(raw_cs_frames, int) and not isinstance(raw_cs_frames, bool)
+                else CAMERA_SHAKE_CURVE_FRAMES
+            )
+            cs_eval = evaluate_camera_shake_studio(cs_cfg, frame_count=cs_frame_count)
+            self._send_json(HTTPStatus.OK, cs_eval.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/camera-shake/compile":
+            cs_cfg = normalize_camera_shake_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            cs_compiled = compile_camera_shake_filtergraph(cs_cfg)
+            self._send_json(HTTPStatus.OK, cs_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/camera-shake/export-json":
+            cs_cfg = normalize_camera_shake_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            cs_title = str(payload.get("title", "TAKTCUT_CAMERA_SHAKE_STUDIO")).strip() or (
+                "TAKTCUT_CAMERA_SHAKE_STUDIO"
+            )
+            cs_exported = export_camera_shake_json(cs_cfg, title=cs_title)
+            raw_cs_out = payload.get("out_path")
+            cs_saved_rel: str | None = None
+            if raw_cs_out is not None and str(raw_cs_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_cs_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(cs_exported.json_text, encoding="utf-8")
+                cs_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                cs_exported.model_copy(update={"saved_path": cs_saved_rel}).model_dump(
+                    mode="json"
+                ),
+            )
+            return
+
+        if route == "/api/fx/camera-shake/download":
+            cs_cfg = normalize_camera_shake_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            cs_title = str(payload.get("title", "TAKTCUT_CAMERA_SHAKE_STUDIO")).strip() or (
+                "TAKTCUT_CAMERA_SHAKE_STUDIO"
+            )
+            cs_exported_dl = export_camera_shake_json(cs_cfg, title=cs_title)
+            cs_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or cs_exported_dl.filename),
+                "taktcut_camera_shake_studio",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                cs_exported_dl.json_text.encode("utf-8"),
+                extra_headers={
+                    "Content-Disposition": f'attachment; filename="{cs_dl_filename}"'
+                },
+            )
+            return
+
+        if route == "/api/fx/camera-shake/apply":
+            cs_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            cs_cfg = normalize_camera_shake_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_cs_doc = apply_camera_shake_to_document(
+                cs_doc,
+                cs_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            cs_compiled_apply = compile_camera_shake_filtergraph(cs_cfg)
+            cs_val = validate_timeline(updated_cs_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_cs_doc.model_dump(mode="json"),
+                    "validation": cs_val.model_dump(mode="json"),
+                    "compiled": cs_compiled_apply.model_dump(mode="json"),
                 },
             )
             return

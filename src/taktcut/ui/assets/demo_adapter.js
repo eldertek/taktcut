@@ -6,6 +6,9 @@ import {
   ALLOWED_FILM_LOOK_PRINT_STOCKS,
   ALLOWED_OPTICAL_FLARE_BLEND_MODES,
   ALLOWED_OPTICAL_FLARE_PRESETS,
+  ALLOWED_CAMERA_SHAKE_EDGE_MODES,
+  ALLOWED_CAMERA_SHAKE_PRESETS,
+  CAMERA_SHAKE_CURVE_FRAMES,
   ALLOWED_MOTION_SPLINE_CHANNELS,
   ALLOWED_MOTION_SPLINE_HANDLE_MODES,
   ALLOWED_MOTION_SPLINE_PRESET_IDS,
@@ -93,6 +96,7 @@ import {
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
   applyOpticalFlareToDocumentClient,
+  applyCameraShakeToDocumentClient,
   applyOpticalGlowToDocumentClient,
   applyPowerWindowToDocumentClient,
   applyRetimeStudioToDocumentClient,
@@ -119,6 +123,7 @@ import {
   compileFilmLookFiltergraphClient,
   compileMulticamStudioFiltergraphClient,
   compileOpticalFlareFiltergraphClient,
+  compileCameraShakeFiltergraphClient,
   compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
@@ -151,6 +156,7 @@ import {
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
   createDefaultOpticalFlareConfigClient,
+  createDefaultCameraShakeConfigClient,
   createDefaultOpticalGlowConfigClient,
   createDefaultPowerWindowConfigClient,
   createDefaultQualifierKeyerConfigClient,
@@ -165,6 +171,7 @@ import {
   evaluateFilmLookStudioClient,
   evaluateMotionSplineStudioClient,
   evaluateOpticalFlareStudioClient,
+  evaluateCameraShakeStudioClient,
   evaluatePowerWindowSamplesClient,
   evaluateRetimeStudioCurveClient,
   evaluateStabilizationStudioClient,
@@ -172,6 +179,7 @@ import {
   exportFilmLookJsonClient,
   exportMotionSplineJsonClient,
   exportOpticalFlareJsonClient,
+  exportCameraShakeJsonClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
   exportRetimeStudioJsonClient,
@@ -184,6 +192,7 @@ import {
   linkAvClipsInDocument,
   listFilmLookPresetsClient,
   listOpticalFlarePresetsClient,
+  listCameraShakePresetsClient,
   listStudioLutPresetsClient,
   normalizeBroadcastConfigClient,
   normalizeFairlightAudioParams,
@@ -191,6 +200,7 @@ import {
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   normalizeOpticalFlareConfigClient,
+  normalizeCameraShakeConfigClient,
   normalizeOpticalGlowConfigClient,
   normalizePowerWindowConfigClient,
   normalizeRetimeProcess,
@@ -4845,6 +4855,84 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/optical-flare/apply", { method: "POST", body: payload });
+    },
+    async getCameraShakePresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: listCameraShakePresetsClient(),
+          preset_ids: ALLOWED_CAMERA_SHAKE_PRESETS,
+          edge_modes: ALLOWED_CAMERA_SHAKE_EDGE_MODES,
+          default_config: createDefaultCameraShakeConfigClient()
+        };
+      }
+      return requestJson("/api/fx/camera-shake/presets");
+    },
+    async evaluateCameraShake(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeCameraShakeConfigClient(p.config ? p.config : p);
+        return evaluateCameraShakeStudioClient(cfg, {
+          frame_count: p.frame_count !== undefined ? Number(p.frame_count) : CAMERA_SHAKE_CURVE_FRAMES
+        });
+      }
+      return requestJson("/api/fx/camera-shake/evaluate", { method: "POST", body: payload });
+    },
+    async compileCameraShake(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeCameraShakeConfigClient(p.config ? p.config : p);
+        return compileCameraShakeFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/camera-shake/compile", { method: "POST", body: payload });
+    },
+    async exportCameraShakeJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeCameraShakeConfigClient(p.config ? p.config : p);
+        return exportCameraShakeJsonClient(cfg, {
+          title: p.title || "TAKTCUT_CAMERA_SHAKE_STUDIO"
+        });
+      }
+      return requestJson("/api/fx/camera-shake/export-json", { method: "POST", body: payload });
+    },
+    async downloadCameraShakeBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeCameraShakeConfigClient(p.config ? p.config : p);
+        const exp = exportCameraShakeJsonClient(cfg, {
+          title: p.title || "TAKTCUT_CAMERA_SHAKE_STUDIO"
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/camera-shake/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyCameraShake(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyCameraShakeToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compileCameraShakeFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/camera-shake/apply", { method: "POST", body: payload });
     }
   };
 }

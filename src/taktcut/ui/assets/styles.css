@@ -12295,3 +12295,351 @@ dialog.nle-dialog.of-studio-dialog {
     width: 100%;
   }
 }
+
+
+/* ============================================================================
+   CAMERA SHAKE, HANDHELD MOTION & LENS DISTORTION STUDIO (CYCLE #114)
+   ============================================================================ */
+
+dialog.nle-dialog.cs-studio-dialog {
+  width: min(1180px, calc(100vw - 24px));
+  max-width: min(1180px, calc(100vw - 24px));
+  max-height: min(92vh, 920px);
+}
+
+.cs-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cs-subtitle {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cs-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cs-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.cs-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.cs-dialog-body .code-box,
+.cs-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.cs-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 7px 10px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.cs-field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cs-field-inline label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.cs-toggle-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cs-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.cs-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.24fr) minmax(0, 0.9fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.cs-viewport-col,
+.cs-inspector-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cs-inspector-col {
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+}
+
+.cs-canvas-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.cs-canvas-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cs-canvas-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.cs-canvas-badge {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+#cs-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 236px;
+  background: #0b0e14;
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+#cs-waveform-canvas {
+  display: block;
+  width: 100%;
+  height: 164px;
+  background: #0b0e14;
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.cs-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.cs-tab-btn {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.cs-tab-btn.is-active {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+
+.cs-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+  min-width: 0;
+}
+
+.cs-tab-panel[hidden] {
+  display: none;
+}
+
+.cs-param-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cs-param-field label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.cs-range-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cs-range-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: #f59e0b;
+}
+
+.cs-range-pair .input-num {
+  width: 82px;
+}
+
+.cs-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: auto;
+  min-width: 0;
+}
+
+.cs-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.cs-metric-k {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.cs-metric-v {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fde68a;
+}
+
+.cs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#btn-cs-play-toggle[aria-pressed="true"] {
+  background: rgba(245, 158, 11, 0.24);
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+
+#camera-shake-studio-dialog .btn:focus-visible,
+#camera-shake-studio-dialog .cs-tab-btn:focus-visible,
+#camera-shake-studio-dialog .input-control:focus-visible,
+#camera-shake-studio-dialog input[type="range"]:focus-visible,
+.cs-studio-btn:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 1px;
+}
+
+@media (max-width: 960px) {
+  .cs-main-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  dialog.nle-dialog.cs-studio-dialog {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: min(94vh, 820px);
+  }
+  .cs-field-inline {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .cs-field-inline select.input-control {
+    flex: 1 1 auto;
+  }
+  .cs-studio-btn,
+  .cs-tab-btn,
+  .cs-actions .btn,
+  #btn-close-camera-shake-studio,
+  #btn-cs-play-toggle,
+  #btn-cs-reset,
+  #camera-shake-studio-dialog .input-control,
+  #camera-shake-studio-dialog .cs-check-label,
+  #camera-shake-studio-dialog .fg-drawer-summary {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  #camera-shake-studio-dialog input[type="range"] {
+    min-height: 44px;
+  }
+  #cs-preview-canvas {
+    height: 196px;
+  }
+  #cs-waveform-canvas {
+    height: 148px;
+  }
+}

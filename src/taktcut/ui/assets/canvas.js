@@ -15160,3 +15160,378 @@ export function drawOpticalFlareFalloffCanvas(canvas, config, evalResult) {
     lx += ctx.measureText(label).width + 22;
   }
 }
+
+
+// =========================================================================
+// CYCLE #114: CAMERA SHAKE, HANDHELD MOTION & LENS DISTORTION CANVASES
+// =========================================================================
+
+function _csWarpPoint(nx, ny, k1, k2) {
+  const r2 = nx * nx + ny * ny;
+  const factor = 1.0 + k1 * r2 + k2 * r2 * r2;
+  return [nx * factor, ny * factor];
+}
+
+export function renderCameraShakePreviewCanvas(canvas, config, evalResult, options = {}) {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+  const width = Math.max(240, Math.round((rect && rect.width > 0 ? rect.width : canvas.clientWidth) || 560));
+  const height = Math.max(150, Math.round((rect && rect.height > 0 ? rect.height : canvas.clientHeight) || 236));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const cfg = config || {};
+  const enabled = cfg.enabled !== false;
+  const compareSplit = cfg.compare_split !== false;
+  const splitPos = Math.max(0.05, Math.min(0.95, Number(cfg.split_position ?? 0.5)));
+  const splitX = Math.round(width * splitPos);
+  const samples = evalResult && Array.isArray(evalResult.motion_samples) ? evalResult.motion_samples : [];
+  const activeFrame = Math.max(
+    0,
+    Math.min(Math.max(0, samples.length - 1), Number(options.activeFrame ?? 0))
+  );
+  const curSample = samples[activeFrame] || {
+    frame: 0,
+    x_px: 0,
+    y_px: 0,
+    tilt_deg: 0,
+    zoom: 1.0,
+    velocity_px_s: 0
+  };
+
+  const k1 = enabled ? Number(cfg.lens_k1 || 0) : 0;
+  const k2 = enabled ? Number(cfg.lens_k2 || 0) : 0;
+  const fringePx = enabled ? Number(cfg.chromatic_fringe_px || 0) : 0;
+  const safeCropPct = evalResult ? Number(evalResult.required_safe_crop_pct || 0) : 0;
+
+  const drawScene = (withEffect) => {
+    ctx.save();
+    // Studio dusk backdrop
+    const sky = ctx.createLinearGradient(0, 0, 0, height);
+    sky.addColorStop(0, "#101828");
+    sky.addColorStop(0.55, "#1b283b");
+    sky.addColorStop(0.56, "#161b24");
+    sky.addColorStop(1, "#0d1017");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, width, height);
+
+    const cx = width * 0.5;
+    const cy = height * 0.5;
+    const sx = width * 0.5;
+    const sy = height * 0.5;
+
+    if (withEffect && enabled) {
+      const scalePreview = width / Math.max(320, Number(cfg.width || 1920));
+      const tx = Number(curSample.x_px || 0) * scalePreview * 1.45;
+      const ty = Number(curSample.y_px || 0) * scalePreview * 1.45;
+      const tiltRad = (Number(curSample.tilt_deg || 0) * Math.PI) / 180;
+      const zoom = Number(curSample.zoom || 1.0);
+      ctx.translate(cx + tx, cy + ty);
+      ctx.rotate(tiltRad);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-cx, -cy);
+    }
+
+    // Architectural studio test silhouette (horizon buildings + beacon)
+    const buildings = [
+      [0.08, 0.34, 0.11, 0.22],
+      [0.21, 0.24, 0.13, 0.32],
+      [0.37, 0.30, 0.10, 0.26],
+      [0.52, 0.20, 0.14, 0.36],
+      [0.69, 0.28, 0.11, 0.28],
+      [0.82, 0.35, 0.10, 0.21]
+    ];
+    for (const [bx, by, bw, bh] of buildings) {
+      ctx.fillStyle = "#1f2a3c";
+      ctx.fillRect(bx * width, by * height, bw * width, bh * height);
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.22)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx * width + 0.5, by * height + 0.5, bw * width - 1, bh * height - 1);
+    }
+
+    // Lens distortion calibration grid (warped when withEffect)
+    const cols = 10;
+    const rows = 6;
+    const drawGridPass = (color, offsetX, lineWidth) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      for (let c = 0; c <= cols; c += 1) {
+        ctx.beginPath();
+        const nx = (c / cols) * 2 - 1;
+        for (let step = 0; step <= 24; step += 1) {
+          const ny = (step / 24) * 2 - 1;
+          const [wx, wy] = withEffect && enabled ? _csWarpPoint(nx, ny, k1, k2) : [nx, ny];
+          const px = cx + wx * sx + offsetX;
+          const py = cy + wy * sy;
+          if (step === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+      for (let r = 0; r <= rows; r += 1) {
+        ctx.beginPath();
+        const ny = (r / rows) * 2 - 1;
+        for (let step = 0; step <= 24; step += 1) {
+          const nx = (step / 24) * 2 - 1;
+          const [wx, wy] = withEffect && enabled ? _csWarpPoint(nx, ny, k1, k2) : [nx, ny];
+          const px = cx + wx * sx + offsetX;
+          const py = cy + wy * sy;
+          if (step === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    };
+
+    if (withEffect && enabled && fringePx >= 0.4) {
+      const caShift = Math.min(6, fringePx * 0.55);
+      drawGridPass("rgba(248, 113, 113, 0.42)", caShift, 1.0);
+      drawGridPass("rgba(56, 189, 248, 0.42)", -caShift, 1.0);
+    }
+    drawGridPass(
+      withEffect && enabled ? "rgba(56, 189, 248, 0.52)" : "rgba(148, 163, 184, 0.30)",
+      0,
+      withEffect && enabled ? 1.15 : 0.9
+    );
+
+    // Center framing reticle
+    ctx.strokeStyle = withEffect && enabled ? "rgba(245, 158, 11, 0.85)" : "rgba(226, 232, 240, 0.45)";
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.min(width, height) * 0.14, 0, Math.PI * 2);
+    ctx.moveTo(cx - 18, cy);
+    ctx.lineTo(cx + 18, cy);
+    ctx.moveTo(cx, cy - 18);
+    ctx.lineTo(cx, cy + 18);
+    ctx.stroke();
+
+    ctx.restore();
+  };
+
+  if (compareSplit) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, splitX, height);
+    ctx.clip();
+    drawScene(false);
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(splitX, 0, width - splitX, height);
+    ctx.clip();
+    drawScene(true);
+    ctx.restore();
+  } else {
+    drawScene(true);
+  }
+
+  // Safe crop overscan guide rectangle
+  if (enabled && safeCropPct > 0.2) {
+    const padX = (width * safeCropPct) / 200;
+    const padY = (height * safeCropPct) / 200;
+    ctx.save();
+    ctx.strokeStyle = "rgba(52, 211, 153, 0.72)";
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.1;
+    ctx.strokeRect(padX + 0.5, padY + 0.5, Math.max(10, width - padX * 2 - 1), Math.max(10, height - padY * 2 - 1));
+    ctx.restore();
+  }
+
+  // Camera motion vector path overlay (centered)
+  if (enabled && samples.length > 1) {
+    const cx = width * 0.5;
+    const cy = height * 0.5;
+    const ampScale = Math.max(0.25, Math.min(1.6, 48 / Math.max(12, Number(cfg.amplitude_px || 18))));
+    ctx.save();
+    ctx.strokeStyle = "rgba(245, 158, 11, 0.72)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i < samples.length; i += 1) {
+      const px = cx + Number(samples[i].x_px || 0) * ampScale;
+      const py = cy + Number(samples[i].y_px || 0) * ampScale;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+
+    const curX = cx + Number(curSample.x_px || 0) * ampScale;
+    const curY = cy + Number(curSample.y_px || 0) * ampScale;
+    ctx.fillStyle = "#fbbf24";
+    ctx.strokeStyle = "#0b0e14";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(curX, curY, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Split wipe handle
+  if (compareSplit) {
+    ctx.save();
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(splitX + 0.5, 0);
+    ctx.lineTo(splitX + 0.5, height);
+    ctx.stroke();
+
+    ctx.fillStyle = "#f59e0b";
+    ctx.beginPath();
+    ctx.arc(splitX, height * 0.5, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#0b0e14";
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("<>", splitX, height * 0.5 + 0.5);
+    ctx.restore();
+  }
+
+  // Corner labels
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.textBaseline = "top";
+  if (compareSplit) {
+    ctx.fillStyle = "rgba(15, 23, 42, 0.75)";
+    ctx.fillRect(8, 8, 66, 17);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.textAlign = "left";
+    ctx.fillText("ORIGINAL", 13, 12);
+  }
+  const edgeTag = String(cfg.edge_mode || "reflect").toUpperCase();
+  const rightTag = enabled ? `SHAKE | ${edgeTag}` : "BYPASSED";
+  const tagW = Math.max(96, rightTag.length * 6.5 + 12);
+  ctx.fillStyle = "rgba(15, 23, 42, 0.78)";
+  ctx.fillRect(width - tagW - 8, 8, tagW, 17);
+  ctx.fillStyle = enabled ? "#fde68a" : "#94a3b8";
+  ctx.textAlign = "right";
+  ctx.fillText(rightTag, width - 13, 12);
+
+  const geom = { width, height, splitX, splitPos };
+  canvas._csPreviewGeom = geom;
+  return geom;
+}
+
+export function renderCameraShakeWaveformCanvas(canvas, config, evalResult, options = {}) {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+  const width = Math.max(240, Math.round((rect && rect.width > 0 ? rect.width : canvas.clientWidth) || 560));
+  const height = Math.max(120, Math.round((rect && rect.height > 0 ? rect.height : canvas.clientHeight) || 164));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const padL = 34;
+  const padR = 12;
+  const padT = 22;
+  const padB = 20;
+  const plotW = Math.max(80, width - padL - padR);
+  const plotH = Math.max(56, height - padT - padB);
+  const midY = padT + plotH * 0.5;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#0e1118";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#131722";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  // Graticule
+  ctx.strokeStyle = "#222736";
+  ctx.lineWidth = 1;
+  for (const frac of [0, 0.25, 0.5, 0.75, 1]) {
+    const y = Math.round(padT + frac * plotH) + 0.5;
+    ctx.strokeStyle = frac === 0.5 ? "#334155" : "#1f2433";
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + plotW, y);
+    ctx.stroke();
+  }
+  for (let i = 0; i <= 4; i += 1) {
+    const x = Math.round(padL + (i / 4) * plotW) + 0.5;
+    ctx.strokeStyle = "#1f2433";
+    ctx.beginPath();
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, padT + plotH);
+    ctx.stroke();
+  }
+
+  const samples = evalResult && Array.isArray(evalResult.motion_samples) ? evalResult.motion_samples : [];
+  const count = Math.max(2, samples.length);
+  const ampMax = Math.max(10, Number(config && config.amplitude_px ? config.amplitude_px : 18));
+  const tiltMax = Math.max(2, Number(config && config.tilt_deg ? config.tilt_deg : 2));
+
+  const drawCurve = (getter, maxVal, color, lineWidth) => {
+    if (samples.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    for (let i = 0; i < samples.length; i += 1) {
+      const x = padL + (i / (count - 1)) * plotW;
+      const norm = Math.max(-1, Math.min(1, getter(samples[i]) / maxVal));
+      const y = midY - norm * (plotH * 0.44);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  drawCurve((s) => Number(s.x_px || 0), ampMax, "#f59e0b", 1.85);
+  drawCurve((s) => Number(s.y_px || 0), ampMax, "#38bdf8", 1.55);
+  drawCurve((s) => Number(s.tilt_deg || 0), tiltMax, "#e879f9", 1.35);
+
+  // Active frame scrubber line
+  const activeFrame = Math.max(0, Math.min(count - 1, Number(options.activeFrame ?? 0)));
+  const playX = padL + (activeFrame / Math.max(1, count - 1)) * plotW;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(playX + 0.5, padT);
+  ctx.lineTo(playX + 0.5, padT + plotH);
+  ctx.stroke();
+  ctx.restore();
+
+  // Legend & axis labels
+  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillText("X (px)", padL, 11);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText("Y (px)", padL + 48, 11);
+  ctx.fillStyle = "#e879f9";
+  ctx.fillText("TILT (deg)", padL + 96, 11);
+
+  ctx.fillStyle = "#94a3b8";
+  ctx.textAlign = "right";
+  const peakVel = evalResult ? Number(evalResult.peak_velocity_px_s || 0).toFixed(0) : "0";
+  ctx.fillText(`PEAK ${peakVel} px/s`, padL + plotW, 11);
+
+  ctx.fillStyle = "#7a808e";
+  ctx.textAlign = "right";
+  ctx.fillText(`+${Math.round(ampMax)}`, padL - 4, padT + 6);
+  ctx.fillText("0", padL - 4, midY);
+  ctx.fillText(`-${Math.round(ampMax)}`, padL - 4, padT + plotH - 6);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const fIdx of [0, 16, 32, 48, 63]) {
+    const clampedF = Math.min(count - 1, fIdx);
+    const fx = padL + (clampedF / Math.max(1, count - 1)) * plotW;
+    ctx.fillText(`F${String(clampedF).padStart(2, "0")}`, fx, padT + plotH + 4);
+  }
+
+  const geom = { width, height, padL, padR, padT, padB, plotW, plotH, count };
+  canvas._csWaveformGeom = geom;
+  return geom;
+}

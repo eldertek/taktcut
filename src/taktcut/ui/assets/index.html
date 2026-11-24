@@ -1572,6 +1572,14 @@
                   <span data-i18n="ofStudio.btn.timeline">Lens Flare</span>
                   <span class="kbd-chip mono">Shift+U</span>
                 </button>
+                <button type="button" id="btn-timeline-camera-shake-studio" class="btn btn-mini tl-cs-studio-btn cs-studio-btn" title="Open Camera Shake, Handheld Motion &amp; Lens Distortion Studio (Shift+J)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <rect x="3" y="4" width="10" height="8" rx="1.2" stroke="#f59e0b" stroke-width="1.2" fill="none"/>
+                    <path d="M1.2 6.5 L2.5 5.2 M1.2 9.5 L2.5 10.8 M14.8 6.5 L13.5 5.2 M14.8 9.5 L13.5 10.8" stroke="#fcd34d" stroke-width="1.1"/>
+                  </svg>
+                  <span data-i18n="csStudio.entryBtn">Camera Shake</span>
+                  <span class="kbd-chip mono">Shift+J</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1804,6 +1812,10 @@
                 <button type="button" id="btn-fx-optical-flare-studio" class="btn btn-secondary of-studio-btn" title="Open Optical Glow, Halation &amp; Anamorphic Lens Flare Studio (Shift+U)">
                   <span data-i18n="ofStudio.btn.fx">Optical Flare</span>
                   <span class="kbd-chip mono">Shift+U</span>
+                </button>
+                <button type="button" id="btn-fx-camera-shake-studio" class="btn btn-secondary cs-studio-btn" title="Open Camera Shake, Handheld Motion &amp; Lens Distortion Studio (Shift+J)">
+                  <span data-i18n="csStudio.entryBtn">Camera Shake</span>
+                  <span class="kbd-chip mono">Shift+J</span>
                 </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
@@ -2639,6 +2651,7 @@
                 <span id="color-fl-badge" class="nle-tag mono" aria-live="polite">FILM OFF</span>
                 <span class="broadcast-quick-sep" aria-hidden="true"></span>
                 <button type="button" id="btn-color-optical-flare-studio" class="btn btn-chip of-studio-btn" data-i18n="ofStudio.btn.color" title="Open Optical Glow, Halation &amp; Anamorphic Lens Flare Studio (Shift+U)">Optical Flare</button>
+                <button type="button" id="btn-color-camera-shake-studio" class="btn btn-chip cs-studio-btn" data-i18n="csStudio.entryBtn" title="Open Camera Shake, Handheld Motion &amp; Lens Distortion Studio (Shift+J)">Camera Shake</button>
                 <span id="color-of-badge" class="nle-tag mono" aria-live="polite">FLARE OFF</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
@@ -6459,6 +6472,196 @@
         <div class="fg-drawer-body">
           <pre id="of-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="of-json-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="camera-shake-studio-dialog" class="nle-dialog cs-studio-dialog" aria-labelledby="camera-shake-studio-title">
+    <div class="nle-pane-header">
+      <div class="cs-header-left">
+        <span class="nle-pane-title" id="camera-shake-studio-title" data-i18n="csStudio.title">Camera Shake, Handheld Motion &amp; Lens Distortion Studio</span>
+        <span class="cs-subtitle mono" data-i18n="csStudio.subtitle">Sapphire S_Shake / ResolveFX Camera Shake &amp; Lens Distortion</span>
+      </div>
+      <div class="cs-header-actions">
+        <span class="kbd-chip mono">Shift+J</span>
+        <button type="button" id="btn-close-camera-shake-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+    <div class="cs-dialog-body">
+      <div class="cs-topbar">
+        <div class="cs-field-inline">
+          <label for="cs-preset-select" data-i18n="csStudio.preset">Motion Preset</label>
+          <select id="cs-preset-select" class="input-control">
+            <option value="handheld_docu" data-i18n="csStudio.preset.handheld_docu">Handheld Documentary</option>
+            <option value="action_impact_punch" data-i18n="csStudio.preset.action_impact_punch">Action Impact Punch</option>
+            <option value="earthquake_rumble" data-i18n="csStudio.preset.earthquake_rumble">Earthquake Rumble</option>
+            <option value="anamorphic_barrel_warp" data-i18n="csStudio.preset.anamorphic_barrel_warp">Anamorphic Barrel Warp</option>
+            <option value="subtle_breathing_tripod" data-i18n="csStudio.preset.subtle_breathing_tripod">Subtle Breathing Tripod</option>
+            <option value="custom" data-i18n="csStudio.preset.custom">Custom Camera Rig</option>
+          </select>
+        </div>
+        <div class="cs-field-inline">
+          <label for="cs-edge-mode-select" data-i18n="csStudio.edgeMode">Edge Mode</label>
+          <select id="cs-edge-mode-select" class="input-control">
+            <option value="reflect" data-i18n="csStudio.edge.reflect">Reflect</option>
+            <option value="crop_zoom" data-i18n="csStudio.edge.crop_zoom">Crop Zoom</option>
+            <option value="wrap" data-i18n="csStudio.edge.wrap">Wrap</option>
+          </select>
+        </div>
+        <div class="cs-toggle-group">
+          <label class="cs-check-label">
+            <input type="checkbox" id="cs-enabled-toggle" checked>
+            <span data-i18n="csStudio.enable">Enable Shake</span>
+          </label>
+          <label class="cs-check-label">
+            <input type="checkbox" id="cs-compare-split-toggle" checked>
+            <span data-i18n="csStudio.compareSplit">Split A/B</span>
+          </label>
+          <button type="button" id="btn-cs-play-toggle" class="btn btn-mini" aria-pressed="false" data-i18n="csStudio.playPreview">Animate</button>
+          <button type="button" id="btn-cs-reset" class="btn btn-mini" data-i18n="csStudio.reset">Reset</button>
+        </div>
+      </div>
+
+      <div class="cs-main-grid">
+        <div class="cs-viewport-col">
+          <div class="cs-canvas-box">
+            <div class="cs-canvas-head">
+              <span class="cs-canvas-title" data-i18n="csStudio.monitorTitle">Before / After Lens Warp &amp; Motion Vector Monitor</span>
+              <span id="cs-monitor-readout" class="cs-canvas-badge mono">F00 | +0.0px, +0.0px | 0.00 deg</span>
+            </div>
+            <canvas id="cs-preview-canvas" width="640" height="360" aria-label="Before and after camera shake and lens distortion monitor"></canvas>
+          </div>
+          <div class="cs-canvas-box">
+            <div class="cs-canvas-head">
+              <span class="cs-canvas-title" data-i18n="csStudio.waveformTitle">64-Frame Procedural X / Y / Tilt Oscillation Curve</span>
+              <span id="cs-waveform-readout" class="cs-canvas-badge mono">64F | 1.8 Hz | 4 oct</span>
+            </div>
+            <canvas id="cs-waveform-canvas" width="640" height="170" aria-label="64-frame X, Y, and Tilt procedural oscillation waveform"></canvas>
+          </div>
+        </div>
+
+        <div class="cs-inspector-col">
+          <div class="cs-tabs" role="tablist" aria-label="Camera Shake parameters">
+            <button type="button" id="btn-cs-tab-motion" class="cs-tab-btn is-active" role="tab" aria-selected="true" aria-controls="cs-panel-motion" data-i18n="csStudio.tab.motion">Shake Motion</button>
+            <button type="button" id="btn-cs-tab-optics" class="cs-tab-btn" role="tab" aria-selected="false" aria-controls="cs-panel-optics" data-i18n="csStudio.tab.optics">Lens &amp; Optics</button>
+          </div>
+
+          <div id="cs-panel-motion" class="cs-tab-panel" role="tabpanel" aria-labelledby="btn-cs-tab-motion">
+            <div class="cs-param-field">
+              <label for="cs-amplitude-num" data-i18n="csStudio.param.amplitude">Amplitude (px, 0..120)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-amplitude" min="0" max="120" step="0.5" value="18" aria-label="Shake amplitude slider">
+                <input type="number" id="cs-amplitude-num" class="input-control input-num mono" min="0" max="120" step="0.5" value="18">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-frequency-num" data-i18n="csStudio.param.frequency">Frequency (Hz, 0.1..20)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-frequency" min="0.1" max="20" step="0.05" value="1.8" aria-label="Shake frequency slider">
+                <input type="number" id="cs-frequency-num" class="input-control input-num mono" min="0.1" max="20" step="0.05" value="1.8">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-z-zoom-num" data-i18n="csStudio.param.zZoom">Z-Zoom Punch (%, 0..25)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-z-zoom" min="0" max="25" step="0.1" value="3.5" aria-label="Z-zoom slider">
+                <input type="number" id="cs-z-zoom-num" class="input-control input-num mono" min="0" max="25" step="0.1" value="3.5">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-tilt-num" data-i18n="csStudio.param.tilt">Roll / Tilt (deg, 0..15)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-tilt" min="0" max="15" step="0.1" value="1.8" aria-label="Tilt angle slider">
+                <input type="number" id="cs-tilt-num" class="input-control input-num mono" min="0" max="15" step="0.1" value="1.8">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-octaves-num" data-i18n="csStudio.param.octaves">Noise Octaves (1..6)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-octaves" min="1" max="6" step="1" value="4" aria-label="Noise octaves slider">
+                <input type="number" id="cs-octaves-num" class="input-control input-num mono" min="1" max="6" step="1" value="4">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-seed-num" data-i18n="csStudio.param.seed">Deterministic Seed (0..99999)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-seed" min="0" max="99999" step="1" value="1042" aria-label="Seed slider">
+                <input type="number" id="cs-seed-num" class="input-control input-num mono" min="0" max="99999" step="1" value="1042">
+              </div>
+            </div>
+          </div>
+
+          <div id="cs-panel-optics" class="cs-tab-panel" role="tabpanel" aria-labelledby="btn-cs-tab-optics" hidden>
+            <div class="cs-param-field">
+              <label for="cs-lens-k1-num" data-i18n="csStudio.param.lensK1">Radial Distortion k1 (-0.5..+0.5)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-lens-k1" min="-0.5" max="0.5" step="0.01" value="0" aria-label="Lens k1 slider">
+                <input type="number" id="cs-lens-k1-num" class="input-control input-num mono" min="-0.5" max="0.5" step="0.01" value="0">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-lens-k2-num" data-i18n="csStudio.param.lensK2">Radial Distortion k2 (-0.25..+0.25)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-lens-k2" min="-0.25" max="0.25" step="0.01" value="0" aria-label="Lens k2 slider">
+                <input type="number" id="cs-lens-k2-num" class="input-control input-num mono" min="-0.25" max="0.25" step="0.01" value="0">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-fringe-num" data-i18n="csStudio.param.fringe">Chromatic Fringe (px, 0..10)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-fringe" min="0" max="10" step="0.1" value="0.6" aria-label="Chromatic fringe slider">
+                <input type="number" id="cs-fringe-num" class="input-control input-num mono" min="0" max="10" step="0.1" value="0.6">
+              </div>
+            </div>
+            <div class="cs-param-field">
+              <label for="cs-shutter-num" data-i18n="csStudio.param.shutter">Motion Blur Shutter (deg, 0..360)</label>
+              <div class="cs-range-pair">
+                <input type="range" id="cs-shutter" min="0" max="360" step="1" value="180" aria-label="Motion blur shutter slider">
+                <input type="number" id="cs-shutter-num" class="input-control input-num mono" min="0" max="360" step="1" value="180">
+              </div>
+            </div>
+          </div>
+
+          <div class="cs-metrics-grid">
+            <div class="cs-metric-card">
+              <span class="cs-metric-k" data-i18n="csStudio.metric.peakVel">Peak Velocity</span>
+              <span id="cs-metric-peak-vel" class="cs-metric-v mono">0.0 px/s</span>
+            </div>
+            <div class="cs-metric-card">
+              <span class="cs-metric-k" data-i18n="csStudio.metric.safeCrop">Safe Crop</span>
+              <span id="cs-metric-safe-crop" class="cs-metric-v mono">0.0%</span>
+            </div>
+            <div class="cs-metric-card">
+              <span class="cs-metric-k" data-i18n="csStudio.metric.cornerWarp">Corner Warp</span>
+              <span id="cs-metric-corner-warp" class="cs-metric-v mono">0.0%</span>
+            </div>
+            <div class="cs-metric-card">
+              <span class="cs-metric-k" data-i18n="csStudio.metric.rmsDisp">RMS Shake</span>
+              <span id="cs-metric-rms-disp" class="cs-metric-v mono">0.0 px</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="cs-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="csStudio.status.idle">Drag the split wipe handle on the monitor, scrub the 64-frame curve, or switch camera presets.</div>
+
+      <div class="btn-row cs-actions">
+        <button type="button" id="btn-cs-apply-timeline" class="btn btn-primary" data-i18n="csStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-cs-send-deliver" class="btn btn-secondary" data-i18n="csStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-cs-export-json" class="btn btn-secondary" data-i18n="csStudio.btn.exportJson">Export JSON</button>
+        <button type="button" id="btn-cs-download-json" class="btn btn-secondary" data-i18n="csStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-cs-copy-fg" class="btn btn-mini" data-i18n="csStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="cs-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="csStudio.drawerTitle">FFmpeg Camera Shake &amp; Lens Distortion Filtergraph (lenscorrection / scale / crop / rotate / tmix / rgbashift) &amp; JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="cs-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="cs-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

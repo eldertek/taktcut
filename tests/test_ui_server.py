@@ -15877,3 +15877,264 @@ def test_ui_playwright_optical_flare_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_camera_shake_studio_rest_endpoints_and_static_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    url, workspace = ui_server
+
+    # 1. GET /api/fx/camera-shake/presets
+    status_p, _, raw_p = _http_call(f"{url}/api/fx/camera-shake/presets")
+    assert status_p == 200
+    presets_data = json.loads(raw_p.decode("utf-8"))
+    assert len(presets_data["presets"]) == 6
+    assert set(presets_data["preset_ids"]) == {
+        "handheld_docu",
+        "action_impact_punch",
+        "earthquake_rumble",
+        "anamorphic_barrel_warp",
+        "subtle_breathing_tripod",
+        "custom",
+    }
+    assert presets_data["edge_modes"] == ["reflect", "crop_zoom", "wrap"]
+
+    cfg_payload = {
+        "preset": "anamorphic_barrel_warp",
+        "amplitude_px": 32.0,
+        "frequency_hz": 4.2,
+        "z_zoom_pct": 6.0,
+        "tilt_deg": 3.5,
+        "octaves": 4,
+        "motion_blur_shutter_deg": 240.0,
+        "edge_mode": "crop_zoom",
+        "lens_k1": -0.26,
+        "lens_k2": -0.08,
+        "chromatic_fringe_px": 3.5,
+        "seed": 2026,
+    }
+
+    # 2. POST /api/fx/camera-shake/evaluate
+    status_e, _, raw_e = _http_call(
+        f"{url}/api/fx/camera-shake/evaluate",
+        method="POST",
+        payload={"config": cfg_payload, "frame_count": 64},
+    )
+    assert status_e == 200
+    eval_data = json.loads(raw_e.decode("utf-8"))
+    assert eval_data["frame_count"] == 64
+    assert len(eval_data["motion_samples"]) == 64
+    assert eval_data["peak_velocity_px_s"] > 0.0
+    assert eval_data["required_safe_crop_pct"] > 0.0
+    assert eval_data["radial_distortion_corner_shift_pct"] < -20.0
+
+    # 3. POST /api/fx/camera-shake/compile
+    status_c, _, raw_c = _http_call(
+        f"{url}/api/fx/camera-shake/compile",
+        method="POST",
+        payload={"config": cfg_payload},
+    )
+    assert status_c == 200
+    comp_data = json.loads(raw_c.decode("utf-8"))
+    assert "lenscorrection=" in comp_data["lens_vf"]
+    assert "crop=" in comp_data["shake_vf"]
+    assert "tmix=" in comp_data["motion_blur_vf"]
+    assert "rgbashift=" in comp_data["aberration_vf"]
+
+    # 4. POST /api/fx/camera-shake/export-json (with workspace-confined out_path)
+    status_x, _, raw_x = _http_call(
+        f"{url}/api/fx/camera-shake/export-json",
+        method="POST",
+        payload={
+            "config": cfg_payload,
+            "title": "Rig Test",
+            "out_path": "exports/camera_shake_test.json",
+        },
+    )
+    assert status_x == 200
+    exp_data = json.loads(raw_x.decode("utf-8"))
+    assert exp_data["schema_version"] == "taktcut.camera_shake_studio.v1"
+    assert exp_data["saved_path"] == "exports/camera_shake_test.json"
+    assert (workspace / "exports" / "camera_shake_test.json").is_file()
+
+    # Path traversal blocked
+    status_bad, _, _ = _http_call(
+        f"{url}/api/fx/camera-shake/export-json",
+        method="POST",
+        payload={"config": cfg_payload, "out_path": "../escape.json"},
+    )
+    assert status_bad in (400, 403)
+
+    # 5. POST /api/fx/camera-shake/download
+    status_d, headers_d, raw_d = _http_call(
+        f"{url}/api/fx/camera-shake/download",
+        method="POST",
+        payload={"config": cfg_payload, "filename": "../../bad name!.json"},
+    )
+    assert status_d == 200
+    cd_header = headers_d.get("content-disposition", "")
+    assert "attachment;" in cd_header
+    assert ".." not in cd_header
+    dl_parsed = json.loads(raw_d.decode("utf-8"))
+    assert dl_parsed["schema_version"] == "taktcut.camera_shake_studio.v1"
+
+    # 6. POST /api/fx/camera-shake/apply
+    sample_status, _, sample_raw = _http_call(f"{url}/api/sample")
+    assert sample_status == 200
+    sample_doc = json.loads(sample_raw.decode("utf-8"))["document"]
+    status_a, _, raw_a = _http_call(
+        f"{url}/api/fx/camera-shake/apply",
+        method="POST",
+        payload={
+            "document": sample_doc,
+            "config": cfg_payload,
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert status_a == 200
+    apply_data = json.loads(raw_a.decode("utf-8"))
+    assert apply_data["changed"] is True
+    assert apply_data["validation"]["valid"] is True
+    v1 = next(t for t in apply_data["document"]["tracks"] if t["kind"] == "video")
+    assert v1["clips"][0]["camera_shake"]["preset"] == "anamorphic_barrel_warp"
+    assert v1["clips"][0]["camera_shake"]["lens_k1"] == pytest.approx(-0.26)
+
+    # 7. Node.js static-demo parity check
+    node_bin = shutil.which("node")
+    assert node_bin is not None
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    exp_vel = eval_data["peak_velocity_px_s"]
+    exp_warp = eval_data["radial_distortion_corner_shift_pct"]
+    sample_doc_json = json.dumps(sample_doc)
+    js_script = f"""
+import assert from 'node:assert/strict';
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: 'static-demo' }} }};
+const mod = await import({json.dumps(demo_uri)});
+const client = mod.createApiClient({{ mode: 'static-demo' }});
+const presets = await client.getCameraShakePresets();
+assert.equal(presets.presets.length, 6);
+const cfg = {json.dumps(cfg_payload)};
+const ev = await client.evaluateCameraShake({{ config: cfg, frame_count: 64 }});
+assert.equal(ev.frame_count, 64);
+assert.equal(ev.motion_samples.length, 64);
+assert.ok(Math.abs(ev.peak_velocity_px_s - {exp_vel}) < 0.2);
+assert.ok(Math.abs(ev.radial_distortion_corner_shift_pct - {exp_warp}) < 0.05);
+const comp = await client.compileCameraShake({{ config: cfg }});
+assert.ok(comp.lens_vf.includes('lenscorrection='));
+assert.ok(comp.shake_vf.includes('crop='));
+const exp = await client.exportCameraShakeJson({{ config: cfg, title: 'DemoRig' }});
+assert.equal(exp.schema_version, 'taktcut.camera_shake_studio.v1');
+const applied = await client.applyCameraShake({{
+  document: {sample_doc_json},
+  config: cfg,
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(applied.changed, true);
+assert.equal(applied.validation.valid, true);
+console.log('CAMERA_SHAKE_STATIC_DEMO_OK');
+"""
+    proc = subprocess.run(
+        [node_bin, "--input-type=module", "-e", js_script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node parity failed: {proc.stderr}\n{proc.stdout}"
+    assert "CAMERA_SHAKE_STATIC_DEMO_OK" in proc.stdout
+
+
+def test_camera_shake_studio_playwright_e2e_responsive(
+    ui_server: tuple[str, Path],
+) -> None:
+    pw_api = pytest.importorskip("playwright.sync_api")
+    url, _ = ui_server
+    with pw_api.sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            page.on("pageerror", lambda exc: console_errors.append(str(exc)))
+            page.goto(url, wait_until="networkidle")
+
+            # Open via Shift+J shortcut
+            page.keyboard.press("Shift+J")
+            page.wait_for_selector("#camera-shake-studio-dialog[open]")
+
+            # Switch preset to anamorphic_barrel_warp and verify corner warp metric updates
+            page.select_option("#cs-preset-select", "anamorphic_barrel_warp")
+            page.wait_for_function(
+                "() => (document.getElementById('cs-metric-corner-warp')?.textContent || '')"
+                ".includes('-37.0%')"
+            )
+
+            # Switch to Lens & Optics tab and verify k1 slider visible
+            page.click("#btn-cs-tab-optics")
+            assert page.locator("#btn-cs-tab-optics").get_attribute("aria-selected") == "true"
+            assert page.locator("#cs-lens-k1-num").is_visible()
+
+            # Verify both canvases painted live non-empty pixels
+            for canvas_id in ("cs-preview-canvas", "cs-waveform-canvas"):
+                lit = page.evaluate(
+                    f"""() => {{
+                        const c = document.getElementById('{canvas_id}');
+                        const ctx = c.getContext('2d');
+                        const d = ctx.getImageData(0, 0, c.width, c.height).data;
+                        let count = 0;
+                        for (let i = 0; i < d.length; i += 16) {{
+                            if (d[i] + d[i+1] + d[i+2] > 70) count++;
+                        }}
+                        return count;
+                    }}"""
+                )
+                assert lit > 50, f"Canvas {canvas_id} appears blank ({lit} lit samples)"
+
+            # Apply to Timeline non-destructively
+            page.click("#btn-cs-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('cs-status-note')?.textContent || '')"
+                ".includes('applied non-destructively')"
+            )
+
+            # Verify desktop zero horizontal overflow
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Verify mobile 375x812 zero horizontal overflow and >=44px touch targets
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            for btn_id in (
+                "btn-close-camera-shake-studio",
+                "btn-cs-tab-motion",
+                "btn-cs-tab-optics",
+                "btn-cs-apply-timeline",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+            # Close via Escape
+            page.keyboard.press("Escape")
+            page.wait_for_function(
+                "() => !document.getElementById('camera-shake-studio-dialog').open"
+            )
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

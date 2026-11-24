@@ -1535,6 +1535,37 @@ class ClipOpticalFlareTrack(BaseModel):
     ffmpeg_vf: str = Field(default="", max_length=16384)
 
 
+class ClipCameraShakeTrack(BaseModel):
+    """Non-destructive Camera Shake, Handheld Motion & Lens Distortion track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    preset: Literal[
+        "handheld_docu",
+        "action_impact_punch",
+        "earthquake_rumble",
+        "anamorphic_barrel_warp",
+        "subtle_breathing_tripod",
+        "custom",
+    ] = "handheld_docu"
+    amplitude_px: float = Field(default=18.0, ge=0.0, le=120.0)
+    frequency_hz: float = Field(default=1.8, ge=0.1, le=20.0)
+    z_zoom_pct: float = Field(default=3.5, ge=0.0, le=25.0)
+    tilt_deg: float = Field(default=1.8, ge=0.0, le=15.0)
+    octaves: int = Field(default=4, ge=1, le=6)
+    motion_blur_shutter_deg: float = Field(default=180.0, ge=0.0, le=360.0)
+    edge_mode: Literal["reflect", "crop_zoom", "wrap"] = "reflect"
+    lens_k1: float = Field(default=0.0, ge=-0.5, le=0.5)
+    lens_k2: float = Field(default=0.0, ge=-0.25, le=0.25)
+    chromatic_fringe_px: float = Field(default=0.6, ge=0.0, le=10.0)
+    seed: int = Field(default=1042, ge=0, le=99999)
+    peak_velocity_px_s: float = Field(default=0.0, ge=0.0, le=100000.0)
+    required_safe_crop_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    radial_distortion_corner_shift_pct: float = Field(default=0.0, ge=-100.0, le=100.0)
+    ffmpeg_vf: str = Field(default="", max_length=16384)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1569,6 +1600,7 @@ class TimelineClip(BaseModel):
     stabilization_studio: ClipStabilizationStudioTrack | None = None
     film_look: ClipFilmLookTrack | None = None
     optical_flare: ClipOpticalFlareTrack | None = None
+    camera_shake: ClipCameraShakeTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

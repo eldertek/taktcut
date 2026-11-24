@@ -17,6 +17,8 @@ import {
   drawFilmLookPreviewCanvas,
   drawOpticalFlareFalloffCanvas,
   drawOpticalFlarePreviewCanvas,
+  renderCameraShakePreviewCanvas,
+  renderCameraShakeWaveformCanvas,
   drawFramesCanvas,
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
@@ -212,6 +214,7 @@ import {
   compileCstFiltergraphClient,
   compileFilmLookFiltergraphClient,
   compileOpticalFlareFiltergraphClient,
+  compileCameraShakeFiltergraphClient,
   compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
@@ -250,6 +253,7 @@ import {
   createDefaultCstConfigClient,
   createDefaultFilmLookConfigClient,
   createDefaultOpticalFlareConfigClient,
+  createDefaultCameraShakeConfigClient,
   createDefaultHslCurves,
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
@@ -277,6 +281,8 @@ import {
   evaluateFilmLookStudioClient,
   evaluateMotionSplineStudioClient,
   evaluateOpticalFlareStudioClient,
+  evaluateCameraShakeStudioClient,
+  CAMERA_SHAKE_CURVE_FRAMES,
   evaluatePowerWindowMask,
   evaluatePowerWindowSamplesClient,
   evaluateRetimeSpeedAt,
@@ -291,6 +297,7 @@ import {
   exportMotionSplineJsonClient,
   exportMulticamEdlClient,
   exportOpticalFlareJsonClient,
+  exportCameraShakeJsonClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
   exportRetimeStudioJsonClient,
@@ -299,10 +306,12 @@ import {
   filterMediaPoolEntries,
   interpolatePowerWindowAtTimeClient,
   listOpticalFlarePresetsClient,
+  listCameraShakePresetsClient,
   normalizeFilmLookConfigClient,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   normalizeOpticalFlareConfigClient,
+  normalizeCameraShakeConfigClient,
   normalizeOpticalGlowConfigClient,
   normalizePowerWindowConfigClient,
   normalizeRetimeStudioConfigClient,
@@ -826,6 +835,20 @@ const state = {
     exportedJson: null,
     lastGeom: null,
     dragState: null,
+    syncSeq: 0
+  },
+  csStudio: {
+    isOpen: false,
+    activeTab: "motion",
+    config: createDefaultCameraShakeConfigClient(),
+    evalResult: null,
+    compiled: null,
+    exportedJson: null,
+    activeFrame: 0,
+    isPlaying: false,
+    rafId: null,
+    lastRafTs: 0,
+    dragMode: null,
     syncSeq: 0
   },
   autoReframeStudio: {
@@ -13355,6 +13378,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+X", descKey: "shortcuts.key.stabilizationStudio" },
       { kbd: "Shift+N", descKey: "shortcuts.key.filmLookStudio" },
       { kbd: "Shift+U", descKey: "shortcuts.key.opticalFlareStudio" },
+      { kbd: "Shift+J", descKey: "shortcuts.key.cameraShakeStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13499,6 +13523,15 @@ function handleTransportKeydown(ev) {
     if (ev.key === "Escape") {
       ev.preventDefault();
       closeOpticalFlareStudioDialog();
+    }
+    return;
+  }
+
+  const csStudioDlg = byId("camera-shake-studio-dialog");
+  if (csStudioDlg && csStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeCameraShakeStudioDialog();
     }
     return;
   }
@@ -13714,6 +13747,11 @@ function handleTransportKeydown(ev) {
     if (lower === "u") {
       ev.preventDefault();
       openOpticalFlareStudioDialog();
+      return;
+    }
+    if (lower === "j") {
+      ev.preventDefault();
+      openCameraShakeStudioDialog();
       return;
     }
   }
@@ -20403,6 +20441,7 @@ function wireEvents() {
   wireStabilizationStudioEvents();
   wireFilmLookStudioEvents();
   wireOpticalFlareStudioEvents();
+  wireCameraShakeStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -30247,4 +30286,561 @@ function wireOpticalFlareStudioEvents() {
     }
     setOpticalFlareStatus("Copied FFmpeg optical flare filtergraph to clipboard.");
   });
+}
+
+
+// =========================================================================
+// CYCLE #114: CAMERA SHAKE, HANDHELD MOTION & LENS DISTORTION STUDIO
+// =========================================================================
+
+function setCameraShakeStatus(text) {
+  const el = byId("cs-status-note");
+  if (el) el.textContent = String(text || "");
+}
+
+function setCameraShakeInspectorTab(tabId) {
+  const valid = tabId === "optics" ? "optics" : "motion";
+  state.csStudio.activeTab = valid;
+  const tabs = [
+    ["motion", "btn-cs-tab-motion", "cs-panel-motion"],
+    ["optics", "btn-cs-tab-optics", "cs-panel-optics"]
+  ];
+  for (const [id, btnId, panelId] of tabs) {
+    const active = id === valid;
+    const btn = byId(btnId);
+    const panel = byId(panelId);
+    if (btn) {
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+    }
+    if (panel) {
+      panel.hidden = !active;
+    }
+  }
+}
+
+function stopCameraShakePlayback() {
+  const st = state.csStudio;
+  st.isPlaying = false;
+  if (st.rafId !== null) {
+    cancelAnimationFrame(st.rafId);
+    st.rafId = null;
+  }
+  const btn = byId("btn-cs-play-toggle");
+  if (btn) {
+    btn.setAttribute("aria-pressed", "false");
+    btn.textContent = t("csStudio.playPreview");
+  }
+}
+
+function startCameraShakePlayback() {
+  const st = state.csStudio;
+  if (st.isPlaying) return;
+  st.isPlaying = true;
+  st.lastRafTs = performance.now();
+  const btn = byId("btn-cs-play-toggle");
+  if (btn) {
+    btn.setAttribute("aria-pressed", "true");
+    btn.textContent = t("csStudio.pausePreview");
+  }
+  const step = (ts) => {
+    if (!st.isPlaying || !st.isOpen) {
+      st.rafId = null;
+      return;
+    }
+    const fps = Math.max(12, Math.min(60, Number(st.config.fps || 24)));
+    const elapsed = ts - st.lastRafTs;
+    if (elapsed >= 1000 / fps) {
+      st.lastRafTs = ts;
+      const total =
+        st.evalResult && Array.isArray(st.evalResult.motion_samples) && st.evalResult.motion_samples.length > 0
+          ? st.evalResult.motion_samples.length
+          : CAMERA_SHAKE_CURVE_FRAMES;
+      st.activeFrame = (st.activeFrame + 1) % total;
+      renderCameraShakeCanvases();
+    }
+    st.rafId = requestAnimationFrame(step);
+  };
+  st.rafId = requestAnimationFrame(step);
+}
+
+function refreshCameraShakeLocalDerived() {
+  const st = state.csStudio;
+  st.config = normalizeCameraShakeConfigClient(st.config);
+  st.evalResult = evaluateCameraShakeStudioClient(st.config, {
+    frame_count: CAMERA_SHAKE_CURVE_FRAMES
+  });
+  st.compiled = compileCameraShakeFiltergraphClient(st.config);
+}
+
+function renderCameraShakeCanvases() {
+  const st = state.csStudio;
+  const cfg = st.config;
+  const ev = st.evalResult;
+  const samples = ev && Array.isArray(ev.motion_samples) ? ev.motion_samples : [];
+  const fIdx = Math.max(0, Math.min(Math.max(0, samples.length - 1), st.activeFrame));
+  const cur = samples[fIdx] || { frame: 0, x_px: 0, y_px: 0, tilt_deg: 0, zoom: 1.0 };
+
+  const monBadge = byId("cs-monitor-readout");
+  if (monBadge) {
+    const xSign = cur.x_px >= 0 ? "+" : "";
+    const ySign = cur.y_px >= 0 ? "+" : "";
+    monBadge.textContent = `F${String(fIdx).padStart(2, "0")} | ${xSign}${Number(cur.x_px || 0).toFixed(1)}px, ${ySign}${Number(cur.y_px || 0).toFixed(1)}px | ${Number(cur.tilt_deg || 0).toFixed(2)} deg`;
+  }
+  const wfBadge = byId("cs-waveform-readout");
+  if (wfBadge) {
+    wfBadge.textContent = `${samples.length || 64}F | ${Number(cfg.frequency_hz || 1.8).toFixed(2)} Hz | ${cfg.octaves} oct`;
+  }
+
+  renderCameraShakePreviewCanvas(byId("cs-preview-canvas"), cfg, ev, { activeFrame: fIdx });
+  renderCameraShakeWaveformCanvas(byId("cs-waveform-canvas"), cfg, ev, { activeFrame: fIdx });
+}
+
+function syncCameraShakeStudioUI(opts = {}) {
+  const st = state.csStudio;
+  if (!st.evalResult || !st.compiled) {
+    refreshCameraShakeLocalDerived();
+  }
+  const cfg = st.config;
+  const ev = st.evalResult;
+  const comp = st.compiled;
+  const skipFocused = opts.skipFocusedNum === true;
+  const activeEl = document.activeElement;
+
+  const setVal = (id, val) => {
+    const el = byId(id);
+    if (!el) return;
+    if (skipFocused && el === activeEl && el.type === "number") return;
+    el.value = String(val);
+  };
+
+  setVal("cs-preset-select", cfg.preset);
+  setVal("cs-edge-mode-select", cfg.edge_mode);
+
+  const enEl = byId("cs-enabled-toggle");
+  if (enEl) enEl.checked = Boolean(cfg.enabled);
+  const splitEl = byId("cs-compare-split-toggle");
+  if (splitEl) splitEl.checked = Boolean(cfg.compare_split);
+
+  const pairs = [
+    ["cs-amplitude", "cs-amplitude-num", cfg.amplitude_px],
+    ["cs-frequency", "cs-frequency-num", cfg.frequency_hz],
+    ["cs-z-zoom", "cs-z-zoom-num", cfg.z_zoom_pct],
+    ["cs-tilt", "cs-tilt-num", cfg.tilt_deg],
+    ["cs-octaves", "cs-octaves-num", cfg.octaves],
+    ["cs-seed", "cs-seed-num", cfg.seed],
+    ["cs-lens-k1", "cs-lens-k1-num", cfg.lens_k1],
+    ["cs-lens-k2", "cs-lens-k2-num", cfg.lens_k2],
+    ["cs-fringe", "cs-fringe-num", cfg.chromatic_fringe_px],
+    ["cs-shutter", "cs-shutter-num", cfg.motion_blur_shutter_deg]
+  ];
+  for (const [rId, nId, val] of pairs) {
+    setVal(rId, val);
+    setVal(nId, val);
+  }
+
+  const mPeak = byId("cs-metric-peak-vel");
+  if (mPeak) mPeak.textContent = `${Number(ev.peak_velocity_px_s || 0).toFixed(1)} px/s`;
+  const mCrop = byId("cs-metric-safe-crop");
+  if (mCrop) mCrop.textContent = `${Number(ev.required_safe_crop_pct || 0).toFixed(1)}%`;
+  const mWarp = byId("cs-metric-corner-warp");
+  if (mWarp) {
+    const wv = Number(ev.radial_distortion_corner_shift_pct || 0);
+    mWarp.textContent = `${wv >= 0 ? "+" : ""}${wv.toFixed(1)}%`;
+  }
+  const mRms = byId("cs-metric-rms-disp");
+  if (mRms) mRms.textContent = `${Number(ev.rms_displacement_px || 0).toFixed(1)} px`;
+
+  const fgEl = byId("cs-fg-output");
+  if (fgEl) {
+    const warnLine =
+      comp.warnings && comp.warnings.length > 0 ? `\n\n# Warnings:\n- ${comp.warnings.join("\n- ")}` : "";
+    fgEl.textContent = `${comp.ffmpeg_command}\n\n# Filter Complex:\n${comp.filter_complex}${warnLine}`;
+  }
+
+  const jsonEl = byId("cs-json-preview");
+  if (jsonEl) {
+    jsonEl.textContent = st.exportedJson
+      ? st.exportedJson.json_text
+      : exportCameraShakeJsonClient(cfg).json_text;
+  }
+
+  renderCameraShakeCanvases();
+}
+
+async function scheduleCameraShakeServerSync(opts = {}) {
+  refreshCameraShakeLocalDerived();
+  syncCameraShakeStudioUI(opts);
+  const seq = ++state.csStudio.syncSeq;
+  try {
+    const [ev, comp] = await Promise.all([
+      api.evaluateCameraShake({
+        config: state.csStudio.config,
+        frame_count: CAMERA_SHAKE_CURVE_FRAMES
+      }),
+      api.compileCameraShake({ config: state.csStudio.config })
+    ]);
+    if (seq !== state.csStudio.syncSeq) return;
+    state.csStudio.evalResult = ev;
+    state.csStudio.compiled = comp;
+    syncCameraShakeStudioUI(opts);
+  } catch (err) {
+    setCameraShakeStatus(`Sync error: ${err.message || err}`);
+  }
+}
+
+function applyCameraShakePresetSelection(presetId) {
+  const presets = listCameraShakePresetsClient();
+  const found = presets.find((p) => p.preset === presetId);
+  if (!found) return;
+  const cur = state.csStudio.config;
+  state.csStudio.config = normalizeCameraShakeConfigClient({
+    ...found.default_config,
+    compare_split: cur.compare_split,
+    split_position: cur.split_position,
+    width: cur.width,
+    height: cur.height,
+    fps: cur.fps
+  });
+  state.csStudio.exportedJson = null;
+  setCameraShakeStatus(`Preset "${found.label}" loaded.`);
+  scheduleCameraShakeServerSync();
+}
+
+function openCameraShakeStudioDialog() {
+  const dlg = byId("camera-shake-studio-dialog");
+  if (!dlg) return;
+
+  const doc = state.timelineDoc;
+  if (doc && Array.isArray(doc.tracks)) {
+    const docFps =
+      doc.fps && Number(doc.fps.num) > 0 && Number(doc.fps.den) > 0
+        ? Number(doc.fps.num) / Number(doc.fps.den)
+        : 24.0;
+    const vTrack = doc.tracks.find((tr) => tr.kind === "video");
+    const targetClip = vTrack && Array.isArray(vTrack.clips) ? vTrack.clips[0] : null;
+    if (targetClip && targetClip.camera_shake) {
+      state.csStudio.config = normalizeCameraShakeConfigClient({
+        ...state.csStudio.config,
+        ...targetClip.camera_shake,
+        width: Number(doc.width || 1920),
+        height: Number(doc.height || 1080),
+        fps: Math.round(docFps * 1000) / 1000
+      });
+    } else {
+      state.csStudio.config = normalizeCameraShakeConfigClient({
+        ...state.csStudio.config,
+        width: Number(doc.width || 1920),
+        height: Number(doc.height || 1080),
+        fps: Math.round(docFps * 1000) / 1000
+      });
+    }
+  }
+
+  state.csStudio.isOpen = true;
+  state.csStudio.exportedJson = null;
+  setCameraShakeInspectorTab(state.csStudio.activeTab || "motion");
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "open");
+  }
+  scheduleCameraShakeServerSync();
+}
+
+function closeCameraShakeStudioDialog() {
+  stopCameraShakePlayback();
+  const dlg = byId("camera-shake-studio-dialog");
+  state.csStudio.isOpen = false;
+  if (dlg && dlg.open) {
+    if (typeof dlg.close === "function") dlg.close();
+    else dlg.removeAttribute("open");
+  }
+}
+
+async function applyCameraShakeToTimelineAction() {
+  if (!state.timelineDoc) {
+    setCameraShakeStatus("No timeline document loaded.");
+    return;
+  }
+  const selInfo = getSelectedClipTrack();
+  const trackIndex =
+    selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex =
+    selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyCameraShake({
+      document: state.timelineDoc,
+      config: state.csStudio.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      commitTimelineMutation(res.document, state.timelineSelected);
+      if (res.compiled) state.csStudio.compiled = res.compiled;
+      syncCameraShakeStudioUI();
+    }
+    setCameraShakeStatus(
+      `Camera Shake Studio (${state.csStudio.config.preset}) applied non-destructively to V${trackIndex} clip #${clipIndex + 1}.`
+    );
+  } catch (err) {
+    setCameraShakeStatus(`Apply failed: ${err.message || err}`);
+  }
+}
+
+function sendCameraShakeToDeliverAction() {
+  refreshCameraShakeLocalDerived();
+  const comp = state.csStudio.compiled;
+  if (comp && comp.filter_complex) {
+    state.deliverCameraShakeVf = comp.filter_complex;
+  }
+  const customVfEl = byId("deliver-custom-vf");
+  if (customVfEl && comp && comp.vf_chain) {
+    customVfEl.value = comp.vf_chain;
+  }
+  setCameraShakeStatus("Compiled Camera Shake FFmpeg filtergraph sent to Deliver.");
+  closeCameraShakeStudioDialog();
+  if (typeof setActiveWorkspaceTab === "function") {
+    setActiveWorkspaceTab("deliver");
+  }
+}
+
+async function exportCameraShakeJsonAction() {
+  try {
+    const title =
+      (state.timelineDoc && state.timelineDoc.name ? String(state.timelineDoc.name) : "TAKTCUT_CAMERA_SHAKE_STUDIO");
+    const res = await api.exportCameraShakeJson({
+      config: state.csStudio.config,
+      title
+    });
+    state.csStudio.exportedJson = res;
+    const drawer = byId("cs-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncCameraShakeStudioUI();
+    setCameraShakeStatus(`Exported ${res.schema_version} (${res.filename}).`);
+  } catch (err) {
+    setCameraShakeStatus(`Export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadCameraShakeJsonAction() {
+  try {
+    const title =
+      (state.timelineDoc && state.timelineDoc.name ? String(state.timelineDoc.name) : "TAKTCUT_CAMERA_SHAKE_STUDIO");
+    const blob = await api.downloadCameraShakeBlob({
+      config: state.csStudio.config,
+      title
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `taktcut_${state.csStudio.config.preset}_camera_shake_studio.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setCameraShakeStatus(`Downloaded ${a.download}.`);
+  } catch (err) {
+    setCameraShakeStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+async function copyCameraShakeFiltergraphAction() {
+  refreshCameraShakeLocalDerived();
+  const cmd = state.csStudio.compiled ? state.csStudio.compiled.ffmpeg_command : "";
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(cmd);
+    }
+    setCameraShakeStatus("FFmpeg camera shake pipeline copied to clipboard.");
+  } catch (_err) {
+    setCameraShakeStatus("Clipboard unavailable; inspect FFmpeg command in the drawer below.");
+  }
+}
+
+function wireCameraShakeStudioEvents() {
+  for (const id of [
+    "btn-timeline-camera-shake-studio",
+    "btn-fx-camera-shake-studio",
+    "btn-color-camera-shake-studio"
+  ]) {
+    const btn = byId(id);
+    if (btn) btn.addEventListener("click", openCameraShakeStudioDialog);
+  }
+
+  const closeBtn = byId("btn-close-camera-shake-studio");
+  if (closeBtn) closeBtn.addEventListener("click", closeCameraShakeStudioDialog);
+
+  const dlg = byId("camera-shake-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("close", () => {
+      stopCameraShakePlayback();
+      state.csStudio.isOpen = false;
+    });
+  }
+
+  const presetSel = byId("cs-preset-select");
+  if (presetSel) {
+    presetSel.addEventListener("change", () => applyCameraShakePresetSelection(presetSel.value));
+  }
+
+  const edgeSel = byId("cs-edge-mode-select");
+  if (edgeSel) {
+    edgeSel.addEventListener("change", () => {
+      state.csStudio.config.edge_mode = edgeSel.value;
+      state.csStudio.exportedJson = null;
+      scheduleCameraShakeServerSync();
+    });
+  }
+
+  const enToggle = byId("cs-enabled-toggle");
+  if (enToggle) {
+    enToggle.addEventListener("change", () => {
+      state.csStudio.config.enabled = Boolean(enToggle.checked);
+      state.csStudio.exportedJson = null;
+      scheduleCameraShakeServerSync();
+    });
+  }
+
+  const splitToggle = byId("cs-compare-split-toggle");
+  if (splitToggle) {
+    splitToggle.addEventListener("change", () => {
+      state.csStudio.config.compare_split = Boolean(splitToggle.checked);
+      renderCameraShakeCanvases();
+    });
+  }
+
+  const playBtn = byId("btn-cs-play-toggle");
+  if (playBtn) {
+    playBtn.addEventListener("click", () => {
+      if (state.csStudio.isPlaying) stopCameraShakePlayback();
+      else startCameraShakePlayback();
+    });
+  }
+
+  const resetBtn = byId("btn-cs-reset");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      stopCameraShakePlayback();
+      state.csStudio.activeFrame = 0;
+      applyCameraShakePresetSelection("handheld_docu");
+    });
+  }
+
+  const tabMotion = byId("btn-cs-tab-motion");
+  if (tabMotion) tabMotion.addEventListener("click", () => setCameraShakeInspectorTab("motion"));
+  const tabOptics = byId("btn-cs-tab-optics");
+  if (tabOptics) tabOptics.addEventListener("click", () => setCameraShakeInspectorTab("optics"));
+
+  const rangeBindings = [
+    ["cs-amplitude", "cs-amplitude-num", "amplitude_px", false],
+    ["cs-frequency", "cs-frequency-num", "frequency_hz", false],
+    ["cs-z-zoom", "cs-z-zoom-num", "z_zoom_pct", false],
+    ["cs-tilt", "cs-tilt-num", "tilt_deg", false],
+    ["cs-octaves", "cs-octaves-num", "octaves", true],
+    ["cs-seed", "cs-seed-num", "seed", true],
+    ["cs-lens-k1", "cs-lens-k1-num", "lens_k1", false],
+    ["cs-lens-k2", "cs-lens-k2-num", "lens_k2", false],
+    ["cs-fringe", "cs-fringe-num", "chromatic_fringe_px", false],
+    ["cs-shutter", "cs-shutter-num", "motion_blur_shutter_deg", false]
+  ];
+
+  for (const [rId, nId, key, isInt] of rangeBindings) {
+    const rEl = byId(rId);
+    const nEl = byId(nId);
+    if (rEl) {
+      rEl.addEventListener("input", () => {
+        const val = isInt ? Math.round(Number(rEl.value)) : Number(rEl.value);
+        if (!Number.isFinite(val)) return;
+        state.csStudio.config[key] = val;
+        state.csStudio.config.preset = "custom";
+        state.csStudio.exportedJson = null;
+        scheduleCameraShakeServerSync();
+      });
+    }
+    if (nEl) {
+      nEl.addEventListener("input", () => {
+        const raw = nEl.value.trim();
+        if (raw === "" || raw === "-" || raw === "." || raw === "-.") return;
+        const val = isInt ? Math.round(Number(raw)) : Number(raw);
+        if (!Number.isFinite(val)) return;
+        state.csStudio.config[key] = val;
+        state.csStudio.config.preset = "custom";
+        state.csStudio.exportedJson = null;
+        scheduleCameraShakeServerSync({ skipFocusedNum: true });
+      });
+      nEl.addEventListener("blur", () => {
+        syncCameraShakeStudioUI();
+      });
+    }
+  }
+
+  // Preview canvas split wipe pointer drag
+  const prevCanvas = byId("cs-preview-canvas");
+  if (prevCanvas) {
+    const updateSplitFromClientX = (clientX) => {
+      const rect = prevCanvas.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      const pos = Math.max(0.05, Math.min(0.95, (clientX - rect.left) / rect.width));
+      state.csStudio.config.split_position = Math.round(pos * 1000) / 1000;
+      renderCameraShakeCanvases();
+    };
+    prevCanvas.addEventListener("pointerdown", (ev) => {
+      if (!state.csStudio.config.compare_split) return;
+      state.csStudio.dragMode = "split";
+      if (prevCanvas.setPointerCapture) prevCanvas.setPointerCapture(ev.pointerId);
+      updateSplitFromClientX(ev.clientX);
+    });
+    prevCanvas.addEventListener("pointermove", (ev) => {
+      if (state.csStudio.dragMode !== "split") return;
+      updateSplitFromClientX(ev.clientX);
+    });
+    const endPrevDrag = () => {
+      if (state.csStudio.dragMode === "split") state.csStudio.dragMode = null;
+    };
+    prevCanvas.addEventListener("pointerup", endPrevDrag);
+    prevCanvas.addEventListener("pointercancel", endPrevDrag);
+  }
+
+  // Waveform canvas 64-frame scrubbing
+  const wfCanvas = byId("cs-waveform-canvas");
+  if (wfCanvas) {
+    const scrubFromClientX = (clientX) => {
+      const geom = wfCanvas._csWaveformGeom;
+      const rect = wfCanvas.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      const padL = geom ? geom.padL : 34;
+      const plotW = geom ? geom.plotW : Math.max(80, rect.width - 46);
+      const count = geom ? geom.count : CAMERA_SHAKE_CURVE_FRAMES;
+      const x = clientX - rect.left;
+      const frac = Math.max(0, Math.min(1, (x - padL) / Math.max(1, plotW)));
+      state.csStudio.activeFrame = Math.round(frac * (count - 1));
+      renderCameraShakeCanvases();
+    };
+    wfCanvas.addEventListener("pointerdown", (ev) => {
+      stopCameraShakePlayback();
+      state.csStudio.dragMode = "scrub";
+      if (wfCanvas.setPointerCapture) wfCanvas.setPointerCapture(ev.pointerId);
+      scrubFromClientX(ev.clientX);
+    });
+    wfCanvas.addEventListener("pointermove", (ev) => {
+      if (state.csStudio.dragMode !== "scrub") return;
+      scrubFromClientX(ev.clientX);
+    });
+    const endWfDrag = () => {
+      if (state.csStudio.dragMode === "scrub") state.csStudio.dragMode = null;
+    };
+    wfCanvas.addEventListener("pointerup", endWfDrag);
+    wfCanvas.addEventListener("pointercancel", endWfDrag);
+  }
+
+  const btnApply = byId("btn-cs-apply-timeline");
+  if (btnApply) btnApply.addEventListener("click", applyCameraShakeToTimelineAction);
+  const btnDeliver = byId("btn-cs-send-deliver");
+  if (btnDeliver) btnDeliver.addEventListener("click", sendCameraShakeToDeliverAction);
+  const btnExport = byId("btn-cs-export-json");
+  if (btnExport) btnExport.addEventListener("click", exportCameraShakeJsonAction);
+  const btnDownload = byId("btn-cs-download-json");
+  if (btnDownload) btnDownload.addEventListener("click", downloadCameraShakeJsonAction);
+  const btnCopy = byId("btn-cs-copy-fg");
+  if (btnCopy) btnCopy.addEventListener("click", copyCameraShakeFiltergraphAction);
 }

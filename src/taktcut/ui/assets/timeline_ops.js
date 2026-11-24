@@ -22801,3 +22801,602 @@ export function applyOpticalFlareToDocumentClient(doc, rawConfig, opts = {}) {
   };
   return nextDoc;
 }
+
+
+// =========================================================================
+// CYCLE #114: CAMERA SHAKE, HANDHELD MOTION & LENS DISTORTION STUDIO
+// =========================================================================
+
+export const ALLOWED_CAMERA_SHAKE_PRESETS = [
+  "handheld_docu",
+  "action_impact_punch",
+  "earthquake_rumble",
+  "anamorphic_barrel_warp",
+  "subtle_breathing_tripod",
+  "custom"
+];
+
+export const ALLOWED_CAMERA_SHAKE_EDGE_MODES = ["reflect", "crop_zoom", "wrap"];
+
+export const CAMERA_SHAKE_CURVE_FRAMES = 64;
+
+const _CAMERA_SHAKE_PRESETS_CLIENT = [
+  {
+    preset: "handheld_docu",
+    label: "Handheld Documentary",
+    description: "Organic 16mm shoulder-rig camera drift with subtle roll and natural 180 deg shutter.",
+    default_config: {
+      enabled: true,
+      preset: "handheld_docu",
+      amplitude_px: 18.0,
+      frequency_hz: 1.8,
+      z_zoom_pct: 3.5,
+      tilt_deg: 1.8,
+      octaves: 4,
+      motion_blur_shutter_deg: 180.0,
+      edge_mode: "reflect",
+      lens_k1: 0.0,
+      lens_k2: 0.0,
+      chromatic_fringe_px: 0.6,
+      seed: 1042,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "action_impact_punch",
+    label: "Action Impact Punch",
+    description: "High-energy kinetic impact shake with Z-zoom punch, tilted roll, and 270 deg blur.",
+    default_config: {
+      enabled: true,
+      preset: "action_impact_punch",
+      amplitude_px: 58.0,
+      frequency_hz: 8.5,
+      z_zoom_pct: 10.0,
+      tilt_deg: 6.5,
+      octaves: 5,
+      motion_blur_shutter_deg: 270.0,
+      edge_mode: "crop_zoom",
+      lens_k1: -0.06,
+      lens_k2: -0.02,
+      chromatic_fringe_px: 2.8,
+      seed: 7731,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "earthquake_rumble",
+    label: "Earthquake Rumble",
+    description: "Heavy multi-octave seismic vibration across X/Y/Z/Roll with wide shutter trail.",
+    default_config: {
+      enabled: true,
+      preset: "earthquake_rumble",
+      amplitude_px: 76.0,
+      frequency_hz: 13.5,
+      z_zoom_pct: 12.5,
+      tilt_deg: 8.2,
+      octaves: 6,
+      motion_blur_shutter_deg: 300.0,
+      edge_mode: "reflect",
+      lens_k1: -0.04,
+      lens_k2: 0.01,
+      chromatic_fringe_px: 3.4,
+      seed: 4096,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "anamorphic_barrel_warp",
+    label: "Anamorphic Barrel Warp",
+    description: "Wide-angle optical barrel distortion with lateral chromatic fringe and gentle drift.",
+    default_config: {
+      enabled: true,
+      preset: "anamorphic_barrel_warp",
+      amplitude_px: 10.0,
+      frequency_hz: 1.1,
+      z_zoom_pct: 4.0,
+      tilt_deg: 0.9,
+      octaves: 3,
+      motion_blur_shutter_deg: 180.0,
+      edge_mode: "crop_zoom",
+      lens_k1: -0.28,
+      lens_k2: -0.09,
+      chromatic_fringe_px: 4.6,
+      seed: 2026,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "subtle_breathing_tripod",
+    label: "Subtle Breathing Tripod",
+    description: "Telephoto tripod micro-sway and gentle operator breathing with zero distortion.",
+    default_config: {
+      enabled: true,
+      preset: "subtle_breathing_tripod",
+      amplitude_px: 5.0,
+      frequency_hz: 0.65,
+      z_zoom_pct: 1.2,
+      tilt_deg: 0.4,
+      octaves: 2,
+      motion_blur_shutter_deg: 144.0,
+      edge_mode: "reflect",
+      lens_k1: 0.0,
+      lens_k2: 0.0,
+      chromatic_fringe_px: 0.0,
+      seed: 512,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "custom",
+    label: "Custom Camera Rig",
+    description: "Balanced starting point for Sapphire S_Shake and ResolveFX Lens Distortion.",
+    default_config: {
+      enabled: true,
+      preset: "custom",
+      amplitude_px: 24.0,
+      frequency_hz: 2.8,
+      z_zoom_pct: 4.5,
+      tilt_deg: 2.4,
+      octaves: 4,
+      motion_blur_shutter_deg: 180.0,
+      edge_mode: "reflect",
+      lens_k1: -0.05,
+      lens_k2: 0.0,
+      chromatic_fringe_px: 1.2,
+      seed: 1337,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  }
+];
+
+function _csClamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+function _csRound(v, decimals) {
+  const f = 10 ** decimals;
+  return Math.round(v * f) / f;
+}
+
+export function listCameraShakePresetsClient() {
+  return _CAMERA_SHAKE_PRESETS_CLIENT.map((p) => ({
+    ...p,
+    default_config: { ...p.default_config }
+  }));
+}
+
+export function createDefaultCameraShakeConfigClient(presetId = "handheld_docu") {
+  const key = String(presetId || "handheld_docu").trim().toLowerCase();
+  const found = _CAMERA_SHAKE_PRESETS_CLIENT.find((p) => p.preset === key);
+  return { ...(found || _CAMERA_SHAKE_PRESETS_CLIENT[0]).default_config };
+}
+
+export function normalizeCameraShakeConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const presetKey =
+    typeof src.preset === "string" && ALLOWED_CAMERA_SHAKE_PRESETS.includes(src.preset.trim().toLowerCase())
+      ? src.preset.trim().toLowerCase()
+      : "handheld_docu";
+  const base = createDefaultCameraShakeConfigClient(presetKey);
+  const merged = { ...base, ...src, preset: presetKey };
+
+  const num = (v, fallback, lo, hi, dec) => {
+    if (typeof v === "boolean") return fallback;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    return _csRound(_csClamp(n, lo, hi), dec);
+  };
+  const intNum = (v, fallback, lo, hi) => {
+    if (typeof v === "boolean") return fallback;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.round(_csClamp(n, lo, hi));
+  };
+
+  const edgeModeRaw = String(merged.edge_mode || base.edge_mode).trim().toLowerCase();
+  const edgeMode = ALLOWED_CAMERA_SHAKE_EDGE_MODES.includes(edgeModeRaw)
+    ? edgeModeRaw
+    : "reflect";
+
+  return {
+    enabled: typeof merged.enabled === "boolean" ? merged.enabled : true,
+    preset: presetKey,
+    amplitude_px: num(merged.amplitude_px, base.amplitude_px, 0.0, 120.0, 2),
+    frequency_hz: num(merged.frequency_hz, base.frequency_hz, 0.1, 20.0, 3),
+    z_zoom_pct: num(merged.z_zoom_pct, base.z_zoom_pct, 0.0, 25.0, 2),
+    tilt_deg: num(merged.tilt_deg, base.tilt_deg, 0.0, 15.0, 3),
+    octaves: intNum(merged.octaves, base.octaves, 1, 6),
+    motion_blur_shutter_deg: num(merged.motion_blur_shutter_deg, base.motion_blur_shutter_deg, 0.0, 360.0, 1),
+    edge_mode: edgeMode,
+    lens_k1: num(merged.lens_k1, base.lens_k1, -0.5, 0.5, 4),
+    lens_k2: num(merged.lens_k2, base.lens_k2, -0.25, 0.25, 4),
+    chromatic_fringe_px: num(merged.chromatic_fringe_px, base.chromatic_fringe_px, 0.0, 10.0, 2),
+    seed: intNum(merged.seed, base.seed, 0, 99999),
+    compare_split: typeof merged.compare_split === "boolean" ? merged.compare_split : true,
+    split_position: num(merged.split_position, 0.5, 0.0, 1.0, 4),
+    width: intNum(merged.width, 1920, 320, 7680),
+    height: intNum(merged.height, 1080, 240, 4320),
+    fps: num(merged.fps, 24.0, 1.0, 120.0, 3)
+  };
+}
+
+function _csFbmChannelClient(tSec, freqHz, octaves, seed, channelSalt) {
+  let total = 0.0;
+  let norm = 0.0;
+  const seedF = Number(seed % 100000);
+  for (let octave = 0; octave < octaves; octave += 1) {
+    const lacunarity = 1.92 ** octave;
+    const gain = 0.54 ** octave;
+    const phase =
+      seedF * (0.0173 * (octave + 1) + channelSalt * 0.0091) +
+      octave * 2.137 +
+      channelSalt * 1.419;
+    const omega = 2.0 * Math.PI * freqHz * lacunarity;
+    const wave =
+      0.68 * Math.sin(omega * tSec + phase) +
+      0.32 * Math.cos(omega * 1.37 * tSec - phase * 0.73);
+    total += wave * gain;
+    norm += gain;
+  }
+  return _csClamp(norm > 0 ? total / norm : 0.0, -1.0, 1.0);
+}
+
+export function evaluateCameraShakeStudioClient(rawConfig, opts = {}) {
+  const cfg = normalizeCameraShakeConfigClient(rawConfig);
+  const n = Math.max(16, Math.min(240, Math.round(Number(opts.frame_count ?? CAMERA_SHAKE_CURVE_FRAMES))));
+  const fps = Math.max(1.0, Number(cfg.fps || 24.0));
+  const dt = 1.0 / fps;
+  const cornerShiftPct = _csRound((cfg.lens_k1 + cfg.lens_k2) * 100.0, 2);
+  const shutterBlurFrames =
+    cfg.enabled && cfg.motion_blur_shutter_deg >= 30.0
+      ? Math.max(1, Math.min(9, Math.round(1.0 + (cfg.motion_blur_shutter_deg / 360.0) * 6.0)))
+      : 1;
+
+  if (!cfg.enabled) {
+    const zeroSamples = [];
+    for (let i = 0; i < n; i += 1) {
+      zeroSamples.push({
+        frame: i,
+        time_sec: _csRound(i * dt, 4),
+        x_px: 0.0,
+        y_px: 0.0,
+        tilt_deg: 0.0,
+        zoom: 1.0,
+        velocity_px_s: 0.0
+      });
+    }
+    return {
+      enabled: false,
+      preset: cfg.preset,
+      edge_mode: cfg.edge_mode,
+      peak_velocity_px_s: 0.0,
+      rms_displacement_px: 0.0,
+      required_safe_crop_pct: 0.0,
+      radial_distortion_corner_shift_pct: 0.0,
+      shutter_blur_frames: 1,
+      chromatic_fringe_px: 0.0,
+      frame_count: n,
+      motion_samples: zeroSamples
+    };
+  }
+
+  const rawPoints = [];
+  let maxAbsX = 0.0;
+  let maxAbsY = 0.0;
+  let maxAbsTilt = 0.0;
+  let sumSqDisp = 0.0;
+
+  for (let i = 0; i < n; i += 1) {
+    const tSec = i * dt;
+    const nx = _csFbmChannelClient(tSec, cfg.frequency_hz, cfg.octaves, cfg.seed, 1.0);
+    const ny = _csFbmChannelClient(tSec, cfg.frequency_hz * 0.91, cfg.octaves, cfg.seed, 2.3);
+    const nt = _csFbmChannelClient(tSec, cfg.frequency_hz * 0.67, cfg.octaves, cfg.seed, 3.7);
+    const nz = _csFbmChannelClient(tSec, cfg.frequency_hz * 0.53, cfg.octaves, cfg.seed, 5.1);
+
+    const xPx = cfg.amplitude_px * nx;
+    const yPx = cfg.amplitude_px * 0.78 * ny;
+    const tiltDeg = cfg.tilt_deg * nt;
+    const zoom = 1.0 + (cfg.z_zoom_pct / 100.0) * (0.5 + 0.5 * nz);
+
+    maxAbsX = Math.max(maxAbsX, Math.abs(xPx));
+    maxAbsY = Math.max(maxAbsY, Math.abs(yPx));
+    maxAbsTilt = Math.max(maxAbsTilt, Math.abs(tiltDeg));
+    sumSqDisp += xPx * xPx + yPx * yPx;
+    rawPoints.push([i, tSec, xPx, yPx, tiltDeg, zoom]);
+  }
+
+  const motionSamples = [];
+  let peakVel = 0.0;
+  for (let idx = 0; idx < rawPoints.length; idx += 1) {
+    const [frameIdx, tSec, xPx, yPx, tiltDeg, zoom] = rawPoints[idx];
+    const prevX = idx > 0 ? rawPoints[idx - 1][2] : xPx;
+    const prevY = idx > 0 ? rawPoints[idx - 1][3] : yPx;
+    const vel = idx > 0 ? Math.hypot(xPx - prevX, yPx - prevY) / dt : 0.0;
+    peakVel = Math.max(peakVel, vel);
+    motionSamples.push({
+      frame: frameIdx,
+      time_sec: _csRound(tSec, 4),
+      x_px: _csRound(xPx, 2),
+      y_px: _csRound(yPx, 2),
+      tilt_deg: _csRound(tiltDeg, 3),
+      zoom: _csRound(zoom, 4),
+      velocity_px_s: _csRound(vel, 1)
+    });
+  }
+
+  const rmsDisp = Math.sqrt(sumSqDisp / n);
+  const transCropPct =
+    Math.max((2.0 * maxAbsX) / cfg.width, (2.0 * maxAbsY) / cfg.height) * 100.0;
+  const tiltRad = (maxAbsTilt * Math.PI) / 180.0;
+  const aspect = cfg.width / cfg.height;
+  const tiltCropPct =
+    maxAbsTilt > 0.0 ? (Math.cos(tiltRad) + aspect * Math.sin(tiltRad) - 1.0) * 100.0 : 0.0;
+  const lensCropPct = Math.max(0.0, -(cfg.lens_k1 + cfg.lens_k2) * 32.0);
+  const safeCropPct = _csRound(
+    _csClamp(transCropPct + tiltCropPct + lensCropPct + cfg.z_zoom_pct * 0.25, 0.0, 48.0),
+    2
+  );
+
+  return {
+    enabled: true,
+    preset: cfg.preset,
+    edge_mode: cfg.edge_mode,
+    peak_velocity_px_s: _csRound(peakVel, 1),
+    rms_displacement_px: _csRound(rmsDisp, 2),
+    required_safe_crop_pct: safeCropPct,
+    radial_distortion_corner_shift_pct: cornerShiftPct,
+    shutter_blur_frames: shutterBlurFrames,
+    chromatic_fringe_px: _csRound(cfg.chromatic_fringe_px, 2),
+    frame_count: n,
+    motion_samples: motionSamples
+  };
+}
+
+export function compileCameraShakeFiltergraphClient(rawConfig) {
+  const cfg = normalizeCameraShakeConfigClient(rawConfig);
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      preset: cfg.preset,
+      edge_mode: cfg.edge_mode,
+      lens_vf: "null",
+      shake_vf: "null",
+      motion_blur_vf: "null",
+      aberration_vf: "null",
+      filter_complex: "[0:v]null[vout]",
+      vf_chain: "null",
+      ffmpeg_command: 'ffmpeg -i input.mp4 -vf "null" -c:a copy output.mp4',
+      warnings: []
+    };
+  }
+
+  const evalRes = evaluateCameraShakeStudioClient(cfg, { frame_count: CAMERA_SHAKE_CURVE_FRAMES });
+  const lensVf =
+    Math.abs(cfg.lens_k1) >= 0.001 || Math.abs(cfg.lens_k2) >= 0.001
+      ? `lenscorrection=cx=0.5:cy=0.5:k1=${cfg.lens_k1.toFixed(4)}:k2=${cfg.lens_k2.toFixed(4)}`
+      : "null";
+
+  const overscan = _csRound(
+    1.0 + Math.max(evalRes.required_safe_crop_pct, cfg.z_zoom_pct) / 100.0,
+    4
+  );
+  let wPad = Math.round(cfg.width * overscan);
+  let hPad = Math.round(cfg.height * overscan);
+  if (wPad % 2 !== 0) wPad += 1;
+  if (hPad % 2 !== 0) hPad += 1;
+
+  const ampX = _csRound(cfg.amplitude_px, 2);
+  const ampY = _csRound(cfg.amplitude_px * 0.78, 2);
+  const omega = _csRound(2.0 * Math.PI * cfg.frequency_hz, 3);
+  const phaseX = _csRound((cfg.seed % 997) * 0.0173, 3);
+  const phaseY = _csRound((cfg.seed % 991) * 0.0231 + 1.4, 3);
+  const tiltRad = _csRound((cfg.tilt_deg * Math.PI) / 180.0, 4);
+
+  const shakeParts = [];
+  if (cfg.amplitude_px > 0.0 || cfg.z_zoom_pct > 0.0 || cfg.tilt_deg > 0.0) {
+    if (cfg.edge_mode === "crop_zoom") {
+      shakeParts.push(`scale=${wPad}:${hPad}:flags=lanczos`);
+    } else if (cfg.edge_mode === "wrap") {
+      shakeParts.push(`scale=${wPad}:${hPad}:flags=bilinear`);
+    } else {
+      shakeParts.push(`scale=${wPad}:${hPad}:flags=bicubic`);
+    }
+    if (cfg.amplitude_px > 0.0) {
+      const cxExpr =
+        `(iw-${cfg.width})/2+${ampX.toFixed(2)}*(0.65*sin(${omega.toFixed(3)}*t+${phaseX.toFixed(3)})` +
+        `+0.35*sin(${(omega * 1.92).toFixed(3)}*t+${(phaseX * 1.7).toFixed(3)}))`;
+      const cyExpr =
+        `(ih-${cfg.height})/2+${ampY.toFixed(2)}*(0.65*sin(${(omega * 0.91).toFixed(3)}*t+${phaseY.toFixed(3)})` +
+        `+0.35*cos(${(omega * 1.75).toFixed(3)}*t+${(phaseY * 1.3).toFixed(3)}))`;
+      shakeParts.push(`crop=${cfg.width}:${cfg.height}:x='${cxExpr}':y='${cyExpr}'`);
+    } else {
+      shakeParts.push(`crop=${cfg.width}:${cfg.height}`);
+    }
+    if (cfg.tilt_deg >= 0.05) {
+      const rotExpr = `${tiltRad.toFixed(4)}*sin(${(omega * 0.67).toFixed(3)}*t+${phaseX.toFixed(3)})`;
+      shakeParts.push(`rotate='${rotExpr}':ow=${cfg.width}:oh=${cfg.height}:fillcolor=black`);
+    }
+  }
+  const shakeVf = shakeParts.length ? shakeParts.join(",") : "null";
+
+  let motionBlurVf = "null";
+  if (cfg.motion_blur_shutter_deg >= 30.0 && evalRes.shutter_blur_frames > 1) {
+    const fcount = evalRes.shutter_blur_frames;
+    const weights = Array.from({ length: fcount }, (_, idx) => Math.max(1, fcount - idx)).join(" ");
+    motionBlurVf = `tmix=frames=${fcount}:weights='${weights}'`;
+  }
+
+  let aberrationVf = "null";
+  if (cfg.chromatic_fringe_px >= 0.5) {
+    const shiftPx = Math.max(1, Math.round(cfg.chromatic_fringe_px));
+    aberrationVf = `rgbashift=rh=${shiftPx}:bh=${-shiftPx}:edge=smear`;
+  }
+
+  const chainParts = [lensVf, shakeVf, motionBlurVf, aberrationVf].filter((p) => p !== "null");
+  const vfChain = chainParts.length ? chainParts.join(",") : "null";
+  const filterComplex = `[0:v]${vfChain}[vout]`;
+
+  const warnings = [];
+  if (evalRes.required_safe_crop_pct >= 18.0) {
+    warnings.push(
+      `High safe crop (${evalRes.required_safe_crop_pct.toFixed(1)}%) softens fine edge detail.`
+    );
+  }
+  if (Math.abs(cfg.lens_k1) >= 0.35) {
+    warnings.push("Strong radial lens distortion (|k1| >= 0.35) heavily stretches frame corners.");
+  }
+  if (cfg.motion_blur_shutter_deg >= 300.0) {
+    warnings.push("Wide shutter angle (>= 300 deg) produces heavy temporal motion smearing.");
+  }
+
+  return {
+    enabled: true,
+    preset: cfg.preset,
+    edge_mode: cfg.edge_mode,
+    lens_vf: lensVf,
+    shake_vf: shakeVf,
+    motion_blur_vf: motionBlurVf,
+    aberration_vf: aberrationVf,
+    filter_complex: filterComplex,
+    vf_chain: vfChain,
+    ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:a copy output.mp4`,
+    warnings
+  };
+}
+
+export function exportCameraShakeJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizeCameraShakeConfigClient(rawConfig);
+  const rawTitle = String(opts.title || "TAKTCUT_CAMERA_SHAKE_STUDIO").trim();
+  const cleanedTitle = rawTitle.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "TAKTCUT_CAMERA_SHAKE_STUDIO";
+  const evalRes = evaluateCameraShakeStudioClient(cfg, { frame_count: CAMERA_SHAKE_CURVE_FRAMES });
+  const compiled = compileCameraShakeFiltergraphClient(cfg);
+  const hosts = [
+    "Boris FX Sapphire S_Shake / S_Distort",
+    "DaVinci ResolveFX Camera Shake & Lens Distortion",
+    "Adobe After Effects Wiggler & Optics Compensation",
+    "FFmpeg Procedural Camera Shake & Lens Correction Pipeline"
+  ];
+  const payload = {
+    schema_version: "taktcut.camera_shake_studio.v1",
+    title: cleanedTitle,
+    preset: cfg.preset,
+    compatible_hosts: hosts,
+    camera_shake: {
+      enabled: cfg.enabled,
+      preset: cfg.preset,
+      amplitude_px: cfg.amplitude_px,
+      frequency_hz: cfg.frequency_hz,
+      z_zoom_pct: cfg.z_zoom_pct,
+      tilt_deg: cfg.tilt_deg,
+      octaves: cfg.octaves,
+      motion_blur_shutter_deg: cfg.motion_blur_shutter_deg,
+      edge_mode: cfg.edge_mode,
+      lens_k1: cfg.lens_k1,
+      lens_k2: cfg.lens_k2,
+      chromatic_fringe_px: cfg.chromatic_fringe_px,
+      seed: cfg.seed
+    },
+    metrics: {
+      peak_velocity_px_s: evalRes.peak_velocity_px_s,
+      rms_displacement_px: evalRes.rms_displacement_px,
+      required_safe_crop_pct: evalRes.required_safe_crop_pct,
+      radial_distortion_corner_shift_pct: evalRes.radial_distortion_corner_shift_pct,
+      shutter_blur_frames: evalRes.shutter_blur_frames,
+      chromatic_fringe_px: evalRes.chromatic_fringe_px,
+      frame_count: evalRes.frame_count
+    },
+    motion_samples: evalRes.motion_samples,
+    ffmpeg: {
+      lens_vf: compiled.lens_vf,
+      shake_vf: compiled.shake_vf,
+      motion_blur_vf: compiled.motion_blur_vf,
+      aberration_vf: compiled.aberration_vf,
+      filter_complex: compiled.filter_complex,
+      vf_chain: compiled.vf_chain
+    }
+  };
+  return {
+    schema_version: "taktcut.camera_shake_studio.v1",
+    title: cleanedTitle,
+    preset: cfg.preset,
+    compatible_hosts: hosts,
+    json_text: JSON.stringify(payload, null, 2),
+    filename: `${cleanedTitle.toLowerCase()}_${cfg.preset}_camera_shake_studio.json`,
+    saved_path: null
+  };
+}
+
+export function applyCameraShakeToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const videoTracks = (nextDoc.tracks || []).filter((t) => t.kind === "video");
+  const trackIndex = Number(opts.track_index ?? 1);
+  const clipIndex = Number(opts.clip_index ?? 0);
+  const trk = videoTracks.find((t) => Number(t.index) === trackIndex) || videoTracks[0];
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error("No video clip available in timeline document.");
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, clipIndex));
+  const clip = trk.clips[safeIdx];
+  const docFps =
+    nextDoc.fps && Number(nextDoc.fps.num) > 0 && Number(nextDoc.fps.den) > 0
+      ? Number(nextDoc.fps.num) / Number(nextDoc.fps.den)
+      : 24.0;
+  const scopedCfg = normalizeCameraShakeConfigClient({
+    ...(rawConfig || {}),
+    width: Number(nextDoc.width || 1920),
+    height: Number(nextDoc.height || 1080),
+    fps: Math.round(docFps * 1000) / 1000
+  });
+  const evalRes = evaluateCameraShakeStudioClient(scopedCfg, {
+    frame_count: CAMERA_SHAKE_CURVE_FRAMES
+  });
+  const compiled = compileCameraShakeFiltergraphClient(scopedCfg);
+
+  trk.clips[safeIdx] = {
+    ...clip,
+    camera_shake: {
+      enabled: scopedCfg.enabled,
+      preset: scopedCfg.preset,
+      amplitude_px: scopedCfg.amplitude_px,
+      frequency_hz: scopedCfg.frequency_hz,
+      z_zoom_pct: scopedCfg.z_zoom_pct,
+      tilt_deg: scopedCfg.tilt_deg,
+      octaves: scopedCfg.octaves,
+      motion_blur_shutter_deg: scopedCfg.motion_blur_shutter_deg,
+      edge_mode: scopedCfg.edge_mode,
+      lens_k1: scopedCfg.lens_k1,
+      lens_k2: scopedCfg.lens_k2,
+      chromatic_fringe_px: scopedCfg.chromatic_fringe_px,
+      seed: scopedCfg.seed,
+      peak_velocity_px_s: evalRes.peak_velocity_px_s,
+      required_safe_crop_pct: evalRes.required_safe_crop_pct,
+      radial_distortion_corner_shift_pct: evalRes.radial_distortion_corner_shift_pct,
+      ffmpeg_vf: compiled.filter_complex.slice(0, 16384)
+    }
+  };
+  return nextDoc;
+}
