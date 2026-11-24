@@ -363,6 +363,18 @@ from taktcut.scene_cut import (
     normalize_scene_cut_split_mode,
     split_clip_at_scene_cuts,
 )
+from taktcut.stabilization_studio import (
+    ALLOWED_STABILIZATION_EDGE_MODES,
+    ALLOWED_STABILIZATION_MODES,
+    ALLOWED_STABILIZATION_PRESET_IDS,
+    StabilizationStudioConfig,
+    apply_stabilization_studio_to_document,
+    compile_stabilization_studio_filtergraph,
+    evaluate_stabilization_studio,
+    export_stabilization_studio_json,
+    list_stabilization_studio_presets,
+    normalize_stabilization_studio_config,
+)
 from taktcut.subtitles import (
     ALL_CAPTION_STYLE_IDS,
     CAPTION_FONT_SIZE_MAX,
@@ -1957,6 +1969,21 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "directions": list(ALLOWED_RETIME_STUDIO_DIRECTIONS),
                     "interpolations": list(ALLOWED_RETIME_STUDIO_INTERPOLATIONS),
                     "default_config": RetimeStudioConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/stabilization/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [
+                        p.model_dump(mode="json") for p in list_stabilization_studio_presets()
+                    ],
+                    "preset_ids": list(ALLOWED_STABILIZATION_PRESET_IDS),
+                    "modes": list(ALLOWED_STABILIZATION_MODES),
+                    "edge_modes": list(ALLOWED_STABILIZATION_EDGE_MODES),
+                    "default_config": StabilizationStudioConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -5234,6 +5261,103 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "document": updated_rt_doc.model_dump(mode="json"),
                     "validation": rt_val.model_dump(mode="json"),
                     "compiled": rt_compiled_apply.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/stabilization/evaluate":
+            stab_cfg = normalize_stabilization_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_samples = payload.get("sample_count", 65)
+            sample_count = (
+                int(raw_samples)
+                if isinstance(raw_samples, int) and not isinstance(raw_samples, bool)
+                else 65
+            )
+            stab_eval = evaluate_stabilization_studio(stab_cfg, sample_count=sample_count)
+            self._send_json(HTTPStatus.OK, stab_eval.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/stabilization/compile":
+            stab_cfg = normalize_stabilization_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            stab_compiled = compile_stabilization_studio_filtergraph(stab_cfg)
+            self._send_json(HTTPStatus.OK, stab_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/stabilization/export-json":
+            stab_cfg = normalize_stabilization_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            stab_title = str(payload.get("title", "TAKTCUT_STABILIZATION_STUDIO")).strip() or (
+                "TAKTCUT_STABILIZATION_STUDIO"
+            )
+            stab_exported = export_stabilization_studio_json(stab_cfg, title=stab_title)
+            raw_stab_out = payload.get("out_path")
+            stab_saved_rel: str | None = None
+            if raw_stab_out is not None and str(raw_stab_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_stab_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(stab_exported.json_text, encoding="utf-8")
+                stab_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                stab_exported.model_copy(update={"saved_path": stab_saved_rel}).model_dump(
+                    mode="json"
+                ),
+            )
+            return
+
+        if route == "/api/fx/stabilization/download":
+            stab_cfg = normalize_stabilization_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            stab_title = str(payload.get("title", "TAKTCUT_STABILIZATION_STUDIO")).strip() or (
+                "TAKTCUT_STABILIZATION_STUDIO"
+            )
+            stab_exported_dl = export_stabilization_studio_json(stab_cfg, title=stab_title)
+            stab_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or stab_exported_dl.filename),
+                "taktcut_stabilization_studio",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                stab_exported_dl.json_text.encode("utf-8"),
+                extra_headers={
+                    "Content-Disposition": f'attachment; filename="{stab_dl_filename}"'
+                },
+            )
+            return
+
+        if route == "/api/fx/stabilization/apply":
+            stab_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            stab_cfg = normalize_stabilization_studio_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_stab_doc = apply_stabilization_studio_to_document(
+                stab_doc,
+                stab_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            stab_compiled_apply = compile_stabilization_studio_filtergraph(stab_cfg)
+            stab_val = validate_timeline(updated_stab_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_stab_doc.model_dump(mode="json"),
+                    "validation": stab_val.model_dump(mode="json"),
+                    "compiled": stab_compiled_apply.model_dump(mode="json"),
                 },
             )
             return

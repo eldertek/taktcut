@@ -11493,3 +11493,273 @@ dialog.nle-dialog.rt-studio-dialog {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ============================================================================
+   DAVINCI STABILIZATION, PERSPECTIVE LOCK & ROLLING-SHUTTER STUDIO (CYCLE #111)
+   ============================================================================ */
+
+dialog.nle-dialog.stab-studio-dialog {
+  width: min(1180px, calc(100vw - 24px));
+  max-width: min(1180px, calc(100vw - 24px));
+  max-height: min(92vh, 900px);
+}
+
+.stab-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.stab-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.stab-dialog-body .code-box,
+.stab-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.stab-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stab-telemetry-pill {
+  background: rgba(52, 211, 153, 0.16);
+  border-color: #34d399;
+  color: #d1fae5;
+  font-weight: 700;
+}
+
+.stab-preset-strip,
+.stab-toolbar-bar,
+.stab-traj-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.stab-toolbar-bar {
+  padding: 7px 9px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+}
+
+.stab-mode-group,
+.stab-flags-group,
+.stab-time-ctrl {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.stab-time-ctrl {
+  flex: 1 1 180px;
+}
+
+.stab-time-ctrl input[type="range"] {
+  flex: 1 1 90px;
+  min-width: 70px;
+  accent-color: #f59e0b;
+}
+
+.stab-preset-btn.is-active {
+  background: rgba(52, 211, 153, 0.22);
+  border-color: #34d399;
+  color: #ecfdf5;
+}
+
+.stab-workstation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.stab-viewport-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stab-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.stab-viewport-canvas {
+  display: block;
+  width: 100%;
+  height: 224px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.stab-trajectory-canvas {
+  display: block;
+  width: 100%;
+  height: 138px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.stab-param-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.stab-param-field label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.stab-range-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stab-range-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 48px;
+  accent-color: #34d399;
+}
+
+.stab-range-pair .input-num {
+  width: 74px;
+}
+
+.stab-jello-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.stab-jello-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stab-jello-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.stab-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.stab-metric-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 7px;
+  background: rgba(9, 12, 18, 0.72);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.stab-metric-k {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.stab-metric-v {
+  font-size: 12px;
+  font-weight: 700;
+  color: #d1fae5;
+}
+
+.stab-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#stabilization-studio-dialog .btn:focus-visible,
+#stabilization-studio-dialog .input-control:focus-visible,
+#stabilization-studio-dialog input[type="range"]:focus-visible,
+.stab-studio-btn:focus-visible {
+  outline: 2px solid #34d399;
+  outline-offset: 1px;
+}
+
+@media (max-width: 960px) {
+  .stab-workstation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  dialog.nle-dialog.stab-studio-dialog {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: min(94vh, 780px);
+  }
+  .stab-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stab-studio-btn,
+  .stab-preset-btn,
+  .stab-traj-toolbar .btn,
+  .stab-actions .btn,
+  #btn-close-stabilization-studio,
+  #stabilization-studio-dialog .input-control,
+  #stabilization-studio-dialog .inline-check,
+  #stabilization-studio-dialog .fg-drawer-summary {
+    min-width: 44px;
+    min-height: 45px;
+  }
+  #stabilization-studio-dialog input[type="range"] {
+    min-height: 44px;
+  }
+  #stabilization-studio-dialog .inline-check {
+    display: inline-flex;
+    align-items: center;
+    padding-inline: 6px;
+  }
+  .stab-mode-group,
+  .stab-flags-group,
+  .stab-time-ctrl {
+    width: 100%;
+  }
+}

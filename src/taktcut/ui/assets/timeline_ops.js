@@ -20957,3 +20957,554 @@ export function applyRetimeStudioToDocumentClient(doc, rawConfig, opts = {}) {
   }
   return nextDoc;
 }
+
+// ---------------------------------------------------------------------------
+// CAMERA STABILIZATION, PERSPECTIVE LOCK & ROLLING-SHUTTER STUDIO (CYCLE #111)
+// ---------------------------------------------------------------------------
+
+export const ALLOWED_STABILIZATION_PRESET_IDS = [
+  "handheld_cinema_glide",
+  "tripod_perspective_lock",
+  "action_gimbal_smooth",
+  "rolling_shutter_fix",
+  "custom"
+];
+
+export const ALLOWED_STABILIZATION_MODES = [
+  "perspective",
+  "similarity",
+  "translation",
+  "camera_lock"
+];
+
+export const ALLOWED_STABILIZATION_EDGE_MODES = [
+  "crop_zoom",
+  "mirror_border",
+  "black"
+];
+
+function stabStudioClamp(val, lo, hi, fallback) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+export function createDefaultStabilizationStudioConfigClient(presetId = "handheld_cinema_glide") {
+  const pid = ALLOWED_STABILIZATION_PRESET_IDS.includes(presetId)
+    ? presetId
+    : "handheld_cinema_glide";
+  const presets = {
+    handheld_cinema_glide: {
+      mode: "similarity",
+      smoothing_pct: 52.0,
+      strength_pct: 68.0,
+      crop_ratio_min: 0.88,
+      auto_zoom_fill: true,
+      rolling_shutter_skew_ms: 0.0,
+      edge_mode: "crop_zoom"
+    },
+    tripod_perspective_lock: {
+      mode: "camera_lock",
+      smoothing_pct: 96.0,
+      strength_pct: 100.0,
+      crop_ratio_min: 0.80,
+      auto_zoom_fill: true,
+      rolling_shutter_skew_ms: -4.0,
+      edge_mode: "crop_zoom"
+    },
+    action_gimbal_smooth: {
+      mode: "perspective",
+      smoothing_pct: 72.0,
+      strength_pct: 84.0,
+      crop_ratio_min: 0.82,
+      auto_zoom_fill: true,
+      rolling_shutter_skew_ms: 6.0,
+      edge_mode: "mirror_border"
+    },
+    rolling_shutter_fix: {
+      mode: "perspective",
+      smoothing_pct: 45.0,
+      strength_pct: 60.0,
+      crop_ratio_min: 0.90,
+      auto_zoom_fill: true,
+      rolling_shutter_skew_ms: -18.0,
+      edge_mode: "crop_zoom"
+    },
+    custom: {
+      mode: "perspective",
+      smoothing_pct: 50.0,
+      strength_pct: 75.0,
+      crop_ratio_min: 0.85,
+      auto_zoom_fill: true,
+      rolling_shutter_skew_ms: 0.0,
+      edge_mode: "crop_zoom"
+    }
+  };
+  const p = presets[pid] || presets.handheld_cinema_glide;
+  return {
+    enabled: true,
+    preset_id: pid,
+    mode: p.mode,
+    smoothing_pct: p.smoothing_pct,
+    strength_pct: p.strength_pct,
+    crop_ratio_min: p.crop_ratio_min,
+    auto_zoom_fill: p.auto_zoom_fill,
+    rolling_shutter_skew_ms: p.rolling_shutter_skew_ms,
+    edge_mode: p.edge_mode,
+    width: 1920,
+    height: 1080,
+    fps: 25.0,
+    duration_s: 6.0,
+    playhead_norm: 0.35,
+    compare_split: false
+  };
+}
+
+export const STABILIZATION_STUDIO_PRESETS_CLIENT = [
+  {
+    preset_id: "handheld_cinema_glide",
+    label: "Handheld Cinema Glide",
+    description: "DaVinci Similarity stabilization preserving natural dolly/pan drift while smoothing micro-shake.",
+    default_config: createDefaultStabilizationStudioConfigClient("handheld_cinema_glide")
+  },
+  {
+    preset_id: "tripod_perspective_lock",
+    label: "Tripod Perspective Lock",
+    description: "Boris FX Mocha / Resolve Camera Lock pinning 4-corner perspective to a virtual tripod.",
+    default_config: createDefaultStabilizationStudioConfigClient("tripod_perspective_lock")
+  },
+  {
+    preset_id: "action_gimbal_smooth",
+    label: "Action Gimbal Smooth",
+    description: "Premiere Warp Perspective smoothing for running handheld footage with mirror-border edge fill.",
+    default_config: createDefaultStabilizationStudioConfigClient("action_gimbal_smooth")
+  },
+  {
+    preset_id: "rolling_shutter_fix",
+    label: "Rolling-Shutter Jello Fix",
+    description: "CMOS readout skew compensation (-18ms) paired with balanced perspective jitter attenuation.",
+    default_config: createDefaultStabilizationStudioConfigClient("rolling_shutter_fix")
+  },
+  {
+    preset_id: "custom",
+    label: "Custom Stabilization",
+    description: "User-defined smoothing, perspective lock, crop limit, and rolling-shutter skew.",
+    default_config: createDefaultStabilizationStudioConfigClient("custom")
+  }
+];
+
+export function normalizeStabilizationStudioConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const rawPreset = String(src.preset_id || "handheld_cinema_glide").trim().toLowerCase();
+  const presetId = ALLOWED_STABILIZATION_PRESET_IDS.includes(rawPreset)
+    ? rawPreset
+    : "handheld_cinema_glide";
+  const base = createDefaultStabilizationStudioConfigClient(presetId);
+
+  const rawMode = String(src.mode || base.mode).trim().toLowerCase();
+  const mode = ALLOWED_STABILIZATION_MODES.includes(rawMode) ? rawMode : base.mode;
+  const rawEdge = String(src.edge_mode || base.edge_mode).trim().toLowerCase();
+  const edgeMode = ALLOWED_STABILIZATION_EDGE_MODES.includes(rawEdge) ? rawEdge : base.edge_mode;
+
+  return {
+    enabled: src.enabled !== undefined ? Boolean(src.enabled) : base.enabled,
+    preset_id: presetId,
+    mode,
+    smoothing_pct: Number(stabStudioClamp(src.smoothing_pct, 0, 100, base.smoothing_pct).toFixed(2)),
+    strength_pct: Number(stabStudioClamp(src.strength_pct, 0, 100, base.strength_pct).toFixed(2)),
+    crop_ratio_min: Number(stabStudioClamp(src.crop_ratio_min, 0.5, 1.0, base.crop_ratio_min).toFixed(4)),
+    auto_zoom_fill: src.auto_zoom_fill !== undefined ? Boolean(src.auto_zoom_fill) : base.auto_zoom_fill,
+    rolling_shutter_skew_ms: Number(
+      stabStudioClamp(src.rolling_shutter_skew_ms, -40, 40, base.rolling_shutter_skew_ms).toFixed(2)
+    ),
+    edge_mode: edgeMode,
+    width: Math.round(stabStudioClamp(src.width, 320, 7680, base.width)),
+    height: Math.round(stabStudioClamp(src.height, 240, 4320, base.height)),
+    fps: Number(stabStudioClamp(src.fps, 1, 120, base.fps).toFixed(3)),
+    duration_s: Number(stabStudioClamp(src.duration_s, 0.25, 3600, base.duration_s).toFixed(4)),
+    playhead_norm: Number(stabStudioClamp(src.playhead_norm, 0, 1, base.playhead_norm).toFixed(4)),
+    compare_split: src.compare_split !== undefined ? Boolean(src.compare_split) : base.compare_split
+  };
+}
+
+function computeStabModeAttenuationClient(mode, smoothingPct, strengthPct) {
+  const smoothNorm = stabStudioClamp(smoothingPct / 100.0, 0, 1, 0.5);
+  const strengthNorm = stabStudioClamp(strengthPct / 100.0, 0, 1, 0.7);
+  if (mode === "camera_lock") {
+    const driftKeep = Math.max(0.0, (1.0 - strengthNorm) * 0.35);
+    const jitterKeep = Math.max(0.02, (1.0 - strengthNorm * 0.96) * (1.0 - 0.75 * smoothNorm));
+    return [driftKeep, jitterKeep, driftKeep * 0.5];
+  }
+  if (mode === "perspective") {
+    const driftKeep = (1.0 - 0.85 * smoothNorm) * (1.0 - 0.40 * strengthNorm);
+    const jitterKeep = Math.max(0.03, (1.0 - 0.92 * strengthNorm) * (1.0 - 0.55 * smoothNorm));
+    const rollKeep = Math.max(0.03, (1.0 - 0.88 * strengthNorm) * (1.0 - 0.45 * smoothNorm));
+    return [driftKeep, jitterKeep, rollKeep];
+  }
+  if (mode === "similarity") {
+    const driftKeep = (1.0 - 0.72 * smoothNorm) * (1.0 - 0.30 * strengthNorm);
+    const jitterKeep = Math.max(0.04, (1.0 - 0.86 * strengthNorm) * (1.0 - 0.50 * smoothNorm));
+    const rollKeep = Math.max(0.05, (1.0 - 0.80 * strengthNorm) * (1.0 - 0.40 * smoothNorm));
+    return [driftKeep, jitterKeep, rollKeep];
+  }
+  const driftKeep = (1.0 - 0.70 * smoothNorm) * (1.0 - 0.25 * strengthNorm);
+  const jitterKeep = Math.max(0.05, (1.0 - 0.82 * strengthNorm) * (1.0 - 0.45 * smoothNorm));
+  return [driftKeep, jitterKeep, 1.0];
+}
+
+function sampleStabCameraMotionClient(u, cfg, driftKeep, jitterKeep, rollKeep) {
+  const tau = 2.0 * Math.PI;
+  const slowPan = 14.0 * Math.sin(tau * (1.25 * u + 0.08));
+  const hiPan = 8.5 * Math.sin(tau * (4.7 * u + 0.21)) + 4.2 * Math.cos(tau * (11.3 * u + 0.05));
+  const rawPan = slowPan + hiPan;
+
+  const slowTilt = 9.5 * Math.cos(tau * (0.95 * u + 0.14));
+  const hiTilt = 6.4 * Math.sin(tau * (5.3 * u + 0.37)) + 3.1 * Math.sin(tau * (12.8 * u + 0.19));
+  const rawTilt = slowTilt + hiTilt;
+
+  const slowRoll = 1.65 * Math.sin(tau * (1.45 * u + 0.11));
+  const hiRoll = 0.95 * Math.cos(tau * (6.1 * u + 0.29)) + 0.42 * Math.sin(tau * (10.7 * u));
+  const rawRoll = slowRoll + hiRoll;
+
+  let stabPan = rawPan;
+  let stabTilt = rawTilt;
+  let stabRoll = rawRoll;
+  let resJitter = Math.hypot(hiPan, hiTilt);
+  if (cfg.enabled) {
+    stabPan = slowPan * driftKeep + hiPan * jitterKeep;
+    stabTilt = slowTilt * driftKeep + hiTilt * jitterKeep;
+    stabRoll = cfg.mode === "translation" ? rawRoll : slowRoll * rollKeep + hiRoll * jitterKeep;
+    resJitter = cfg.mode === "camera_lock"
+      ? Math.hypot(stabPan, stabTilt)
+      : Math.hypot(stabPan - slowPan * driftKeep, stabTilt - slowTilt * driftKeep);
+  }
+  return {
+    t_norm: Number(u.toFixed(4)),
+    raw_pan_px: Number(rawPan.toFixed(3)),
+    stab_pan_px: Number(stabPan.toFixed(3)),
+    raw_tilt_px: Number(rawTilt.toFixed(3)),
+    stab_tilt_px: Number(stabTilt.toFixed(3)),
+    raw_roll_deg: Number(rawRoll.toFixed(3)),
+    stab_roll_deg: Number(stabRoll.toFixed(3)),
+    residual_jitter_px: Number(resJitter.toFixed(3))
+  };
+}
+
+export function evaluateStabilizationStudioClient(rawConfig, opts = {}) {
+  const cfg = normalizeStabilizationStudioConfigClient(rawConfig);
+  const count = Math.max(9, Math.min(257, Math.round(Number(opts.sample_count || 65))));
+  const [driftKeep, jitterKeep, rollKeep] = computeStabModeAttenuationClient(
+    cfg.mode, cfg.smoothing_pct, cfg.strength_pct
+  );
+
+  const samples = [];
+  let rawSqSum = 0;
+  let stabSqSum = 0;
+  let peakPan = 0;
+  let peakTilt = 0;
+  let peakRoll = 0;
+  let maxCompX = 0;
+  let maxCompY = 0;
+  let maxCompRoll = 0;
+
+  const tau = 2.0 * Math.PI;
+  for (let i = 0; i < count; i++) {
+    const u = i / (count - 1);
+    const smp = sampleStabCameraMotionClient(u, cfg, driftKeep, jitterKeep, rollKeep);
+    samples.push(smp);
+
+    const slowPan = 14.0 * Math.sin(tau * (1.25 * u + 0.08));
+    const slowTilt = 9.5 * Math.cos(tau * (0.95 * u + 0.14));
+    const rawDev = cfg.mode === "camera_lock"
+      ? Math.hypot(smp.raw_pan_px, smp.raw_tilt_px)
+      : Math.hypot(smp.raw_pan_px - slowPan, smp.raw_tilt_px - slowTilt);
+    rawSqSum += rawDev * rawDev;
+    stabSqSum += smp.residual_jitter_px * smp.residual_jitter_px;
+
+    peakPan = Math.max(peakPan, Math.abs(smp.raw_pan_px));
+    peakTilt = Math.max(peakTilt, Math.abs(smp.raw_tilt_px));
+    peakRoll = Math.max(peakRoll, Math.abs(smp.raw_roll_deg));
+    maxCompX = Math.max(maxCompX, Math.abs(smp.raw_pan_px - smp.stab_pan_px));
+    maxCompY = Math.max(maxCompY, Math.abs(smp.raw_tilt_px - smp.stab_tilt_px));
+    maxCompRoll = Math.max(maxCompRoll, Math.abs(smp.raw_roll_deg - smp.stab_roll_deg));
+  }
+
+  const rawRms = Math.sqrt(rawSqSum / count);
+  const stabRms = Math.sqrt(stabSqSum / count);
+  const jitterReduction = (!cfg.enabled || rawRms <= 1e-6)
+    ? 0.0
+    : stabStudioClamp((1.0 - stabRms / rawRms) * 100.0, 0.0, 99.9, 0.0);
+
+  const skewAbs = Math.abs(cfg.rolling_shutter_skew_ms);
+  const jelloRepairPct = (cfg.enabled && skewAbs >= 0.1)
+    ? Number((stabStudioClamp(skewAbs / 22.0, 0, 1, 0) * 92.0).toFixed(1))
+    : 0.0;
+
+  let requiredCropRatio = 1.0;
+  let effectiveCropRatio = 1.0;
+  let zoomComp = 1.0;
+  let borderRisk = false;
+
+  if (cfg.enabled) {
+    const rollMarginPx = Math.sin((maxCompRoll * Math.PI) / 180.0) * 320.0;
+    const skewMarginPx = skewAbs * 0.45;
+    const marginNorm = Math.min(
+      0.42,
+      Math.max((maxCompX + skewMarginPx) / 220.0, (maxCompY + rollMarginPx) / 145.0)
+    );
+    requiredCropRatio = Number(stabStudioClamp(1.0 - marginNorm, 0.50, 1.0, 1.0).toFixed(4));
+    if (cfg.auto_zoom_fill && cfg.edge_mode === "crop_zoom") {
+      effectiveCropRatio = Number(Math.max(cfg.crop_ratio_min, requiredCropRatio).toFixed(4));
+      zoomComp = Number((1.0 / Math.max(0.50, effectiveCropRatio)).toFixed(4));
+      borderRisk = requiredCropRatio < (cfg.crop_ratio_min - 1e-4);
+    } else if (cfg.auto_zoom_fill) {
+      effectiveCropRatio = Number(Math.max(cfg.crop_ratio_min, requiredCropRatio).toFixed(4));
+      zoomComp = Number((1.0 / Math.max(0.50, effectiveCropRatio)).toFixed(4));
+      borderRisk = false;
+    } else {
+      effectiveCropRatio = 1.0;
+      zoomComp = 1.0;
+      borderRisk = marginNorm > 0.015 && cfg.edge_mode === "black";
+    }
+  }
+
+  const phSmp = sampleStabCameraMotionClient(cfg.playhead_norm, cfg, driftKeep, jitterKeep, rollKeep);
+  return {
+    enabled: cfg.enabled,
+    preset_id: cfg.preset_id,
+    mode: cfg.mode,
+    edge_mode: cfg.edge_mode,
+    raw_rms_px: Number(rawRms.toFixed(2)),
+    stabilized_rms_px: Number(stabRms.toFixed(2)),
+    jitter_reduction_pct: Number(jitterReduction.toFixed(1)),
+    peak_pan_px: Number(peakPan.toFixed(2)),
+    peak_tilt_px: Number(peakTilt.toFixed(2)),
+    peak_roll_deg: Number(peakRoll.toFixed(2)),
+    jello_repair_pct: jelloRepairPct,
+    required_crop_ratio: requiredCropRatio,
+    effective_crop_ratio: effectiveCropRatio,
+    zoom_compensation_ratio: zoomComp,
+    safe_frame_width_norm: effectiveCropRatio,
+    safe_frame_height_norm: effectiveCropRatio,
+    border_clipping_risk: borderRisk,
+    playhead_raw_pan_px: phSmp.raw_pan_px,
+    playhead_stab_pan_px: phSmp.stab_pan_px,
+    playhead_raw_tilt_px: phSmp.raw_tilt_px,
+    playhead_stab_tilt_px: phSmp.stab_tilt_px,
+    playhead_roll_deg: phSmp.stab_roll_deg,
+    samples
+  };
+}
+
+export function compileStabilizationStudioFiltergraphClient(rawConfig) {
+  const cfg = normalizeStabilizationStudioConfigClient(rawConfig);
+  const evalRes = evaluateStabilizationStudioClient(cfg, { sample_count: 33 });
+
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      preset_id: cfg.preset_id,
+      mode: cfg.mode,
+      edge_mode: cfg.edge_mode,
+      zoom_compensation_ratio: 1.0,
+      pass1_vidstabdetect: "null",
+      pass2_vidstabtransform: "null",
+      deshake_fallback_vf: "null",
+      rolling_shutter_vf: "null",
+      crop_scale_vf: "null",
+      vf_chain: "null",
+      ffmpeg_pass1_command: 'ffmpeg -i input.mp4 -vf "null" -f null -',
+      ffmpeg_pass2_command: 'ffmpeg -i input.mp4 -vf "null" output.mp4',
+      ffmpeg_command: 'ffmpeg -i input.mp4 -vf "null" output.mp4',
+      warnings: []
+    };
+  }
+
+  const warnings = [];
+  const shakiness = Math.max(1, Math.min(10, Math.round(3 + (cfg.strength_pct / 100.0) * 7)));
+  const accuracy = (cfg.mode === "perspective" || cfg.mode === "camera_lock") ? 15 : 12;
+  const stepsize = cfg.mode === "camera_lock" ? 6 : 16;
+  const tripodFlag = cfg.mode === "camera_lock" ? 1 : 0;
+  const pass1Detect =
+    `vidstabdetect=shakiness=${shakiness}:accuracy=${accuracy}:stepsize=${stepsize}:tripod=${tripodFlag}:result=transforms.trf`;
+
+  const smoothingFrames = Math.max(0, Math.min(60, Math.round((cfg.smoothing_pct / 100.0) * 45)));
+  const optalgo = cfg.mode === "camera_lock" ? "avg" : "gauss";
+  const optzoom = cfg.auto_zoom_fill ? 2 : 0;
+  const maxZoomPct = Math.max(0, (1.0 / cfg.crop_ratio_min - 1.0) * 100.0);
+  const zoomPct = Math.max(0, (evalRes.zoom_compensation_ratio - 1.0) * 100.0);
+  const maxshift = Math.max(8, Math.min(128, Math.round(16 + (cfg.strength_pct / 100.0) * 64)));
+  const maxangle = cfg.mode === "translation" ? "0" : "-1";
+  const vidstabCrop = cfg.edge_mode === "black" ? "black" : "keep";
+  const pass2Transform =
+    `vidstabtransform=input=transforms.trf:smoothing=${smoothingFrames}:optalgo=${optalgo}:optzoom=${optzoom}:zoom=${zoomPct.toFixed(1)}:maxshift=${maxshift}:maxangle=${maxangle}:crop=${vidstabCrop}:interpol=bicubic:tripod=${tripodFlag}`;
+
+  const deshakeEdge = cfg.edge_mode === "mirror_border"
+    ? "mirror"
+    : (cfg.edge_mode === "black" ? "blank" : "clamp");
+  const rx = Math.max(8, Math.min(64, Math.round(16 + (cfg.strength_pct / 100.0) * 48)));
+  const ry = Math.max(8, Math.min(64, Math.round(16 + (cfg.strength_pct / 100.0) * 48)));
+  const deshakeFallback = `deshake=rx=${rx}:ry=${ry}:edge=${deshakeEdge}:blocksize=8`;
+
+  const skewMs = cfg.rolling_shutter_skew_ms;
+  let rollingShutterVf = "null";
+  if (Math.abs(skewMs) >= 0.1) {
+    const skewPx = ((skewMs / 40.0) * 18.0).toFixed(2);
+    const shearX = ((skewMs / 40.0) * 0.035).toFixed(5);
+    const w = cfg.width;
+    const h = cfg.height;
+    const x3 = (w + Number(skewPx)).toFixed(2);
+    rollingShutterVf =
+      `shear=shx=${shearX}:shy=0:fillcolor=black,perspective=x0=0:y0=0:x1=${w}:y1=0:x2=${skewPx}:y2=${h}:x3=${x3}:y3=${h}:interpolation=linear`;
+  }
+
+  const cropRatio = evalRes.effective_crop_ratio;
+  const cropScaleVf = cropRatio < 0.9999
+    ? `crop=iw*${cropRatio.toFixed(4)}:ih*${cropRatio.toFixed(4)},scale=${cfg.width}:${cfg.height}:flags=lanczos`
+    : `scale=${cfg.width}:${cfg.height}:flags=lanczos`;
+
+  const chainParts = [];
+  if (rollingShutterVf !== "null") chainParts.push(rollingShutterVf);
+  chainParts.push(pass2Transform);
+  chainParts.push(cropScaleVf);
+  const vfChain = chainParts.join(",");
+
+  if (evalRes.border_clipping_risk) {
+    warnings.push(
+      `Required crop ratio (${evalRes.required_crop_ratio.toFixed(2)}) exceeds crop_ratio_min (${cfg.crop_ratio_min.toFixed(2)}) or auto_zoom_fill is disabled (max zoom ${maxZoomPct.toFixed(1)}%).`
+    );
+  }
+  if (cfg.mode === "camera_lock") {
+    warnings.push("Camera Lock pins perspective to initial frame; verify static tripod subject framing.");
+  }
+
+  const singleParts = [rollingShutterVf, deshakeFallback, cropScaleVf].filter((p) => p !== "null");
+  return {
+    enabled: true,
+    preset_id: cfg.preset_id,
+    mode: cfg.mode,
+    edge_mode: cfg.edge_mode,
+    zoom_compensation_ratio: evalRes.zoom_compensation_ratio,
+    pass1_vidstabdetect: pass1Detect,
+    pass2_vidstabtransform: pass2Transform,
+    deshake_fallback_vf: deshakeFallback,
+    rolling_shutter_vf: rollingShutterVf,
+    crop_scale_vf: cropScaleVf,
+    vf_chain: vfChain,
+    ffmpeg_pass1_command: `ffmpeg -i input.mp4 -vf "${pass1Detect}" -f null -`,
+    ffmpeg_pass2_command: `ffmpeg -i input.mp4 -vf "${vfChain}" -c:a copy output.mp4`,
+    ffmpeg_command: `ffmpeg -i input.mp4 -vf "${singleParts.join(",")}" -c:a copy output.mp4`,
+    warnings
+  };
+}
+
+export function exportStabilizationStudioJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizeStabilizationStudioConfigClient(rawConfig);
+  const evalRes = evaluateStabilizationStudioClient(cfg, { sample_count: 33 });
+  const compiled = compileStabilizationStudioFiltergraphClient(cfg);
+  const cleanTitle = String(opts.title || "TAKTCUT_STABILIZATION_STUDIO")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "TAKTCUT_STABILIZATION_STUDIO";
+  const hosts = [
+    "DaVinci Resolve Inspector Stabilization",
+    "Adobe Premiere Pro Warp Stabilizer",
+    "Boris FX Mocha Camera Lock",
+    "FFmpeg vidstab / deshake"
+  ];
+  const payload = {
+    schema_version: "taktcut.stabilization_studio.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: hosts,
+    stabilization: {
+      enabled: cfg.enabled,
+      mode: cfg.mode,
+      smoothing_pct: cfg.smoothing_pct,
+      strength_pct: cfg.strength_pct,
+      crop_ratio_min: cfg.crop_ratio_min,
+      auto_zoom_fill: cfg.auto_zoom_fill,
+      rolling_shutter_skew_ms: cfg.rolling_shutter_skew_ms,
+      edge_mode: cfg.edge_mode,
+      width: cfg.width,
+      height: cfg.height,
+      fps: cfg.fps,
+      duration_s: cfg.duration_s
+    },
+    metrics: {
+      raw_rms_px: evalRes.raw_rms_px,
+      stabilized_rms_px: evalRes.stabilized_rms_px,
+      jitter_reduction_pct: evalRes.jitter_reduction_pct,
+      jello_repair_pct: evalRes.jello_repair_pct,
+      required_crop_ratio: evalRes.required_crop_ratio,
+      effective_crop_ratio: evalRes.effective_crop_ratio,
+      zoom_compensation_ratio: evalRes.zoom_compensation_ratio,
+      border_clipping_risk: evalRes.border_clipping_risk
+    },
+    ffmpeg: {
+      pass1_vidstabdetect: compiled.pass1_vidstabdetect,
+      pass2_vidstabtransform: compiled.pass2_vidstabtransform,
+      deshake_fallback_vf: compiled.deshake_fallback_vf,
+      rolling_shutter_vf: compiled.rolling_shutter_vf,
+      crop_scale_vf: compiled.crop_scale_vf,
+      vf_chain: compiled.vf_chain
+    }
+  };
+  return {
+    schema_version: "taktcut.stabilization_studio.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: hosts,
+    json_text: JSON.stringify(payload, null, 2),
+    filename: `${cleanTitle.toLowerCase()}_${cfg.preset_id}_stabilization_studio.json`,
+    saved_path: null
+  };
+}
+
+export function applyStabilizationStudioToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const cfg = normalizeStabilizationStudioConfigClient(rawConfig);
+  const trackIndex = Number(opts.track_index || 1);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === "video" && t.index === trackIndex)
+    || (nextDoc.tracks || []).find((t) => t.kind === "video");
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error(`Video track V${trackIndex} has no clips`);
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, Number(opts.clip_index || 0)));
+  const clip = trk.clips[safeIdx];
+  const docFps = nextDoc.fps && nextDoc.fps.num > 0 && nextDoc.fps.den > 0
+    ? nextDoc.fps.num / nextDoc.fps.den
+    : cfg.fps;
+  const clipDurS = Math.max(0.25, Number(clip.duration_frames || 0) / Math.max(1, docFps));
+  const scopedCfg = {
+    ...cfg,
+    width: Number(nextDoc.width || cfg.width),
+    height: Number(nextDoc.height || cfg.height),
+    fps: Number(docFps.toFixed(3)),
+    duration_s: Number(clipDurS.toFixed(4))
+  };
+  const evalRes = evaluateStabilizationStudioClient(scopedCfg, { sample_count: 33 });
+  const compiled = compileStabilizationStudioFiltergraphClient(scopedCfg);
+
+  trk.clips[safeIdx] = {
+    ...clip,
+    stabilization_studio: {
+      enabled: scopedCfg.enabled,
+      preset_id: scopedCfg.preset_id,
+      mode: scopedCfg.mode,
+      smoothing_pct: scopedCfg.smoothing_pct,
+      strength_pct: scopedCfg.strength_pct,
+      crop_ratio_min: scopedCfg.crop_ratio_min,
+      auto_zoom_fill: scopedCfg.auto_zoom_fill,
+      rolling_shutter_skew_ms: scopedCfg.rolling_shutter_skew_ms,
+      edge_mode: scopedCfg.edge_mode,
+      raw_rms_px: evalRes.raw_rms_px,
+      stabilized_rms_px: evalRes.stabilized_rms_px,
+      jitter_reduction_pct: evalRes.jitter_reduction_pct,
+      zoom_compensation_ratio: evalRes.zoom_compensation_ratio,
+      ffmpeg_vf: compiled.vf_chain.slice(0, 16384),
+      ffmpeg_pass1_vf: compiled.pass1_vidstabdetect.slice(0, 4096)
+    }
+  };
+  return nextDoc;
+}

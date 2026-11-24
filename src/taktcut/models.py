@@ -1449,6 +1449,28 @@ class ClipRetimeStudioTrack(BaseModel):
     control_points: list[ClipRetimeStudioPointRef] = Field(default_factory=list)
 
 
+class ClipStabilizationStudioTrack(BaseModel):
+    """Non-destructive Camera Stabilization, Perspective Lock & Rolling-Shutter Repair track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    preset_id: str = Field(default="handheld_cinema_glide", max_length=64)
+    mode: Literal["perspective", "similarity", "translation", "camera_lock"] = "similarity"
+    smoothing_pct: float = Field(default=52.0, ge=0.0, le=100.0)
+    strength_pct: float = Field(default=68.0, ge=0.0, le=100.0)
+    crop_ratio_min: float = Field(default=0.88, ge=0.50, le=1.00)
+    auto_zoom_fill: bool = True
+    rolling_shutter_skew_ms: float = Field(default=0.0, ge=-40.0, le=40.0)
+    edge_mode: Literal["crop_zoom", "mirror_border", "black"] = "crop_zoom"
+    raw_rms_px: float = Field(default=0.0, ge=0.0, le=500.0)
+    stabilized_rms_px: float = Field(default=0.0, ge=0.0, le=500.0)
+    jitter_reduction_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    zoom_compensation_ratio: float = Field(default=1.0, ge=1.0, le=2.5)
+    ffmpeg_vf: str = Field(default="", max_length=16384)
+    ffmpeg_pass1_vf: str = Field(default="", max_length=4096)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1480,6 +1502,7 @@ class TimelineClip(BaseModel):
     optical_glow: ClipOpticalGlowTrack | None = None
     power_window: ClipPowerWindowTrack | None = None
     retime_studio: ClipRetimeStudioTrack | None = None
+    stabilization_studio: ClipStabilizationStudioTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

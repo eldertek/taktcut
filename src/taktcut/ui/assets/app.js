@@ -34,6 +34,8 @@ import {
   drawRetimeRampEditorCanvas,
   drawRetimeStudioCadenceCanvas,
   drawRetimeStudioCurveCanvas,
+  drawStabilizationTrajectoryCanvas,
+  drawStabilizationViewportCanvas,
   drawSceneCutConfidenceCanvas,
   drawSourceMonitorCanvas,
   drawStereoVuMeterCanvas,
@@ -187,6 +189,7 @@ import {
   applyOpticalGlowToDocumentClient,
   applyPowerWindowToDocumentClient,
   applyRetimeStudioToDocumentClient,
+  applyStabilizationStudioToDocumentClient,
   applySplitEditJlInDocument,
   auditMediaPoolLinksClient,
   autoSwitchMulticamSpeakersClient,
@@ -214,6 +217,7 @@ import {
   compileProxyPlanClient,
   compileRetimeFilterClient,
   compileRetimeStudioFiltergraphClient,
+  compileStabilizationStudioFiltergraphClient,
   compileRoughcutSelectFiltergraphClient,
   compileSplitEditFiltergraphClient,
   compileTransitionFilterClient,
@@ -244,6 +248,7 @@ import {
   createDefaultPowerWindow,
   createDefaultPowerWindowConfigClient,
   createDefaultRetimeStudioConfigClient,
+  createDefaultStabilizationStudioConfigClient,
   createDefaultQualifier,
   createDefaultQualifierKeyerConfigClient,
   createEmptyTransformKeyframes,
@@ -266,6 +271,7 @@ import {
   evaluateRetimeSpeedAt,
   evaluateRetimeStudioCurveClient,
   evaluateRetimeStudioSpeedAtClient,
+  evaluateStabilizationStudioClient,
   evaluateTitleMotionState,
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
@@ -275,6 +281,7 @@ import {
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
   exportRetimeStudioJsonClient,
+  exportStabilizationStudioJsonClient,
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
   interpolatePowerWindowAtTimeClient,
@@ -283,6 +290,7 @@ import {
   normalizeOpticalGlowConfigClient,
   normalizePowerWindowConfigClient,
   normalizeRetimeStudioConfigClient,
+  normalizeStabilizationStudioConfigClient,
   resolveMulticamStudioSegmentsClient,
   simulatePowerWindowTrackClient,
   syncMulticamStudioAnglesClient,
@@ -765,6 +773,18 @@ const state = {
     compiled: null,
     exportedJson: null,
     selectedPointIdx: 1,
+    dragState: null,
+    playing: false,
+    rafId: null,
+    lastTs: 0,
+    syncSeq: 0
+  },
+  stabStudio: {
+    isOpen: false,
+    config: createDefaultStabilizationStudioConfigClient("handheld_cinema_glide"),
+    evalResult: null,
+    compiled: null,
+    exportedJson: null,
     dragState: null,
     playing: false,
     rafId: null,
@@ -13295,6 +13315,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+A", descKey: "shortcuts.key.opticalGlowStudio" },
       { kbd: "Shift+W", descKey: "shortcuts.key.powerWindowStudio" },
       { kbd: "Shift+Y", descKey: "shortcuts.key.retimeStudio" },
+      { kbd: "Shift+X", descKey: "shortcuts.key.stabilizationStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13404,6 +13425,22 @@ function handleTransportKeydown(ev) {
     if ((ev.code === "Space" || ev.key === " ") && !(ev.target instanceof Element && ev.target.tagName === "BUTTON")) {
       ev.preventDefault();
       toggleRetimeStudioPlay();
+      return;
+    }
+    return;
+  }
+
+  const stabStudioDlg = byId("stabilization-studio-dialog");
+  if (stabStudioDlg && stabStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeStabilizationStudioDialog();
+      return;
+    }
+    if (isEditableTarget(ev.target)) return;
+    if ((ev.code === "Space" || ev.key === " ") && !(ev.target instanceof Element && ev.target.tagName === "BUTTON")) {
+      ev.preventDefault();
+      toggleStabilizationStudioPlay();
       return;
     }
     return;
@@ -13605,6 +13642,11 @@ function handleTransportKeydown(ev) {
     if (lower === "y") {
       ev.preventDefault();
       openRetimeStudioDialog();
+      return;
+    }
+    if (lower === "x") {
+      ev.preventDefault();
+      openStabilizationStudioDialog();
       return;
     }
   }
@@ -20291,6 +20333,7 @@ function wireEvents() {
   wireOpticalGlowStudioEvents();
   wirePowerWindowStudioEvents();
   wireRetimeStudioEvents();
+  wireStabilizationStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -28583,6 +28626,540 @@ function wireRetimeStudioEvents() {
       // Clipboard may be unavailable in headless mode
     }
     setRtStudioStatus(t("rtStudio.status.copied"));
+  });
+}
+
+// ============================================================================
+// CAMERA STABILIZATION, PERSPECTIVE LOCK & ROLLING-SHUTTER STUDIO (CYCLE #111)
+// ============================================================================
+
+function setStabStudioStatus(msg) {
+  const el = byId("stab-status-note");
+  if (el) el.textContent = String(msg || "");
+}
+
+function refreshStabStudioLocalDerived() {
+  const st = state.stabStudio;
+  st.evalResult = evaluateStabilizationStudioClient(st.config, { sample_count: 65 });
+  st.compiled = compileStabilizationStudioFiltergraphClient(st.config);
+}
+
+function syncStabilizationStudioUI() {
+  const st = state.stabStudio;
+  const cfg = normalizeStabilizationStudioConfigClient(st.config);
+  st.config = cfg;
+  if (!st.evalResult) refreshStabStudioLocalDerived();
+  const ev = st.evalResult;
+  const comp = st.compiled;
+
+  const presetBadge = byId("stab-active-preset-badge");
+  if (presetBadge) presetBadge.textContent = cfg.preset_id.toUpperCase().replace(/_/g, " ");
+
+  const teleBadge = byId("stab-telemetry-badge");
+  if (teleBadge && ev) {
+    teleBadge.textContent = `JITTER -${ev.jitter_reduction_pct.toFixed(0)}% | ZOOM ${ev.zoom_compensation_ratio.toFixed(2)}x`;
+  }
+
+  for (const btn of document.querySelectorAll(".stab-preset-btn[data-stab-studio-preset]")) {
+    const pid = btn.getAttribute("data-stab-studio-preset");
+    const active = pid === cfg.preset_id;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const modeEl = byId("stab-mode");
+  if (modeEl) modeEl.value = cfg.mode;
+  const edgeEl = byId("stab-edge-mode");
+  if (edgeEl) edgeEl.value = cfg.edge_mode;
+  const azEl = byId("stab-auto-zoom-fill");
+  if (azEl) azEl.checked = Boolean(cfg.auto_zoom_fill);
+  const cmpEl = byId("stab-compare-split");
+  if (cmpEl) cmpEl.checked = Boolean(cfg.compare_split);
+  const enEl = byId("stab-enabled");
+  if (enEl) enEl.checked = Boolean(cfg.enabled);
+
+  const cmpBtn = byId("btn-stab-compare-toggle");
+  if (cmpBtn) cmpBtn.setAttribute("aria-pressed", cfg.compare_split ? "true" : "false");
+
+  const playBtn = byId("btn-stab-play");
+  if (playBtn) {
+    playBtn.setAttribute("aria-pressed", st.playing ? "true" : "false");
+    playBtn.textContent = st.playing ? "Pause" : t("stabStudio.btn.play");
+  }
+
+  const phSlider = byId("stab-playhead-slider");
+  if (phSlider) phSlider.value = String(Math.round(cfg.playhead_norm * 100));
+  const phLbl = byId("stab-playhead-label");
+  if (phLbl) phLbl.textContent = cfg.playhead_norm.toFixed(2);
+
+  const syncInputVal = (id, val, digits = null) => {
+    const el = byId(id);
+    if (!el) return;
+    if (document.activeElement === el && el.type === "number") return;
+    el.value = digits !== null ? Number(val).toFixed(digits) : String(val);
+  };
+
+  syncInputVal("stab-smoothing", Math.round(cfg.smoothing_pct));
+  syncInputVal("stab-smoothing-num", Math.round(cfg.smoothing_pct));
+  syncInputVal("stab-strength", Math.round(cfg.strength_pct));
+  syncInputVal("stab-strength-num", Math.round(cfg.strength_pct));
+  syncInputVal("stab-crop-min", cfg.crop_ratio_min, 2);
+  syncInputVal("stab-crop-min-num", cfg.crop_ratio_min, 2);
+  syncInputVal("stab-skew", cfg.rolling_shutter_skew_ms, 1);
+  syncInputVal("stab-skew-num", cfg.rolling_shutter_skew_ms, 1);
+
+  const jelloBadge = byId("stab-jello-badge");
+  if (jelloBadge) {
+    jelloBadge.textContent = `${cfg.rolling_shutter_skew_ms >= 0 ? "+" : ""}${cfg.rolling_shutter_skew_ms.toFixed(1)} ms`;
+  }
+
+  if (ev) {
+    const cropReadout = byId("stab-crop-readout");
+    if (cropReadout) {
+      cropReadout.textContent = `CROP ${Math.round(ev.effective_crop_ratio * 100)}% | ${ev.zoom_compensation_ratio.toFixed(2)}x`;
+    }
+    const rmsBadge = byId("stab-rms-badge");
+    if (rmsBadge) rmsBadge.textContent = `RMS ${ev.stabilized_rms_px.toFixed(1)}px`;
+    const riskBadge = byId("stab-risk-badge");
+    if (riskBadge) riskBadge.textContent = ev.border_clipping_risk ? "CLIP RISK" : "SAFE";
+
+    const rawEl = byId("stab-metric-raw-rms");
+    if (rawEl) rawEl.textContent = `${ev.raw_rms_px.toFixed(1)}px`;
+    const stabEl = byId("stab-metric-stab-rms");
+    if (stabEl) stabEl.textContent = `${ev.stabilized_rms_px.toFixed(1)}px`;
+    const redEl = byId("stab-metric-reduction");
+    if (redEl) redEl.textContent = `${ev.jitter_reduction_pct.toFixed(1)}%`;
+    const zoomEl = byId("stab-metric-zoom");
+    if (zoomEl) zoomEl.textContent = `${ev.zoom_compensation_ratio.toFixed(2)}x`;
+  }
+
+  const fgEl = byId("stab-fg-output");
+  if (fgEl && comp) fgEl.textContent = `${comp.pass1_vidstabdetect}\n${comp.vf_chain}`;
+  const jsEl = byId("stab-json-preview");
+  if (jsEl && st.exportedJson) jsEl.textContent = st.exportedJson.json_text || "";
+
+  const vpCanvas = byId("stab-viewport-canvas");
+  if (vpCanvas) drawStabilizationViewportCanvas(vpCanvas, cfg, { evalResult: ev });
+  const trCanvas = byId("stab-trajectory-canvas");
+  if (trCanvas) drawStabilizationTrajectoryCanvas(trCanvas, cfg, { evalResult: ev });
+}
+
+async function syncStabilizationStudioServer() {
+  const st = state.stabStudio;
+  const seq = ++st.syncSeq;
+  refreshStabStudioLocalDerived();
+  syncStabilizationStudioUI();
+  try {
+    const [evRes, compRes] = await Promise.all([
+      api.evaluateStabilizationStudio({ config: st.config, sample_count: 65 }),
+      api.compileStabilizationStudio({ config: st.config })
+    ]);
+    if (seq !== state.stabStudio.syncSeq) return;
+    if (evRes) state.stabStudio.evalResult = evRes;
+    if (compRes) state.stabStudio.compiled = compRes;
+    syncStabilizationStudioUI();
+  } catch {
+    // Offline fallback already computed locally
+  }
+}
+
+function updateStabStudioConfig(patch, opts = {}) {
+  const st = state.stabStudio;
+  const nextRaw = { ...st.config, ...patch };
+  if (opts.customPreset && patch.preset_id === undefined) {
+    nextRaw.preset_id = "custom";
+  }
+  st.config = normalizeStabilizationStudioConfigClient(nextRaw);
+  refreshStabStudioLocalDerived();
+  syncStabilizationStudioUI();
+}
+
+function toggleStabilizationStudioPlay() {
+  const st = state.stabStudio;
+  st.playing = !st.playing;
+  if (!st.playing) {
+    if (st.rafId) cancelAnimationFrame(st.rafId);
+    st.rafId = null;
+    syncStabilizationStudioUI();
+    return;
+  }
+  st.lastTs = performance.now();
+  const step = (ts) => {
+    if (!state.stabStudio.playing) return;
+    const dt = Math.max(0, Math.min(0.1, (ts - state.stabStudio.lastTs) / 1000));
+    state.stabStudio.lastTs = ts;
+    let nextT = Number(state.stabStudio.config.playhead_norm || 0) + dt * 0.25;
+    if (nextT > 1) nextT = 0;
+    state.stabStudio.config = normalizeStabilizationStudioConfigClient({
+      ...state.stabStudio.config,
+      playhead_norm: Number(nextT.toFixed(4))
+    });
+    refreshStabStudioLocalDerived();
+    syncStabilizationStudioUI();
+    state.stabStudio.rafId = requestAnimationFrame(step);
+  };
+  syncStabilizationStudioUI();
+  st.rafId = requestAnimationFrame(step);
+}
+
+function openStabilizationStudioDialog() {
+  const dlg = byId("stabilization-studio-dialog");
+  if (!dlg) return;
+  const selInfo = getSelectedClipTrack();
+  const docW = state.timelineDoc && state.timelineDoc.width ? Number(state.timelineDoc.width) : 1920;
+  const docH = state.timelineDoc && state.timelineDoc.height ? Number(state.timelineDoc.height) : 1080;
+  const fpsVal = state.timelineDoc && state.timelineDoc.fps ? state.timelineDoc.fps.num / state.timelineDoc.fps.den : 25;
+  if (selInfo && selInfo.clip) {
+    const durS = Math.max(0.25, Number(selInfo.clip.duration_frames || 150) / Math.max(1, fpsVal));
+    if (selInfo.clip.stabilization_studio) {
+      state.stabStudio.config = normalizeStabilizationStudioConfigClient({
+        ...selInfo.clip.stabilization_studio,
+        width: docW,
+        height: docH,
+        fps: fpsVal,
+        duration_s: durS
+      });
+    } else {
+      state.stabStudio.config = normalizeStabilizationStudioConfigClient({
+        ...state.stabStudio.config,
+        width: docW,
+        height: docH,
+        fps: fpsVal,
+        duration_s: durS
+      });
+    }
+  }
+  state.stabStudio.isOpen = true;
+  if (!dlg.open && typeof dlg.showModal === "function") dlg.showModal();
+  refreshStabStudioLocalDerived();
+  syncStabilizationStudioUI();
+  syncStabilizationStudioServer();
+}
+
+function closeStabilizationStudioDialog() {
+  const st = state.stabStudio;
+  st.playing = false;
+  if (st.rafId) cancelAnimationFrame(st.rafId);
+  st.rafId = null;
+  st.isOpen = false;
+  const dlg = byId("stabilization-studio-dialog");
+  if (dlg && dlg.open && typeof dlg.close === "function") dlg.close();
+}
+
+async function applyStabilizationStudioToTimelineAction() {
+  if (!state.timelineDoc) return;
+  const st = state.stabStudio;
+  const selInfo = getSelectedClipTrack();
+  const trackIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyStabilizationStudio({
+      document: state.timelineDoc,
+      config: st.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      pushTimelineUndoSnapshot("Apply Stabilization Studio");
+      applyTimelineMutationResponse(res, { syncClipSelection: true });
+      setStabStudioStatus(t("stabStudio.status.applied"));
+    }
+  } catch (err) {
+    try {
+      const nextDoc = applyStabilizationStudioToDocumentClient(state.timelineDoc, st.config, {
+        track_index: trackIndex,
+        clip_index: clipIndex
+      });
+      pushTimelineUndoSnapshot("Apply Stabilization Studio");
+      state.timelineDoc = nextDoc;
+      renderTimelineUI();
+      setStabStudioStatus(t("stabStudio.status.applied"));
+    } catch {
+      setStabStudioStatus(`Apply failed: ${err.message || err}`);
+    }
+  }
+}
+
+async function sendStabilizationStudioToDeliverAction() {
+  const st = state.stabStudio;
+  let compiled = st.compiled;
+  try {
+    compiled = await api.compileStabilizationStudio({ config: st.config });
+    if (compiled) st.compiled = compiled;
+  } catch {
+    compiled = compileStabilizationStudioFiltergraphClient(st.config);
+  }
+  const outEl = byId("render-filtergraph-preview") || byId("fx-filtergraph-output");
+  if (outEl && compiled && compiled.vf_chain) {
+    outEl.textContent = compiled.vf_chain;
+  }
+  closeStabilizationStudioDialog();
+  switchTab("render");
+  setStabStudioStatus(t("stabStudio.status.deliver"));
+}
+
+async function exportStabilizationStudioJsonAction() {
+  const st = state.stabStudio;
+  try {
+    const res = await api.exportStabilizationStudioJson({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`
+    });
+    st.exportedJson = res;
+    const drawer = byId("stab-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncStabilizationStudioUI();
+    setStabStudioStatus(
+      t("stabStudio.status.exportedJson").replace(
+        "{schema}",
+        String(res.schema_version || "taktcut.stabilization_studio.v1")
+      )
+    );
+  } catch (err) {
+    setStabStudioStatus(`JSON export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadStabilizationStudioJsonAction() {
+  const st = state.stabStudio;
+  const filename = `taktcut_${st.config.preset_id}_stabilization_studio.json`;
+  try {
+    const blob = await api.downloadStabilizationStudioBlob({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`,
+      filename
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setStabStudioStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+function wireStabilizationStudioEvents() {
+  byId("btn-timeline-stabilization-studio")?.addEventListener("click", openStabilizationStudioDialog);
+  byId("btn-inspector-stabilization-studio")?.addEventListener("click", openStabilizationStudioDialog);
+  byId("btn-fx-stabilization-studio")?.addEventListener("click", openStabilizationStudioDialog);
+  byId("btn-close-stabilization-studio")?.addEventListener("click", closeStabilizationStudioDialog);
+
+  const dlg = byId("stabilization-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeStabilizationStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeStabilizationStudioDialog();
+    });
+    dlg.addEventListener("close", () => {
+      state.stabStudio.playing = false;
+      state.stabStudio.isOpen = false;
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".stab-preset-btn[data-stab-studio-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-stab-studio-preset") || "handheld_cinema_glide";
+      const presetCfg = createDefaultStabilizationStudioConfigClient(pid);
+      state.stabStudio.config = normalizeStabilizationStudioConfigClient({
+        ...presetCfg,
+        width: state.stabStudio.config.width,
+        height: state.stabStudio.config.height,
+        fps: state.stabStudio.config.fps,
+        duration_s: state.stabStudio.config.duration_s
+      });
+      refreshStabStudioLocalDerived();
+      syncStabilizationStudioUI();
+      syncStabilizationStudioServer();
+      const ev = state.stabStudio.evalResult;
+      setStabStudioStatus(
+        t("stabStudio.status.presetApplied")
+          .replace("{preset}", pid)
+          .replace("{red}", ev ? ev.jitter_reduction_pct.toFixed(1) : "80.0")
+          .replace("{zoom}", ev ? ev.zoom_compensation_ratio.toFixed(2) : "1.14")
+      );
+    });
+  }
+
+  byId("stab-mode")?.addEventListener("change", (ev) => {
+    updateStabStudioConfig({ mode: ev.target.value }, { customPreset: true });
+    syncStabilizationStudioServer();
+  });
+  byId("stab-edge-mode")?.addEventListener("change", (ev) => {
+    updateStabStudioConfig({ edge_mode: ev.target.value }, { customPreset: true });
+    syncStabilizationStudioServer();
+  });
+  byId("stab-auto-zoom-fill")?.addEventListener("change", (ev) => {
+    updateStabStudioConfig({ auto_zoom_fill: Boolean(ev.target.checked) });
+    syncStabilizationStudioServer();
+  });
+  byId("stab-compare-split")?.addEventListener("change", (ev) => {
+    updateStabStudioConfig({ compare_split: Boolean(ev.target.checked) });
+  });
+  byId("stab-enabled")?.addEventListener("change", (ev) => {
+    updateStabStudioConfig({ enabled: Boolean(ev.target.checked) });
+    syncStabilizationStudioServer();
+  });
+
+  byId("btn-stab-play")?.addEventListener("click", toggleStabilizationStudioPlay);
+  byId("btn-stab-compare-toggle")?.addEventListener("click", () => {
+    updateStabStudioConfig({ compare_split: !state.stabStudio.config.compare_split });
+  });
+  byId("btn-stab-reset")?.addEventListener("click", () => {
+    const base = createDefaultStabilizationStudioConfigClient("handheld_cinema_glide");
+    state.stabStudio.config = normalizeStabilizationStudioConfigClient({
+      ...base,
+      width: state.stabStudio.config.width,
+      height: state.stabStudio.config.height,
+      fps: state.stabStudio.config.fps,
+      duration_s: state.stabStudio.config.duration_s
+    });
+    refreshStabStudioLocalDerived();
+    syncStabilizationStudioUI();
+    syncStabilizationStudioServer();
+  });
+
+  byId("stab-playhead-slider")?.addEventListener("input", (ev) => {
+    const val = Math.max(0, Math.min(1, Number(ev.target.value) / 100));
+    updateStabStudioConfig({ playhead_norm: Number(val.toFixed(2)) });
+  });
+
+  const bindStabRangePair = (rangeId, numId, key, minV, maxV, customPreset = true) => {
+    const rangeEl = byId(rangeId);
+    const numEl = byId(numId);
+    if (rangeEl) {
+      rangeEl.addEventListener("input", () => {
+        const v = Number.parseFloat(rangeEl.value);
+        if (Number.isFinite(v)) updateStabStudioConfig({ [key]: v }, { customPreset });
+      });
+      rangeEl.addEventListener("change", () => syncStabilizationStudioServer());
+    }
+    if (numEl) {
+      numEl.addEventListener("input", () => {
+        const v = Number.parseFloat(numEl.value);
+        if (Number.isFinite(v) && v >= minV && v <= maxV) {
+          updateStabStudioConfig({ [key]: v }, { customPreset });
+        }
+      });
+      numEl.addEventListener("change", () => {
+        const v = Number.parseFloat(numEl.value);
+        const clamped = Number.isFinite(v) ? Math.min(maxV, Math.max(minV, v)) : state.stabStudio.config[key];
+        updateStabStudioConfig({ [key]: clamped }, { customPreset });
+        syncStabilizationStudioServer();
+      });
+    }
+  };
+  bindStabRangePair("stab-smoothing", "stab-smoothing-num", "smoothing_pct", 0, 100);
+  bindStabRangePair("stab-strength", "stab-strength-num", "strength_pct", 0, 100);
+  bindStabRangePair("stab-crop-min", "stab-crop-min-num", "crop_ratio_min", 0.5, 1.0);
+  bindStabRangePair("stab-skew", "stab-skew-num", "rolling_shutter_skew_ms", -40, 40, false);
+
+  // Interactive crop-box corner handle drag on viewport canvas
+  const vpCanvas = byId("stab-viewport-canvas");
+  if (vpCanvas) {
+    vpCanvas.addEventListener("pointerdown", (ev) => {
+      const meta = vpCanvas._stabViewportMeta;
+      if (!meta) return;
+      const rect = vpCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      let hitHandle = null;
+      for (const h of meta.handles || []) {
+        if (Math.hypot(x - h.x, y - h.y) <= h.r) {
+          hitHandle = h;
+          break;
+        }
+      }
+      if (hitHandle) {
+        state.stabStudio.dragState = { kind: "crop", meta };
+        try {
+          vpCanvas.setPointerCapture(ev.pointerId);
+        } catch {
+          // Ignore synthetic pointer events
+        }
+      } else {
+        const tNorm = Math.max(0, Math.min(1, (x - meta.frameX) / Math.max(1, meta.frameW)));
+        updateStabStudioConfig({ playhead_norm: Number(tNorm.toFixed(3)) });
+      }
+    });
+
+    vpCanvas.addEventListener("pointermove", (ev) => {
+      const drag = state.stabStudio.dragState;
+      if (!drag || drag.kind !== "crop") return;
+      const rect = vpCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      const m = drag.meta;
+      const cx = m.frameX + m.frameW * 0.5;
+      const cy = m.frameY + m.frameH * 0.5;
+      const rx = Math.abs(x - cx) / Math.max(1, m.frameW * 0.5);
+      const ry = Math.abs(y - cy) / Math.max(1, m.frameH * 0.5);
+      const nextRatio = Math.max(0.5, Math.min(1.0, Math.max(rx, ry)));
+      updateStabStudioConfig({ crop_ratio_min: Number(nextRatio.toFixed(2)) }, { customPreset: true });
+    });
+
+    const endVpDrag = () => {
+      if (state.stabStudio.dragState && state.stabStudio.dragState.kind === "crop") {
+        state.stabStudio.dragState = null;
+        syncStabilizationStudioServer();
+      }
+    };
+    vpCanvas.addEventListener("pointerup", endVpDrag);
+    vpCanvas.addEventListener("pointercancel", endVpDrag);
+  }
+
+  // Interactive trajectory graph playhead scrubbing
+  const trCanvas = byId("stab-trajectory-canvas");
+  if (trCanvas) {
+    const scrubTraj = (ev) => {
+      const meta = trCanvas._stabTrajMeta;
+      if (!meta) return;
+      const rect = trCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const u = Math.max(0, Math.min(1, (x - meta.padL) / Math.max(1, meta.plotW)));
+      updateStabStudioConfig({ playhead_norm: Number(u.toFixed(3)) });
+    };
+    trCanvas.addEventListener("pointerdown", (ev) => {
+      state.stabStudio.dragState = { kind: "scrub" };
+      try {
+        trCanvas.setPointerCapture(ev.pointerId);
+      } catch {
+        // Ignore synthetic pointer events
+      }
+      scrubTraj(ev);
+    });
+    trCanvas.addEventListener("pointermove", (ev) => {
+      if (state.stabStudio.dragState && state.stabStudio.dragState.kind === "scrub") {
+        scrubTraj(ev);
+      }
+    });
+    const endTraj = () => {
+      if (state.stabStudio.dragState && state.stabStudio.dragState.kind === "scrub") {
+        state.stabStudio.dragState = null;
+      }
+    };
+    trCanvas.addEventListener("pointerup", endTraj);
+    trCanvas.addEventListener("pointercancel", endTraj);
+  }
+
+  byId("btn-stab-apply-timeline")?.addEventListener("click", applyStabilizationStudioToTimelineAction);
+  byId("btn-stab-send-deliver")?.addEventListener("click", sendStabilizationStudioToDeliverAction);
+  byId("btn-stab-export-json")?.addEventListener("click", exportStabilizationStudioJsonAction);
+  byId("btn-stab-download-json")?.addEventListener("click", downloadStabilizationStudioJsonAction);
+  byId("btn-stab-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.stabStudio.compiled || compileStabilizationStudioFiltergraphClient(state.stabStudio.config);
+    try {
+      await navigator.clipboard.writeText(compiled.vf_chain || "");
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    setStabStudioStatus(t("stabStudio.status.copied"));
   });
 }
 

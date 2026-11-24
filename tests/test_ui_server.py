@@ -14950,3 +14950,317 @@ def test_ui_playwright_retime_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_ui_stabilization_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/fx/stabilization/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 5
+    assert "tripod_perspective_lock" in meta["preset_ids"]
+    assert "camera_lock" in meta["modes"]
+    assert "mirror_border" in meta["edge_modes"]
+
+    ev_status, _, ev_raw = _http_call(
+        f"{base_url}/api/fx/stabilization/evaluate",
+        method="POST",
+        payload={"config": {"preset_id": "tripod_perspective_lock"}},
+    )
+    assert ev_status == 200
+    ev_payload = json.loads(ev_raw.decode("utf-8"))
+    assert ev_payload["raw_rms_px"] > ev_payload["stabilized_rms_px"]
+    assert ev_payload["jitter_reduction_pct"] >= 90.0
+    assert len(ev_payload["samples"]) == 65
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/stabilization/compile",
+        method="POST",
+        payload={
+            "config": {
+                "preset_id": "rolling_shutter_fix",
+                "rolling_shutter_skew_ms": -18.0,
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert "vidstabdetect=" in compiled["pass1_vidstabdetect"]
+    assert "vidstabtransform=" in compiled["pass2_vidstabtransform"]
+    assert "deshake=" in compiled["deshake_fallback_vf"]
+    assert "perspective=" in compiled["rolling_shutter_vf"]
+    assert "shear=" in compiled["rolling_shutter_vf"]
+    assert "crop=" in compiled["crop_scale_vf"]
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/fx/stabilization/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "tripod_perspective_lock"},
+            "title": "Tripod Lock",
+            "out_path": "exports/tripod_stab.json",
+        },
+    )
+    assert ex_status == 200
+    exported = json.loads(ex_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/tripod_stab.json"
+    assert (workspace / "exports" / "tripod_stab.json").is_file()
+    assert exported["schema_version"] == "taktcut.stabilization_studio.v1"
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/fx/stabilization/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "handheld_cinema_glide"},
+            "out_path": "../escape_stab.json",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    dl_status, dl_headers, dl_raw = _http_call(
+        f"{base_url}/api/fx/stabilization/download",
+        method="POST",
+        payload={
+            "config": {"preset_id": "tripod_perspective_lock"},
+            "title": "Lock DL",
+            "filename": "../../evil_stab.json",
+        },
+    )
+    assert dl_status == 200
+    disp = dl_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "taktcut.stabilization_studio.v1" in dl_raw.decode("utf-8")
+
+    # Apply to Timeline document
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+    ap_status, _, ap_raw = _http_call(
+        f"{base_url}/api/fx/stabilization/apply",
+        method="POST",
+        payload={
+            "document": doc_payload,
+            "config": {
+                "preset_id": "tripod_perspective_lock",
+                "rolling_shutter_skew_ms": -14.0,
+            },
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert ap_status == 200
+    ap_data = json.loads(ap_raw.decode("utf-8"))
+    assert ap_data["changed"] is True
+    assert ap_data["validation"]["valid"] is True
+    stab_clip = ap_data["document"]["tracks"][0]["clips"][0]["stabilization_studio"]
+    assert stab_clip["preset_id"] == "tripod_perspective_lock"
+    assert stab_clip["rolling_shutter_skew_ms"] == -14.0
+
+    # Node.js static-demo parity check via demo_adapter.js
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getStabilizationStudioPresets();
+assert.equal(pre.presets.length, 5);
+const ev = await api.evaluateStabilizationStudio({{
+  config: {{ preset_id: "tripod_perspective_lock" }}
+}});
+assert.ok(ev.raw_rms_px > ev.stabilized_rms_px);
+assert.ok(ev.jitter_reduction_pct >= 90);
+const comp = await api.compileStabilizationStudio({{
+  config: {{ preset_id: "rolling_shutter_fix", rolling_shutter_skew_ms: -18.0 }}
+}});
+assert.ok(comp.pass1_vidstabdetect.includes("vidstabdetect="));
+assert.ok(comp.vf_chain.includes("vidstabtransform="));
+assert.ok(comp.rolling_shutter_vf.includes("perspective="));
+const exp = await api.exportStabilizationStudioJson({{
+  config: {{ preset_id: "tripod_perspective_lock" }},
+  title: "Demo Stab"
+}});
+assert.equal(exp.schema_version, "taktcut.stabilization_studio.v1");
+const blob = await api.downloadStabilizationStudioBlob({{
+  config: {{ preset_id: "tripod_perspective_lock" }},
+  title: "Demo Stab DL"
+}});
+assert.ok((await blob.text()).includes("taktcut.stabilization_studio.v1"));
+const sampleDoc = {{
+  title: "Demo",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [{{
+    index: 1,
+    kind: "video",
+    name: "V1",
+    clips: [{{
+      name: "C1",
+      track_index: 1,
+      media_type: "video",
+      start_frame: 0,
+      duration_frames: 100
+    }}]
+  }}]
+}};
+const applied = await api.applyStabilizationStudio({{
+  document: sampleDoc,
+  config: {{ preset_id: "tripod_perspective_lock", rolling_shutter_skew_ms: -14.0 }},
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(applied.changed, true);
+assert.equal(applied.validation.valid, true);
+assert.equal(
+  applied.document.tracks[0].clips[0].stabilization_studio.preset_id,
+  "tripod_perspective_lock"
+);
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_stabilization_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#btn-timeline-stabilization-studio")
+
+            # Open Stabilization Studio via Shift+X shortcut
+            page.keyboard.press("Shift+X")
+            page.wait_for_selector("#stabilization-studio-dialog[open]")
+
+            # Drag crop-box corner handle on viewport canvas
+            crop_before = float(page.input_value("#stab-crop-min-num"))
+            drag_pt = page.evaluate(
+                """() => {
+                  const c = document.getElementById('stab-viewport-canvas');
+                  const r = c.getBoundingClientRect();
+                  const m = c._stabViewportMeta;
+                  const h = m.handles[3];
+                  return { x: r.left + h.x, y: r.top + h.y };
+                }"""
+            )
+            page.mouse.move(drag_pt["x"], drag_pt["y"])
+            page.mouse.down()
+            page.mouse.move(drag_pt["x"] - 36, drag_pt["y"] - 22, steps=4)
+            page.mouse.up()
+            crop_after = float(page.input_value("#stab-crop-min-num"))
+            assert crop_after != crop_before
+
+            # Switch preset to tripod_perspective_lock & adjust rolling_shutter_skew_ms
+            page.click(".stab-preset-btn[data-stab-studio-preset='tripod_perspective_lock']")
+            page.wait_for_function(
+                "() => (document.getElementById('stab-active-preset-badge')?.textContent || '')"
+                ".includes('TRIPOD PERSPECTIVE LOCK')"
+            )
+            page.fill("#stab-skew-num", "-16")
+            page.dispatch_event("#stab-skew-num", "change")
+            page.wait_for_function(
+                "() => (document.getElementById('stab-jello-badge')?.textContent || '')"
+                ".includes('-16.0 ms')"
+            )
+
+            # Export JSON taktcut.stabilization_studio.v1
+            page.click("#btn-stab-export-json")
+            page.wait_for_function(
+                "() => (document.getElementById('stab-json-preview')?.textContent || '')"
+                ".includes('taktcut.stabilization_studio.v1')"
+            )
+            fg_text = page.locator("#stab-fg-output").text_content() or ""
+            assert "vidstabdetect=" in fg_text
+            assert "vidstabtransform=" in fg_text
+            assert "perspective=" in fg_text
+
+            # Apply to Timeline
+            page.click("#btn-stab-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('stab-status-note')?.textContent || '')"
+                ".includes('Timeline')"
+            )
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#btn-close-stabilization-studio")
+            page.click("#lang-fr")
+            page.click("#btn-timeline-stabilization-studio")
+            page.wait_for_selector("#stabilization-studio-dialog[open]")
+            fr_txt = page.locator("#stabilization-studio-dialog").text_content() or ""
+            assert "Verrou Perspective" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-stabilization-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-timeline-stabilization-studio")
+            page.wait_for_selector("#stabilization-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('stabilization-studio-dialog')"
+                ".getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-timeline-stabilization-studio",
+                "btn-stab-play",
+                "btn-stab-compare-toggle",
+                "btn-stab-apply-timeline",
+                "btn-stab-send-deliver",
+                "btn-stab-export-json",
+                "btn-close-stabilization-studio",
+                "stab-smoothing-num",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-stabilization-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

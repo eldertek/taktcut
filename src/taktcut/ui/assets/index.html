@@ -1205,6 +1205,7 @@
                   <div class="viewer-controls">
                     <span id="clip-retime-badge" class="nle-tag mono">1.0x NORMAL</span>
                     <button type="button" id="btn-inspector-retime-studio" class="btn btn-mini rt-studio-btn" data-i18n="rtStudio.btn.inspector" title="Open Optical-Flow Speed-Ramp &amp; Freeze-Frame Studio (Shift+Y)">Speed Studio</button>
+                    <button type="button" id="btn-inspector-stabilization-studio" class="btn btn-mini stab-studio-btn" data-i18n="stabStudio.btn.inspector" title="Open Camera Stabilization, Perspective Lock &amp; Jello Repair Studio (Shift+X)">Stabilizer</button>
                     <button type="button" id="btn-clip-retime-to-deliver" class="btn btn-mini" data-i18n="timeline.retime.sendDeliver">Use in Deliver</button>
                   </div>
                 </div>
@@ -1543,6 +1544,15 @@
                   <span data-i18n="rtStudio.btn.toolbar">Retime Studio</span>
                   <span class="kbd-chip mono">Shift+Y</span>
                 </button>
+                <button type="button" id="btn-timeline-stabilization-studio" class="btn btn-mini tl-stab-studio-btn stab-studio-btn" title="Open Camera Stabilization, Perspective Lock &amp; Rolling-Shutter Jello Studio (Shift+X)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <rect x="2.5" y="3" width="11" height="10" rx="1" stroke="#34d399" stroke-width="1.3" fill="none"/>
+                    <rect x="4.5" y="4.8" width="7" height="6.4" stroke="#f59e0b" stroke-width="1" stroke-dasharray="2 1.5" fill="none"/>
+                    <circle cx="8" cy="8" r="1.3" fill="#38bdf8"/>
+                  </svg>
+                  <span data-i18n="stabStudio.btn.toolbar">Stabilizer</span>
+                  <span class="kbd-chip mono">Shift+X</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1763,6 +1773,10 @@
                 <button type="button" id="btn-fx-retime-studio" class="btn btn-secondary rt-studio-btn" title="Open Optical-Flow Speed-Ramp, Freeze-Frame &amp; Pitch-Lock Retime Studio (Shift+Y)">
                   <span data-i18n="rtStudio.btn.fx">Retime Studio</span>
                   <span class="kbd-chip mono">Shift+Y</span>
+                </button>
+                <button type="button" id="btn-fx-stabilization-studio" class="btn btn-secondary stab-studio-btn" title="Open Camera Stabilization, Perspective Lock &amp; Rolling-Shutter Jello Studio (Shift+X)">
+                  <span data-i18n="stabStudio.btn.fx">Stabilizer Studio</span>
+                  <span class="kbd-chip mono">Shift+X</span>
                 </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
@@ -5832,6 +5846,183 @@
         <div class="fg-drawer-body">
           <pre id="rt-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="rt-json-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="stabilization-studio-dialog" class="nle-dialog stab-studio-dialog" aria-labelledby="stab-studio-title" aria-describedby="stab-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="stab-studio-title" data-i18n="stabStudio.dialog.title">DaVinci Stabilization, Perspective Lock &amp; Rolling-Shutter Studio</h2>
+        <p id="stab-studio-subtitle" class="nle-dialog-subtitle" data-i18n="stabStudio.dialog.subtitle">Camera Motion Smoothing, Mocha Perspective Lock, Safe Crop-Box Auto-Zoom &amp; CMOS Jello Repair</p>
+      </div>
+      <div class="stab-header-actions">
+        <span id="stab-active-preset-badge" class="nle-tag mono">HANDHELD CINEMA GLIDE</span>
+        <span id="stab-telemetry-badge" class="nle-tag mono stab-telemetry-pill">JITTER -84% | ZOOM 1.14x</span>
+        <button type="button" id="btn-close-stabilization-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body stab-dialog-body">
+      <div class="stab-preset-strip" id="stab-preset-strip" role="group" aria-label="Camera Stabilization Studio presets">
+        <span class="pill-label" data-i18n="stabStudio.presetsLabel">STABILIZATION PRESETS</span>
+        <button type="button" class="btn btn-chip stab-preset-btn is-active" data-stab-studio-preset="handheld_cinema_glide" aria-pressed="true" data-i18n="stabStudio.preset.handheld_cinema_glide">Handheld Cinema</button>
+        <button type="button" class="btn btn-chip stab-preset-btn" data-stab-studio-preset="tripod_perspective_lock" aria-pressed="false" data-i18n="stabStudio.preset.tripod_perspective_lock">Tripod Lock</button>
+        <button type="button" class="btn btn-chip stab-preset-btn" data-stab-studio-preset="action_gimbal_smooth" aria-pressed="false" data-i18n="stabStudio.preset.action_gimbal_smooth">Action Gimbal</button>
+        <button type="button" class="btn btn-chip stab-preset-btn" data-stab-studio-preset="rolling_shutter_fix" aria-pressed="false" data-i18n="stabStudio.preset.rolling_shutter_fix">Jello Repair</button>
+        <button type="button" class="btn btn-chip stab-preset-btn" data-stab-studio-preset="custom" aria-pressed="false" data-i18n="stabStudio.preset.custom">Custom</button>
+      </div>
+
+      <div class="stab-toolbar-bar">
+        <div class="stab-mode-group">
+          <label class="inline-label" for="stab-mode" data-i18n="stabStudio.modeLabel">Solve Mode</label>
+          <select id="stab-mode" class="input-control mono">
+            <option value="perspective" data-i18n="stabStudio.mode.perspective">Perspective</option>
+            <option value="similarity" selected data-i18n="stabStudio.mode.similarity">Similarity</option>
+            <option value="translation" data-i18n="stabStudio.mode.translation">Translation</option>
+            <option value="camera_lock" data-i18n="stabStudio.mode.camera_lock">Camera Lock (Tripod)</option>
+          </select>
+          <label class="inline-label" for="stab-edge-mode" data-i18n="stabStudio.edgeLabel">Edge Fill</label>
+          <select id="stab-edge-mode" class="input-control mono">
+            <option value="crop_zoom" selected data-i18n="stabStudio.edge.crop_zoom">Crop + Auto-Zoom</option>
+            <option value="mirror_border" data-i18n="stabStudio.edge.mirror_border">Mirror Border</option>
+            <option value="black" data-i18n="stabStudio.edge.black">Black Border</option>
+          </select>
+        </div>
+
+        <div class="stab-flags-group">
+          <label class="inline-check" for="stab-auto-zoom-fill">
+            <input type="checkbox" id="stab-auto-zoom-fill" checked>
+            <span data-i18n="stabStudio.autoZoomLabel">Auto-Zoom Fill</span>
+          </label>
+          <label class="inline-check" for="stab-compare-split">
+            <input type="checkbox" id="stab-compare-split">
+            <span data-i18n="stabStudio.compareLabel">Before/After Split</span>
+          </label>
+          <label class="inline-check" for="stab-enabled">
+            <input type="checkbox" id="stab-enabled" checked>
+            <span data-i18n="stabStudio.enabledLabel">Enable Stabilizer</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="stab-workstation-grid">
+        <div class="stab-viewport-col">
+          <div class="stab-card">
+            <div class="pane-subheader">
+              <span data-i18n="stabStudio.viewportTitle">Stabilized Safe-Frame Envelope &amp; Crop-Box (Drag Corner Handles = Min Crop)</span>
+              <span id="stab-crop-readout" class="nle-tag mono">CROP 88% | 1.14x</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="stab-viewport-canvas" class="studio-canvas stab-viewport-canvas" aria-label="Camera Stabilization safe frame and crop-box canvas"></canvas>
+            </div>
+          </div>
+
+          <div class="stab-card">
+            <div class="pane-subheader">
+              <span data-i18n="stabStudio.trajTitle">Temporal Trajectory Graph (Raw vs Stabilized Pan / Tilt / Roll)</span>
+              <span id="stab-rms-badge" class="nle-tag mono">RMS 1.8px</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="stab-trajectory-canvas" class="studio-canvas stab-trajectory-canvas" aria-label="Camera motion trajectory waveform graph"></canvas>
+            </div>
+            <div class="stab-traj-toolbar">
+              <button type="button" id="btn-stab-play" class="btn btn-mini" aria-pressed="false" data-i18n="stabStudio.btn.play">Play</button>
+              <button type="button" id="btn-stab-compare-toggle" class="btn btn-mini" aria-pressed="false" data-i18n="stabStudio.btn.compare">A/B Wipe</button>
+              <button type="button" id="btn-stab-reset" class="btn btn-mini" data-i18n="stabStudio.btn.reset">Reset</button>
+              <div class="stab-time-ctrl">
+                <label class="inline-label" for="stab-playhead-slider" data-i18n="stabStudio.timeLabel">Frame</label>
+                <input type="range" id="stab-playhead-slider" min="0" max="100" step="1" value="35" aria-label="Stabilization Studio playhead scrubber">
+                <span id="stab-playhead-label" class="mono nle-tag">0.35</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stab-inspector-col stab-card">
+          <div class="pane-subheader">
+            <span data-i18n="stabStudio.inspectorTitle">Resolve Stabilization Inspector</span>
+            <span id="stab-risk-badge" class="nle-tag mono">SAFE</span>
+          </div>
+
+          <div class="stab-param-field">
+            <label for="stab-smoothing-num" data-i18n="stabStudio.param.smoothing">Trajectory Smoothing (%)</label>
+            <div class="stab-range-pair">
+              <input type="range" id="stab-smoothing" min="0" max="100" step="1" value="52" aria-label="Trajectory smoothing percentage slider">
+              <input type="number" id="stab-smoothing-num" class="input-control input-num mono" min="0" max="100" step="1" value="52">
+            </div>
+          </div>
+
+          <div class="stab-param-field">
+            <label for="stab-strength-num" data-i18n="stabStudio.param.strength">Stabilization Strength (%)</label>
+            <div class="stab-range-pair">
+              <input type="range" id="stab-strength" min="0" max="100" step="1" value="68" aria-label="Stabilization strength percentage slider">
+              <input type="number" id="stab-strength-num" class="input-control input-num mono" min="0" max="100" step="1" value="68">
+            </div>
+          </div>
+
+          <div class="stab-param-field">
+            <label for="stab-crop-min-num" data-i18n="stabStudio.param.cropRatioMin">Min Crop Ratio (0.50..1.00)</label>
+            <div class="stab-range-pair">
+              <input type="range" id="stab-crop-min" min="0.50" max="1.00" step="0.01" value="0.88" aria-label="Minimum safe crop ratio slider">
+              <input type="number" id="stab-crop-min-num" class="input-control input-num mono" min="0.50" max="1.00" step="0.01" value="0.88">
+            </div>
+          </div>
+
+          <div class="stab-jello-box">
+            <div class="stab-jello-head">
+              <span class="stab-jello-title" data-i18n="stabStudio.jelloTitle">Rolling-Shutter Jello Repair (CMOS Skew)</span>
+              <span id="stab-jello-badge" class="nle-tag mono">0.0 ms</span>
+            </div>
+            <div class="stab-param-field">
+              <label for="stab-skew-num" data-i18n="stabStudio.param.skewMs">Sensor Readout Skew (ms, -40..+40)</label>
+              <div class="stab-range-pair">
+                <input type="range" id="stab-skew" min="-40" max="40" step="0.5" value="0" aria-label="Rolling shutter skew compensation milliseconds slider">
+                <input type="number" id="stab-skew-num" class="input-control input-num mono" min="-40" max="40" step="0.5" value="0.0">
+              </div>
+            </div>
+          </div>
+
+          <div class="stab-metrics-grid mono" id="stab-metrics-grid">
+            <div class="stab-metric-cell">
+              <span class="stab-metric-k" data-i18n="stabStudio.metric.rawRms">Raw RMS</span>
+              <span class="stab-metric-v" id="stab-metric-raw-rms">9.2px</span>
+            </div>
+            <div class="stab-metric-cell">
+              <span class="stab-metric-k" data-i18n="stabStudio.metric.stabRms">Stab RMS</span>
+              <span class="stab-metric-v" id="stab-metric-stab-rms">1.8px</span>
+            </div>
+            <div class="stab-metric-cell">
+              <span class="stab-metric-k" data-i18n="stabStudio.metric.reduction">Jitter Red.</span>
+              <span class="stab-metric-v" id="stab-metric-reduction">80.4%</span>
+            </div>
+            <div class="stab-metric-cell">
+              <span class="stab-metric-k" data-i18n="stabStudio.metric.zoomComp">Zoom Comp</span>
+              <span class="stab-metric-v" id="stab-metric-zoom">1.14x</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="stab-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="stabStudio.status.idle">Drag crop-box corners on the viewport, scrub the trajectory graph, or switch stabilization presets.</div>
+
+      <div class="btn-row stab-actions">
+        <button type="button" id="btn-stab-apply-timeline" class="btn btn-primary" data-i18n="stabStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-stab-send-deliver" class="btn btn-secondary" data-i18n="stabStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-stab-export-json" class="btn btn-secondary" data-i18n="stabStudio.btn.exportJson">Export JSON</button>
+        <button type="button" id="btn-stab-download-json" class="btn btn-secondary" data-i18n="stabStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-stab-copy-fg" class="btn btn-mini" data-i18n="stabStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="stab-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="stabStudio.drawerTitle">FFmpeg Pipeline (vidstabdetect / vidstabtransform / deshake / perspective) &amp; JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="stab-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="stab-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

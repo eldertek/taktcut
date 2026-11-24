@@ -46,6 +46,8 @@ import {
   evaluateRetimeStudioCurveClient,
   evaluateRetimeStudioSpeedAtClient,
   normalizeRetimeStudioConfigClient,
+  evaluateStabilizationStudioClient,
+  normalizeStabilizationStudioConfigClient,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
   evaluateCstRgbClient,
@@ -13995,4 +13997,334 @@ export function drawRetimeStudioCadenceCanvas(canvas, rawConfig, evalResult) {
   ctx.fillStyle = cfg.pitch_preserve ? "#34d399" : "#f59e0b";
   ctx.textAlign = "right";
   ctx.fillText(cfg.pitch_preserve ? "PITCH LOCK ON" : "ATEMPO", padL + plotW, 12);
+}
+
+// ============================================================================
+// CAMERA STABILIZATION, PERSPECTIVE LOCK & ROLLING-SHUTTER CANVAS (CYCLE #111)
+// ============================================================================
+
+export function drawStabilizationViewportCanvas(canvas, rawConfig, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 224);
+  if (!ctx) return null;
+
+  const cfg = normalizeStabilizationStudioConfigClient(rawConfig);
+  const evalRes = opts.evalResult || evaluateStabilizationStudioClient(cfg, { sample_count: 65 });
+
+  ctx.fillStyle = "#080b10";
+  ctx.fillRect(0, 0, w, h);
+
+  // Outer 16:9 viewport frame
+  const padX = 22;
+  const padY = 26;
+  const availW = Math.max(120, w - padX * 2);
+  const availH = Math.max(80, h - padY - 16);
+  const targetAspect = cfg.width / Math.max(1, cfg.height);
+  let frameW = availW;
+  let frameH = frameW / targetAspect;
+  if (frameH > availH) {
+    frameH = availH;
+    frameW = frameH * targetAspect;
+  }
+  const frameX = (w - frameW) * 0.5;
+  const frameY = padY + (availH - frameH) * 0.5;
+
+  // Checker/dark border fill backdrop
+  ctx.fillStyle = "#0f141e";
+  ctx.fillRect(frameX, frameY, frameW, frameH);
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.28)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(frameX, frameY, frameW, frameH);
+
+  // Playhead displacement & rolling-shutter skew preview
+  const rawDx = evalRes.playhead_raw_pan_px * 1.15;
+  const rawDy = evalRes.playhead_raw_tilt_px * 1.15;
+  const stabDx = evalRes.playhead_stab_pan_px * 1.15;
+  const stabDy = evalRes.playhead_stab_tilt_px * 1.15;
+  const skewShift = cfg.enabled ? (cfg.rolling_shutter_skew_ms / 40.0) * 14.0 : 0.0;
+  const rollRad = (evalRes.playhead_roll_deg * Math.PI) / 180.0;
+
+  const drawSyntheticScene = (offsetX, offsetY, rotRad, skewPx, alphaTint) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(frameX, frameY, frameW, frameH);
+    ctx.clip();
+
+    const cx = frameX + frameW * 0.5 + offsetX;
+    const cy = frameY + frameH * 0.5 + offsetY;
+    ctx.translate(cx, cy);
+    ctx.rotate(rotRad);
+
+    // Horizon + architectural vertical pillars (shows rolling shutter jello & perspective lock)
+    const skyGrad = ctx.createLinearGradient(0, -frameH * 0.5, 0, frameH * 0.5);
+    skyGrad.addColorStop(0, "#172554");
+    skyGrad.addColorStop(0.54, "#1e293b");
+    skyGrad.addColorStop(0.55, "#0f172a");
+    skyGrad.addColorStop(1, "#0b1120");
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(-frameW * 0.65, -frameH * 0.65, frameW * 1.3, frameH * 1.3);
+
+    // Horizon line
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-frameW * 0.6, 0);
+    ctx.lineTo(frameW * 0.6, 0);
+    ctx.stroke();
+
+    // Vertical reference pillars (illustrate shear/jello vs corrected verticals)
+    ctx.strokeStyle = alphaTint;
+    ctx.lineWidth = 2.2;
+    const colOffsets = [-0.34, -0.14, 0.14, 0.34];
+    for (const frac of colOffsets) {
+      const bx = frac * frameW;
+      ctx.beginPath();
+      ctx.moveTo(bx, -frameH * 0.38);
+      ctx.lineTo(bx + skewPx, frameH * 0.38);
+      ctx.stroke();
+    }
+
+    // Center tracking reticle
+    ctx.strokeStyle = "rgba(226, 232, 240, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, 12, 0, Math.PI * 2);
+    ctx.moveTo(-18, 0);
+    ctx.lineTo(18, 0);
+    ctx.moveTo(0, -18);
+    ctx.lineTo(0, 18);
+    ctx.stroke();
+
+    ctx.restore();
+  };
+
+  if (cfg.compare_split) {
+    // Left half = RAW shaky + jello; Right half = STABILIZED
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(frameX, frameY, frameW * 0.5, frameH);
+    ctx.clip();
+    drawSyntheticScene(rawDx, rawDy, (evalRes.peak_roll_deg * 0.6 * Math.PI) / 180.0, 9.0, "rgba(251, 113, 133, 0.85)");
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(frameX + frameW * 0.5, frameY, frameW * 0.5, frameH);
+    ctx.clip();
+    drawSyntheticScene(stabDx * 0.35, stabDy * 0.35, rollRad * 0.35, skewShift * 0.25, "rgba(56, 189, 248, 0.9)");
+    ctx.restore();
+
+    // Split wipe divider
+    const splitX = frameX + frameW * 0.5;
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(splitX, frameY);
+    ctx.lineTo(splitX, frameY + frameH);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(9, 12, 18, 0.85)";
+    ctx.fillRect(frameX + 6, frameY + 6, 42, 16);
+    ctx.fillRect(frameX + frameW - 82, frameY + 6, 76, 16);
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#fb7185";
+    ctx.fillText("RAW", frameX + 12, frameY + 14);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#34d399";
+    ctx.fillText("STABILIZED", frameX + frameW - 10, frameY + 14);
+  } else {
+    // Ghost raw offset outline + live stabilized scene
+    drawSyntheticScene(
+      cfg.enabled ? stabDx * 0.35 : rawDx,
+      cfg.enabled ? stabDy * 0.35 : rawDy,
+      cfg.enabled ? rollRad * 0.35 : (evalRes.peak_roll_deg * 0.6 * Math.PI) / 180.0,
+      cfg.enabled ? skewShift * 0.25 : 9.0,
+      cfg.enabled ? "rgba(56, 189, 248, 0.88)" : "rgba(251, 113, 133, 0.85)"
+    );
+  }
+
+  // Raw frame envelope (dashed rose) vs Stabilized Crop-Box Safe Frame (solid amber/cyan)
+  const rawShiftX = Math.max(-18, Math.min(18, rawDx * 0.55));
+  const rawShiftY = Math.max(-14, Math.min(14, rawDy * 0.55));
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = "rgba(251, 113, 133, 0.72)";
+  ctx.lineWidth = 1.4;
+  ctx.strokeRect(frameX + rawShiftX, frameY + rawShiftY, frameW, frameH);
+  ctx.restore();
+
+  // Minimum crop ratio box (user draggable)
+  const cropMinW = frameW * cfg.crop_ratio_min;
+  const cropMinH = frameH * cfg.crop_ratio_min;
+  const cropMinX = frameX + (frameW - cropMinW) * 0.5;
+  const cropMinY = frameY + (frameH - cropMinH) * 0.5;
+
+  // Effective safe frame envelope
+  const effRatio = evalRes.effective_crop_ratio || cfg.crop_ratio_min;
+  const effW = frameW * effRatio;
+  const effH = frameH * effRatio;
+  const effX = frameX + (frameW - effW) * 0.5;
+  const effY = frameY + (frameH - effH) * 0.5;
+
+  // Dim outside crop-box
+  ctx.fillStyle = evalRes.border_clipping_risk
+    ? "rgba(244, 63, 94, 0.18)"
+    : "rgba(9, 12, 18, 0.42)";
+  ctx.fillRect(frameX, frameY, frameW, Math.max(0, effY - frameY));
+  ctx.fillRect(frameX, effY + effH, frameW, Math.max(0, frameY + frameH - (effY + effH)));
+  ctx.fillRect(frameX, effY, Math.max(0, effX - frameX), effH);
+  ctx.fillRect(effX + effW, effY, Math.max(0, frameX + frameW - (effX + effW)), effH);
+
+  // Safe frame outline
+  ctx.strokeStyle = evalRes.border_clipping_risk ? "#fb7185" : "#34d399";
+  ctx.lineWidth = 1.8;
+  ctx.strokeRect(effX, effY, effW, effH);
+
+  // Draggable crop_ratio_min limit box
+  ctx.strokeStyle = "#f59e0b";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(cropMinX, cropMinY, cropMinW, cropMinH);
+
+  // Corner drag handles on cropMin box
+  const corners = [
+    { id: "tl", x: cropMinX, y: cropMinY },
+    { id: "tr", x: cropMinX + cropMinW, y: cropMinY },
+    { id: "bl", x: cropMinX, y: cropMinY + cropMinH },
+    { id: "br", x: cropMinX + cropMinW, y: cropMinY + cropMinH }
+  ];
+  for (const c of corners) {
+    ctx.fillStyle = "#f59e0b";
+    ctx.strokeStyle = "#090c12";
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(c.x - 5, c.y - 5, 10, 10);
+    ctx.strokeRect(c.x - 5, c.y - 5, 10, 10);
+  }
+
+  // Top HUD ribbon
+  ctx.fillStyle = "rgba(10, 12, 16, 0.90)";
+  ctx.fillRect(6, 4, w - 12, 18);
+  ctx.fillStyle = "#38bdf8";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const modeLbl = cfg.mode.toUpperCase().replace(/_/g, " ");
+  ctx.fillText(
+    `${modeLbl} | ZOOM ${evalRes.zoom_compensation_ratio.toFixed(2)}x | MIN CROP ${Math.round(cfg.crop_ratio_min * 100)}% | SKEW ${cfg.rolling_shutter_skew_ms >= 0 ? "+" : ""}${cfg.rolling_shutter_skew_ms.toFixed(1)}ms`,
+    12,
+    13
+  );
+
+  const meta = {
+    frameX,
+    frameY,
+    frameW,
+    frameH,
+    cropMinX,
+    cropMinY,
+    cropMinW,
+    cropMinH,
+    handles: corners.map((c) => ({ ...c, r: 14 }))
+  };
+  canvas._stabViewportMeta = meta;
+  return meta;
+}
+
+export function drawStabilizationTrajectoryCanvas(canvas, rawConfig, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 138);
+  if (!ctx) return null;
+
+  const cfg = normalizeStabilizationStudioConfigClient(rawConfig);
+  const evalRes = opts.evalResult || evaluateStabilizationStudioClient(cfg, { sample_count: 65 });
+  const samples = Array.isArray(evalRes.samples) ? evalRes.samples : [];
+
+  ctx.fillStyle = "#090c12";
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 44;
+  const padR = 14;
+  const padT = 20;
+  const padB = 18;
+  const plotW = Math.max(80, w - padL - padR);
+  const plotH = Math.max(40, h - padT - padB);
+  const midY = padT + plotH * 0.5;
+
+  // Grid lines
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.14)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL, padT, plotW, plotH);
+  ctx.beginPath();
+  ctx.moveTo(padL, midY);
+  ctx.lineTo(padL + plotW, midY);
+  ctx.stroke();
+
+  const maxAmp = 28.0;
+  const valToY = (v) => midY - Math.max(-1, Math.min(1, v / maxAmp)) * (plotH * 0.45);
+  const uToX = (u) => padL + Math.max(0, Math.min(1, u)) * plotW;
+
+  const drawWave = (getter, color, lineWidth, dashed = false) => {
+    if (samples.length < 2) return;
+    ctx.save();
+    if (dashed) ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    samples.forEach((s, idx) => {
+      const px = uToX(s.t_norm);
+      const py = valToY(getter(s));
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // Raw Pan & Tilt (dashed rose/slate) vs Stabilized Pan & Tilt (solid cyan/emerald) + Roll
+  drawWave((s) => s.raw_pan_px, "rgba(251, 113, 133, 0.72)", 1.3, true);
+  drawWave((s) => s.raw_tilt_px, "rgba(245, 158, 11, 0.55)", 1.1, true);
+  drawWave((s) => s.stab_pan_px, "#38bdf8", 2.1, false);
+  drawWave((s) => s.stab_tilt_px, "#34d399", 1.7, false);
+  drawWave((s) => s.stab_roll_deg * 4.0, "#a78bfa", 1.2, false);
+
+  // Playhead scrubber
+  const headX = uToX(cfg.playhead_norm);
+  ctx.strokeStyle = "#f59e0b";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(headX, padT);
+  ctx.lineTo(headX, padT + plotH);
+  ctx.stroke();
+
+  // Axis labels & legend
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText("+28px", padL - 5, padT + 4);
+  ctx.fillText("0px", padL - 5, midY);
+  ctx.fillText("-28px", padL - 5, padT + plotH - 4);
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#fb7185";
+  ctx.fillText("RAW PAN/TILT", padL + 4, 10);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText("STAB PAN", padL + 94, 10);
+  ctx.fillStyle = "#34d399";
+  ctx.fillText("STAB TILT", padL + 158, 10);
+  ctx.fillStyle = "#a78bfa";
+  ctx.fillText("ROLL", padL + 224, 10);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#34d399";
+  ctx.fillText(
+    `JITTER -${evalRes.jitter_reduction_pct.toFixed(1)}% (${evalRes.raw_rms_px.toFixed(1)} -> ${evalRes.stabilized_rms_px.toFixed(1)}px)`,
+    padL + plotW,
+    10
+  );
+
+  const meta = { padL, padT, plotW, plotH };
+  canvas._stabTrajMeta = meta;
+  return meta;
 }

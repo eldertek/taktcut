@@ -23,6 +23,9 @@ import {
   ALLOWED_RETIME_STUDIO_EASINGS,
   ALLOWED_RETIME_STUDIO_INTERPOLATIONS,
   ALLOWED_RETIME_STUDIO_PRESET_IDS,
+  ALLOWED_STABILIZATION_EDGE_MODES,
+  ALLOWED_STABILIZATION_MODES,
+  ALLOWED_STABILIZATION_PRESET_IDS,
   ASPECT_RATIO_PRESETS,
   AUTO_REFRAME_ASPECT_SPECS_CLIENT,
   AUTO_REFRAME_MOTION_PRESETS_CLIENT,
@@ -87,6 +90,7 @@ import {
   applyOpticalGlowToDocumentClient,
   applyPowerWindowToDocumentClient,
   applyRetimeStudioToDocumentClient,
+  applyStabilizationStudioToDocumentClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
@@ -121,6 +125,7 @@ import {
   compileRetimeFilterClient,
   compileRetimeRampSetptsClient,
   compileRetimeStudioFiltergraphClient,
+  compileStabilizationStudioFiltergraphClient,
   compileSplitEditFiltergraphClient,
   compileStabilizerFilterClient,
   compileTransformFilterClient,
@@ -140,6 +145,7 @@ import {
   createDefaultPowerWindowConfigClient,
   createDefaultQualifierKeyerConfigClient,
   createDefaultRetimeStudioConfigClient,
+  createDefaultStabilizationStudioConfigClient,
   createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
   deleteMulticamCutInDocument,
@@ -149,11 +155,13 @@ import {
   evaluateMotionSplineStudioClient,
   evaluatePowerWindowSamplesClient,
   evaluateRetimeStudioCurveClient,
+  evaluateStabilizationStudioClient,
   evaluateTitleMotionState,
   exportMotionSplineJsonClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
   exportRetimeStudioJsonClient,
+  exportStabilizationStudioJsonClient,
   exportMulticamEdlClient,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
@@ -170,7 +178,9 @@ import {
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
   normalizeRetimeStudioConfigClient,
+  normalizeStabilizationStudioConfigClient,
   RETIME_STUDIO_PRESETS_CLIENT,
+  STABILIZATION_STUDIO_PRESETS_CLIENT,
   simulatePowerWindowTrackClient,
   syncMulticamStudioAnglesClient,
   parseCubeLutTextClient,
@@ -4582,6 +4592,85 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/retime/apply", { method: "POST", body: payload });
+    },
+    async getStabilizationStudioPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: STABILIZATION_STUDIO_PRESETS_CLIENT,
+          preset_ids: ALLOWED_STABILIZATION_PRESET_IDS,
+          modes: ALLOWED_STABILIZATION_MODES,
+          edge_modes: ALLOWED_STABILIZATION_EDGE_MODES,
+          default_config: createDefaultStabilizationStudioConfigClient()
+        };
+      }
+      return requestJson("/api/fx/stabilization/presets");
+    },
+    async evaluateStabilizationStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeStabilizationStudioConfigClient(p.config ? p.config : p);
+        return evaluateStabilizationStudioClient(cfg, {
+          sample_count: p.sample_count !== undefined ? Number(p.sample_count) : 65
+        });
+      }
+      return requestJson("/api/fx/stabilization/evaluate", { method: "POST", body: payload });
+    },
+    async compileStabilizationStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeStabilizationStudioConfigClient(p.config ? p.config : p);
+        return compileStabilizationStudioFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/stabilization/compile", { method: "POST", body: payload });
+    },
+    async exportStabilizationStudioJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeStabilizationStudioConfigClient(p.config ? p.config : p);
+        return exportStabilizationStudioJsonClient(cfg, {
+          title: p.title || "TAKTCUT_STABILIZATION_STUDIO"
+        });
+      }
+      return requestJson("/api/fx/stabilization/export-json", { method: "POST", body: payload });
+    },
+    async downloadStabilizationStudioBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeStabilizationStudioConfigClient(p.config ? p.config : p);
+        const exp = exportStabilizationStudioJsonClient(cfg, {
+          title: p.title || "TAKTCUT_STABILIZATION_STUDIO"
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/stabilization/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyStabilizationStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyStabilizationStudioToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compileStabilizationStudioFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/stabilization/apply", { method: "POST", body: payload });
     }
   };
 }
