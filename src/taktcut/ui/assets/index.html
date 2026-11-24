@@ -2517,6 +2517,10 @@
                 <button type="button" id="btn-color-cst-toggle" class="btn btn-chip cst-toggle-btn" aria-pressed="false" data-i18n="cst.btn.toggle" title="Toggle Camera Log Color-Space Transform (CST)">CST</button>
                 <button type="button" id="btn-open-cst-studio" class="btn btn-chip cst-studio-btn" data-i18n="cst.btn.studio" title="Open Camera Log Color-Space Transform Studio (Shift+L)">Log CST</button>
                 <span id="color-cst-badge" class="nle-tag mono" aria-live="polite">CST OFF</span>
+                <span class="broadcast-quick-sep" aria-hidden="true"></span>
+                <button type="button" id="btn-color-qk-toggle" class="btn btn-chip qk-toggle-btn" aria-pressed="false" data-i18n="qk.btn.toggle" title="Toggle Qualifier Keyer &amp; Light-Wrap">Keyer</button>
+                <button type="button" id="btn-open-qk-studio" class="btn btn-chip qk-studio-btn" data-i18n="qk.btn.studio" title="Open Qualifier Keyer, Despill &amp; Light-Wrap Studio (Shift+Q)">Keyer Studio</button>
+                <span id="color-qk-badge" class="nle-tag mono" aria-live="polite">KEYER OFF</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
@@ -2680,6 +2684,7 @@
                       <button type="button" id="btn-qual-highlight" class="btn btn-mini" aria-pressed="false" title="Highlight Matte Preview (Shift+H)" data-i18n="color.qual.highlight">Highlight</button>
                       <button type="button" id="btn-qual-invert" class="btn btn-mini" aria-pressed="false" disabled data-i18n="color.qual.invert">Invert</button>
                       <button type="button" id="btn-qual-reset" class="btn btn-mini" disabled aria-label="Reset HSL Qualifier">Rst</button>
+                      <button type="button" id="btn-qual-open-keyer-studio" class="btn btn-mini qk-studio-btn" data-i18n="qk.btn.dockStudio" title="Open Qualifier Keyer &amp; Light-Wrap Studio (Shift+Q)">Keyer / Light-Wrap (Shift+Q)</button>
                     </div>
                   </div>
                   <canvas id="qual-spectrum-canvas" class="qual-spectrum-canvas" aria-label="HSL Qualifier spectrum range"></canvas>
@@ -4553,6 +4558,249 @@
         <div class="fg-drawer-body">
           <pre id="cst-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="cst-cube-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="qk-studio-dialog" class="nle-dialog qk-studio-dialog" aria-labelledby="qk-studio-title" aria-describedby="qk-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="qk-studio-title" data-i18n="qk.dialog.title">Qualifier Keyer, Spill Suppression &amp; Boris FX Light-Wrap Studio</h2>
+        <p id="qk-studio-subtitle" class="nle-dialog-subtitle" data-i18n="qk.dialog.subtitle">DaVinci Resolve HSL / 3D Chroma Keying, Matte Finesse &amp; Edge Light-Wrap Composite</p>
+      </div>
+      <div class="qk-header-actions">
+        <span id="qk-active-preset-badge" class="nle-tag mono">GREEN SCREEN PRO</span>
+        <button type="button" id="btn-close-qk-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body qk-dialog-body">
+      <div class="qk-top-toggle-bar">
+        <label class="inline-check qk-enable-check" for="qk-enabled-toggle">
+          <input type="checkbox" id="qk-enabled-toggle">
+          <span data-i18n="qk.enableLabel">Enable Live Keyer on Color Viewer</span>
+        </label>
+        <label class="inline-check qk-invert-check" for="qk-invert-toggle">
+          <input type="checkbox" id="qk-invert-toggle" checked>
+          <span data-i18n="qk.invertMatte">Invert Matte</span>
+        </label>
+        <button type="button" id="btn-qk-pick-viewer" class="btn btn-mini qk-pick-btn" aria-pressed="false" data-i18n="qk.pickViewer">Pick from Color Viewer</button>
+        <div class="qk-mode-select-wrap">
+          <label for="qk-key-mode" data-i18n="qk.keyMode">Keyer Model</label>
+          <select id="qk-key-mode" class="input-control mono">
+            <option value="hybrid" selected data-i18n="qk.keyMode.hybrid">Hybrid (HSL + 3D Chroma)</option>
+            <option value="chroma_3d" data-i18n="qk.keyMode.chroma_3d">3D Chroma Distance</option>
+            <option value="hsl" data-i18n="qk.keyMode.hsl">HSL Qualifier Range</option>
+            <option value="luma_key" data-i18n="qk.keyMode.luma_key">Studio Luma Key</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="qk-preset-strip" id="qk-preset-strip" role="group" aria-label="Qualifier Keyer presets">
+        <span class="pill-label" data-i18n="qk.presetsLabel">KEYER &amp; DESPILL PRESETS</span>
+      </div>
+
+      <div class="qk-highlight-strip" role="group" aria-label="Highlight matte preview mode">
+        <span class="pill-label" data-i18n="qk.highlightLabel">HIGHLIGHT MODE</span>
+        <button type="button" class="btn btn-mini qk-highlight-btn is-active" data-qk-highlight="final_composite" aria-pressed="true" data-i18n="qk.highlight.final_composite">Final Composite</button>
+        <button type="button" class="btn btn-mini qk-highlight-btn" data-qk-highlight="bw_alpha_matte" aria-pressed="false" data-i18n="qk.highlight.bw_alpha_matte">B&amp;W Alpha Matte</button>
+        <button type="button" class="btn btn-mini qk-highlight-btn" data-qk-highlight="red_rubylith" aria-pressed="false" data-i18n="qk.highlight.red_rubylith">Red Rubylith</button>
+        <button type="button" class="btn btn-mini qk-highlight-btn" data-qk-highlight="isolated_foreground" aria-pressed="false" data-i18n="qk.highlight.isolated_foreground">Isolated FG</button>
+      </div>
+
+      <div class="qk-workstation-grid">
+        <div class="qk-controls-col">
+          <div class="qk-tablist" role="tablist" aria-label="Qualifier Keyer parameter sections">
+            <button type="button" role="tab" id="qk-tab-btn-hsl" class="qk-tab-btn is-active" aria-selected="true" aria-controls="qk-panel-hsl" data-qk-tab="hsl" data-i18n="qk.tab.hsl">HSL / 3D Chroma</button>
+            <button type="button" role="tab" id="qk-tab-btn-finesse" class="qk-tab-btn" aria-selected="false" aria-controls="qk-panel-finesse" data-qk-tab="finesse" tabindex="-1" data-i18n="qk.tab.finesse">Matte Finesse</button>
+            <button type="button" role="tab" id="qk-tab-btn-despill" class="qk-tab-btn" aria-selected="false" aria-controls="qk-panel-despill" data-qk-tab="despill" tabindex="-1" data-i18n="qk.tab.despill">Despill &amp; Light-Wrap</button>
+          </div>
+
+          <section id="qk-panel-hsl" class="qk-tab-panel" role="tabpanel" aria-labelledby="qk-tab-btn-hsl">
+            <div class="pane-subheader">
+              <span data-i18n="qk.hslBarTitle">Interactive HSL Range Strip (Hue / Sat / Luma)</span>
+              <span id="qk-sampled-readout" class="nle-tag mono" aria-live="polite">H 120 | S 75% | L 44%</span>
+            </div>
+            <div class="viewer-well qk-hsl-well">
+              <canvas id="qk-hsl-bar-canvas" class="studio-canvas qk-hsl-canvas" aria-label="Interactive HSL Hue Saturation Luminance Range Bar"></canvas>
+            </div>
+            <div class="qk-sliders-grid mono">
+              <div class="qk-param-row">
+                <label for="qk-hue-center-range" data-i18n="qk.hueCenter">Hue Center (deg)</label>
+                <input type="range" id="qk-hue-center-range" min="0" max="360" step="1" value="120">
+                <input type="number" id="qk-hue-center-num" class="input-num" min="0" max="360" step="1" value="120" aria-label="Hue Center degrees">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-hue-width-range" data-i18n="qk.hueWidth">Hue Width (deg)</label>
+                <input type="range" id="qk-hue-width-range" min="1" max="360" step="1" value="76">
+                <input type="number" id="qk-hue-width-num" class="input-num" min="1" max="360" step="1" value="76" aria-label="Hue Width degrees">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-hue-soft-range" data-i18n="qk.hueSoftness">Hue Softness (deg)</label>
+                <input type="range" id="qk-hue-soft-range" min="0" max="90" step="1" value="18">
+                <input type="number" id="qk-hue-soft-num" class="input-num" min="0" max="90" step="1" value="18" aria-label="Hue Softness degrees">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-sat-low-range" data-i18n="qk.satLow">Sat Low</label>
+                <input type="range" id="qk-sat-low-range" min="0" max="1" step="0.01" value="0.22">
+                <input type="number" id="qk-sat-low-num" class="input-num" min="0" max="1" step="0.01" value="0.22" aria-label="Saturation Low">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-sat-high-range" data-i18n="qk.satHigh">Sat High</label>
+                <input type="range" id="qk-sat-high-range" min="0" max="1" step="0.01" value="1.00">
+                <input type="number" id="qk-sat-high-num" class="input-num" min="0" max="1" step="0.01" value="1.00" aria-label="Saturation High">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-luma-low-range" data-i18n="qk.lumaLow">Luma Low</label>
+                <input type="range" id="qk-luma-low-range" min="0" max="1" step="0.01" value="0.08">
+                <input type="number" id="qk-luma-low-num" class="input-num" min="0" max="1" step="0.01" value="0.08" aria-label="Luma Low">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-luma-high-range" data-i18n="qk.lumaHigh">Luma High</label>
+                <input type="range" id="qk-luma-high-range" min="0" max="1" step="0.01" value="0.95">
+                <input type="number" id="qk-luma-high-num" class="input-num" min="0" max="1" step="0.01" value="0.95" aria-label="Luma High">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-chroma-dist-range" data-i18n="qk.chromaDistance">3D Chroma Distance</label>
+                <input type="range" id="qk-chroma-dist-range" min="0.01" max="1" step="0.01" value="0.28">
+                <input type="number" id="qk-chroma-dist-num" class="input-num" min="0.01" max="1" step="0.01" value="0.28" aria-label="3D Chroma Distance">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-chroma-soft-range" data-i18n="qk.chromaSoftness">3D Chroma Softness</label>
+                <input type="range" id="qk-chroma-soft-range" min="0" max="0.6" step="0.01" value="0.14">
+                <input type="number" id="qk-chroma-soft-num" class="input-num" min="0" max="0.6" step="0.01" value="0.14" aria-label="3D Chroma Softness">
+              </div>
+            </div>
+          </section>
+
+          <section id="qk-panel-finesse" class="qk-tab-panel" role="tabpanel" aria-labelledby="qk-tab-btn-finesse" hidden>
+            <div class="qk-sliders-grid mono">
+              <div class="qk-param-row">
+                <label for="qk-pre-blur-range" data-i18n="qk.preBlur">Pre-Blur Radius (px)</label>
+                <input type="range" id="qk-pre-blur-range" min="0" max="12" step="0.25" value="0.5">
+                <input type="number" id="qk-pre-blur-num" class="input-num" min="0" max="12" step="0.25" value="0.50" aria-label="Pre-Blur Radius px">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-clean-black-range" data-i18n="qk.cleanBlack">Clean Black Clip</label>
+                <input type="range" id="qk-clean-black-range" min="0" max="0.90" step="0.01" value="0.06">
+                <input type="number" id="qk-clean-black-num" class="input-num" min="0" max="0.90" step="0.01" value="0.06" aria-label="Clean Black Clip">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-clean-white-range" data-i18n="qk.cleanWhite">Clean White Clip</label>
+                <input type="range" id="qk-clean-white-range" min="0.10" max="1" step="0.01" value="0.94">
+                <input type="number" id="qk-clean-white-num" class="input-num" min="0.10" max="1" step="0.01" value="0.94" aria-label="Clean White Clip">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-choke-range" data-i18n="qk.chokePx">Shrink / Grow Choke (px)</label>
+                <input type="range" id="qk-choke-range" min="-12" max="12" step="0.5" value="0">
+                <input type="number" id="qk-choke-num" class="input-num" min="-12" max="12" step="0.5" value="0.0" aria-label="Shrink Grow Choke px">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-post-feather-range" data-i18n="qk.postFeather">Post Edge Feather (px)</label>
+                <input type="range" id="qk-post-feather-range" min="0" max="16" step="0.5" value="1">
+                <input type="number" id="qk-post-feather-num" class="input-num" min="0" max="16" step="0.5" value="1.0" aria-label="Post Edge Feather px">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-sat-soft-range" data-i18n="qk.satSoftness">Sat Softness</label>
+                <input type="range" id="qk-sat-soft-range" min="0" max="0.5" step="0.01" value="0.10">
+                <input type="number" id="qk-sat-soft-num" class="input-num" min="0" max="0.5" step="0.01" value="0.10" aria-label="Saturation Softness">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-luma-soft-range" data-i18n="qk.lumaSoftness">Luma Softness</label>
+                <input type="range" id="qk-luma-soft-range" min="0" max="0.5" step="0.01" value="0.08">
+                <input type="number" id="qk-luma-soft-num" class="input-num" min="0" max="0.5" step="0.01" value="0.08" aria-label="Luma Softness">
+              </div>
+            </div>
+          </section>
+
+          <section id="qk-panel-despill" class="qk-tab-panel" role="tabpanel" aria-labelledby="qk-tab-btn-despill" hidden>
+            <div class="qk-sliders-grid mono">
+              <div class="form-row">
+                <label for="qk-despill-mode" data-i18n="qk.despillMode">Spill Suppression Mode</label>
+                <select id="qk-despill-mode" class="input-control mono">
+                  <option value="luma_preserving" selected data-i18n="qk.despill.luma_preserving">Luma-Preserving Despill</option>
+                  <option value="complement_mix" data-i18n="qk.despill.complement_mix">Complement Mix</option>
+                  <option value="avg_gb" data-i18n="qk.despill.avg_gb">Average Reference Channels</option>
+                  <option value="none" data-i18n="qk.despill.none">None (Bypass)</option>
+                </select>
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-despill-strength-range" data-i18n="qk.despillStrength">Despill Strength</label>
+                <input type="range" id="qk-despill-strength-range" min="0" max="1" step="0.01" value="0.80">
+                <input type="number" id="qk-despill-strength-num" class="input-num" min="0" max="1" step="0.01" value="0.80" aria-label="Despill Strength">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-lw-intensity-range" data-i18n="qk.lightWrapIntensity">Light-Wrap Intensity</label>
+                <input type="range" id="qk-lw-intensity-range" min="0" max="1" step="0.01" value="0.35">
+                <input type="number" id="qk-lw-intensity-num" class="input-num" min="0" max="1" step="0.01" value="0.35" aria-label="Boris FX Light-Wrap Intensity">
+              </div>
+              <div class="qk-param-row">
+                <label for="qk-lw-radius-range" data-i18n="qk.lightWrapRadius">Light-Wrap Radius (px)</label>
+                <input type="range" id="qk-lw-radius-range" min="0" max="64" step="1" value="14">
+                <input type="number" id="qk-lw-radius-num" class="input-num" min="0" max="64" step="1" value="14" aria-label="Boris FX Light-Wrap Radius px">
+              </div>
+              <div class="qk-bg-plate-row">
+                <label for="qk-bg-color-input" data-i18n="qk.lightWrapBg">Composite / Wrap Plate Color</label>
+                <div class="qk-bg-plate-controls">
+                  <input type="color" id="qk-bg-color-input" value="#243357" aria-label="Light-Wrap composite background color">
+                  <button type="button" class="btn btn-mini qk-plate-swatch" data-qk-bg="0.14,0.20,0.34">Night Slate</button>
+                  <button type="button" class="btn btn-mini qk-plate-swatch" data-qk-bg="0.72,0.44,0.24">Warm Sunset</button>
+                  <button type="button" class="btn btn-mini qk-plate-swatch" data-qk-bg="0.22,0.52,0.82">Daylight Sky</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="qk-scopes-col">
+          <div class="qk-canvas-card">
+            <div class="pane-subheader">
+              <span data-i18n="qk.previewTitle">Live Pixel-by-Pixel Composite &amp; Eyedropper Viewer (Click to Sample)</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="qk-preview-canvas" class="studio-canvas qk-preview-canvas" aria-label="Qualifier Keyer Live Pixel Preview and Eyedropper"></canvas>
+            </div>
+          </div>
+
+          <div class="qk-canvas-card">
+            <div class="pane-subheader">
+              <span data-i18n="qk.histogramTitle">Alpha Matte Histogram &amp; Spill Telemetry</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="qk-histogram-canvas" class="studio-canvas qk-histogram-canvas" aria-label="Alpha Matte Distribution Histogram"></canvas>
+            </div>
+            <div id="qk-telemetry-grid" class="broadcast-compliance-grid qk-telemetry-grid" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="qk-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="qk.status.idle">Keyer bypass active. Pick from Viewer or choose a Chroma/HSL preset.</div>
+
+      <div class="btn-row qk-actions">
+        <div class="qk-lut-mode-wrap">
+          <label for="qk-lut-mode-select" data-i18n="qk.lutMode">LUT Export Mode</label>
+          <select id="qk-lut-mode-select" class="input-control mono">
+            <option value="isolation" selected data-i18n="qk.lutMode.isolation">FG Isolation .cube</option>
+            <option value="matte" data-i18n="qk.lutMode.matte">Alpha Matte .cube</option>
+            <option value="despill" data-i18n="qk.lutMode.despill">Despill Only .cube</option>
+          </select>
+        </div>
+        <button type="button" id="btn-qk-export-lut" class="btn btn-primary" data-i18n="qk.action.exportLut">Export .cube LUT</button>
+        <button type="button" id="btn-qk-download-lut" class="btn btn-secondary" data-i18n="qk.action.downloadLut">Download .cube</button>
+        <button type="button" id="btn-qk-send-deliver" class="btn btn-secondary" data-i18n="qk.action.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-qk-copy-fg" class="btn btn-secondary" data-i18n="qk.action.copyFg">Copy FFmpeg Keyer</button>
+        <button type="button" id="btn-qk-reset" class="btn btn-mini" data-i18n="qk.action.reset">Reset Keyer</button>
+      </div>
+
+      <details id="qk-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="qk.drawerTitle">FFmpeg Qualifier Keyer &amp; Matte Finesse Filtergraph</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="qk-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="qk-cube-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

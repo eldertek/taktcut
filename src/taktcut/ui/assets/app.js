@@ -18,6 +18,9 @@ import {
   drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
   drawProgramMonitorCanvas,
+  drawQualifierKeyerHistogramCanvas,
+  drawQualifierKeyerHslBarCanvas,
+  drawQualifierKeyerPreviewCanvas,
   drawQualifierSpectrumCanvas,
   drawRetimeRampEditorCanvas,
   drawSceneCutConfidenceCanvas,
@@ -39,6 +42,7 @@ import {
   sampleCanvasBroadcastRgb,
   sampleColorViewerInputRgb,
   sampleDataUrlRgbGrid,
+  sampleQualifierKeyerCanvasRgb,
   trackPointSequenceCanvas
 } from "./canvas.js";
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
@@ -99,6 +103,7 @@ import {
   MULTICAM_SYNC_MODES,
   PLANAR_TRACKER_PRESETS_CLIENT,
   PRECOMP_BLEND_MODES,
+  QUALIFIER_KEYER_PRESETS_CLIENT,
   QUALIFIER_PRESETS,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
@@ -159,6 +164,7 @@ import {
   addOutsideColorNodeInTree,
   alignAvSplitInDocument,
   analyzeAudioSpectrumClient,
+  analyzeQualifierKeyerSamplesClient,
   appendClipToTrackInDocument,
   appendStillBounded,
   applyFairlightRackPresetClient,
@@ -176,6 +182,7 @@ import {
   compileAutoReframeFiltergraphClient,
   compileCompoundFiltergraphClient,
   compileCstFiltergraphClient,
+  compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
@@ -208,6 +215,7 @@ import {
   createDefaultHslCurves,
   createDefaultPowerWindow,
   createDefaultQualifier,
+  createDefaultQualifierKeyerConfigClient,
   createEmptyTransformKeyframes,
   createMulticamClipInDocument,
   createStillRecord,
@@ -301,6 +309,7 @@ import {
   normalizeMasterBusState,
   normalizePowerWindow,
   normalizeQualifier,
+  normalizeQualifierKeyerConfigClient,
   normalizeTransformHexColor,
   normalizeTimelineTool,
   normalizeTransientDetectConfig,
@@ -633,6 +642,17 @@ const state = {
     lastCubeText: "",
     dragHandle: null,
     hoverHandle: null,
+    compileSeq: 0
+  },
+  qualifierKeyer: createDefaultQualifierKeyerConfigClient(),
+  qkStudio: {
+    isOpen: false,
+    activeTab: "hsl",
+    pickMode: false,
+    pickedPoint: null,
+    metrics: null,
+    compiled: null,
+    lastCubeText: "",
     compileSeq: 0
   },
   autoReframeStudio: {
@@ -1042,6 +1062,7 @@ function setLanguage(lang) {
   syncBroadcastMonitorUI();
   if (typeof syncAutoReframeUI === "function") syncAutoReframeUI();
   if (typeof syncCstStudioUI === "function") syncCstStudioUI();
+  if (typeof syncQualifierKeyerStudioUI === "function") syncQualifierKeyerStudioUI();
   renderTimelineUI();
   renderMediaPool();
   const teSearch = byId("text-edit-search");
@@ -1580,7 +1601,8 @@ function redrawActiveCanvases() {
         showOverlay: Boolean(state.powerWindowOverlay)
       },
       broadcastMonitor: state.broadcastMonitor,
-      cstConfig: state.cstConfig
+      cstConfig: state.cstConfig,
+      qualifierKeyer: state.qualifierKeyer
     });
     drawColorScopeCanvas(
       byId("color-scope-canvas"),
@@ -1621,6 +1643,9 @@ function redrawActiveCanvases() {
     drawColorWheel(byId("wheel-gain"), "gain", state.colorGrade.gain);
     if (state.cstStudio && state.cstStudio.isOpen && typeof renderCstStudioCanvases === "function") {
       renderCstStudioCanvases();
+    }
+    if (state.qkStudio && state.qkStudio.isOpen && typeof renderQualifierKeyerStudioCanvases === "function") {
+      renderQualifierKeyerStudioCanvases();
     }
   } else if (state.activeTab === "qa" && state.lastQaReport) {
     drawLoudnessCanvas(byId("qa-loudness-canvas"), state.lastQaReport.loudness);
@@ -9416,7 +9441,7 @@ function wireColorInputs() {
 
       canvas.addEventListener("pointerdown", (ev) => {
         const wipe = desc.stateObj();
-        if (!wipe.enabled || (target === "color" && state.qualifierPickMode)) return;
+        if (!wipe.enabled || (target === "color" && (state.qualifierPickMode || (state.qkStudio && state.qkStudio.pickMode)))) return;
         const pt = toCanvasPoint(ev);
         if (!pt || !isPointerOnSplitWipeDivider(pt.x, pt.y, pt.geom, SPLIT_WIPE_HIT_RADIUS_PX)) {
           return;
@@ -9528,6 +9553,16 @@ function wireColorInputs() {
 
     colorPreviewCanvas.addEventListener("pointerdown", (ev) => {
       if (state.colorSplitWipe.isDragging) return;
+      if (state.qkStudio && state.qkStudio.pickMode) {
+        const rect = colorPreviewCanvas.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const u = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+          const v = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
+          ev.preventDefault();
+          applyQkViewerEyedropperAt(u, v);
+          return;
+        }
+      }
       if (state.qualifierPickMode) {
         const rect = colorPreviewCanvas.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
@@ -13136,6 +13171,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+B", descKey: "shortcuts.key.broadcastSafe" },
       { kbd: "Shift+G", descKey: "shortcuts.key.broadcastStudio" },
       { kbd: "Shift+L", descKey: "shortcuts.key.cstStudio" },
+      { kbd: "Shift+Q", descKey: "shortcuts.key.qualifierKeyerStudio" },
       { kbd: "Shift+R", descKey: "shortcuts.key.autoReframe" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
@@ -13336,6 +13372,11 @@ function handleTransportKeydown(ev) {
     if (lower === "l") {
       ev.preventDefault();
       openCstStudioDialog();
+      return;
+    }
+    if (lower === "q") {
+      ev.preventDefault();
+      openQualifierKeyerDialog();
       return;
     }
   }
@@ -20016,6 +20057,7 @@ function wireEvents() {
   wireBroadcastMonitorEvents();
   wireAutoReframeEvents();
   wireCstStudioEvents();
+  wireQualifierKeyerStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -20480,6 +20522,7 @@ async function bootstrap() {
   syncBroadcastMonitorUI();
   syncAutoReframeUI();
   syncCstStudioUI();
+  syncQualifierKeyerStudioUI();
   syncSplitWipeControls("color");
   syncSplitWipeControls("fx");
   renderStillsGallery();
@@ -24337,6 +24380,589 @@ function wireCstStudioEvents() {
       }
     });
   }
+}
+
+// =========================================================================
+// CYCLE #105: DAVINCI RESOLVE QUALIFIER KEYER & BORIS FX LIGHT-WRAP STUDIO
+// =========================================================================
+
+const QK_SLIDER_PAIRS = [
+  { key: "hue_center", rangeId: "qk-hue-center-range", numId: "qk-hue-center-num", decimals: 0 },
+  { key: "hue_width", rangeId: "qk-hue-width-range", numId: "qk-hue-width-num", decimals: 0 },
+  { key: "hue_softness", rangeId: "qk-hue-soft-range", numId: "qk-hue-soft-num", decimals: 0 },
+  { key: "sat_low", rangeId: "qk-sat-low-range", numId: "qk-sat-low-num", decimals: 2 },
+  { key: "sat_high", rangeId: "qk-sat-high-range", numId: "qk-sat-high-num", decimals: 2 },
+  { key: "sat_softness", rangeId: "qk-sat-soft-range", numId: "qk-sat-soft-num", decimals: 2 },
+  { key: "luma_low", rangeId: "qk-luma-low-range", numId: "qk-luma-low-num", decimals: 2 },
+  { key: "luma_high", rangeId: "qk-luma-high-range", numId: "qk-luma-high-num", decimals: 2 },
+  { key: "luma_softness", rangeId: "qk-luma-soft-range", numId: "qk-luma-soft-num", decimals: 2 },
+  { key: "chroma_distance", rangeId: "qk-chroma-dist-range", numId: "qk-chroma-dist-num", decimals: 2 },
+  { key: "chroma_softness", rangeId: "qk-chroma-soft-range", numId: "qk-chroma-soft-num", decimals: 2 },
+  { key: "pre_blur_radius", rangeId: "qk-pre-blur-range", numId: "qk-pre-blur-num", decimals: 2 },
+  { key: "clean_black", rangeId: "qk-clean-black-range", numId: "qk-clean-black-num", decimals: 2 },
+  { key: "clean_white", rangeId: "qk-clean-white-range", numId: "qk-clean-white-num", decimals: 2 },
+  { key: "choke_px", rangeId: "qk-choke-range", numId: "qk-choke-num", decimals: 1 },
+  { key: "post_feather_px", rangeId: "qk-post-feather-range", numId: "qk-post-feather-num", decimals: 1 },
+  { key: "despill_strength", rangeId: "qk-despill-strength-range", numId: "qk-despill-strength-num", decimals: 2 },
+  { key: "light_wrap_intensity", rangeId: "qk-lw-intensity-range", numId: "qk-lw-intensity-num", decimals: 2 },
+  { key: "light_wrap_radius", rangeId: "qk-lw-radius-range", numId: "qk-lw-radius-num", decimals: 0 }
+];
+
+function qkRgbToHexInput(rgb) {
+  const toHex = (v) =>
+    Math.round(Math.min(1, Math.max(0, Number(v) || 0)) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${toHex(rgb[0])}${toHex(rgb[1])}${toHex(rgb[2])}`;
+}
+
+function qkHexInputToRgb(hex) {
+  const clean = String(hex || "").replace(/^#/, "");
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return [0.14, 0.2, 0.34];
+  return [
+    Number((Number.parseInt(clean.slice(0, 2), 16) / 255).toFixed(3)),
+    Number((Number.parseInt(clean.slice(2, 4), 16) / 255).toFixed(3)),
+    Number((Number.parseInt(clean.slice(4, 6), 16) / 255).toFixed(3))
+  ];
+}
+
+function renderQualifierKeyerPresetStrip() {
+  const strip = byId("qk-preset-strip");
+  if (!strip) return;
+  const label = strip.querySelector(".pill-label") || dom("span", "pill-label", t("qk.presetsLabel"));
+  const btns = QUALIFIER_KEYER_PRESETS_CLIENT.filter((p) => p.preset_id !== "custom").map((preset) => {
+    const isSel = state.qualifierKeyer.enabled && state.qualifierKeyer.preset_id === preset.preset_id;
+    const btn = dom(
+      "button",
+      `btn btn-chip qk-preset-btn${isSel ? " is-active" : ""}`,
+      preset.label
+    );
+    btn.type = "button";
+    btn.setAttribute("data-qk-preset", preset.preset_id);
+    btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+    btn.title = preset.description;
+    btn.addEventListener("click", () => applyQualifierKeyerPresetSelection(preset.preset_id));
+    return btn;
+  });
+  strip.replaceChildren(label, ...btns);
+}
+
+function renderQualifierKeyerTelemetry(metrics) {
+  const grid = byId("qk-telemetry-grid");
+  if (!grid || !metrics) return;
+  const items = [
+    { label: t("qk.kv.bgLeak"), val: `${(metrics.bg_leak_ratio * 100).toFixed(1)}%` },
+    { label: t("qk.kv.coreSolid"), val: `${(metrics.core_solid_ratio * 100).toFixed(1)}%` },
+    { label: t("qk.kv.edgeSpill"), val: `${(metrics.edge_contamination_ratio * 100).toFixed(1)}%` },
+    { label: t("qk.kv.semiTrans"), val: `${(metrics.semi_transparent_ratio * 100).toFixed(1)}%` }
+  ];
+  grid.replaceChildren(
+    ...items.map((it) => {
+      const card = dom("div", "bm-stat-card");
+      card.appendChild(dom("span", "bm-stat-label", it.label));
+      card.appendChild(dom("span", "bm-stat-val mono", it.val));
+      return card;
+    })
+  );
+}
+
+function renderQualifierKeyerStudioCanvases() {
+  const cfg = state.qualifierKeyer;
+  const hslCanvas = byId("qk-hsl-bar-canvas");
+  if (hslCanvas) {
+    drawQualifierKeyerHslBarCanvas(hslCanvas, cfg);
+  }
+  const previewCanvas = byId("qk-preview-canvas");
+  let localMetrics = state.qkStudio.metrics;
+  if (previewCanvas) {
+    localMetrics = drawQualifierKeyerPreviewCanvas(previewCanvas, cfg, {
+      pickedPoint: state.qkStudio.pickedPoint
+    });
+    if (localMetrics) {
+      state.qkStudio.metrics = localMetrics;
+    }
+  }
+  const histCanvas = byId("qk-histogram-canvas");
+  if (histCanvas) {
+    drawQualifierKeyerHistogramCanvas(
+      histCanvas,
+      localMetrics || analyzeQualifierKeyerSamplesClient(cfg),
+      cfg
+    );
+  }
+  if (localMetrics) {
+    renderQualifierKeyerTelemetry(localMetrics);
+  }
+}
+
+function syncQualifierKeyerStudioUI() {
+  const cfg = state.qualifierKeyer;
+  const toggleBtn = byId("btn-color-qk-toggle");
+  if (toggleBtn) {
+    toggleBtn.classList.toggle("is-active", Boolean(cfg.enabled));
+    toggleBtn.setAttribute("aria-pressed", cfg.enabled ? "true" : "false");
+  }
+  const quickBadge = byId("color-qk-badge");
+  const activePreset = QUALIFIER_KEYER_PRESETS_CLIENT.find((p) => p.preset_id === cfg.preset_id);
+  const presetShort = activePreset ? activePreset.label.toUpperCase() : cfg.preset_id.toUpperCase();
+  if (quickBadge) {
+    quickBadge.textContent = cfg.enabled ? presetShort : "KEYER OFF";
+    quickBadge.className = `nle-tag mono${cfg.enabled ? " is-active" : ""}`;
+  }
+  const dlgBadge = byId("qk-active-preset-badge");
+  if (dlgBadge) {
+    dlgBadge.textContent = cfg.enabled ? presetShort : "BYPASS";
+  }
+
+  const enChk = byId("qk-enabled-toggle");
+  if (enChk) enChk.checked = Boolean(cfg.enabled);
+  const invChk = byId("qk-invert-toggle");
+  if (invChk) invChk.checked = Boolean(cfg.invert_matte);
+  const keySel = byId("qk-key-mode");
+  if (keySel) keySel.value = cfg.key_mode;
+  const despillSel = byId("qk-despill-mode");
+  if (despillSel) despillSel.value = cfg.despill_mode;
+  const bgPicker = byId("qk-bg-color-input");
+  if (bgPicker && document.activeElement !== bgPicker) {
+    bgPicker.value = qkRgbToHexInput(cfg.light_wrap_bg_rgb);
+  }
+
+  const pickViewerBtn = byId("btn-qk-pick-viewer");
+  if (pickViewerBtn) {
+    const picking = Boolean(state.qkStudio.pickMode);
+    pickViewerBtn.classList.toggle("is-active", picking);
+    pickViewerBtn.setAttribute("aria-pressed", picking ? "true" : "false");
+  }
+  const colorPreview = byId("color-preview-canvas");
+  if (colorPreview) {
+    colorPreview.classList.toggle(
+      "is-eyedropper",
+      Boolean(state.qualifierPickMode || state.qkStudio.pickMode)
+    );
+  }
+
+  for (const hlBtn of document.querySelectorAll(".qk-highlight-btn[data-qk-highlight]")) {
+    const isSel = hlBtn.getAttribute("data-qk-highlight") === cfg.highlight_mode;
+    hlBtn.classList.toggle("is-active", isSel);
+    hlBtn.setAttribute("aria-pressed", isSel ? "true" : "false");
+  }
+
+  for (const pair of QK_SLIDER_PAIRS) {
+    const raw = Number(cfg[pair.key]);
+    const txt = Number.isFinite(raw) ? raw.toFixed(pair.decimals) : "0";
+    const rEl = byId(pair.rangeId);
+    const nEl = byId(pair.numId);
+    if (rEl) rEl.value = txt;
+    if (nEl && document.activeElement !== nEl) nEl.value = txt;
+  }
+
+  const readout = byId("qk-sampled-readout");
+  if (readout) {
+    const [tr, tg, tb] = cfg.target_rgb;
+    const [h, s, l] = rgbToHslClient(tr, tg, tb);
+    readout.textContent = `H ${Math.round(h)} | S ${Math.round(s * 100)}% | L ${Math.round(l * 100)}%`;
+  }
+
+  renderQualifierKeyerPresetStrip();
+
+  const compiled = state.qkStudio.compiled || compileQualifierFiltergraphClient(cfg);
+  state.qkStudio.compiled = compiled;
+  const fgOut = byId("qk-fg-output");
+  if (fgOut) fgOut.textContent = compiled.ffmpeg_filter_expr;
+  const statusEl = byId("qk-status-note");
+  if (statusEl && !cfg.enabled) {
+    statusEl.textContent = t("qk.status.idle");
+  } else if (statusEl && cfg.enabled && compiled) {
+    statusEl.textContent = `${presetShort} | ${cfg.key_mode} | ${cfg.highlight_mode} | Despill=${cfg.despill_mode} (${Math.round(cfg.despill_strength * 100)}%) | Light-Wrap=${Math.round(cfg.light_wrap_intensity * 100)}%`;
+  }
+}
+
+async function compileAndAnalyzeQkServerAsync() {
+  const seq = (state.qkStudio.compileSeq += 1);
+  try {
+    const [compiled, metrics] = await Promise.all([
+      api.compileQualifierKeyer({ config: state.qualifierKeyer }),
+      api.analyzeQualifierKeyer({ config: state.qualifierKeyer })
+    ]);
+    if (seq !== state.qkStudio.compileSeq) return;
+    state.qkStudio.compiled = compiled;
+    state.qkStudio.metrics = metrics;
+    if (state.qkStudio.isOpen) {
+      const fgOut = byId("qk-fg-output");
+      if (fgOut && compiled) fgOut.textContent = compiled.ffmpeg_filter_expr;
+      renderQualifierKeyerStudioCanvases();
+    }
+  } catch {
+    // Fallback to client math already rendered synchronously
+  }
+}
+
+function updateQualifierKeyerConfig(mutatorOrObj, opts = {}) {
+  const nextRaw =
+    typeof mutatorOrObj === "function"
+      ? mutatorOrObj({ ...state.qualifierKeyer })
+      : { ...state.qualifierKeyer, ...(mutatorOrObj || {}) };
+  state.qualifierKeyer = normalizeQualifierKeyerConfigClient(nextRaw);
+  state.qkStudio.compiled = compileQualifierFiltergraphClient(state.qualifierKeyer);
+  syncQualifierKeyerStudioUI();
+  if (state.qkStudio.isOpen) {
+    renderQualifierKeyerStudioCanvases();
+  }
+  if (state.activeTab === "color") {
+    redrawActiveCanvases();
+  }
+  if (opts.syncServer !== false) {
+    compileAndAnalyzeQkServerAsync();
+  }
+}
+
+function applyQualifierKeyerPresetSelection(presetId) {
+  const preset = QUALIFIER_KEYER_PRESETS_CLIENT.find((p) => p.preset_id === presetId);
+  if (!preset) return;
+  updateQualifierKeyerConfig({
+    ...preset.config,
+    enabled: true,
+    preset_id: preset.preset_id
+  });
+}
+
+function switchQualifierKeyerTab(tabId) {
+  const valid = ["hsl", "finesse", "despill"].includes(tabId) ? tabId : "hsl";
+  state.qkStudio.activeTab = valid;
+  for (const btn of document.querySelectorAll(".qk-tab-btn[data-qk-tab]")) {
+    const isSel = btn.getAttribute("data-qk-tab") === valid;
+    btn.classList.toggle("is-active", isSel);
+    btn.setAttribute("aria-selected", isSel ? "true" : "false");
+    btn.tabIndex = isSel ? 0 : -1;
+  }
+  const panelMap = {
+    hsl: byId("qk-panel-hsl"),
+    finesse: byId("qk-panel-finesse"),
+    despill: byId("qk-panel-despill")
+  };
+  for (const [k, el] of Object.entries(panelMap)) {
+    if (!el) continue;
+    el.hidden = k !== valid;
+  }
+  if (valid === "hsl") {
+    requestAnimationFrame(() => renderQualifierKeyerStudioCanvases());
+  }
+}
+
+function applyQkSampledRgb(r, g, b, point = null) {
+  const [h, s, l] = rgbToHslClient(r, g, b);
+  state.qkStudio.pickedPoint = point;
+  const nextPatch = {
+    enabled: true,
+    preset_id: "custom",
+    target_rgb: [Number(r.toFixed(4)), Number(g.toFixed(4)), Number(b.toFixed(4))],
+    hue_center: Math.round(h),
+    hue_width: Math.max(24, Math.min(120, Math.round(state.qualifierKeyer.hue_width || 68))),
+    sat_low: Number(Math.max(0, s - 0.28).toFixed(2)),
+    sat_high: Number(Math.min(1, Math.max(s + 0.35, 0.9)).toFixed(2)),
+    luma_low: Number(Math.max(0, l - 0.32).toFixed(2)),
+    luma_high: Number(Math.min(1, l + 0.38).toFixed(2))
+  };
+  updateQualifierKeyerConfig(nextPatch);
+  const statusEl = byId("qk-status-note");
+  if (statusEl) {
+    const rgbTxt = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)}`;
+    statusEl.textContent = t("qk.status.picked")
+      .replace("{rgb}", rgbTxt)
+      .replace("{hue}", String(Math.round(h)));
+  }
+}
+
+function applyQkViewerEyedropperAt(u, v) {
+  const previewCanvas = byId("color-preview-canvas");
+  if (!previewCanvas) return;
+  const active = syncActiveColorGradeFromTree();
+  const sample = sampleColorViewerInputRgb(previewCanvas, state.colorNodeTree, u, v, active.id);
+  if (!sample) return;
+  state.qkStudio.pickMode = false;
+  applyQkSampledRgb(sample[0], sample[1], sample[2], { u, v });
+}
+
+function openQualifierKeyerDialog() {
+  const dlg = byId("qk-studio-dialog");
+  if (!dlg) return;
+  state.qkStudio.isOpen = true;
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  switchQualifierKeyerTab(state.qkStudio.activeTab || "hsl");
+  syncQualifierKeyerStudioUI();
+  requestAnimationFrame(() => {
+    renderQualifierKeyerStudioCanvases();
+  });
+  compileAndAnalyzeQkServerAsync();
+}
+
+function closeQualifierKeyerDialog() {
+  const dlg = byId("qk-studio-dialog");
+  state.qkStudio.isOpen = false;
+  if (!dlg || !dlg.open) return;
+  if (typeof dlg.close === "function") dlg.close();
+  else dlg.removeAttribute("open");
+}
+
+async function exportQualifierKeyerLutAction() {
+  const modeSel = byId("qk-lut-mode-select");
+  const mode = modeSel ? modeSel.value : "isolation";
+  const sizeEl = byId("cube-size-select");
+  const size = sizeEl ? Math.min(33, Number(sizeEl.value || 17)) : 17;
+  const title = `qualifier_${state.qualifierKeyer.preset_id}_${mode}`;
+  try {
+    const res = await api.exportQualifierKeyerLut({
+      config: state.qualifierKeyer,
+      size,
+      mode,
+      title
+    });
+    state.qkStudio.lastCubeText = res.cube_text || "";
+    const previewEl = byId("qk-cube-preview");
+    if (previewEl) {
+      previewEl.textContent = (res.cube_text || "").split(/\r?\n/).slice(0, 24).join("\n");
+    }
+    const drawer = byId("qk-fg-drawer");
+    if (drawer) drawer.open = true;
+    const statusEl = byId("qk-status-note");
+    if (statusEl) {
+      statusEl.textContent = t("qk.status.exported")
+        .replace("{mode}", mode)
+        .replace("{size}", String(size));
+    }
+  } catch (err) {
+    const statusEl = byId("qk-status-note");
+    if (statusEl) statusEl.textContent = `Qualifier .cube export failed: ${err.message || err}`;
+  }
+}
+
+async function downloadQualifierKeyerLutAction() {
+  const modeSel = byId("qk-lut-mode-select");
+  const mode = modeSel ? modeSel.value : "isolation";
+  const sizeEl = byId("cube-size-select");
+  const size = sizeEl ? Math.min(33, Number(sizeEl.value || 17)) : 17;
+  const title = `qualifier_${state.qualifierKeyer.preset_id}_${mode}`;
+  try {
+    const blob = await api.downloadQualifierKeyerLutBlob({
+      config: state.qualifierKeyer,
+      size,
+      mode,
+      title,
+      filename: `${title}.cube`
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title}.cube`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    const statusEl = byId("qk-status-note");
+    if (statusEl) statusEl.textContent = `Qualifier .cube download failed: ${err.message || err}`;
+  }
+}
+
+function sendQualifierKeyerToDeliverAction() {
+  const compiled = state.qkStudio.compiled || compileQualifierFiltergraphClient(state.qualifierKeyer);
+  const modeSel = byId("qk-lut-mode-select");
+  const mode = modeSel ? modeSel.value : "isolation";
+  const deliverLutInput = byId("render-lut-path") || byId("cube-out-path");
+  if (deliverLutInput) {
+    deliverLutInput.value = `luts/qualifier_${state.qualifierKeyer.preset_id}_${mode}.cube`;
+  }
+  const fgOut = byId("color-filtergraph-output");
+  if (fgOut && compiled) {
+    fgOut.textContent = compiled.ffmpeg_filter_expr;
+  }
+  closeQualifierKeyerDialog();
+  switchTab("render");
+  const statusEl = byId("qk-status-note");
+  if (statusEl) {
+    statusEl.textContent = `Qualifier Keyer (${state.qualifierKeyer.preset_id}) staged for Deliver.`;
+  }
+}
+
+function wireQualifierKeyerStudioEvents() {
+  byId("btn-color-qk-toggle")?.addEventListener("click", () => {
+    updateQualifierKeyerConfig((cur) => ({ ...cur, enabled: !cur.enabled }));
+  });
+  byId("btn-open-qk-studio")?.addEventListener("click", openQualifierKeyerDialog);
+  byId("btn-qual-open-keyer-studio")?.addEventListener("click", openQualifierKeyerDialog);
+  byId("btn-close-qk-studio")?.addEventListener("click", closeQualifierKeyerDialog);
+  const dlg = byId("qk-studio-dialog");
+  dlg?.addEventListener("close", () => {
+    state.qkStudio.isOpen = false;
+  });
+
+  byId("qk-enabled-toggle")?.addEventListener("change", (ev) => {
+    updateQualifierKeyerConfig((cur) => ({ ...cur, enabled: Boolean(ev.target.checked) }));
+  });
+  byId("qk-invert-toggle")?.addEventListener("change", (ev) => {
+    updateQualifierKeyerConfig((cur) => ({
+      ...cur,
+      invert_matte: Boolean(ev.target.checked),
+      enabled: true,
+      preset_id: "custom"
+    }));
+  });
+  byId("btn-qk-pick-viewer")?.addEventListener("click", () => {
+    state.qkStudio.pickMode = !state.qkStudio.pickMode;
+    if (state.qkStudio.pickMode) {
+      state.qualifierPickMode = false;
+      closeQualifierKeyerDialog();
+      if (state.activeTab !== "color") switchTab("color");
+    }
+    syncQualifierKeyerStudioUI();
+  });
+
+  byId("qk-key-mode")?.addEventListener("change", (ev) => {
+    updateQualifierKeyerConfig((cur) => ({
+      ...cur,
+      key_mode: ev.target.value,
+      enabled: true,
+      preset_id: "custom"
+    }));
+  });
+  byId("qk-despill-mode")?.addEventListener("change", (ev) => {
+    updateQualifierKeyerConfig((cur) => ({
+      ...cur,
+      despill_mode: ev.target.value,
+      enabled: true,
+      preset_id: "custom"
+    }));
+  });
+
+  for (const hlBtn of document.querySelectorAll(".qk-highlight-btn[data-qk-highlight]")) {
+    hlBtn.addEventListener("click", () => {
+      const mode = hlBtn.getAttribute("data-qk-highlight") || "final_composite";
+      updateQualifierKeyerConfig((cur) => ({ ...cur, highlight_mode: mode, enabled: true }));
+    });
+  }
+
+  const tabBtns = Array.from(document.querySelectorAll(".qk-tab-btn[data-qk-tab]"));
+  tabBtns.forEach((btn, idx) => {
+    btn.addEventListener("click", () => {
+      switchQualifierKeyerTab(btn.getAttribute("data-qk-tab"));
+    });
+    btn.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        const dir = ev.key === "ArrowRight" ? 1 : -1;
+        const nextBtn = tabBtns[(idx + dir + tabBtns.length) % tabBtns.length];
+        if (nextBtn) {
+          switchQualifierKeyerTab(nextBtn.getAttribute("data-qk-tab"));
+          nextBtn.focus();
+        }
+      }
+    });
+  });
+
+  for (const pair of QK_SLIDER_PAIRS) {
+    const rEl = byId(pair.rangeId);
+    const nEl = byId(pair.numId);
+    rEl?.addEventListener("input", (ev) => {
+      const val = Number.parseFloat(ev.target.value);
+      if (Number.isFinite(val)) {
+        updateQualifierKeyerConfig(
+          (cur) => ({ ...cur, [pair.key]: val, enabled: true, preset_id: "custom" }),
+          { syncServer: false }
+        );
+      }
+    });
+    rEl?.addEventListener("change", () => compileAndAnalyzeQkServerAsync());
+
+    // Never clamp controlled numeric inputs mid-keystroke
+    nEl?.addEventListener("input", (ev) => {
+      const raw = String(ev.target.value || "").trim();
+      if (raw === "" || raw === "-" || raw === "." || raw === "-.") return;
+      const val = Number.parseFloat(raw);
+      if (Number.isFinite(val)) {
+        const minV = Number.parseFloat(nEl.min);
+        const maxV = Number.parseFloat(nEl.max);
+        if (val >= minV && val <= maxV) {
+          updateQualifierKeyerConfig(
+            (cur) => ({ ...cur, [pair.key]: val, enabled: true, preset_id: "custom" }),
+            { syncServer: false }
+          );
+        }
+      }
+    });
+    nEl?.addEventListener("blur", () => {
+      syncQualifierKeyerStudioUI();
+      compileAndAnalyzeQkServerAsync();
+    });
+    nEl?.addEventListener("change", () => {
+      const val = Number.parseFloat(nEl.value);
+      if (Number.isFinite(val)) {
+        updateQualifierKeyerConfig((cur) => ({
+          ...cur,
+          [pair.key]: val,
+          enabled: true,
+          preset_id: "custom"
+        }));
+      } else {
+        syncQualifierKeyerStudioUI();
+      }
+    });
+  }
+
+  byId("qk-bg-color-input")?.addEventListener("input", (ev) => {
+    const rgb = qkHexInputToRgb(ev.target.value);
+    updateQualifierKeyerConfig(
+      (cur) => ({ ...cur, light_wrap_bg_rgb: rgb, enabled: true }),
+      { syncServer: false }
+    );
+  });
+  byId("qk-bg-color-input")?.addEventListener("change", () => compileAndAnalyzeQkServerAsync());
+
+  for (const sw of document.querySelectorAll(".qk-plate-swatch[data-qk-bg]")) {
+    sw.addEventListener("click", () => {
+      const parts = String(sw.getAttribute("data-qk-bg") || "")
+        .split(",")
+        .map((v) => Number.parseFloat(v));
+      if (parts.length === 3 && parts.every((v) => Number.isFinite(v))) {
+        updateQualifierKeyerConfig((cur) => ({ ...cur, light_wrap_bg_rgb: parts, enabled: true }));
+      }
+    });
+  }
+
+  const qkPreview = byId("qk-preview-canvas");
+  if (qkPreview) {
+    qkPreview.addEventListener("pointerdown", (ev) => {
+      const rect = qkPreview.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const u = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+      const v = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
+      const sample = sampleQualifierKeyerCanvasRgb(qkPreview, u, v);
+      if (sample) {
+        applyQkSampledRgb(sample[0], sample[1], sample[2], { u, v });
+      }
+    });
+  }
+
+  byId("btn-qk-export-lut")?.addEventListener("click", exportQualifierKeyerLutAction);
+  byId("btn-qk-download-lut")?.addEventListener("click", downloadQualifierKeyerLutAction);
+  byId("btn-qk-send-deliver")?.addEventListener("click", sendQualifierKeyerToDeliverAction);
+  byId("btn-qk-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.qkStudio.compiled || compileQualifierFiltergraphClient(state.qualifierKeyer);
+    try {
+      await navigator.clipboard.writeText(compiled.ffmpeg_filter_expr);
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    const statusEl = byId("qk-status-note");
+    if (statusEl) statusEl.textContent = t("qk.action.copied");
+  });
+  byId("btn-qk-reset")?.addEventListener("click", () => {
+    state.qkStudio.pickedPoint = null;
+    state.qkStudio.pickMode = false;
+    updateQualifierKeyerConfig(createDefaultQualifierKeyerConfigClient());
+  });
 }
 
 bootstrap();

@@ -13017,3 +13017,304 @@ def test_ui_playwright_cst_studio_desktop_and_mobile(ui_server: tuple[str, Path]
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_ui_qualifier_keyer_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/color/qualifier/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 7
+    assert "luma_preserving" in meta["despill_modes"]
+    assert "bw_alpha_matte" in meta["highlight_modes"]
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/color/qualifier/compile",
+        method="POST",
+        payload={
+            "config": {
+                "enabled": True,
+                "preset_id": "green_screen_pro",
+                "key_mode": "hybrid",
+                "despill_mode": "luma_preserving",
+                "despill_strength": 0.85,
+                "choke_px": -1.0,
+                "post_feather_px": 1.5,
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["enabled"] is True
+    assert "chromakey=" in compiled["ffmpeg_key_filter"]
+    assert "despill=" in compiled["ffmpeg_despill_filter"]
+    assert "erosion" in compiled["ffmpeg_matte_finesse_filter"]
+
+    a_status, _, a_raw = _http_call(
+        f"{base_url}/api/color/qualifier/analyze",
+        method="POST",
+        payload={
+            "config": {
+                "enabled": True,
+                "preset_id": "green_screen_pro",
+                "key_mode": "hybrid",
+                "despill_mode": "luma_preserving",
+                "light_wrap_intensity": 0.35,
+            }
+        },
+    )
+    assert a_status == 200
+    metrics = json.loads(a_raw.decode("utf-8"))
+    assert metrics["sample_count"] == 24 * 16
+    assert sum(metrics["alpha_histogram"]) == metrics["sample_count"]
+    assert metrics["despill_reduction_ratio"] > 0.3
+
+    e_status, _, e_raw = _http_call(
+        f"{base_url}/api/color/qualifier/export-lut",
+        method="POST",
+        payload={
+            "config": {"enabled": True, "preset_id": "green_screen_pro"},
+            "size": 9,
+            "mode": "matte",
+            "title": "Test_QK_Matte",
+            "out_path": "luts/test_qk_matte.cube",
+        },
+    )
+    assert e_status == 200
+    exported = json.loads(e_raw.decode("utf-8"))
+    assert exported["saved_path"] == "luts/test_qk_matte.cube"
+    assert (workspace / "luts" / "test_qk_matte.cube").is_file()
+    assert "LUT_3D_SIZE 9" in exported["cube_text"]
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/color/qualifier/export-lut",
+        method="POST",
+        payload={
+            "config": {"enabled": True},
+            "size": 9,
+            "out_path": "../escape_qk.cube",
+        },
+    )
+    assert trav_status == 403
+
+    d_status, d_headers, d_raw = _http_call(
+        f"{base_url}/api/color/qualifier/download",
+        method="POST",
+        payload={
+            "config": {"enabled": True, "preset_id": "blue_screen_cinema"},
+            "size": 9,
+            "mode": "isolation",
+            "title": "dl_qk",
+        },
+    )
+    assert d_status == 200
+    assert "attachment;" in d_headers.get("content-disposition", "")
+    assert "LUT_3D_SIZE 9" in d_raw.decode("utf-8")
+
+    # demo_adapter.js static-demo parity check via Node
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getQualifierKeyerPresets();
+assert.equal(pre.presets.length, 7);
+const comp = await api.compileQualifierKeyer({{
+  config: {{
+    enabled: true,
+    preset_id: "green_screen_pro",
+    key_mode: "hybrid",
+    despill_mode: "luma_preserving",
+    choke_px: -1.0
+  }}
+}});
+assert.equal(comp.enabled, true);
+assert.ok(comp.ffmpeg_filter_expr.includes("chromakey="));
+assert.ok(comp.ffmpeg_filter_expr.includes("erosion"));
+const ana = await api.analyzeQualifierKeyer({{
+  config: {{ enabled: true, preset_id: "green_screen_pro" }}
+}});
+assert.equal(ana.sample_count, 384);
+assert.ok(ana.despill_reduction_ratio > 0.3);
+const lut = await api.exportQualifierKeyerLut({{
+  config: {{ enabled: true, preset_id: "green_screen_pro" }},
+  size: 9,
+  mode: "matte",
+  title: "Demo_QK"
+}});
+assert.ok(lut.cube_text.includes("LUT_3D_SIZE 9"));
+const blob = await api.downloadQualifierKeyerLutBlob({{
+  config: {{ enabled: true, preset_id: "green_screen_pro" }},
+  size: 9,
+  mode: "isolation",
+  title: "Demo_QK_DL"
+}});
+assert.ok((await blob.text()).includes("LUT_3D_SIZE 9"));
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_qualifier_keyer_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#tab-color")
+
+            page.click("#tab-color")
+            page.wait_for_selector("#color-preview-canvas")
+            viewer_before = page.evaluate(
+                "() => document.getElementById('color-preview-canvas').toDataURL()"
+            )
+
+            # Open Qualifier Keyer Studio via Shift+Q
+            page.keyboard.press("Shift+Q")
+            page.wait_for_selector("#qk-studio-dialog[open]")
+
+            # Select Green Screen Pro preset
+            page.click(".qk-preset-btn[data-qk-preset='green_screen_pro']")
+            page.wait_for_function(
+                "() => document.getElementById('color-qk-badge')?.classList.contains('is-active')"
+            )
+            assert "chromakey=" in (page.locator("#qk-fg-output").text_content() or "")
+
+            # Color viewer updated live
+            viewer_after = page.evaluate(
+                "() => document.getElementById('color-preview-canvas').toDataURL()"
+            )
+            assert viewer_after != viewer_before
+
+            # Toggle Highlight Mode -> B&W Alpha Matte -> Red Rubylith
+            dlg_preview_before = page.evaluate(
+                "() => document.getElementById('qk-preview-canvas').toDataURL()"
+            )
+            page.click(".qk-highlight-btn[data-qk-highlight='bw_alpha_matte']")
+            dlg_preview_matte = page.evaluate(
+                "() => document.getElementById('qk-preview-canvas').toDataURL()"
+            )
+            assert dlg_preview_matte != dlg_preview_before
+
+            page.click(".qk-highlight-btn[data-qk-highlight='red_rubylith']")
+            assert (
+                page.locator(".qk-highlight-btn[data-qk-highlight='red_rubylith']").get_attribute(
+                    "aria-pressed"
+                )
+                == "true"
+            )
+
+            # Switch tabs via keyboard ArrowRight & verify Matte Finesse + Despill/Light-Wrap
+            page.locator("#qk-tab-btn-hsl").focus()
+            page.keyboard.press("ArrowRight")
+            page.wait_for_selector("#qk-choke-num")
+            page.fill("#qk-choke-num", "-2")
+            page.locator("#qk-choke-num").dispatch_event("change")
+            assert "erosion" in (page.locator("#qk-fg-output").text_content() or "")
+
+            page.locator("#qk-tab-btn-finesse").focus()
+            page.keyboard.press("ArrowRight")
+            page.wait_for_selector("#qk-lw-intensity-num")
+
+            # Click eyedropper directly on #qk-preview-canvas
+            qk_box = page.locator("#qk-preview-canvas").bounding_box()
+            assert qk_box is not None
+            page.mouse.click(
+                qk_box["x"] + qk_box["width"] * 0.15,
+                qk_box["y"] + qk_box["height"] * 0.25,
+            )
+            page.wait_for_function(
+                "() => (document.getElementById('qk-status-note')?.textContent || '')"
+                ".includes('Hue')"
+            )
+
+            # Export .cube LUT
+            page.click("#btn-qk-export-lut")
+            page.wait_for_function(
+                "() => (document.getElementById('qk-cube-preview')?.textContent || '')"
+                ".includes('LUT_3D_SIZE')"
+            )
+
+            # Use in Deliver stages pipeline and switches to Deliver tab
+            page.click("#btn-qk-send-deliver")
+            page.wait_for_function(
+                "() => !document.getElementById('qk-studio-dialog')?.open"
+            )
+            assert page.locator("#tab-render").get_attribute("aria-selected") == "true"
+            page.click("#tab-color")
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#lang-fr")
+            page.click("#btn-open-qk-studio")
+            page.wait_for_selector("#qk-studio-dialog[open]")
+            fr_txt = page.locator("#qk-studio-dialog").text_content() or ""
+            assert "Finesse de Masque" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-qk-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-open-qk-studio")
+            page.wait_for_selector("#qk-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('qk-studio-dialog').getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-color-qk-toggle",
+                "btn-open-qk-studio",
+                "btn-qk-export-lut",
+                "btn-qk-download-lut",
+                "btn-close-qk-studio",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-qk-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

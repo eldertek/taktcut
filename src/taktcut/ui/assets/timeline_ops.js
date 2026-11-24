@@ -15655,3 +15655,833 @@ export function generateCstCubeTextClient(rawConfig, size = 33, title = "taktcut
   }
   return `${lines.join("\n")}\n`;
 }
+
+// =========================================================================
+// CYCLE #105: DAVINCI RESOLVE QUALIFIER KEYER & BORIS FX LIGHT-WRAP STUDIO
+// =========================================================================
+
+export const ALLOWED_QUALIFIER_KEYER_PRESETS = [
+  "green_screen_pro",
+  "blue_screen_cinema",
+  "skin_tone_isolator",
+  "sky_cyan_qualifier",
+  "sodium_street_despill",
+  "studio_luma_key",
+  "custom"
+];
+
+export const ALLOWED_QUALIFIER_KEY_MODES = ["hybrid", "chroma_3d", "hsl", "luma_key"];
+
+export const ALLOWED_QUALIFIER_DESPILL_MODES = [
+  "none",
+  "luma_preserving",
+  "complement_mix",
+  "avg_gb"
+];
+
+export const ALLOWED_QUALIFIER_HIGHLIGHT_MODES = [
+  "final_composite",
+  "bw_alpha_matte",
+  "red_rubylith",
+  "isolated_foreground"
+];
+
+export const ALLOWED_QUALIFIER_CUBE_MODES = ["isolation", "matte", "despill"];
+
+export const QUALIFIER_KEYER_DEFAULT_CONFIG = {
+  enabled: false,
+  preset_id: "green_screen_pro",
+  key_mode: "hybrid",
+  highlight_mode: "final_composite",
+  hue_center: 120.0,
+  hue_width: 76.0,
+  hue_softness: 18.0,
+  sat_low: 0.22,
+  sat_high: 1.0,
+  sat_softness: 0.1,
+  luma_low: 0.08,
+  luma_high: 0.95,
+  luma_softness: 0.08,
+  invert_matte: true,
+  target_rgb: [0.12, 0.75, 0.22],
+  chroma_distance: 0.28,
+  chroma_softness: 0.14,
+  pre_blur_radius: 0.5,
+  clean_black: 0.06,
+  clean_white: 0.94,
+  choke_px: 0.0,
+  post_feather_px: 1.0,
+  despill_mode: "luma_preserving",
+  despill_strength: 0.8,
+  light_wrap_intensity: 0.35,
+  light_wrap_radius: 14.0,
+  light_wrap_bg_rgb: [0.14, 0.2, 0.34]
+};
+
+export const QUALIFIER_KEYER_PRESETS_CLIENT = [
+  {
+    preset_id: "green_screen_pro",
+    label: "Green Screen Pro",
+    category: "Chroma Keyer",
+    description: "3D Chroma + HSL studio green screen key with luma-preserving despill and edge light-wrap.",
+    config: {
+      ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+      enabled: true,
+      preset_id: "green_screen_pro"
+    }
+  },
+  {
+    preset_id: "blue_screen_cinema",
+    label: "Blue Screen Cinema",
+    category: "Chroma Keyer",
+    description: "Tungsten/cinema blue screen keyer tuned for shadow retention and complement-mix despill.",
+    config: {
+      ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+      enabled: true,
+      preset_id: "blue_screen_cinema",
+      hue_center: 228.0,
+      hue_width: 68.0,
+      sat_low: 0.24,
+      luma_low: 0.06,
+      luma_high: 0.92,
+      target_rgb: [0.12, 0.24, 0.78],
+      chroma_distance: 0.26,
+      clean_white: 0.93,
+      choke_px: -0.5,
+      post_feather_px: 1.2,
+      despill_mode: "complement_mix",
+      despill_strength: 0.78,
+      light_wrap_intensity: 0.3,
+      light_wrap_radius: 12.0,
+      light_wrap_bg_rgb: [0.24, 0.18, 0.14]
+    }
+  },
+  {
+    preset_id: "skin_tone_isolator",
+    label: "Skin Tone Isolator",
+    category: "HSL Qualifier",
+    description: "DaVinci HSL secondary skin-line isolator (I-line ~24 deg) with soft matte feathering.",
+    config: {
+      ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+      enabled: true,
+      preset_id: "skin_tone_isolator",
+      key_mode: "hsl",
+      highlight_mode: "isolated_foreground",
+      hue_center: 24.0,
+      hue_width: 40.0,
+      hue_softness: 16.0,
+      sat_low: 0.14,
+      sat_high: 0.72,
+      luma_low: 0.18,
+      luma_high: 0.88,
+      luma_softness: 0.1,
+      invert_matte: false,
+      target_rgb: [0.76, 0.52, 0.4],
+      chroma_distance: 0.24,
+      pre_blur_radius: 1.0,
+      clean_black: 0.04,
+      clean_white: 0.95,
+      post_feather_px: 2.0,
+      despill_mode: "none",
+      despill_strength: 0.0,
+      light_wrap_intensity: 0.0,
+      light_wrap_radius: 0.0,
+      light_wrap_bg_rgb: [0.1, 0.11, 0.14]
+    }
+  },
+  {
+    preset_id: "sky_cyan_qualifier",
+    label: "Sky / Cyan Qualifier",
+    category: "HSL Qualifier",
+    description: "Isolates daylight cyan/blue skies for sky replacement or secondary grading.",
+    config: {
+      ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+      enabled: true,
+      preset_id: "sky_cyan_qualifier",
+      key_mode: "hsl",
+      highlight_mode: "red_rubylith",
+      hue_center: 205.0,
+      hue_width: 56.0,
+      hue_softness: 20.0,
+      sat_low: 0.2,
+      sat_high: 0.95,
+      sat_softness: 0.12,
+      luma_low: 0.35,
+      luma_high: 0.98,
+      luma_softness: 0.1,
+      invert_matte: false,
+      target_rgb: [0.24, 0.58, 0.88],
+      chroma_distance: 0.28,
+      chroma_softness: 0.16,
+      pre_blur_radius: 0.8,
+      clean_black: 0.05,
+      clean_white: 0.92,
+      post_feather_px: 1.5,
+      despill_mode: "none",
+      despill_strength: 0.0,
+      light_wrap_intensity: 0.18,
+      light_wrap_radius: 10.0,
+      light_wrap_bg_rgb: [0.82, 0.58, 0.36]
+    }
+  },
+  {
+    preset_id: "sodium_street_despill",
+    label: "Sodium Street Despill",
+    category: "Spill / Cleanup",
+    description: "Suppresses harsh amber/sodium-vapor streetlight contamination while preserving foreground highlights.",
+    config: {
+      ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+      enabled: true,
+      preset_id: "sodium_street_despill",
+      key_mode: "hybrid",
+      highlight_mode: "final_composite",
+      hue_center: 42.0,
+      hue_width: 54.0,
+      sat_low: 0.3,
+      sat_softness: 0.12,
+      luma_low: 0.12,
+      luma_high: 0.96,
+      luma_softness: 0.1,
+      invert_matte: true,
+      target_rgb: [0.86, 0.62, 0.14],
+      chroma_distance: 0.25,
+      clean_black: 0.05,
+      despill_mode: "luma_preserving",
+      despill_strength: 0.72,
+      light_wrap_intensity: 0.22,
+      light_wrap_radius: 8.0,
+      light_wrap_bg_rgb: [0.12, 0.16, 0.24]
+    }
+  },
+  {
+    preset_id: "studio_luma_key",
+    label: "Studio Luma Key",
+    category: "Luma Keyer",
+    description: "Clean luminance keyer separating illuminated foreground talent from crushed dark studio cyclorama.",
+    config: {
+      ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+      enabled: true,
+      preset_id: "studio_luma_key",
+      key_mode: "luma_key",
+      highlight_mode: "bw_alpha_matte",
+      hue_width: 360.0,
+      hue_softness: 0.0,
+      sat_low: 0.0,
+      sat_softness: 0.0,
+      luma_low: 0.18,
+      luma_high: 1.0,
+      luma_softness: 0.08,
+      invert_matte: false,
+      target_rgb: [0.04, 0.04, 0.05],
+      chroma_distance: 0.3,
+      chroma_softness: 0.15,
+      clean_black: 0.08,
+      clean_white: 0.92,
+      post_feather_px: 1.5,
+      despill_mode: "none",
+      despill_strength: 0.0,
+      light_wrap_intensity: 0.28,
+      light_wrap_radius: 12.0,
+      light_wrap_bg_rgb: [0.18, 0.22, 0.3]
+    }
+  },
+  {
+    preset_id: "custom",
+    label: "Custom Keyer",
+    category: "Custom",
+    description: "User-defined HSL / 3D Chroma Keyer, Matte Finesse & Boris FX Light-Wrap configuration.",
+    config: {
+      ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+      enabled: false,
+      preset_id: "custom"
+    }
+  }
+];
+
+export function createDefaultQualifierKeyerConfigClient(overrides = {}) {
+  return normalizeQualifierKeyerConfigClient({
+    ...QUALIFIER_KEYER_DEFAULT_CONFIG,
+    ...(overrides || {})
+  });
+}
+
+function normalizeRgbTupleClient(raw, fallback) {
+  if (!Array.isArray(raw) || raw.length !== 3) return [...fallback];
+  return raw.map((v, i) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? clampNum(n, 0, 1) : fallback[i];
+  });
+}
+
+export function normalizeQualifierKeyerConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const d = QUALIFIER_KEYER_DEFAULT_CONFIG;
+  const presetId = ALLOWED_QUALIFIER_KEYER_PRESETS.includes(src.preset_id)
+    ? src.preset_id
+    : d.preset_id;
+  const keyMode = ALLOWED_QUALIFIER_KEY_MODES.includes(src.key_mode) ? src.key_mode : d.key_mode;
+  const highlightMode = ALLOWED_QUALIFIER_HIGHLIGHT_MODES.includes(src.highlight_mode)
+    ? src.highlight_mode
+    : d.highlight_mode;
+  const despillMode = ALLOWED_QUALIFIER_DESPILL_MODES.includes(src.despill_mode)
+    ? src.despill_mode
+    : d.despill_mode;
+
+  const numOr = (val, fb, lo, hi) => {
+    const n = Number(val);
+    return Number.isFinite(n) ? clampNum(n, lo, hi) : fb;
+  };
+  let satLow = numOr(src.sat_low, d.sat_low, 0, 1);
+  let satHigh = numOr(src.sat_high, d.sat_high, 0, 1);
+  if (satLow > satHigh) [satLow, satHigh] = [satHigh, satLow];
+  let lumaLow = numOr(src.luma_low, d.luma_low, 0, 1);
+  let lumaHigh = numOr(src.luma_high, d.luma_high, 0, 1);
+  if (lumaLow > lumaHigh) [lumaLow, lumaHigh] = [lumaHigh, lumaLow];
+  const cleanBlack = numOr(src.clean_black, d.clean_black, 0, 0.9);
+  const cleanWhite = Math.max(cleanBlack + 0.02, numOr(src.clean_white, d.clean_white, 0.1, 1.0));
+
+  return {
+    enabled: typeof src.enabled === "boolean" ? src.enabled : d.enabled,
+    preset_id: presetId,
+    key_mode: keyMode,
+    highlight_mode: highlightMode,
+    hue_center: numOr(src.hue_center, d.hue_center, 0, 360),
+    hue_width: numOr(src.hue_width, d.hue_width, 1, 360),
+    hue_softness: numOr(src.hue_softness, d.hue_softness, 0, 90),
+    sat_low: satLow,
+    sat_high: satHigh,
+    sat_softness: numOr(src.sat_softness, d.sat_softness, 0, 0.5),
+    luma_low: lumaLow,
+    luma_high: lumaHigh,
+    luma_softness: numOr(src.luma_softness, d.luma_softness, 0, 0.5),
+    invert_matte: typeof src.invert_matte === "boolean" ? src.invert_matte : d.invert_matte,
+    target_rgb: normalizeRgbTupleClient(src.target_rgb, d.target_rgb),
+    chroma_distance: numOr(src.chroma_distance, d.chroma_distance, 0.01, 1.0),
+    chroma_softness: numOr(src.chroma_softness, d.chroma_softness, 0, 0.6),
+    pre_blur_radius: numOr(src.pre_blur_radius, d.pre_blur_radius, 0, 12),
+    clean_black: cleanBlack,
+    clean_white: clampNum(cleanWhite, 0.1, 1.0),
+    choke_px: numOr(src.choke_px, d.choke_px, -12, 12),
+    post_feather_px: numOr(src.post_feather_px, d.post_feather_px, 0, 16),
+    despill_mode: despillMode,
+    despill_strength: numOr(src.despill_strength, d.despill_strength, 0, 1),
+    light_wrap_intensity: numOr(src.light_wrap_intensity, d.light_wrap_intensity, 0, 1),
+    light_wrap_radius: numOr(src.light_wrap_radius, d.light_wrap_radius, 0, 64),
+    light_wrap_bg_rgb: normalizeRgbTupleClient(src.light_wrap_bg_rgb, d.light_wrap_bg_rgb)
+  };
+}
+
+function qkRgbToHslClient(r, g, b) {
+  const cr = clampNum(r, 0, 1);
+  const cg = clampNum(g, 0, 1);
+  const cb = clampNum(b, 0, 1);
+  const maxC = Math.max(cr, cg, cb);
+  const minC = Math.min(cr, cg, cb);
+  const delta = maxC - minC;
+  const luma = 0.5 * (maxC + minC);
+  if (delta <= 1e-7) return [0, 0, luma];
+  const sat = delta / Math.max(1e-7, 1 - Math.abs(2 * luma - 1));
+  let hue = 0;
+  if (maxC === cr) hue = 60 * (((cg - cb) / delta) % 6);
+  else if (maxC === cg) hue = 60 * ((cb - cr) / delta + 2);
+  else hue = 60 * ((cr - cg) / delta + 4);
+  if (hue < 0) hue += 360;
+  return [(hue + 360) % 360, clampNum(sat, 0, 1), clampNum(luma, 0, 1)];
+}
+
+function qkBandWeightClient(val, lo, hi, soft) {
+  if (val >= lo && val <= hi) return 1;
+  if (soft <= 1e-6) return 0;
+  if (val < lo) return clampNum(1 - (lo - val) / soft, 0, 1);
+  return clampNum(1 - (val - hi) / soft, 0, 1);
+}
+
+function qkHueWeightClient(hue, center, width, soft) {
+  if (width >= 359.5) return 1;
+  const halfW = 0.5 * width;
+  const diff = Math.abs((((hue - center + 180) % 360) + 360) % 360 - 180);
+  if (diff <= halfW) return 1;
+  if (soft <= 1e-6) return 0;
+  return clampNum(1 - (diff - halfW) / soft, 0, 1);
+}
+
+function qkDetectSpillChannelClient(cfg) {
+  const [tr, tg, tb] = cfg.target_rgb;
+  const hue = ((cfg.hue_center % 360) + 360) % 360;
+  if ((hue >= 65 && hue <= 175) || (tg >= tr && tg >= tb && tg - Math.max(tr, tb) > 0.08)) {
+    return "g";
+  }
+  if ((hue > 175 && hue <= 290) || (tb >= tr && tb >= tg && tb - Math.max(tr, tg) > 0.08)) {
+    return "b";
+  }
+  return "r";
+}
+
+export function applyQualifierSpillSuppressionClient(cfg, r, g, b) {
+  const cr = clampNum(r, 0, 1);
+  const cg = clampNum(g, 0, 1);
+  const cb = clampNum(b, 0, 1);
+  const strength = cfg.despill_strength;
+  if (cfg.despill_mode === "none" || strength <= 1e-6) return [cr, cg, cb];
+
+  const ch = qkDetectSpillChannelClient(cfg);
+  const channels = [cr, cg, cb];
+  const [sIdx, o1Idx, o2Idx] = ch === "r" ? [0, 1, 2] : ch === "g" ? [1, 0, 2] : [2, 0, 1];
+  const sVal = channels[sIdx];
+  const o1Val = channels[o1Idx];
+  const o2Val = channels[o2Idx];
+  const limit =
+    cfg.despill_mode === "complement_mix"
+      ? 0.35 * Math.min(o1Val, o2Val) + 0.65 * Math.max(o1Val, o2Val)
+      : 0.5 * (o1Val + o2Val);
+  if (sVal <= limit) return [cr, cg, cb];
+
+  const sNew = sVal - (sVal - limit) * strength;
+  if (cfg.despill_mode === "luma_preserving") {
+    const lw = [0.2126, 0.7152, 0.0722];
+    const origY = cr * lw[0] + cg * lw[1] + cb * lw[2];
+    channels[sIdx] = sNew;
+    const newY = channels[0] * lw[0] + channels[1] * lw[1] + channels[2] * lw[2];
+    const deltaY = Math.max(0, origY - newY);
+    const compW = lw[o1Idx] + lw[o2Idx];
+    if (compW > 1e-6 && deltaY > 0) {
+      const boost = deltaY / compW;
+      channels[o1Idx] = clampNum(o1Val + boost, 0, 1);
+      channels[o2Idx] = clampNum(o2Val + boost, 0, 1);
+    }
+  } else {
+    channels[sIdx] = sNew;
+  }
+  return [
+    clampNum(channels[0], 0, 1),
+    clampNum(channels[1], 0, 1),
+    clampNum(channels[2], 0, 1)
+  ];
+}
+
+export function evaluateRawKeyMatchClient(cfg, r, g, b) {
+  const cr = clampNum(r, 0, 1);
+  const cg = clampNum(g, 0, 1);
+  const cb = clampNum(b, 0, 1);
+  const [hue, sat, luma] = qkRgbToHslClient(cr, cg, cb);
+  const rec709Y = 0.2126 * cr + 0.7152 * cg + 0.0722 * cb;
+  if (cfg.key_mode === "luma_key") {
+    return qkBandWeightClient(rec709Y, cfg.luma_low, cfg.luma_high, cfg.luma_softness);
+  }
+  const hW = qkHueWeightClient(hue, cfg.hue_center, cfg.hue_width, cfg.hue_softness);
+  const sW = qkBandWeightClient(sat, cfg.sat_low, cfg.sat_high, cfg.sat_softness);
+  const lW = qkBandWeightClient(luma, cfg.luma_low, cfg.luma_high, cfg.luma_softness);
+  const hslW = hW * sW * lW;
+  if (cfg.key_mode === "hsl") return clampNum(hslW, 0, 1);
+
+  const [tr, tg, tb] = cfg.target_rgb;
+  const pCb = -0.1146 * cr - 0.3854 * cg + 0.5 * cb;
+  const pCr = 0.5 * cr - 0.4542 * cg - 0.0458 * cb;
+  const tCb = -0.1146 * tr - 0.3854 * tg + 0.5 * tb;
+  const tCr = 0.5 * tr - 0.4542 * tg - 0.0458 * tb;
+  const chromaDist = Math.hypot(pCb - tCb, pCr - tCr) * 1.41421356;
+  const rgbDist = Math.sqrt(((cr - tr) ** 2 + (cg - tg) ** 2 + (cb - tb) ** 2) / 3);
+  const dist3d = 0.72 * chromaDist + 0.28 * rgbDist;
+  let chromaW = 0;
+  if (dist3d <= cfg.chroma_distance) chromaW = 1;
+  else if (cfg.chroma_softness > 1e-6) {
+    chromaW = clampNum(1 - (dist3d - cfg.chroma_distance) / cfg.chroma_softness, 0, 1);
+  }
+  if (cfg.key_mode === "chroma_3d") return clampNum(chromaW * lW, 0, 1);
+  return clampNum(0.55 * chromaW * lW + 0.45 * hslW, 0, 1);
+}
+
+export function evaluateQualifierKeyerPixelClient(rawCfg, r, g, b) {
+  const cfg = normalizeQualifierKeyerConfigClient(rawCfg);
+  const rawMatch = evaluateRawKeyMatchClient(cfg, r, g, b);
+  const matte = cfg.invert_matte ? 1 - rawMatch : rawMatch;
+  const span = Math.max(1e-4, cfg.clean_white - cfg.clean_black);
+  const alpha = clampNum((matte - cfg.clean_black) / span, 0, 1);
+  const [dr, dg, db] = applyQualifierSpillSuppressionClient(cfg, r, g, b);
+  return [alpha, dr, dg, db];
+}
+
+function qkBoxBlur2dClient(grid, width, height, radius) {
+  if (radius <= 0 || width <= 1 || height <= 1) return grid.slice();
+  const temp = new Float32Array(width * height);
+  const out = new Float32Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowOff = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const x0 = Math.max(0, x - radius);
+      const x1 = Math.min(width - 1, x + radius);
+      let acc = 0;
+      for (let sx = x0; sx <= x1; sx += 1) acc += grid[rowOff + sx];
+      temp[rowOff + x] = acc / (x1 - x0 + 1);
+    }
+  }
+  for (let y = 0; y < height; y += 1) {
+    const y0 = Math.max(0, y - radius);
+    const y1 = Math.min(height - 1, y + radius);
+    const count = y1 - y0 + 1;
+    for (let x = 0; x < width; x += 1) {
+      let acc = 0;
+      for (let sy = y0; sy <= y1; sy += 1) acc += temp[sy * width + x];
+      out[y * width + x] = acc / count;
+    }
+  }
+  return Array.from(out);
+}
+
+function qkMorphChoke2dClient(grid, width, height, chokePx) {
+  const radius = Math.min(4, Math.round(Math.abs(chokePx)));
+  if (radius <= 0 || width <= 1 || height <= 1) return grid.slice();
+  const erode = chokePx < 0;
+  const out = new Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    const y0 = Math.max(0, y - radius);
+    const y1 = Math.min(height - 1, y + radius);
+    for (let x = 0; x < width; x += 1) {
+      const x0 = Math.max(0, x - radius);
+      const x1 = Math.min(width - 1, x + radius);
+      let best = erode ? 1 : 0;
+      for (let sy = y0; sy <= y1; sy += 1) {
+        const rowOff = sy * width;
+        for (let sx = x0; sx <= x1; sx += 1) {
+          const v = grid[rowOff + sx];
+          if (erode ? v < best : v > best) best = v;
+        }
+      }
+      out[y * width + x] = best;
+    }
+  }
+  return out;
+}
+
+export function synthesizeQualifierTestFrameClient(cfg, width = 24, height = 16) {
+  const pixels = [];
+  const [tr, tg, tb] = cfg.target_rgb;
+  const isLuma = cfg.key_mode === "luma_key";
+  const [bgR, bgG, bgB] = isLuma ? [0.04, 0.04, 0.05] : [tr, tg, tb];
+  const fgSkin = [0.76, 0.54, 0.42];
+  const fgJacket = [0.22, 0.24, 0.3];
+  const cx = (width - 1) * 0.5;
+  const cy = (height - 1) * 0.54;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = (x - cx) / Math.max(1, width * 0.28);
+      const dy = (y - cy) / Math.max(1, height * 0.38);
+      const dist = Math.hypot(dx, dy);
+      if (dist <= 0.85) {
+        pixels.push(y < height * 0.5 ? fgSkin : fgJacket);
+      } else if (dist <= 1.15) {
+        const blend = clampNum((1.15 - dist) / 0.3, 0, 1);
+        const base = y < height * 0.5 ? fgSkin : fgJacket;
+        pixels.push([
+          clampNum(base[0] * blend + bgR * (1 - blend), 0, 1),
+          clampNum(base[1] * blend + bgG * (1 - blend), 0, 1),
+          clampNum(base[2] * blend + bgB * (1 - blend), 0, 1)
+        ]);
+      } else {
+        const shade = 0.92 + 0.08 * Math.sin((x / Math.max(1, width)) * Math.PI);
+        pixels.push([
+          clampNum(bgR * shade, 0, 1),
+          clampNum(bgG * shade, 0, 1),
+          clampNum(bgB * shade, 0, 1)
+        ]);
+      }
+    }
+  }
+  return pixels;
+}
+
+export function analyzeQualifierKeyerSamplesClient(rawCfg, opts = {}) {
+  const cfg = normalizeQualifierKeyerConfigClient(rawCfg);
+  let w = Number(opts.width || 0);
+  let h = Number(opts.height || 0);
+  let rgbList = [];
+  if (Array.isArray(opts.pixels) && opts.pixels.length > 0) {
+    const stride = w > 0 && h > 0 && opts.pixels.length === w * h * 4 ? 4 : 3;
+    const count = w > 0 && h > 0 ? Math.min(w * h, Math.floor(opts.pixels.length / stride)) : Math.floor(opts.pixels.length / stride);
+    if (w <= 0 || h <= 0) {
+      w = Math.max(1, count);
+      h = 1;
+    }
+    let maxV = 1;
+    for (let i = 0; i < count * stride; i += 1) {
+      if (Number(opts.pixels[i]) > maxV) maxV = Number(opts.pixels[i]);
+    }
+    const scale = maxV > 1.001 ? 1 / 255 : 1;
+    for (let idx = 0; idx < count; idx += 1) {
+      const b = idx * stride;
+      rgbList.push([
+        clampNum(Number(opts.pixels[b]) * scale, 0, 1),
+        clampNum(Number(opts.pixels[b + 1]) * scale, 0, 1),
+        clampNum(Number(opts.pixels[b + 2]) * scale, 0, 1)
+      ]);
+    }
+  } else if (Array.isArray(opts.samples) && opts.samples.length > 0) {
+    let maxV = 1;
+    for (const row of opts.samples) {
+      for (let c = 0; c < 3; c += 1) {
+        if (Number(row[c]) > maxV) maxV = Number(row[c]);
+      }
+    }
+    const scale = maxV > 1.001 ? 1 / 255 : 1;
+    rgbList = opts.samples.map((row) => [
+      clampNum(Number(row[0]) * scale, 0, 1),
+      clampNum(Number(row[1]) * scale, 0, 1),
+      clampNum(Number(row[2]) * scale, 0, 1)
+    ]);
+    if (!(w > 0 && h > 0 && w * h === rgbList.length)) {
+      w = rgbList.length;
+      h = 1;
+    }
+  } else {
+    w = 24;
+    h = 16;
+    rgbList = synthesizeQualifierTestFrameClient(cfg, w, h);
+  }
+
+  const total = rgbList.length;
+  const rawMattes = rgbList.map(([r, g, b]) => {
+    const m = evaluateRawKeyMatchClient(cfg, r, g, b);
+    return cfg.invert_matte ? 1 - m : m;
+  });
+  const span = Math.max(1e-4, cfg.clean_white - cfg.clean_black);
+  let alphas;
+  let blurredInv;
+  if (w > 1 && h > 1 && rawMattes.length === w * h) {
+    const preR = Math.min(3, Math.round(cfg.pre_blur_radius));
+    let grid = qkBoxBlur2dClient(rawMattes, w, h, preR);
+    grid = grid.map((v) => clampNum((v - cfg.clean_black) / span, 0, 1));
+    grid = qkMorphChoke2dClient(grid, w, h, cfg.choke_px);
+    const postR = Math.min(4, Math.round(cfg.post_feather_px));
+    alphas = qkBoxBlur2dClient(grid, w, h, postR);
+    const invA = alphas.map((a) => 1 - a);
+    const wrapR = cfg.light_wrap_radius > 0 ? Math.max(1, Math.min(5, Math.round(cfg.light_wrap_radius / 4))) : 0;
+    blurredInv = wrapR > 0 ? qkBoxBlur2dClient(invA, w, h, wrapR) : invA;
+  } else {
+    alphas = rawMattes.map((v) => clampNum((v - cfg.clean_black) / span, 0, 1));
+    blurredInv = alphas.map((a) => 1 - a);
+  }
+
+  const hist = new Array(16).fill(0);
+  const spillCh = qkDetectSpillChannelClient(cfg);
+  const sIdx = spillCh === "r" ? 0 : spillCh === "g" ? 1 : 2;
+  const oIdxs = [0, 1, 2].filter((i) => i !== sIdx);
+  let bgCount = 0;
+  let bgLeakCount = 0;
+  let coreSolidCount = 0;
+  let semiTransCount = 0;
+  let edgeSpillSum = 0;
+  let edgeCount = 0;
+  let origSpillSum = 0;
+  let newSpillSum = 0;
+  let wrapEnergySum = 0;
+  let alphaSum = 0;
+
+  for (let i = 0; i < total; i += 1) {
+    const [r, g, b] = rgbList[i];
+    const a = clampNum(alphas[i], 0, 1);
+    alphaSum += a;
+    hist[Math.min(15, Math.max(0, Math.floor(a * 15.9999)))] += 1;
+    if (a >= 0.95) coreSolidCount += 1;
+    else if (a > 0.02) semiTransCount += 1;
+    if (rawMattes[i] < 0.2) {
+      bgCount += 1;
+      if (a > 0.08) bgLeakCount += 1;
+    }
+    const [dr, dg, db] = applyQualifierSpillSuppressionClient(cfg, r, g, b);
+    const origVec = [r, g, b];
+    const newVec = [dr, dg, db];
+    const origEx = Math.max(0, origVec[sIdx] - 0.5 * (origVec[oIdxs[0]] + origVec[oIdxs[1]]));
+    const newEx = Math.max(0, newVec[sIdx] - 0.5 * (newVec[oIdxs[0]] + newVec[oIdxs[1]]));
+    origSpillSum += origEx;
+    newSpillSum += newEx;
+    if (a > 0.02 && a < 0.98) {
+      edgeCount += 1;
+      edgeSpillSum += newEx;
+    }
+    wrapEnergySum += clampNum(a * blurredInv[i] * 2.2 * cfg.light_wrap_intensity, 0, 1);
+  }
+
+  const bgLeakRatio = clampNum(bgLeakCount / Math.max(1, bgCount), 0, 1);
+  const coreSolidRatio = clampNum(coreSolidCount / Math.max(1, total), 0, 1);
+  const semiTransRatio = clampNum(semiTransCount / Math.max(1, total), 0, 1);
+  const edgeContamRatio = clampNum(edgeSpillSum / Math.max(1, edgeCount), 0, 1);
+  const despillReduction = origSpillSum > 1e-6 ? clampNum((origSpillSum - newSpillSum) / origSpillSum, 0, 1) : 0;
+  const lightWrapEnergy = clampNum(wrapEnergySum / Math.max(1, total), 0, 1);
+  let grade = "NEEDS_FINESSE";
+  if (bgLeakRatio <= 0.08 && edgeContamRatio <= 0.08) grade = "EXCELLENT";
+  else if (bgLeakRatio <= 0.22 && edgeContamRatio <= 0.2) grade = "GOOD";
+
+  return {
+    sample_count: total,
+    width: w,
+    height: h,
+    mean_alpha: Number((alphaSum / Math.max(1, total)).toFixed(4)),
+    bg_leak_ratio: Number(bgLeakRatio.toFixed(4)),
+    core_solid_ratio: Number(coreSolidRatio.toFixed(4)),
+    edge_contamination_ratio: Number(edgeContamRatio.toFixed(4)),
+    semi_transparent_ratio: Number(semiTransRatio.toFixed(4)),
+    despill_reduction_ratio: Number(despillReduction.toFixed(4)),
+    light_wrap_energy: Number(lightWrapEnergy.toFixed(4)),
+    alpha_histogram: hist,
+    alpha_map: alphas.slice(0, 2048).map((v) => Number(v.toFixed(4))),
+    quality_grade: grade
+  };
+}
+
+function qkRgbToHexClient(rgb) {
+  const hex = (v) => Math.round(clampNum(v, 0, 1) * 255).toString(16).toUpperCase().padStart(2, "0");
+  return `0x${hex(rgb[0])}${hex(rgb[1])}${hex(rgb[2])}`;
+}
+
+export function compileQualifierFiltergraphClient(rawCfg) {
+  const cfg = normalizeQualifierKeyerConfigClient(rawCfg);
+  const targetHex = qkRgbToHexClient(cfg.target_rgb);
+  const warnings = [];
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      preset_id: cfg.preset_id,
+      key_mode: cfg.key_mode,
+      highlight_mode: cfg.highlight_mode,
+      ffmpeg_key_filter: "null",
+      ffmpeg_despill_filter: "null",
+      ffmpeg_matte_finesse_filter: "null",
+      ffmpeg_light_wrap_filter: "null",
+      ffmpeg_filter_expr: "null",
+      target_hex: targetHex,
+      warnings: ["Qualifier Keyer bypass active (enabled=false)."]
+    };
+  }
+  let keyFilter;
+  if (cfg.key_mode === "luma_key") {
+    const threshold = clampNum(0.5 * (cfg.luma_low + cfg.luma_high), 0, 1);
+    const tol = clampNum(0.5 * (cfg.luma_high - cfg.luma_low), 0.01, 1);
+    const soft = clampNum(cfg.luma_softness, 0, 1);
+    keyFilter = `format=rgba,lumakey=threshold=${threshold.toFixed(4)}:tolerance=${tol.toFixed(4)}:softness=${soft.toFixed(4)}`;
+  } else if (cfg.key_mode === "chroma_3d") {
+    const sim = clampNum(cfg.chroma_distance, 0.01, 1);
+    const blend = clampNum(cfg.chroma_softness, 0, 0.6);
+    keyFilter = `format=rgba,colorkey=color=${targetHex}:similarity=${sim.toFixed(4)}:blend=${blend.toFixed(4)}`;
+  } else if (cfg.key_mode === "hsl") {
+    const sim = clampNum(cfg.hue_width / 360, 0.02, 0.85);
+    const blend = clampNum(cfg.hue_softness / 180, 0, 0.5);
+    keyFilter = `format=rgba,chromakey=color=${targetHex}:similarity=${sim.toFixed(4)}:blend=${blend.toFixed(4)}`;
+  } else {
+    const sim = clampNum(cfg.chroma_distance, 0.01, 1);
+    const blend = clampNum(cfg.chroma_softness, 0, 0.6);
+    keyFilter = `format=rgba,chromakey=color=${targetHex}:similarity=${sim.toFixed(4)}:blend=${blend.toFixed(4)}`;
+  }
+
+  const spillCh = qkDetectSpillChannelClient(cfg);
+  let despillFilter = "null";
+  if (cfg.despill_mode !== "none" && cfg.despill_strength > 1e-6) {
+    if (spillCh === "r") {
+      warnings.push("Red/sodium despill mapped to FFmpeg colorbalance warm-spill trim.");
+      const shift = (-0.35 * cfg.despill_strength).toFixed(3);
+      despillFilter = `colorbalance=rm=${shift}:rh=${shift}`;
+    } else {
+      const despillType = spillCh === "b" ? "blue" : "green";
+      const mix = clampNum(0.5 * cfg.despill_strength, 0, 1).toFixed(3);
+      const expand = clampNum(0.25 * cfg.despill_strength, 0, 1).toFixed(3);
+      const bright = cfg.despill_mode === "luma_preserving" ? "0.120" : "0.000";
+      despillFilter = `despill=type=${despillType}:mix=${mix}:expand=${expand}:brightness=${bright}`;
+    }
+  }
+
+  const matteOps = [];
+  if (cfg.pre_blur_radius >= 0.5) {
+    matteOps.push(`boxblur=lr=${Math.max(1, Math.round(cfg.pre_blur_radius))}:lp=1`);
+  }
+  if (cfg.clean_black > 0.001 || cfg.clean_white < 0.999) {
+    const span = Math.max(0.01, cfg.clean_white - cfg.clean_black);
+    matteOps.push(`lut=y='clip((val/255-${cfg.clean_black.toFixed(4)})/${span.toFixed(4)}\\,0\\,1)*255'`);
+  }
+  if (cfg.choke_px <= -0.5) {
+    const steps = Math.min(4, Math.max(1, Math.round(Math.abs(cfg.choke_px))));
+    for (let i = 0; i < steps; i += 1) matteOps.push("erosion");
+  } else if (cfg.choke_px >= 0.5) {
+    const steps = Math.min(4, Math.max(1, Math.round(cfg.choke_px)));
+    for (let i = 0; i < steps; i += 1) matteOps.push("dilation");
+  }
+  if (cfg.post_feather_px >= 0.5) {
+    matteOps.push(`boxblur=lr=${Math.max(1, Math.round(cfg.post_feather_px))}:lp=1`);
+  }
+  const matteFinesseFilter = matteOps.length > 0
+    ? `split[qkfg][qkalp];[qkalp]alphaextract,${matteOps.join(",")}[qkmatte];[qkfg][qkmatte]alphamerge`
+    : "null";
+
+  const bgHex = qkRgbToHexClient(cfg.light_wrap_bg_rgb);
+  let lightWrapFilter = "null";
+  if (cfg.highlight_mode === "bw_alpha_matte") lightWrapFilter = "alphaextract,format=rgb24";
+  else if (cfg.highlight_mode === "red_rubylith") lightWrapFilter = "format=rgba";
+  else if (cfg.light_wrap_intensity > 0.01 && cfg.light_wrap_radius > 0.5) {
+    const lwAlpha = clampNum(cfg.light_wrap_intensity * 0.45, 0, 1).toFixed(3);
+    const lwBlur = Math.min(4, Math.max(1, Math.round(cfg.light_wrap_radius)));
+    lightWrapFilter = `drawbox=color=${bgHex}@${lwAlpha}:t=2:box_source=0,boxblur=lr=${lwBlur}:lp=1`;
+  }
+
+  const ordered = [keyFilter];
+  if (despillFilter !== "null") ordered.push(despillFilter);
+  const prefix = ordered.join(",");
+  const suffix = cfg.highlight_mode === "bw_alpha_matte" ? ",alphaextract,format=rgb24" : "";
+  const fullExpr = matteFinesseFilter !== "null"
+    ? `${prefix},${matteFinesseFilter}${suffix}`
+    : `${prefix}${suffix}`;
+
+  return {
+    enabled: true,
+    preset_id: cfg.preset_id,
+    key_mode: cfg.key_mode,
+    highlight_mode: cfg.highlight_mode,
+    ffmpeg_key_filter: keyFilter,
+    ffmpeg_despill_filter: despillFilter,
+    ffmpeg_matte_finesse_filter: matteFinesseFilter,
+    ffmpeg_light_wrap_filter: lightWrapFilter,
+    ffmpeg_filter_expr: fullExpr,
+    target_hex: targetHex,
+    warnings
+  };
+}
+
+export function generateQualifierCubeTextClient(
+  rawCfg,
+  size = 17,
+  mode = "isolation",
+  title = "taktcut_qualifier_keyer"
+) {
+  const gridSize = Number.isInteger(Number(size)) && Number(size) >= 2 && Number(size) <= 65 ? Number(size) : 17;
+  const cubeMode = ALLOWED_QUALIFIER_CUBE_MODES.includes(mode) ? mode : "isolation";
+  const cfg = normalizeQualifierKeyerConfigClient(rawCfg);
+  const cleanTitle = String(title || "taktcut_qualifier_keyer").replace(/"/g, "").trim() || "taktcut_qualifier_keyer";
+  const lines = [
+    `TITLE "${cleanTitle}"`,
+    `LUT_3D_SIZE ${gridSize}`,
+    "DOMAIN_MIN 0.0 0.0 0.0",
+    "DOMAIN_MAX 1.0 1.0 1.0"
+  ];
+  const denom = gridSize - 1;
+  for (let bIdx = 0; bIdx < gridSize; bIdx += 1) {
+    const b = bIdx / denom;
+    for (let gIdx = 0; gIdx < gridSize; gIdx += 1) {
+      const g = gIdx / denom;
+      for (let rIdx = 0; rIdx < gridSize; rIdx += 1) {
+        const r = rIdx / denom;
+        const [alpha, dr, dg, db] = evaluateQualifierKeyerPixelClient(cfg, r, g, b);
+        let outR = dr * alpha;
+        let outG = dg * alpha;
+        let outB = db * alpha;
+        if (cubeMode === "matte") {
+          outR = alpha;
+          outG = alpha;
+          outB = alpha;
+        } else if (cubeMode === "despill") {
+          outR = dr;
+          outG = dg;
+          outB = db;
+        }
+        lines.push(`${outR.toFixed(6)} ${outG.toFixed(6)} ${outB.toFixed(6)}`);
+      }
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}

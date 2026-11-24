@@ -2,6 +2,10 @@ import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ALLOWED_CST_GAMUT_MAPPING_MODES,
   ALLOWED_CST_TONE_MAPPING_MODES,
+  ALLOWED_QUALIFIER_CUBE_MODES,
+  ALLOWED_QUALIFIER_DESPILL_MODES,
+  ALLOWED_QUALIFIER_HIGHLIGHT_MODES,
+  ALLOWED_QUALIFIER_KEY_MODES,
   ASPECT_RATIO_PRESETS,
   AUTO_REFRAME_ASPECT_SPECS_CLIENT,
   AUTO_REFRAME_MOTION_PRESETS_CLIENT,
@@ -19,6 +23,7 @@ import {
   HSL_CURVE_PRESETS,
   LOUDNESS_PRESET_LUFS,
   PLANAR_TRACKER_PRESETS_CLIENT,
+  QUALIFIER_KEYER_PRESETS_CLIENT,
   QUALIFIER_PRESETS,
   STABILIZER_PRESETS_CLIENT,
   STUDIO_LUT_CATEGORIES_CLIENT,
@@ -47,6 +52,7 @@ import {
   analyzeAvSyncClient,
   analyzeBroadcastComplianceClient,
   analyzeCstPipelineClient,
+  analyzeQualifierKeyerSamplesClient,
   analyzeAudioSpectrumClient,
   analyzeClipSceneCutsClient,
   analyzeClipTranscriptClient,
@@ -60,6 +66,7 @@ import {
   clearAutoReframeFromDocumentClient,
   clearProxiesInDocument,
   generateCstCubeTextClient,
+  generateQualifierCubeTextClient,
   generateProxiesInDocument,
   relinkClipInDocumentClient,
   toggleClipOfflineInDocumentClient,
@@ -70,6 +77,7 @@ import {
   compileColorNodeChainClient,
   compileCompoundFiltergraphClient,
   compileCstFiltergraphClient,
+  compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
@@ -92,6 +100,7 @@ import {
   createColorNode,
   createCompoundClipInDocument,
   createDefaultCstConfigClient,
+  createDefaultQualifierKeyerConfigClient,
   createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
   deleteMulticamCutInDocument,
@@ -4004,6 +4013,82 @@ export function createApiClient() {
         return new Blob([text], { type: "text/plain; charset=utf-8" });
       }
       const resp = await fetch(`${apiBase}/api/color/cst/download-cube`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async getQualifierKeyerPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: QUALIFIER_KEYER_PRESETS_CLIENT,
+          key_modes: ALLOWED_QUALIFIER_KEY_MODES,
+          despill_modes: ALLOWED_QUALIFIER_DESPILL_MODES,
+          highlight_modes: ALLOWED_QUALIFIER_HIGHLIGHT_MODES,
+          cube_modes: ALLOWED_QUALIFIER_CUBE_MODES,
+          default_config: createDefaultQualifierKeyerConfigClient()
+        };
+      }
+      return requestJson("/api/color/qualifier/presets");
+    },
+    async compileQualifierKeyer(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileQualifierFiltergraphClient(payload && payload.config ? payload.config : payload);
+      }
+      return requestJson("/api/color/qualifier/compile", { method: "POST", body: payload });
+    },
+    async analyzeQualifierKeyer(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        return analyzeQualifierKeyerSamplesClient(p.config || p, {
+          samples: p.samples,
+          pixels: p.pixels,
+          width: p.width,
+          height: p.height
+        });
+      }
+      return requestJson("/api/color/qualifier/analyze", { method: "POST", body: payload });
+    },
+    async exportQualifierKeyerLut(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const size = Number(p.size || 17);
+        const mode = ALLOWED_QUALIFIER_CUBE_MODES.includes(p.mode) ? p.mode : "isolation";
+        const title = String(p.title || "taktcut_qualifier_keyer").trim() || "taktcut_qualifier_keyer";
+        const cfg = p.config || {};
+        const cubeText = generateQualifierCubeTextClient(cfg, size, mode, title);
+        const compiled = compileQualifierFiltergraphClient(cfg);
+        return {
+          info: {
+            path: "memory://qualifier_keyer.cube",
+            title,
+            dimension: "3D",
+            size,
+            entry_count: size * size * size
+          },
+          saved_path: null,
+          mode,
+          cube_text: cubeText,
+          compiled
+        };
+      }
+      return requestJson("/api/color/qualifier/export-lut", { method: "POST", body: payload });
+    },
+    async downloadQualifierKeyerLutBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const size = Number(p.size || 17);
+        const mode = ALLOWED_QUALIFIER_CUBE_MODES.includes(p.mode) ? p.mode : "isolation";
+        const title = String(p.title || "taktcut_qualifier_keyer").trim() || "taktcut_qualifier_keyer";
+        const text = generateQualifierCubeTextClient(p.config || {}, size, mode, title);
+        return new Blob([text], { type: "text/plain; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/color/qualifier/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload || {})

@@ -47,6 +47,7 @@ import {
   evaluateFairlightEqBandDb,
   evaluateFairlightEqCurveDb,
   evaluatePeriodicHueCurveClient,
+  evaluateQualifierKeyerPixelClient,
   evaluateRetimeSourceOffset,
   evaluateTitleMotionState,
   evaluateRetimeSpeedAt,
@@ -84,7 +85,9 @@ import {
   normalizePlanarTrackerClient,
   normalizePowerWindow,
   normalizeQualifier,
+  normalizeQualifierKeyerConfigClient,
   normalizeStabilizerClient,
+  analyzeQualifierKeyerSamplesClient,
   resolveTransformKeyframeBezier,
   sampleTransformCurve
 } from "./timeline_ops.js";
@@ -7117,6 +7120,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
 
   const bmConfig = splitOpts && splitOpts.broadcastMonitor ? splitOpts.broadcastMonitor : null;
   const cstConfig = splitOpts && splitOpts.cstConfig && splitOpts.cstConfig.enabled ? splitOpts.cstConfig : null;
+  const qkConfig = splitOpts && splitOpts.qualifierKeyer && splitOpts.qualifierKeyer.enabled ? splitOpts.qualifierKeyer : null;
   const dprScale = width > 0 ? canvas.width / width : 1;
   if (wipeEnabled) {
     const geom = computeSplitWipeGeometry(0, 0, width, height, wipePct);
@@ -7134,6 +7138,12 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
       }
       if (canvas.width - divPx > 0) {
         applyCstPixelPass(ctx, divPx, 0, canvas.width - divPx, canvas.height, cstConfig);
+      }
+    }
+    if (qkConfig) {
+      const divPx = Math.max(0, Math.round(geom.dividerX * dprScale));
+      if (canvas.width - divPx > 0) {
+        applyQualifierKeyerPixelPass(ctx, divPx, 0, canvas.width - divPx, canvas.height, qkConfig);
       }
     }
     if (bmConfig) {
@@ -7154,7 +7164,13 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
             beforeLabel: (CST_INPUT_SPACES_CLIENT[cstConfig.input_space]?.transfer_label || "LOG").toUpperCase(),
             afterLabel: (CST_OUTPUT_SPACES_CLIENT[cstConfig.output_space]?.gamut_label || "ODT").toUpperCase()
           }
-        : splitOpts || {};
+        : qkConfig
+          ? {
+              ...(splitOpts || {}),
+              beforeLabel: "SOURCE",
+              afterLabel: String(qkConfig.highlight_mode || "KEYER").replace(/_/g, " ").toUpperCase()
+            }
+          : splitOpts || {};
     drawSplitWipeOverlay(ctx, 0, 0, width, height, geom, overlayOpts);
     canvas._splitWipeGeom = {
       ...geom,
@@ -7165,6 +7181,9 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     drawHalf(0, width, true);
     if (cstConfig) {
       applyCstPixelPass(ctx, 0, 0, canvas.width, canvas.height, cstConfig);
+    }
+    if (qkConfig) {
+      applyQualifierKeyerPixelPass(ctx, 0, 0, canvas.width, canvas.height, qkConfig);
     }
     if (bmConfig) {
       applyBroadcastMonitorPixelPass(ctx, 0, 0, width, height, bmConfig, {
@@ -11109,4 +11128,500 @@ export function drawCstGamutDiagramCanvas(canvas, compiled) {
   ctx.textAlign = "right";
   ctx.fillStyle = comp.bradford_active ? "#facc15" : "#94a3b8";
   ctx.fillText(comp.bradford_active ? "BRADFORD ACTIVE" : "D65 MATCHED", width - 10, 6);
+}
+
+// =========================================================================
+// CYCLE #105: DAVINCI RESOLVE QUALIFIER KEYER & BORIS FX LIGHT-WRAP CANVASES
+// =========================================================================
+
+function qkBlurAlphaFloat(alphas, w, h, radius) {
+  if (radius <= 0 || w <= 1 || h <= 1) return alphas;
+  const r = Math.min(8, Math.round(radius));
+  const temp = new Float32Array(w * h);
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y += 1) {
+    const row = y * w;
+    for (let x = 0; x < w; x += 1) {
+      const x0 = Math.max(0, x - r);
+      const x1 = Math.min(w - 1, x + r);
+      let acc = 0;
+      for (let sx = x0; sx <= x1; sx += 1) acc += alphas[row + sx];
+      temp[row + x] = acc / (x1 - x0 + 1);
+    }
+  }
+  for (let y = 0; y < h; y += 1) {
+    const y0 = Math.max(0, y - r);
+    const y1 = Math.min(h - 1, y + r);
+    const count = y1 - y0 + 1;
+    for (let x = 0; x < w; x += 1) {
+      let acc = 0;
+      for (let sy = y0; sy <= y1; sy += 1) acc += temp[sy * w + x];
+      out[y * w + x] = acc / count;
+    }
+  }
+  return out;
+}
+
+function qkChokeAlphaFloat(alphas, w, h, chokePx) {
+  const r = Math.min(4, Math.round(Math.abs(chokePx)));
+  if (r <= 0 || w <= 1 || h <= 1) return alphas;
+  const erode = chokePx < 0;
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y += 1) {
+    const y0 = Math.max(0, y - r);
+    const y1 = Math.min(h - 1, y + r);
+    for (let x = 0; x < w; x += 1) {
+      const x0 = Math.max(0, x - r);
+      const x1 = Math.min(w - 1, x + r);
+      let best = erode ? 1 : 0;
+      for (let sy = y0; sy <= y1; sy += 1) {
+        const row = sy * w;
+        for (let sx = x0; sx <= x1; sx += 1) {
+          const v = alphas[row + sx];
+          if (erode ? v < best : v > best) best = v;
+        }
+      }
+      out[y * w + x] = best;
+    }
+  }
+  return out;
+}
+
+export function applyQualifierKeyerPixelPass(ctx, xPx, yPx, wPx, hPx, rawQkConfig) {
+  if (!ctx || wPx <= 0 || hPx <= 0) return;
+  const cfg = normalizeQualifierKeyerConfigClient(rawQkConfig);
+  if (!cfg.enabled) return;
+  const x0 = Math.max(0, Math.round(xPx));
+  const y0 = Math.max(0, Math.round(yPx));
+  const w = Math.max(1, Math.round(wPx));
+  const h = Math.max(1, Math.round(hPx));
+  const img = ctx.getImageData(x0, y0, w, h);
+  const data = img.data;
+  const count = w * h;
+  const rawAlphas = new Float32Array(count);
+  const despillRgb = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i += 1) {
+    const p = i * 4;
+    const [a, dr, dg, db] = evaluateQualifierKeyerPixelClient(
+      cfg,
+      data[p] / 255,
+      data[p + 1] / 255,
+      data[p + 2] / 255
+    );
+    rawAlphas[i] = a;
+    despillRgb[i * 3] = dr;
+    despillRgb[i * 3 + 1] = dg;
+    despillRgb[i * 3 + 2] = db;
+  }
+
+  let alphas = rawAlphas;
+  if (cfg.choke_px !== 0) {
+    alphas = qkChokeAlphaFloat(alphas, w, h, cfg.choke_px);
+  }
+  if (cfg.post_feather_px >= 0.5) {
+    alphas = qkBlurAlphaFloat(alphas, w, h, Math.min(4, Math.round(cfg.post_feather_px)));
+  }
+
+  let blurredInv = null;
+  if (cfg.highlight_mode === "final_composite" && cfg.light_wrap_intensity > 0.01 && cfg.light_wrap_radius > 0.5) {
+    const inv = new Float32Array(count);
+    for (let i = 0; i < count; i += 1) inv[i] = 1 - alphas[i];
+    blurredInv = qkBlurAlphaFloat(inv, w, h, Math.max(1, Math.min(6, Math.round(cfg.light_wrap_radius / 3))));
+  }
+
+  const [bgR, bgG, bgB] = cfg.light_wrap_bg_rgb;
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = y * w + x;
+      const p = i * 4;
+      const a = clamp01(alphas[i]);
+      let fr = despillRgb[i * 3];
+      let fg = despillRgb[i * 3 + 1];
+      let fb = despillRgb[i * 3 + 2];
+
+      if (cfg.highlight_mode === "bw_alpha_matte") {
+        const gVal = Math.round(a * 255);
+        data[p] = gVal;
+        data[p + 1] = gVal;
+        data[p + 2] = gVal;
+        data[p + 3] = 255;
+      } else if (cfg.highlight_mode === "red_rubylith") {
+        const rubyMix = (1 - a) * 0.68;
+        data[p] = Math.round(clamp01(fr * (1 - rubyMix) + 0.92 * rubyMix) * 255);
+        data[p + 1] = Math.round(clamp01(fg * (1 - rubyMix) + 0.12 * rubyMix) * 255);
+        data[p + 2] = Math.round(clamp01(fb * (1 - rubyMix) + 0.16 * rubyMix) * 255);
+        data[p + 3] = 255;
+      } else if (cfg.highlight_mode === "isolated_foreground") {
+        const checker = ((Math.floor(x / 8) + Math.floor(y / 8)) % 2 === 0) ? 0.18 : 0.11;
+        data[p] = Math.round(clamp01(fr * a + checker * (1 - a)) * 255);
+        data[p + 1] = Math.round(clamp01(fg * a + checker * (1 - a)) * 255);
+        data[p + 2] = Math.round(clamp01(fb * a + checker * (1 - a)) * 255);
+        data[p + 3] = 255;
+      } else {
+        if (blurredInv) {
+          const wrapW = clamp01(a * blurredInv[i] * 2.2 * cfg.light_wrap_intensity);
+          fr = clamp01(fr + wrapW * (bgR - fr * bgR));
+          fg = clamp01(fg + wrapW * (bgG - fg * bgG));
+          fb = clamp01(fb + wrapW * (bgB - fb * bgB));
+        }
+        const grad = 0.85 + 0.25 * (1 - y / Math.max(1, h));
+        const pR = clamp01(bgR * grad);
+        const pG = clamp01(bgG * grad);
+        const pB = clamp01(bgB * grad);
+        data[p] = Math.round(clamp01(fr * a + pR * (1 - a)) * 255);
+        data[p + 1] = Math.round(clamp01(fg * a + pG * (1 - a)) * 255);
+        data[p + 2] = Math.round(clamp01(fb * a + pB * (1 - a)) * 255);
+        data[p + 3] = 255;
+      }
+    }
+  }
+  ctx.putImageData(img, x0, y0);
+}
+
+function renderQkStudioTestPlate(ctx, width, height, cfg) {
+  const [tr, tg, tb] = cfg.target_rgb;
+  const isLuma = cfg.key_mode === "luma_key";
+  const bgR = Math.round((isLuma ? 0.04 : tr) * 255);
+  const bgG = Math.round((isLuma ? 0.04 : tg) * 255);
+  const bgB = Math.round((isLuma ? 0.05 : tb) * 255);
+
+  // Studio chroma/luma backdrop with realistic falloff
+  const bgGrad = ctx.createRadialGradient(
+    width * 0.5,
+    height * 0.45,
+    width * 0.05,
+    width * 0.5,
+    height * 0.5,
+    width * 0.72
+  );
+  bgGrad.addColorStop(0, `rgb(${Math.min(255, Math.round(bgR * 1.06))}, ${Math.min(255, Math.round(bgG * 1.06))}, ${Math.min(255, Math.round(bgB * 1.06))})`);
+  bgGrad.addColorStop(1, `rgb(${Math.round(bgR * 0.78)}, ${Math.round(bgG * 0.78)}, ${Math.round(bgB * 0.78)})`);
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, width, height);
+
+  // Secondary sky/accent strip on top edge for qualifier testing
+  if (cfg.preset_id === "sky_cyan_qualifier") {
+    const skyG = ctx.createLinearGradient(0, 0, 0, height * 0.6);
+    skyG.addColorStop(0, "#2477d4");
+    skyG.addColorStop(1, "#6db4e8");
+    ctx.fillStyle = skyG;
+    ctx.fillRect(0, 0, width, height * 0.56);
+    ctx.fillStyle = "#2b303a";
+    ctx.fillRect(0, height * 0.56, width, height * 0.44);
+  }
+
+  // Talent torso + skin portrait with subtle edge spill halo
+  const cx = width * 0.5;
+  const headY = height * 0.38;
+  const headR = Math.min(width, height) * 0.16;
+
+  // Hair / spill fringe
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, headY, headR * 1.18, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(${Math.round(0.24 * 255 + bgR * 0.28)}, ${Math.round(0.18 * 255 + bgG * 0.28)}, ${Math.round(0.14 * 255 + bgB * 0.28)}, 0.72)`;
+  ctx.fill();
+  ctx.restore();
+
+  // Shoulders / jacket
+  ctx.fillStyle = "#2f3644";
+  ctx.beginPath();
+  ctx.ellipse(cx, height * 0.86, width * 0.24, height * 0.34, 0, Math.PI, Math.PI * 2);
+  ctx.fill();
+
+  // Skin portrait sphere
+  const skinGrad = ctx.createRadialGradient(
+    cx - headR * 0.25,
+    headY - headR * 0.25,
+    headR * 0.15,
+    cx,
+    headY,
+    headR
+  );
+  skinGrad.addColorStop(0, "#e2a889");
+  skinGrad.addColorStop(0.65, "#c58464");
+  skinGrad.addColorStop(1, "#8d5840");
+  ctx.fillStyle = skinGrad;
+  ctx.beginPath();
+  ctx.arc(cx, headY, headR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Neutral studio color card on side for spill verification
+  ctx.fillStyle = "#d8dce3";
+  ctx.fillRect(width * 0.12, height * 0.62, width * 0.1, height * 0.24);
+  ctx.fillStyle = "#6c7382";
+  ctx.fillRect(width * 0.12, height * 0.74, width * 0.1, height * 0.12);
+}
+
+export function drawQualifierKeyerPreviewCanvas(canvas, rawQkConfig, opts = {}) {
+  if (!canvas) return null;
+  const cfg = normalizeQualifierKeyerConfigClient(rawQkConfig);
+  const { ctx, width, height } = setupCanvas(canvas, 224);
+
+  if (!canvas._qkSourceCanvas) {
+    canvas._qkSourceCanvas = document.createElement("canvas");
+  }
+  const srcBuf = canvas._qkSourceCanvas;
+  const srcW = 160;
+  const srcH = 108;
+  if (srcBuf.width !== srcW || srcBuf.height !== srcH) {
+    srcBuf.width = srcW;
+    srcBuf.height = srcH;
+  }
+  const srcCtx = srcBuf.getContext("2d", { willReadFrequently: true });
+  if (srcCtx) {
+    renderQkStudioTestPlate(srcCtx, srcW, srcH, cfg);
+  }
+
+  renderQkStudioTestPlate(ctx, width, height, cfg);
+
+  if (cfg.enabled) {
+    applyQualifierKeyerPixelPass(ctx, 0, 0, canvas.width, canvas.height, cfg);
+  }
+
+  // Optional eyedropper crosshair marker
+  if (opts && opts.pickedPoint) {
+    const px = clamp01(opts.pickedPoint.u) * width;
+    const py = clamp01(opts.pickedPoint.v) * height;
+    ctx.save();
+    ctx.strokeStyle = "#facc15";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.moveTo(px - 10, py);
+    ctx.lineTo(px + 10, py);
+    ctx.moveTo(px, py - 10);
+    ctx.lineTo(px, py + 10);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Top-right Highlight Mode HUD badge
+  const hlLabel = cfg.enabled
+    ? String(cfg.highlight_mode || "final_composite").replace(/_/g, " ").toUpperCase()
+    : "BYPASS";
+  ctx.save();
+  ctx.fillStyle = "rgba(13, 15, 20, 0.86)";
+  ctx.strokeStyle = cfg.enabled ? "#38bdf8" : "#475569";
+  ctx.lineWidth = 1;
+  const badgeW = 156;
+  ctx.fillRect(width - badgeW - 8, 8, badgeW, 20);
+  ctx.strokeRect(width - badgeW - 8, 8, badgeW, 20);
+  ctx.fillStyle = cfg.enabled ? "#bae6fd" : "#94a3b8";
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(hlLabel, width - badgeW * 0.5 - 8, 18);
+  ctx.restore();
+
+  if (srcCtx) {
+    const imgData = srcCtx.getImageData(0, 0, 24, 16);
+    const sampleArr = Array.from(imgData.data);
+    return analyzeQualifierKeyerSamplesClient(cfg, { width: 24, height: 16, pixels: sampleArr });
+  }
+  return analyzeQualifierKeyerSamplesClient(cfg);
+}
+
+export function sampleQualifierKeyerCanvasRgb(canvas, u, v) {
+  if (!canvas || !canvas._qkSourceCanvas) return null;
+  const buf = canvas._qkSourceCanvas;
+  const ctx = buf.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  const cu = clamp01(u);
+  const cv = clamp01(v);
+  const px = Math.min(buf.width - 1, Math.max(0, Math.floor(cu * buf.width)));
+  const py = Math.min(buf.height - 1, Math.max(0, Math.floor(cv * buf.height)));
+  const pxData = ctx.getImageData(px, py, 1, 1).data;
+  return [pxData[0] / 255, pxData[1] / 255, pxData[2] / 255];
+}
+
+export function drawQualifierKeyerHslBarCanvas(canvas, rawQkConfig) {
+  if (!canvas) return;
+  const cfg = normalizeQualifierKeyerConfigClient(rawQkConfig);
+  const { ctx, width, height } = setupCanvas(canvas, 78);
+
+  ctx.fillStyle = "#101216";
+  ctx.fillRect(0, 0, width, height);
+
+  const labelW = 32;
+  const padR = 8;
+  const barX = labelW;
+  const barW = Math.max(60, width - labelW - padR);
+  const rows = [
+    { key: "HUE", y: 8, h: 16 },
+    { key: "SAT", y: 31, h: 16 },
+    { key: "LUM", y: 54, h: 16 }
+  ];
+
+  // Hue rainbow gradient
+  const hueGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  hueGrad.addColorStop(0.0, "#ff2a2a");
+  hueGrad.addColorStop(1 / 6, "#ffff2a");
+  hueGrad.addColorStop(2 / 6, "#2aff2a");
+  hueGrad.addColorStop(3 / 6, "#2affff");
+  hueGrad.addColorStop(4 / 6, "#2a2aff");
+  hueGrad.addColorStop(5 / 6, "#ff2aff");
+  hueGrad.addColorStop(1.0, "#ff2a2a");
+  ctx.fillStyle = hueGrad;
+  ctx.fillRect(barX, rows[0].y, barW, rows[0].h);
+
+  // Saturation bar
+  const satGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  satGrad.addColorStop(0.0, "#3b3d44");
+  satGrad.addColorStop(1.0, `hsl(${Math.round(cfg.hue_center)}, 92%, 54%)`);
+  ctx.fillStyle = satGrad;
+  ctx.fillRect(barX, rows[1].y, barW, rows[1].h);
+
+  // Luminance bar
+  const lumGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  lumGrad.addColorStop(0.0, "#090a0d");
+  lumGrad.addColorStop(0.5, "#7d828d");
+  lumGrad.addColorStop(1.0, "#f5f7fa");
+  ctx.fillStyle = lumGrad;
+  ctx.fillRect(barX, rows[2].y, barW, rows[2].h);
+
+  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
+  rows.forEach((row) => {
+    ctx.fillStyle = cfg.enabled ? "#cbd5e1" : "#64748b";
+    ctx.fillText(row.key, 4, row.y + row.h * 0.5);
+    ctx.strokeStyle = "#2a2f3a";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, row.y, barW, row.h);
+  });
+
+  const accent = cfg.invert_matte ? "#38bdf8" : "#f59e0b";
+  const drawRangeBracket = (row, lo, hi, soft) => {
+    const x0 = barX + clamp01(lo) * barW;
+    const x1 = barX + clamp01(hi) * barW;
+    const xSL = barX + clamp01(lo - soft) * barW;
+    const xSR = barX + clamp01(hi + soft) * barW;
+    ctx.fillStyle = "rgba(10, 12, 16, 0.62)";
+    if (xSL > barX) ctx.fillRect(barX, row.y, xSL - barX, row.h);
+    if (xSR < barX + barW) ctx.fillRect(xSR, row.y, barX + barW - xSR, row.h);
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.6;
+    ctx.strokeRect(x0, row.y, Math.max(3, x1 - x0), row.h);
+    if (soft > 0.004) {
+      ctx.save();
+      ctx.setLineDash([2, 2]);
+      ctx.strokeStyle = "#e2e8f0";
+      ctx.beginPath();
+      ctx.moveTo(xSL, row.y);
+      ctx.lineTo(xSL, row.y + row.h);
+      ctx.moveTo(xSR, row.y);
+      ctx.lineTo(xSR, row.y + row.h);
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+
+  // Hue bracket (supports wrap-around)
+  const hRow = rows[0];
+  const halfH = cfg.hue_width * 0.5;
+  const hLo = ((cfg.hue_center - halfH) % 360 + 360) % 360;
+  const hHi = ((cfg.hue_center + halfH) % 360 + 360) % 360;
+  if (cfg.hue_width >= 359.5) {
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.6;
+    ctx.strokeRect(barX, hRow.y, barW, hRow.h);
+  } else if (hLo < hHi) {
+    drawRangeBracket(hRow, hLo / 360, hHi / 360, cfg.hue_softness / 360);
+  } else {
+    drawRangeBracket(hRow, 0, hHi / 360, cfg.hue_softness / 360);
+    drawRangeBracket(hRow, hLo / 360, 1, cfg.hue_softness / 360);
+  }
+  const hCenterX = barX + ((((cfg.hue_center % 360) + 360) % 360) / 360) * barW;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(hCenterX, hRow.y - 2);
+  ctx.lineTo(hCenterX, hRow.y + hRow.h + 2);
+  ctx.stroke();
+
+  drawRangeBracket(rows[1], cfg.sat_low, cfg.sat_high, cfg.sat_softness);
+  drawRangeBracket(rows[2], cfg.luma_low, cfg.luma_high, cfg.luma_softness);
+}
+
+export function drawQualifierKeyerHistogramCanvas(canvas, metrics, rawQkConfig) {
+  if (!canvas) return;
+  const cfg = normalizeQualifierKeyerConfigClient(rawQkConfig);
+  const { ctx, width, height } = setupCanvas(canvas, 118);
+
+  ctx.fillStyle = "#0f1116";
+  ctx.fillRect(0, 0, width, height);
+
+  const padL = 10;
+  const padR = 10;
+  const padT = 18;
+  const padB = 20;
+  const plotW = Math.max(40, width - padL - padR);
+  const plotH = Math.max(30, height - padT - padB);
+
+  const hist = metrics && Array.isArray(metrics.alpha_histogram) ? metrics.alpha_histogram : new Array(16).fill(0);
+  const maxBin = Math.max(1, ...hist);
+  const binW = plotW / Math.max(1, hist.length);
+
+  // Subtle horizontal grid
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.14)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 3; i += 1) {
+    const gy = padT + (plotH * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+  }
+
+  for (let i = 0; i < hist.length; i += 1) {
+    const frac = hist[i] / maxBin;
+    const barH = Math.max(2, frac * plotH);
+    const bx = padL + i * binW + 1;
+    const by = padT + plotH - barH;
+    const bw = Math.max(2, binW - 2);
+    if (i <= 1) ctx.fillStyle = "#38bdf8";
+    else if (i >= hist.length - 2) ctx.fillStyle = "#f8fafc";
+    else ctx.fillStyle = "#f59e0b";
+    ctx.fillRect(bx, by, bw, barH);
+  }
+
+  // Clean Black & Clean White clip markers
+  const cbX = padL + clamp01(cfg.clean_black) * plotW;
+  const cwX = padL + clamp01(cfg.clean_white) * plotW;
+  ctx.save();
+  ctx.setLineDash([3, 2]);
+  ctx.strokeStyle = "#38bdf8";
+  ctx.beginPath();
+  ctx.moveTo(cbX, padT);
+  ctx.lineTo(cbX, padT + plotH);
+  ctx.stroke();
+  ctx.strokeStyle = "#f8fafc";
+  ctx.beginPath();
+  ctx.moveTo(cwX, padT);
+  ctx.lineTo(cwX, padT + plotH);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  ctx.textAlign = "left";
+  ctx.fillText("0% KEY", padL, height - 6);
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillText("EDGE SEMI-ALPHA", padL + plotW * 0.5, height - 6);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.fillText("100% CORE", padL + plotW, height - 6);
+
+  if (metrics && metrics.quality_grade) {
+    ctx.textAlign = "right";
+    ctx.fillStyle =
+      metrics.quality_grade === "EXCELLENT"
+        ? "#4ade80"
+        : metrics.quality_grade === "GOOD"
+          ? "#38bdf8"
+          : "#fbbf24";
+    ctx.fillText(`MATTE: ${metrics.quality_grade}`, padL + plotW, 11);
+  }
 }

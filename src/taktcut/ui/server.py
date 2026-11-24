@@ -213,6 +213,20 @@ from taktcut.project import (
     validate_project_payload,
 )
 from taktcut.qa import run_qa_gate
+from taktcut.qualifier_keyer import (
+    ALLOWED_QUALIFIER_CUBE_MODES,
+    ALLOWED_QUALIFIER_DESPILL_MODES,
+    ALLOWED_QUALIFIER_HIGHLIGHT_MODES,
+    ALLOWED_QUALIFIER_KEY_MODES,
+    QualifierCubeMode,
+    QualifierKeyerConfig,
+    analyze_qualifier_keyer_samples,
+    bake_qualifier_to_cube,
+    compile_qualifier_filtergraph,
+    generate_qualifier_cube_text,
+    list_qualifier_keyer_presets,
+    normalize_qualifier_keyer_config,
+)
 from taktcut.remote_render import (
     MAX_REMOTE_JOB_BYTES,
     RemoteRenderClient,
@@ -1943,6 +1957,20 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "tone_mapping_modes": list(ALLOWED_CST_TONE_MAPPING_MODES),
                     "gamut_mapping_modes": list(ALLOWED_CST_GAMUT_MAPPING_MODES),
                     "default_config": CstConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/color/qualifier/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_qualifier_keyer_presets()],
+                    "key_modes": list(ALLOWED_QUALIFIER_KEY_MODES),
+                    "despill_modes": list(ALLOWED_QUALIFIER_DESPILL_MODES),
+                    "highlight_modes": list(ALLOWED_QUALIFIER_HIGHLIGHT_MODES),
+                    "cube_modes": list(ALLOWED_QUALIFIER_CUBE_MODES),
+                    "default_config": QualifierKeyerConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -3699,6 +3727,120 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 ".cube",
             )
             cube_text = generate_cst_cube_text(cst_cfg, size=size, title=title)
+            self._send_bytes(
+                HTTPStatus.OK,
+                "text/plain; charset=utf-8",
+                cube_text.encode("utf-8"),
+                extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+            return
+
+        if route == "/api/color/qualifier/compile":
+            qk_cfg = normalize_qualifier_keyer_config(payload.get("config"))
+            qk_compiled = compile_qualifier_filtergraph(qk_cfg)
+            self._send_json(HTTPStatus.OK, qk_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/color/qualifier/analyze":
+            qk_cfg = normalize_qualifier_keyer_config(payload.get("config"))
+            raw_samples = payload.get("samples")
+            qk_samples = list(raw_samples) if isinstance(raw_samples, list) else None
+            raw_pixels = payload.get("pixels")
+            qk_pixels = [float(v) for v in raw_pixels] if isinstance(raw_pixels, list) else None
+            qk_w = int(payload.get("width", 0) or 0)
+            qk_h = int(payload.get("height", 0) or 0)
+            qk_metrics = analyze_qualifier_keyer_samples(
+                qk_cfg,
+                samples=qk_samples,
+                width=qk_w,
+                height=qk_h,
+                pixels=qk_pixels,
+            )
+            self._send_json(HTTPStatus.OK, qk_metrics.model_dump(mode="json"))
+            return
+
+        if route == "/api/color/qualifier/export-lut":
+            qk_cfg = normalize_qualifier_keyer_config(payload.get("config"))
+            size = int(payload.get("size", 17))
+            raw_mode = str(payload.get("mode", "isolation")).strip() or "isolation"
+            cube_mode: QualifierCubeMode | None = next(
+                (m for m in ALLOWED_QUALIFIER_CUBE_MODES if m == raw_mode),
+                None,
+            )
+            if cube_mode is None:
+                allowed = ", ".join(ALLOWED_QUALIFIER_CUBE_MODES)
+                raise ValueError(
+                    f"Unsupported .cube mode {raw_mode!r}; expected one of: {allowed}"
+                )
+            title = (
+                str(payload.get("title", "taktcut_qualifier_keyer")).strip()
+                or "taktcut_qualifier_keyer"
+            )
+            raw_out = payload.get("out_path")
+            if raw_out is not None and str(raw_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_out),
+                    must_exist=False,
+                    allowed_suffixes=LUT_SUFFIXES,
+                )
+                info = bake_qualifier_to_cube(
+                    qk_cfg, out_file, size=size, mode=cube_mode, title=title
+                )
+                cube_text = out_file.read_text(encoding="utf-8")
+                qk_saved_rel: str | None = out_file.relative_to(
+                    self.app_state.workspace_root
+                ).as_posix()
+            else:
+                cube_text = generate_qualifier_cube_text(
+                    qk_cfg, size=size, mode=cube_mode, title=title
+                )
+                info = CubeLutInfo(
+                    path="memory://qualifier_keyer.cube",
+                    title=title,
+                    dimension="3D",
+                    size=size,
+                    entry_count=size**3,
+                )
+                qk_saved_rel = None
+            qk_compiled = compile_qualifier_filtergraph(qk_cfg)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "info": info.model_dump(mode="json"),
+                    "saved_path": qk_saved_rel,
+                    "mode": cube_mode,
+                    "cube_text": cube_text,
+                    "compiled": qk_compiled.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/color/qualifier/download":
+            qk_cfg = normalize_qualifier_keyer_config(payload.get("config"))
+            size = int(payload.get("size", 17))
+            raw_mode = str(payload.get("mode", "isolation")).strip() or "isolation"
+            cube_mode_dl: QualifierCubeMode | None = next(
+                (m for m in ALLOWED_QUALIFIER_CUBE_MODES if m == raw_mode),
+                None,
+            )
+            if cube_mode_dl is None:
+                allowed = ", ".join(ALLOWED_QUALIFIER_CUBE_MODES)
+                raise ValueError(
+                    f"Unsupported .cube mode {raw_mode!r}; expected one of: {allowed}"
+                )
+            title = (
+                str(payload.get("title", "taktcut_qualifier_keyer")).strip()
+                or "taktcut_qualifier_keyer"
+            )
+            filename = sanitize_download_filename(
+                str(payload.get("filename") or f"{title}_{cube_mode_dl}"),
+                "taktcut_qualifier_keyer",
+                ".cube",
+            )
+            cube_text = generate_qualifier_cube_text(
+                qk_cfg, size=size, mode=cube_mode_dl, title=title
+            )
             self._send_bytes(
                 HTTPStatus.OK,
                 "text/plain; charset=utf-8",
