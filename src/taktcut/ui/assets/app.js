@@ -13,6 +13,8 @@ import {
   drawCompoundMiniMapCanvas,
   drawCstGamutDiagramCanvas,
   drawCstToneCurveCanvas,
+  drawFilmLookCurveCanvas,
+  drawFilmLookPreviewCanvas,
   drawFramesCanvas,
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
@@ -184,6 +186,7 @@ import {
   appendClipToTrackInDocument,
   appendStillBounded,
   applyFairlightRackPresetClient,
+  applyFilmLookToDocumentClient,
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
   applyOpticalGlowToDocumentClient,
@@ -205,6 +208,7 @@ import {
   compileAutoReframeFiltergraphClient,
   compileCompoundFiltergraphClient,
   compileCstFiltergraphClient,
+  compileFilmLookFiltergraphClient,
   compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
@@ -241,6 +245,7 @@ import {
   createDefaultBroadcastMonitorConfig,
   createDefaultColorWarper,
   createDefaultCstConfigClient,
+  createDefaultFilmLookConfigClient,
   createDefaultHslCurves,
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
@@ -265,6 +270,7 @@ import {
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
   evaluateCurvePchipClient,
+  evaluateFilmLookStudioClient,
   evaluateMotionSplineStudioClient,
   evaluatePowerWindowMask,
   evaluatePowerWindowSamplesClient,
@@ -276,6 +282,7 @@ import {
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
+  exportFilmLookJsonClient,
   exportMotionSplineJsonClient,
   exportMulticamEdlClient,
   exportOpticalGlowJsonClient,
@@ -285,6 +292,7 @@ import {
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
   interpolatePowerWindowAtTimeClient,
+  normalizeFilmLookConfigClient,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   normalizeOpticalGlowConfigClient,
@@ -789,6 +797,16 @@ const state = {
     playing: false,
     rafId: null,
     lastTs: 0,
+    syncSeq: 0
+  },
+  flStudio: {
+    isOpen: false,
+    activeTab: "tone",
+    config: createDefaultFilmLookConfigClient("kodak_2383_d65"),
+    evalResult: null,
+    compiled: null,
+    exportedJson: null,
+    dragState: null,
     syncSeq: 0
   },
   autoReframeStudio: {
@@ -13316,6 +13334,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+W", descKey: "shortcuts.key.powerWindowStudio" },
       { kbd: "Shift+Y", descKey: "shortcuts.key.retimeStudio" },
       { kbd: "Shift+X", descKey: "shortcuts.key.stabilizationStudio" },
+      { kbd: "Shift+N", descKey: "shortcuts.key.filmLookStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13442,6 +13461,15 @@ function handleTransportKeydown(ev) {
       ev.preventDefault();
       toggleStabilizationStudioPlay();
       return;
+    }
+    return;
+  }
+
+  const flStudioDlg = byId("film-look-studio-dialog");
+  if (flStudioDlg && flStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeFilmLookStudioDialog();
     }
     return;
   }
@@ -13647,6 +13675,11 @@ function handleTransportKeydown(ev) {
     if (lower === "x") {
       ev.preventDefault();
       openStabilizationStudioDialog();
+      return;
+    }
+    if (lower === "n") {
+      ev.preventDefault();
+      openFilmLookStudioDialog();
       return;
     }
   }
@@ -20334,6 +20367,7 @@ function wireEvents() {
   wirePowerWindowStudioEvents();
   wireRetimeStudioEvents();
   wireStabilizationStudioEvents();
+  wireFilmLookStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -29164,3 +29198,547 @@ function wireStabilizationStudioEvents() {
 }
 
 bootstrap();
+
+
+// ============================================================================
+// Film Look Creator, Print Stock Curve & Bleach Bypass Studio (Cycle #112)
+// ============================================================================
+
+function setFilmLookStatus(text) {
+  const el = byId("fl-status-note");
+  if (el) el.textContent = String(text || "");
+}
+
+function setFilmLookInspectorTab(tabId) {
+  const validTab = ["tone", "color", "grain"].includes(tabId) ? tabId : "tone";
+  state.flStudio.activeTab = validTab;
+  for (const btn of document.querySelectorAll(".fl-tab-btn[data-fl-tab]")) {
+    const active = btn.getAttribute("data-fl-tab") === validTab;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  const panels = {
+    tone: byId("fl-panel-tone"),
+    color: byId("fl-panel-color"),
+    grain: byId("fl-panel-grain")
+  };
+  for (const [key, panel] of Object.entries(panels)) {
+    if (!panel) continue;
+    panel.hidden = key !== validTab;
+  }
+}
+
+function refreshFilmLookLocalDerived() {
+  const st = state.flStudio;
+  st.config = normalizeFilmLookConfigClient(st.config);
+  st.evalResult = evaluateFilmLookStudioClient(st.config, { sample_count: 33 });
+  st.compiled = compileFilmLookFiltergraphClient(st.config);
+}
+
+function syncFilmLookStudioUI(opts = {}) {
+  const st = state.flStudio;
+  const cfg = st.config;
+  if (!st.evalResult || !st.compiled) {
+    refreshFilmLookLocalDerived();
+  }
+  const ev = st.evalResult;
+  const comp = st.compiled;
+  const skipInputEl = opts.skipInputEl || null;
+
+  for (const btn of document.querySelectorAll(".fl-preset-btn[data-fl-stock]")) {
+    const active = btn.getAttribute("data-fl-stock") === cfg.print_stock;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  for (const btn of document.querySelectorAll(".fl-gauge-btn[data-fl-gauge]")) {
+    const active = Number(btn.getAttribute("data-fl-gauge")) === Number(cfg.grain_size_mm);
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const compareChk = byId("fl-compare-split");
+  if (compareChk) compareChk.checked = Boolean(cfg.compare_split);
+  const enabledChk = byId("fl-enabled");
+  if (enabledChk) enabledChk.checked = Boolean(cfg.enabled);
+
+  const colorBadge = byId("color-fl-badge");
+  if (colorBadge) {
+    colorBadge.textContent = cfg.enabled
+      ? `${cfg.print_stock.toUpperCase().replace(/_/g, " ")} | ${cfg.grain_size_mm}MM`
+      : "FILM OFF";
+  }
+
+  const fieldPairs = [
+    ["fl-exposure-ev", "fl-exposure-ev-num", "exposure_ev"],
+    ["fl-contrast-pivot", "fl-contrast-pivot-num", "contrast_pivot"],
+    ["fl-toe-density", "fl-toe-density-num", "toe_density_pct"],
+    ["fl-shoulder-rolloff", "fl-shoulder-rolloff-num", "shoulder_rolloff_pct"],
+    ["fl-bleach-bypass", "fl-bleach-bypass-num", "bleach_bypass_pct"],
+    ["fl-shadow-hue", "fl-shadow-hue-num", "split_tone_shadow_hue"],
+    ["fl-highlight-hue", "fl-highlight-hue-num", "split_tone_highlight_hue"],
+    ["fl-halation-red", "fl-halation-red-num", "halation_red_pct"],
+    ["fl-grain-strength", "fl-grain-strength-num", "grain_strength_pct"],
+    ["fl-gate-weave", "fl-gate-weave-num", "gate_weave_px"],
+    ["fl-flicker-pct", "fl-flicker-pct-num", "flicker_pct"]
+  ];
+  for (const [rangeId, numId, key] of fieldPairs) {
+    const rEl = byId(rangeId);
+    const nEl = byId(numId);
+    const strVal = String(cfg[key]);
+    if (rEl && rEl !== skipInputEl) rEl.value = strVal;
+    if (nEl && nEl !== skipInputEl) nEl.value = strVal;
+  }
+
+  const presetBadge = byId("fl-active-preset-badge");
+  if (presetBadge) {
+    presetBadge.textContent = cfg.print_stock.toUpperCase().replace(/_/g, " ");
+  }
+  const telBadge = byId("fl-telemetry-badge");
+  if (telBadge && ev) {
+    telBadge.textContent = `CR ${ev.contrast_ratio.toFixed(1)}:1 | DR ${ev.dynamic_range_stops.toFixed(1)} stops`;
+  }
+  const splitBadge = byId("fl-split-badge");
+  if (splitBadge) {
+    splitBadge.textContent = cfg.compare_split
+      ? `WIPE ${Math.round((cfg.split_position ?? 0.5) * 100)}%`
+      : "GRADED FULL";
+  }
+  const gammaBadge = byId("fl-gamma-badge");
+  if (gammaBadge && ev) {
+    gammaBadge.textContent = `GAMMA ${ev.gamma_at_pivot.toFixed(2)}`;
+  }
+
+  if (ev) {
+    const crEl = byId("fl-metric-contrast");
+    if (crEl) crEl.textContent = `${ev.contrast_ratio.toFixed(2)}:1`;
+    const drEl = byId("fl-metric-dr");
+    if (drEl) drEl.textContent = `${ev.dynamic_range_stops.toFixed(1)} stops`;
+    const grEl = byId("fl-metric-grain");
+    if (grEl) grEl.textContent = `${ev.grain_rms.toFixed(2)}`;
+    const dmEl = byId("fl-metric-dmax");
+    if (dmEl) dmEl.textContent = `${ev.shadow_density_dmax.toFixed(2)}`;
+  }
+
+  const fgEl = byId("fl-fg-output");
+  if (fgEl && comp) {
+    const warnBlock = comp.warnings && comp.warnings.length > 0 ? `\n\nWARNINGS:\n- ${comp.warnings.join("\n- ")}` : "";
+    fgEl.textContent =
+      `CURVES:\n${comp.curves_vf}\n\nCOLORBALANCE:\n${comp.colorbalance_vf}\n\nEQ:\n${comp.eq_vf}\n\nNOISE:\n${comp.noise_vf}\n\nVIGNETTE:\n${comp.vignette_vf}\n\nGATE WEAVE:\n${comp.gate_weave_vf}\n\nFFMPEG COMMAND:\n${comp.ffmpeg_command}${warnBlock}`;
+  }
+
+  const jsonPrev = byId("fl-json-preview");
+  if (jsonPrev) {
+    jsonPrev.textContent = st.exportedJson ? st.exportedJson.json_text : "";
+  }
+
+  drawFilmLookPreviewCanvas(byId("fl-preview-canvas"), cfg, { evalResult: ev });
+  drawFilmLookCurveCanvas(byId("fl-curve-canvas"), cfg, { evalResult: ev });
+}
+
+function updateFilmLookConfig(patch, opts = {}) {
+  const next = {
+    ...state.flStudio.config,
+    ...(patch || {})
+  };
+  state.flStudio.config = normalizeFilmLookConfigClient(next);
+  refreshFilmLookLocalDerived();
+  syncFilmLookStudioUI(opts);
+}
+
+async function syncFilmLookServer() {
+  const seq = (state.flStudio.syncSeq += 1);
+  const st = state.flStudio;
+  try {
+    const [evRes, compRes] = await Promise.all([
+      api.evaluateFilmLook({ config: st.config, sample_count: 33 }),
+      api.compileFilmLook({ config: st.config })
+    ]);
+    if (seq !== state.flStudio.syncSeq) return;
+    if (evRes) state.flStudio.evalResult = evRes;
+    if (compRes) state.flStudio.compiled = compRes;
+    syncFilmLookStudioUI();
+  } catch (err) {
+    if (seq === state.flStudio.syncSeq) {
+      setFilmLookStatus(`Film Look sync fallback: ${err.message || err}`);
+    }
+  }
+}
+
+function openFilmLookStudioDialog() {
+  const dlg = byId("film-look-studio-dialog");
+  if (!dlg) return;
+  const selInfo = getSelectedClipTrack();
+  const doc = state.timelineDoc;
+  if (doc) {
+    const fpsVal = doc.fps && doc.fps.num > 0 && doc.fps.den > 0 ? doc.fps.num / doc.fps.den : 24;
+    if (selInfo && selInfo.clip && selInfo.clip.film_look) {
+      state.flStudio.config = normalizeFilmLookConfigClient({
+        ...selInfo.clip.film_look,
+        width: doc.width || 1920,
+        height: doc.height || 1080,
+        fps: fpsVal
+      });
+    } else {
+      state.flStudio.config = normalizeFilmLookConfigClient({
+        ...state.flStudio.config,
+        width: doc.width || 1920,
+        height: doc.height || 1080,
+        fps: fpsVal
+      });
+    }
+  }
+  state.flStudio.isOpen = true;
+  refreshFilmLookLocalDerived();
+  setFilmLookInspectorTab(state.flStudio.activeTab || "tone");
+  syncFilmLookStudioUI();
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  syncFilmLookServer();
+}
+
+function closeFilmLookStudioDialog() {
+  const dlg = byId("film-look-studio-dialog");
+  if (dlg && dlg.open) {
+    if (typeof dlg.close === "function") dlg.close();
+    else dlg.removeAttribute("open");
+  }
+  state.flStudio.isOpen = false;
+}
+
+async function applyFilmLookToTimelineAction() {
+  if (!state.timelineDoc) return;
+  const st = state.flStudio;
+  const selInfo = getSelectedClipTrack();
+  const trackIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+
+  try {
+    const res = await api.applyFilmLook({
+      document: state.timelineDoc,
+      config: st.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      pushTimelineUndoSnapshot("Apply Film Look Studio");
+      applyTimelineMutationResponse(res, { syncClipSelection: true });
+      if (res.compiled) st.compiled = res.compiled;
+      setFilmLookStatus(t("flStudio.status.applied"));
+      syncFilmLookStudioUI();
+    }
+  } catch (err) {
+    try {
+      const nextDoc = applyFilmLookToDocumentClient(state.timelineDoc, st.config, {
+        track_index: trackIndex,
+        clip_index: clipIndex
+      });
+      pushTimelineUndoSnapshot("Apply Film Look Studio");
+      state.timelineDoc = nextDoc;
+      renderTimelineUI();
+      setFilmLookStatus(t("flStudio.status.applied"));
+      syncFilmLookStudioUI();
+    } catch (localErr) {
+      setFilmLookStatus(`Apply failed: ${localErr.message || err}`);
+    }
+  }
+}
+
+async function sendFilmLookToDeliverAction() {
+  const st = state.flStudio;
+  let compiled = st.compiled;
+  try {
+    compiled = await api.compileFilmLook({ config: st.config });
+    if (compiled) st.compiled = compiled;
+  } catch {
+    compiled = compileFilmLookFiltergraphClient(st.config);
+  }
+  const outEl = byId("render-filtergraph-preview") || byId("fx-filtergraph-output");
+  if (outEl && compiled && compiled.vf_chain && compiled.vf_chain !== "null") {
+    outEl.textContent = compiled.vf_chain;
+  }
+  closeFilmLookStudioDialog();
+  switchTab("render");
+  setFilmLookStatus(t("flStudio.status.deliver"));
+}
+
+async function exportFilmLookJsonAction() {
+  const st = state.flStudio;
+  try {
+    const res = await api.exportFilmLookJson({
+      config: st.config,
+      title: (state.timelineDoc && state.timelineDoc.title) || "TAKTCUT_FILM_LOOK_STUDIO"
+    });
+    st.exportedJson = res;
+    const drawer = byId("fl-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncFilmLookStudioUI();
+    setFilmLookStatus(
+      t("flStudio.status.exportedJson").replace(
+        "{schema}",
+        String(res.schema_version || "taktcut.film_look_studio.v1")
+      )
+    );
+  } catch (err) {
+    setFilmLookStatus(`Export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadFilmLookJsonAction() {
+  const st = state.flStudio;
+  const filename = `taktcut_${st.config.print_stock}_film_look_studio.json`;
+  try {
+    const blob = await api.downloadFilmLookBlob({
+      config: st.config,
+      title: (state.timelineDoc && state.timelineDoc.title) || "TAKTCUT_FILM_LOOK_STUDIO",
+      filename
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setFilmLookStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+function wireFilmLookStudioEvents() {
+  byId("btn-timeline-film-look-studio")?.addEventListener("click", openFilmLookStudioDialog);
+  byId("btn-fx-film-look-studio")?.addEventListener("click", openFilmLookStudioDialog);
+  byId("btn-color-film-look-studio")?.addEventListener("click", openFilmLookStudioDialog);
+  byId("btn-close-film-look-studio")?.addEventListener("click", closeFilmLookStudioDialog);
+
+  const dlg = byId("film-look-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeFilmLookStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeFilmLookStudioDialog();
+    });
+    dlg.addEventListener("close", () => {
+      state.flStudio.isOpen = false;
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".fl-preset-btn[data-fl-stock]")) {
+    btn.addEventListener("click", () => {
+      const stock = btn.getAttribute("data-fl-stock") || "kodak_2383_d65";
+      const presetCfg = createDefaultFilmLookConfigClient(stock);
+      state.flStudio.config = normalizeFilmLookConfigClient({
+        ...presetCfg,
+        compare_split: state.flStudio.config.compare_split,
+        split_position: state.flStudio.config.split_position,
+        width: state.flStudio.config.width,
+        height: state.flStudio.config.height,
+        fps: state.flStudio.config.fps
+      });
+      refreshFilmLookLocalDerived();
+      syncFilmLookStudioUI();
+      syncFilmLookServer();
+      const ev = state.flStudio.evalResult;
+      setFilmLookStatus(
+        t("flStudio.status.presetApplied")
+          .replace("{preset}", stock)
+          .replace("{cr}", ev ? ev.contrast_ratio.toFixed(1) : "1.0")
+          .replace("{dr}", ev ? ev.dynamic_range_stops.toFixed(1) : "12.0")
+          .replace("{rms}", ev ? ev.grain_rms.toFixed(2) : "0.00")
+      );
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".fl-gauge-btn[data-fl-gauge]")) {
+    btn.addEventListener("click", () => {
+      const gauge = Number.parseInt(btn.getAttribute("data-fl-gauge") || "35", 10);
+      updateFilmLookConfig({ grain_size_mm: gauge });
+      syncFilmLookServer();
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".fl-tab-btn[data-fl-tab]")) {
+    btn.addEventListener("click", () => {
+      setFilmLookInspectorTab(btn.getAttribute("data-fl-tab") || "tone");
+    });
+  }
+
+  byId("fl-compare-split")?.addEventListener("change", (ev) => {
+    updateFilmLookConfig({ compare_split: Boolean(ev.target.checked) });
+  });
+  byId("fl-enabled")?.addEventListener("change", (ev) => {
+    updateFilmLookConfig({ enabled: Boolean(ev.target.checked) });
+    syncFilmLookServer();
+  });
+
+  byId("btn-fl-reset")?.addEventListener("click", () => {
+    const presetCfg = createDefaultFilmLookConfigClient("kodak_2383_d65");
+    state.flStudio.config = normalizeFilmLookConfigClient({
+      ...presetCfg,
+      width: state.flStudio.config.width,
+      height: state.flStudio.config.height,
+      fps: state.flStudio.config.fps
+    });
+    state.flStudio.exportedJson = null;
+    refreshFilmLookLocalDerived();
+    syncFilmLookStudioUI();
+    syncFilmLookServer();
+    setFilmLookStatus(t("flStudio.status.idle"));
+  });
+
+  const sliderMap = [
+    ["fl-exposure-ev", "fl-exposure-ev-num", "exposure_ev", -2.0, 2.0],
+    ["fl-contrast-pivot", "fl-contrast-pivot-num", "contrast_pivot", 0.15, 0.85],
+    ["fl-toe-density", "fl-toe-density-num", "toe_density_pct", 0.0, 100.0],
+    ["fl-shoulder-rolloff", "fl-shoulder-rolloff-num", "shoulder_rolloff_pct", 0.0, 100.0],
+    ["fl-bleach-bypass", "fl-bleach-bypass-num", "bleach_bypass_pct", 0.0, 100.0],
+    ["fl-shadow-hue", "fl-shadow-hue-num", "split_tone_shadow_hue", 0.0, 360.0],
+    ["fl-highlight-hue", "fl-highlight-hue-num", "split_tone_highlight_hue", 0.0, 360.0],
+    ["fl-halation-red", "fl-halation-red-num", "halation_red_pct", 0.0, 100.0],
+    ["fl-grain-strength", "fl-grain-strength-num", "grain_strength_pct", 0.0, 100.0],
+    ["fl-gate-weave", "fl-gate-weave-num", "gate_weave_px", 0.0, 6.0],
+    ["fl-flicker-pct", "fl-flicker-pct-num", "flicker_pct", 0.0, 30.0]
+  ];
+  for (const [rangeId, numId, key, minV, maxV] of sliderMap) {
+    const rEl = byId(rangeId);
+    const nEl = byId(numId);
+    if (rEl) {
+      rEl.addEventListener("input", () => {
+        const v = Number.parseFloat(rEl.value);
+        if (Number.isFinite(v)) {
+          updateFilmLookConfig({ [key]: Math.min(maxV, Math.max(minV, v)) });
+        }
+      });
+      rEl.addEventListener("change", syncFilmLookServer);
+    }
+    if (nEl) {
+      nEl.addEventListener("input", () => {
+        const raw = nEl.value.trim();
+        if (raw === "" || raw === "-" || raw === "." || raw === "-.") return;
+        const v = Number.parseFloat(raw);
+        if (Number.isFinite(v) && v >= minV && v <= maxV) {
+          updateFilmLookConfig({ [key]: v }, { skipInputEl: nEl });
+        }
+      });
+      nEl.addEventListener("change", () => {
+        const v = Number.parseFloat(nEl.value);
+        const clamped = Number.isFinite(v) ? Math.min(maxV, Math.max(minV, v)) : state.flStudio.config[key];
+        updateFilmLookConfig({ [key]: clamped });
+        syncFilmLookServer();
+      });
+    }
+  }
+
+  // Interactive Split-Wipe dragging on #fl-preview-canvas
+  const previewCanvas = byId("fl-preview-canvas");
+  if (previewCanvas) {
+    const applySplitFromEvent = (ev) => {
+      const meta = previewCanvas._flPreviewMeta;
+      if (!meta || meta.frameW <= 0) return;
+      const rect = previewCanvas.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const splitPos = Math.max(0.05, Math.min(0.95, (px - meta.frameX) / meta.frameW));
+      updateFilmLookConfig({ compare_split: true, split_position: Number(splitPos.toFixed(3)) });
+    };
+    previewCanvas.addEventListener("pointerdown", (ev) => {
+      state.flStudio.dragState = { kind: "wipe" };
+      previewCanvas.setPointerCapture?.(ev.pointerId);
+      applySplitFromEvent(ev);
+    });
+    previewCanvas.addEventListener("pointermove", (ev) => {
+      if (state.flStudio.dragState && state.flStudio.dragState.kind === "wipe") {
+        applySplitFromEvent(ev);
+      }
+    });
+    const endWipeDrag = () => {
+      if (state.flStudio.dragState && state.flStudio.dragState.kind === "wipe") {
+        state.flStudio.dragState = null;
+      }
+    };
+    previewCanvas.addEventListener("pointerup", endWipeDrag);
+    previewCanvas.addEventListener("pointercancel", endWipeDrag);
+  }
+
+  // Interactive Toe / Pivot / Shoulder handle dragging on #fl-curve-canvas
+  const curveCanvas = byId("fl-curve-canvas");
+  if (curveCanvas) {
+    const applyCurveDrag = (ev, handleId) => {
+      const meta = curveCanvas._flCurveMeta;
+      if (!meta || meta.plotW <= 0 || meta.plotH <= 0) return;
+      const rect = curveCanvas.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      const xNorm = Math.max(0, Math.min(1, (px - meta.padL) / meta.plotW));
+      const yNorm = Math.max(0, Math.min(1, 1 - (py - meta.padT) / meta.plotH));
+
+      if (handleId === "toe") {
+        const toePct = Math.round(Math.max(0, Math.min(100, (0.38 - yNorm) * 290)));
+        updateFilmLookConfig({ toe_density_pct: toePct });
+      } else if (handleId === "shoulder") {
+        const shPct = Math.round(Math.max(0, Math.min(100, (1.02 - yNorm) * 260)));
+        updateFilmLookConfig({ shoulder_rolloff_pct: shPct });
+      } else {
+        const pivot = Number(Math.max(0.15, Math.min(0.85, xNorm)).toFixed(3));
+        const evShift = Number(Math.max(-2.0, Math.min(2.0, (yNorm - 0.48) * 3.2)).toFixed(2));
+        updateFilmLookConfig({ contrast_pivot: pivot, exposure_ev: evShift });
+      }
+    };
+    curveCanvas.addEventListener("pointerdown", (ev) => {
+      const meta = curveCanvas._flCurveMeta;
+      if (!meta || !Array.isArray(meta.handles)) return;
+      const rect = curveCanvas.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      let best = meta.handles[1] || meta.handles[0];
+      let bestDist = Infinity;
+      for (const h of meta.handles) {
+        const d = Math.hypot(px - h.x, py - h.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = h;
+        }
+      }
+      if (best) {
+        state.flStudio.dragState = { kind: "curve", handleId: best.id };
+        curveCanvas.setPointerCapture?.(ev.pointerId);
+        applyCurveDrag(ev, best.id);
+      }
+    });
+    curveCanvas.addEventListener("pointermove", (ev) => {
+      const drag = state.flStudio.dragState;
+      if (drag && drag.kind === "curve") {
+        applyCurveDrag(ev, drag.handleId);
+      }
+    });
+    const endCurveDrag = () => {
+      if (state.flStudio.dragState && state.flStudio.dragState.kind === "curve") {
+        state.flStudio.dragState = null;
+        syncFilmLookServer();
+      }
+    };
+    curveCanvas.addEventListener("pointerup", endCurveDrag);
+    curveCanvas.addEventListener("pointercancel", endCurveDrag);
+  }
+
+  byId("btn-fl-apply-timeline")?.addEventListener("click", applyFilmLookToTimelineAction);
+  byId("btn-fl-send-deliver")?.addEventListener("click", sendFilmLookToDeliverAction);
+  byId("btn-fl-export-json")?.addEventListener("click", exportFilmLookJsonAction);
+  byId("btn-fl-download-json")?.addEventListener("click", downloadFilmLookJsonAction);
+  byId("btn-fl-copy-fg")?.addEventListener("click", async () => {
+    const comp = state.flStudio.compiled || compileFilmLookFiltergraphClient(state.flStudio.config);
+    const txt = comp.vf_chain || "";
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      try {
+        await navigator.clipboard.writeText(txt);
+      } catch {
+        // Fallback silent in headless environments
+      }
+    }
+    setFilmLookStatus(t("flStudio.status.copied"));
+  });
+}

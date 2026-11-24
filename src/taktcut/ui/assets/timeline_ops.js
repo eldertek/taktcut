@@ -21508,3 +21508,669 @@ export function applyStabilizationStudioToDocumentClient(doc, rawConfig, opts = 
   };
   return nextDoc;
 }
+
+
+// ============================================================================
+// Film Look Creator, Print Stock Curve (Kodak 2383 / Fuji 3513), Grain & Bleach Bypass (Cycle #112)
+// ============================================================================
+
+export const ALLOWED_FILM_LOOK_PRINT_STOCKS = [
+  "kodak_2383_d65",
+  "fuji_3513_teal_gold",
+  "super16_bleach_bypass",
+  "ilford_hp5_bw_35mm",
+  "vintage_70s_warm_fade",
+  "custom"
+];
+
+export const ALLOWED_FILM_LOOK_GRAIN_GAUGES = [8, 16, 35, 65];
+
+const FILM_LOOK_STOCK_SIGNATURES = {
+  kodak_2383_d65: {
+    floor: 0.012,
+    ceil: 0.965,
+    gamma_base: 1.18,
+    r_gain: 1.015,
+    g_gain: 1.0,
+    b_gain: 0.985,
+    mono: 0.0,
+    split_strength: 0.14
+  },
+  fuji_3513_teal_gold: {
+    floor: 0.022,
+    ceil: 0.955,
+    gamma_base: 1.12,
+    r_gain: 1.02,
+    g_gain: 1.005,
+    b_gain: 0.965,
+    mono: 0.0,
+    split_strength: 0.24
+  },
+  super16_bleach_bypass: {
+    floor: 0.008,
+    ceil: 0.978,
+    gamma_base: 1.38,
+    r_gain: 0.995,
+    g_gain: 1.005,
+    b_gain: 1.0,
+    mono: 0.0,
+    split_strength: 0.12
+  },
+  ilford_hp5_bw_35mm: {
+    floor: 0.018,
+    ceil: 0.96,
+    gamma_base: 1.24,
+    r_gain: 1.0,
+    g_gain: 1.0,
+    b_gain: 1.0,
+    mono: 1.0,
+    split_strength: 0.04
+  },
+  vintage_70s_warm_fade: {
+    floor: 0.056,
+    ceil: 0.925,
+    gamma_base: 0.96,
+    r_gain: 1.04,
+    g_gain: 1.01,
+    b_gain: 0.92,
+    mono: 0.0,
+    split_strength: 0.22
+  },
+  custom: {
+    floor: 0.014,
+    ceil: 0.965,
+    gamma_base: 1.14,
+    r_gain: 1.0,
+    g_gain: 1.0,
+    b_gain: 1.0,
+    mono: 0.0,
+    split_strength: 0.16
+  }
+};
+
+export const FILM_LOOK_PRESETS = [
+  {
+    print_stock: "kodak_2383_d65",
+    label: "Kodak 2383 Print D65",
+    description: "Reference Kodak Vision 2383 D65 print curve with rich D-max blacks, deep cyan shadow toe, and warm ivory highlights.",
+    default_config: {
+      enabled: true,
+      print_stock: "kodak_2383_d65",
+      exposure_ev: 0.0,
+      contrast_pivot: 0.435,
+      toe_density_pct: 42.0,
+      shoulder_rolloff_pct: 66.0,
+      split_tone_shadow_hue: 205.0,
+      split_tone_highlight_hue: 42.0,
+      bleach_bypass_pct: 0.0,
+      grain_size_mm: 35,
+      grain_strength_pct: 28.0,
+      gate_weave_px: 0.8,
+      flicker_pct: 4.0,
+      halation_red_pct: 26.0,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    print_stock: "fuji_3513_teal_gold",
+    label: "Fuji 3513 Teal/Gold",
+    description: "Fuji Eterna 3513DI print emulation with creamy shadow toe, teal shadow separation, and golden skin highlights.",
+    default_config: {
+      enabled: true,
+      print_stock: "fuji_3513_teal_gold",
+      exposure_ev: 0.08,
+      contrast_pivot: 0.45,
+      toe_density_pct: 34.0,
+      shoulder_rolloff_pct: 72.0,
+      split_tone_shadow_hue: 192.0,
+      split_tone_highlight_hue: 36.0,
+      bleach_bypass_pct: 6.0,
+      grain_size_mm: 35,
+      grain_strength_pct: 24.0,
+      gate_weave_px: 0.6,
+      flicker_pct: 3.5,
+      halation_red_pct: 22.0,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    print_stock: "super16_bleach_bypass",
+    label: "Super 16 Bleach Bypass",
+    description: "Silver-retained skip-bleach Super 16mm look with high midtone micro-contrast, pronounced 16mm grain, and gate weave.",
+    default_config: {
+      enabled: true,
+      print_stock: "super16_bleach_bypass",
+      exposure_ev: -0.12,
+      contrast_pivot: 0.41,
+      toe_density_pct: 68.0,
+      shoulder_rolloff_pct: 52.0,
+      split_tone_shadow_hue: 215.0,
+      split_tone_highlight_hue: 50.0,
+      bleach_bypass_pct: 58.0,
+      grain_size_mm: 16,
+      grain_strength_pct: 56.0,
+      gate_weave_px: 2.1,
+      flicker_pct: 9.5,
+      halation_red_pct: 18.0,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    print_stock: "ilford_hp5_bw_35mm",
+    label: "Ilford HP5 B&W 35mm",
+    description: "Classic panchromatic 35mm silver-gelatin monochrome curve with crisp shadow density and organic 400 ASA grain.",
+    default_config: {
+      enabled: true,
+      print_stock: "ilford_hp5_bw_35mm",
+      exposure_ev: 0.05,
+      contrast_pivot: 0.44,
+      toe_density_pct: 48.0,
+      shoulder_rolloff_pct: 68.0,
+      split_tone_shadow_hue: 210.0,
+      split_tone_highlight_hue: 45.0,
+      bleach_bypass_pct: 100.0,
+      grain_size_mm: 35,
+      grain_strength_pct: 44.0,
+      gate_weave_px: 1.0,
+      flicker_pct: 5.0,
+      halation_red_pct: 0.0,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    print_stock: "vintage_70s_warm_fade",
+    label: "Vintage 70s Warm Fade",
+    description: "1970s ECN-2 faded print emulation with lifted matte black floor, soft highlight shoulder, and warm red emulsion halation.",
+    default_config: {
+      enabled: true,
+      print_stock: "vintage_70s_warm_fade",
+      exposure_ev: 0.15,
+      contrast_pivot: 0.48,
+      toe_density_pct: 22.0,
+      shoulder_rolloff_pct: 82.0,
+      split_tone_shadow_hue: 28.0,
+      split_tone_highlight_hue: 44.0,
+      bleach_bypass_pct: 12.0,
+      grain_size_mm: 16,
+      grain_strength_pct: 42.0,
+      gate_weave_px: 1.6,
+      flicker_pct: 8.5,
+      halation_red_pct: 46.0,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    print_stock: "custom",
+    label: "Custom Print Lab",
+    description: "User-calibrated D-logE print curve, split toning, silver retention, grain gauge, and gate weave.",
+    default_config: {
+      enabled: true,
+      print_stock: "custom",
+      exposure_ev: 0.0,
+      contrast_pivot: 0.435,
+      toe_density_pct: 38.0,
+      shoulder_rolloff_pct: 64.0,
+      split_tone_shadow_hue: 205.0,
+      split_tone_highlight_hue: 42.0,
+      bleach_bypass_pct: 0.0,
+      grain_size_mm: 35,
+      grain_strength_pct: 28.0,
+      gate_weave_px: 0.8,
+      flicker_pct: 4.0,
+      halation_red_pct: 24.0,
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  }
+];
+
+function _flClamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, Number(v)));
+}
+
+function _flNum(raw, fallback, lo, hi, decimals = 2) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  const c = _flClamp(n, lo, hi);
+  const f = 10 ** decimals;
+  return Math.round(c * f) / f;
+}
+
+export function listFilmLookPresetsClient() {
+  return FILM_LOOK_PRESETS.map((p) => ({
+    ...p,
+    default_config: { ...p.default_config }
+  }));
+}
+
+export function getFilmLookPresetClient(printStock = "kodak_2383_d65") {
+  const key = String(printStock || "kodak_2383_d65").trim().toLowerCase();
+  const found = FILM_LOOK_PRESETS.find((p) => p.print_stock === key);
+  if (!found) {
+    throw new Error(`Unsupported print_stock ${printStock}`);
+  }
+  return {
+    ...found,
+    default_config: { ...found.default_config }
+  };
+}
+
+export function createDefaultFilmLookConfigClient(printStock = "kodak_2383_d65") {
+  return getFilmLookPresetClient(printStock).default_config;
+}
+
+export function normalizeFilmLookConfigClient(raw) {
+  if (!raw || typeof raw !== "object") {
+    return createDefaultFilmLookConfigClient("kodak_2383_d65");
+  }
+  const stockRaw = String(raw.print_stock || raw.preset_id || "kodak_2383_d65").trim().toLowerCase();
+  const stock = ALLOWED_FILM_LOOK_PRINT_STOCKS.includes(stockRaw) ? stockRaw : "kodak_2383_d65";
+  const base = createDefaultFilmLookConfigClient(stock);
+  const rawGauge = Number(raw.grain_size_mm ?? base.grain_size_mm);
+  const grainSizeMm = ALLOWED_FILM_LOOK_GRAIN_GAUGES.includes(rawGauge) ? rawGauge : base.grain_size_mm;
+
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : base.enabled,
+    print_stock: stock,
+    exposure_ev: _flNum(raw.exposure_ev, base.exposure_ev, -2.0, 2.0, 3),
+    contrast_pivot: _flNum(raw.contrast_pivot, base.contrast_pivot, 0.15, 0.85, 4),
+    toe_density_pct: _flNum(raw.toe_density_pct, base.toe_density_pct, 0.0, 100.0, 2),
+    shoulder_rolloff_pct: _flNum(raw.shoulder_rolloff_pct, base.shoulder_rolloff_pct, 0.0, 100.0, 2),
+    split_tone_shadow_hue: _flNum(raw.split_tone_shadow_hue, base.split_tone_shadow_hue, 0.0, 360.0, 2),
+    split_tone_highlight_hue: _flNum(raw.split_tone_highlight_hue, base.split_tone_highlight_hue, 0.0, 360.0, 2),
+    bleach_bypass_pct: _flNum(raw.bleach_bypass_pct, base.bleach_bypass_pct, 0.0, 100.0, 2),
+    grain_size_mm: grainSizeMm,
+    grain_strength_pct: _flNum(raw.grain_strength_pct, base.grain_strength_pct, 0.0, 100.0, 2),
+    gate_weave_px: _flNum(raw.gate_weave_px, base.gate_weave_px, 0.0, 6.0, 3),
+    flicker_pct: _flNum(raw.flicker_pct, base.flicker_pct, 0.0, 30.0, 2),
+    halation_red_pct: _flNum(raw.halation_red_pct, base.halation_red_pct, 0.0, 100.0, 2),
+    compare_split: typeof raw.compare_split === "boolean" ? raw.compare_split : base.compare_split,
+    split_position: _flNum(raw.split_position, base.split_position, 0.0, 1.0, 4),
+    width: Math.round(_flNum(raw.width, base.width, 320, 7680, 0)),
+    height: Math.round(_flNum(raw.height, base.height, 240, 4320, 0)),
+    fps: _flNum(raw.fps, base.fps, 1.0, 120.0, 3)
+  };
+}
+
+function _flHueToRgbOffset(hueDeg) {
+  const rad = (hueDeg * Math.PI) / 180.0;
+  const r = Math.cos(rad);
+  const g = Math.cos(rad - 2.0943951023931953);
+  const b = Math.cos(rad + 2.0943951023931953);
+  const mean = (r + g + b) / 3.0;
+  return [r - mean, g - mean, b - mean];
+}
+
+function _flEvalSensitometricTransfer(xNorm, cfg) {
+  if (!cfg.enabled) {
+    const v = _flClamp(xNorm, 0.0, 1.0);
+    return [v, v, v, v];
+  }
+  const sig = FILM_LOOK_STOCK_SIGNATURES[cfg.print_stock] || FILM_LOOK_STOCK_SIGNATURES.kodak_2383_d65;
+  const evScale = Math.pow(2.0, cfg.exposure_ev * 0.42);
+  const xExp = _flClamp(xNorm * evScale, 0.0, 1.45);
+
+  const pivot = cfg.contrast_pivot;
+  const toeK = 0.25 + (cfg.toe_density_pct / 100.0) * 1.15;
+  const shoulderK = 0.25 + (cfg.shoulder_rolloff_pct / 100.0) * 1.25;
+  const bleachK = cfg.bleach_bypass_pct / 100.0;
+  const gamma = sig.gamma_base * (1.0 + bleachK * 0.42);
+
+  let lumaRaw = 0.0;
+  const delta = xExp - pivot;
+  if (delta < 0.0) {
+    const slope = gamma * (1.0 + toeK * 0.35);
+    const shaped = pivot / (1.0 + Math.exp((-slope * (xExp - pivot)) / Math.max(0.12, pivot)));
+    const baseAnchor = pivot / (1.0 + Math.exp(slope));
+    lumaRaw = (shaped - baseAnchor) / Math.max(1e-5, 1.0 - baseAnchor * 1.15);
+  } else {
+    const slope = gamma * (1.0 + (1.0 - shoulderK * 0.45) * 0.25);
+    const tail = 1.0 - pivot;
+    const normHi = (xExp - pivot) / Math.max(0.12, tail);
+    const compressed = 1.0 - Math.exp(-slope * normHi * (0.85 + 0.75 * shoulderK));
+    const denom = 1.0 - Math.exp(-slope * (0.85 + 0.75 * shoulderK));
+    lumaRaw = pivot + (1.0 - pivot) * (compressed / Math.max(1e-5, denom));
+  }
+
+  const floor = sig.floor * (1.0 - (cfg.toe_density_pct / 100.0) * 0.45);
+  const ceil = sig.ceil - (cfg.shoulder_rolloff_pct / 100.0) * 0.035;
+  const luma = _flClamp(floor + (ceil - floor) * _flClamp(lumaRaw, 0.0, 1.0), 0.0, 1.0);
+
+  if (sig.mono >= 0.99) {
+    return [luma, luma, luma, luma];
+  }
+
+  const shVec = _flHueToRgbOffset(cfg.split_tone_shadow_hue);
+  const hiVec = _flHueToRgbOffset(cfg.split_tone_highlight_hue);
+  const shWeight = Math.pow(Math.max(0.0, 1.0 - xNorm), 1.6) * sig.split_strength * (1.0 - bleachK * 0.55);
+  const hiWeight = Math.pow(Math.max(0.0, xNorm), 1.5) * sig.split_strength * (1.0 - bleachK * 0.45);
+  const halRedBoost = (cfg.halation_red_pct / 100.0) * 0.065 * Math.pow(Math.max(0.0, xNorm), 2.1);
+
+  const rRaw = luma * sig.r_gain + shWeight * shVec[0] * 0.28 + hiWeight * hiVec[0] * 0.28 + halRedBoost;
+  const gRaw = luma * sig.g_gain + shWeight * shVec[1] * 0.28 + hiWeight * hiVec[1] * 0.28;
+  const bRaw = luma * sig.b_gain + shWeight * shVec[2] * 0.28 + hiWeight * hiVec[2] * 0.28;
+
+  const silverMix = bleachK * 0.72;
+  const rOut = _flClamp(rRaw * (1.0 - silverMix) + luma * silverMix, 0.0, 1.0);
+  const gOut = _flClamp(gRaw * (1.0 - silverMix) + luma * silverMix, 0.0, 1.0);
+  const bOut = _flClamp(bRaw * (1.0 - silverMix) + luma * silverMix, 0.0, 1.0);
+  return [luma, rOut, gOut, bOut];
+}
+
+export function evaluateFilmLookStudioClient(rawConfig, opts = {}) {
+  const cfg = normalizeFilmLookConfigClient(rawConfig);
+  const count = Math.max(17, Math.min(65, Math.round(Number(opts.sample_count || 33))));
+  const samples = [];
+  for (let i = 0; i < count; i += 1) {
+    const xNorm = i / (count - 1);
+    const logExp = -3.2 + xNorm * 4.4;
+    const [luma, rVal, gVal, bVal] = _flEvalSensitometricTransfer(xNorm, cfg);
+    samples.push({
+      x_norm: Number(xNorm.toFixed(4)),
+      log_exposure: Number(logExp.toFixed(3)),
+      linear_ref: Number(xNorm.toFixed(4)),
+      luma: Number(luma.toFixed(4)),
+      r: Number(rVal.toFixed(4)),
+      g: Number(gVal.toFixed(4)),
+      b: Number(bVal.toFixed(4))
+    });
+  }
+
+  const sig = FILM_LOOK_STOCK_SIGNATURES[cfg.print_stock] || FILM_LOOK_STOCK_SIGNATURES.kodak_2383_d65;
+  const isMono = sig.mono >= 0.99;
+
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      print_stock: cfg.print_stock,
+      contrast_ratio: 1.0,
+      gamma_at_pivot: 1.0,
+      dynamic_range_stops: 12.0,
+      grain_rms: 0.0,
+      shadow_density_dmax: 2.0,
+      highlight_headroom_pct: 100.0,
+      silver_retention_pct: 0.0,
+      gate_weave_rms_px: 0.0,
+      flicker_delta_ire: 0.0,
+      halation_energy_pct: 0.0,
+      is_monochrome: isMono,
+      samples
+    };
+  }
+
+  const pLo = Math.max(0.02, cfg.contrast_pivot - 0.08);
+  const pHi = Math.min(0.98, cfg.contrast_pivot + 0.08);
+  const [yLo] = _flEvalSensitometricTransfer(pLo, cfg);
+  const [yHi] = _flEvalSensitometricTransfer(pHi, cfg);
+  const gammaAtPivot = Math.max(0.35, (yHi - yLo) / Math.max(0.01, pHi - pLo));
+
+  const yBlack = Math.max(0.004, samples[0].luma);
+  const yWhite = Math.max(yBlack + 0.05, samples[samples.length - 1].luma);
+  const contrastRatio = Number(_flClamp((yWhite / yBlack) * (0.28 + gammaAtPivot * 0.22), 1.2, 48.0).toFixed(2));
+
+  const shoulderBonus = (cfg.shoulder_rolloff_pct / 100.0) * 1.9;
+  const bleachPenalty = (cfg.bleach_bypass_pct / 100.0) * 1.4;
+  const toeBonus = (cfg.toe_density_pct / 100.0) * 0.6;
+  const drStops = Number(_flClamp(10.8 + shoulderBonus + toeBonus - bleachPenalty, 7.2, 15.0).toFixed(2));
+
+  const gaugeScale = { 8: 2.15, 16: 1.52, 35: 1.0, 65: 0.58 }[cfg.grain_size_mm] || 1.0;
+  const grainRms = Number(((cfg.grain_strength_pct / 100.0) * 8.4 * gaugeScale).toFixed(2));
+  const shadowDmax = Number(_flClamp(2.2 + (cfg.toe_density_pct / 100.0) * 1.45 - samples[0].luma * 12.0, 1.4, 4.0).toFixed(2));
+  const highlightHeadroom = Number(_flClamp((1.0 - samples[samples.length - 2].luma) * 100.0 + cfg.shoulder_rolloff_pct * 0.35, 2.0, 45.0).toFixed(1));
+
+  return {
+    enabled: true,
+    print_stock: cfg.print_stock,
+    contrast_ratio: contrastRatio,
+    gamma_at_pivot: Number(gammaAtPivot.toFixed(3)),
+    dynamic_range_stops: drStops,
+    grain_rms: grainRms,
+    shadow_density_dmax: shadowDmax,
+    highlight_headroom_pct: highlightHeadroom,
+    silver_retention_pct: Number(cfg.bleach_bypass_pct.toFixed(1)),
+    gate_weave_rms_px: Number((cfg.gate_weave_px * 0.62).toFixed(2)),
+    flicker_delta_ire: Number((cfg.flicker_pct * 0.45).toFixed(2)),
+    halation_energy_pct: Number((cfg.halation_red_pct * 0.85).toFixed(1)),
+    is_monochrome: isMono,
+    samples
+  };
+}
+
+function _flFormatCurvePoints(samples, ch) {
+  const idxs = [0, 4, 8, 12, 16, 20, 24, 28, 32];
+  return idxs
+    .map((idx) => {
+      const s = samples[Math.min(idx, samples.length - 1)];
+      return `${s.x_norm.toFixed(3)}/${Number(s[ch]).toFixed(3)}`;
+    })
+    .join(" ");
+}
+
+export function compileFilmLookFiltergraphClient(rawConfig) {
+  const cfg = normalizeFilmLookConfigClient(rawConfig);
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      print_stock: cfg.print_stock,
+      curves_vf: "null",
+      colorbalance_vf: "null",
+      eq_vf: "null",
+      noise_vf: "null",
+      vignette_vf: "null",
+      gate_weave_vf: "null",
+      vf_chain: "null",
+      ffmpeg_command: 'ffmpeg -i input.mp4 -vf "null" output.mp4',
+      warnings: []
+    };
+  }
+
+  const evalRes = evaluateFilmLookStudioClient(cfg, { sample_count: 33 });
+  const rPts = _flFormatCurvePoints(evalRes.samples, "r");
+  const gPts = _flFormatCurvePoints(evalRes.samples, "g");
+  const bPts = _flFormatCurvePoints(evalRes.samples, "b");
+  const curvesVf = `curves=r='${rPts}':g='${gPts}':b='${bPts}'`;
+
+  const sig = FILM_LOOK_STOCK_SIGNATURES[cfg.print_stock] || FILM_LOOK_STOCK_SIGNATURES.kodak_2383_d65;
+  const shVec = _flHueToRgbOffset(cfg.split_tone_shadow_hue);
+  const hiVec = _flHueToRgbOffset(cfg.split_tone_highlight_hue);
+  const splitAmt = sig.mono >= 0.99 ? 0.0 : sig.split_strength * 0.45;
+  const halRed = sig.mono >= 0.99 ? 0.0 : (cfg.halation_red_pct / 100.0) * 0.14;
+
+  const rs = _flClamp(shVec[0] * splitAmt, -0.5, 0.5);
+  const gs = _flClamp(shVec[1] * splitAmt, -0.5, 0.5);
+  const bs = _flClamp(shVec[2] * splitAmt, -0.5, 0.5);
+  const rh = _flClamp(hiVec[0] * splitAmt + halRed, -0.5, 0.5);
+  const gh = _flClamp(hiVec[1] * splitAmt, -0.5, 0.5);
+  const bh = _flClamp(hiVec[2] * splitAmt, -0.5, 0.5);
+  const colorbalanceVf = `colorbalance=rs=${rs.toFixed(3)}:gs=${gs.toFixed(3)}:bs=${bs.toFixed(3)}:rh=${rh.toFixed(3)}:gh=${gh.toFixed(3)}:bh=${bh.toFixed(3)}`;
+
+  const bleachK = cfg.bleach_bypass_pct / 100.0;
+  const brightness = _flClamp(cfg.exposure_ev * 0.06, -0.4, 0.4);
+  const contrast = _flClamp(0.95 + (evalRes.gamma_at_pivot - 1.0) * 0.22 + bleachK * 0.18, 0.5, 1.8);
+  const saturation = sig.mono >= 0.99 ? 0.0 : _flClamp(1.0 - bleachK * 0.72, 0.0, 2.0);
+  const gammaEq = _flClamp(1.0 + (0.435 - cfg.contrast_pivot) * 0.25, 0.6, 1.6);
+  const flickerExpr = cfg.flicker_pct > 0.0 ? `+${((cfg.flicker_pct / 100.0) * 0.06).toFixed(4)}*sin(n*1.37)` : "";
+  const eqVf = `eq=brightness=${brightness.toFixed(3)}${flickerExpr}:contrast=${contrast.toFixed(3)}:saturation=${saturation.toFixed(3)}:gamma=${gammaEq.toFixed(3)}`;
+
+  const gaugeNoiseMult = { 8: 1.55, 16: 1.25, 35: 1.0, 65: 0.72 }[cfg.grain_size_mm] || 1.0;
+  const noiseStrength = Math.round(_flClamp((cfg.grain_strength_pct / 100.0) * 28.0 * gaugeNoiseMult, 0.0, 64.0));
+  const noiseVf = noiseStrength > 0 ? `noise=alls=${noiseStrength}:allf=t+u` : "null";
+
+  const vigAngle = _flClamp(0.24 + (cfg.halation_red_pct / 100.0) * 0.12 + (8.0 / cfg.grain_size_mm) * 0.14, 0.18, 0.62);
+  const vignetteVf = `vignette=angle=${vigAngle.toFixed(3)}:mode=forward`;
+
+  let gateWeaveVf = "null";
+  if (cfg.gate_weave_px > 0.05) {
+    const padPx = Math.max(2, Math.ceil(cfg.gate_weave_px * 2.0));
+    const amp = Number(cfg.gate_weave_px.toFixed(2));
+    gateWeaveVf = `pad=iw+${padPx * 2}:ih+${padPx * 2}:${padPx}:${padPx}:color=black,crop=iw-${padPx * 2}:ih-${padPx * 2}:${padPx}+${amp.toFixed(2)}*sin(t*7.3):${padPx}+${(amp * 0.85).toFixed(2)}*cos(t*5.1)`;
+  }
+
+  const parts = [curvesVf, colorbalanceVf, eqVf, noiseVf, vignetteVf, gateWeaveVf].filter((p) => p !== "null");
+  const vfChain = parts.length > 0 ? parts.join(",") : "null";
+
+  const warnings = [];
+  if (cfg.gate_weave_px >= 4.0) {
+    warnings.push("Gate weave >= 4.0 px introduces visible organic projector frame excursion.");
+  }
+  if (cfg.flicker_pct >= 18.0) {
+    warnings.push("High gate flicker (>= 18%) may trigger photosensitive luminance oscillations.");
+  }
+  if (cfg.bleach_bypass_pct >= 75.0 && !evalRes.is_monochrome) {
+    warnings.push("Heavy silver retention (>= 75%) strongly compresses chroma and shadow latitude.");
+  }
+
+  return {
+    enabled: true,
+    print_stock: cfg.print_stock,
+    curves_vf: curvesVf,
+    colorbalance_vf: colorbalanceVf,
+    eq_vf: eqVf,
+    noise_vf: noiseVf,
+    vignette_vf: vignetteVf,
+    gate_weave_vf: gateWeaveVf,
+    vf_chain: vfChain,
+    ffmpeg_command: `ffmpeg -i input.mp4 -vf "${vfChain}" -c:a copy output.mp4`,
+    warnings
+  };
+}
+
+export function exportFilmLookJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizeFilmLookConfigClient(rawConfig);
+  const rawTitle = String(opts.title || "TAKTCUT_FILM_LOOK_STUDIO").trim();
+  const cleanTitle = rawTitle.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "TAKTCUT_FILM_LOOK_STUDIO";
+  const evalRes = evaluateFilmLookStudioClient(cfg, { sample_count: 33 });
+  const compiled = compileFilmLookFiltergraphClient(cfg);
+  const hosts = [
+    "DaVinci Resolve Film Look Creator",
+    "Dehancer Pro Film Emulation",
+    "Boris FX Sapphire S_FilmEffect",
+    "FFmpeg Print Stock Pipeline"
+  ];
+  const payload = {
+    schema_version: "taktcut.film_look_studio.v1",
+    title: cleanTitle,
+    print_stock: cfg.print_stock,
+    compatible_hosts: hosts,
+    film_look: {
+      enabled: cfg.enabled,
+      print_stock: cfg.print_stock,
+      exposure_ev: cfg.exposure_ev,
+      contrast_pivot: cfg.contrast_pivot,
+      toe_density_pct: cfg.toe_density_pct,
+      shoulder_rolloff_pct: cfg.shoulder_rolloff_pct,
+      split_tone_shadow_hue: cfg.split_tone_shadow_hue,
+      split_tone_highlight_hue: cfg.split_tone_highlight_hue,
+      bleach_bypass_pct: cfg.bleach_bypass_pct,
+      grain_size_mm: cfg.grain_size_mm,
+      grain_strength_pct: cfg.grain_strength_pct,
+      gate_weave_px: cfg.gate_weave_px,
+      flicker_pct: cfg.flicker_pct,
+      halation_red_pct: cfg.halation_red_pct
+    },
+    metrics: {
+      contrast_ratio: evalRes.contrast_ratio,
+      gamma_at_pivot: evalRes.gamma_at_pivot,
+      dynamic_range_stops: evalRes.dynamic_range_stops,
+      grain_rms: evalRes.grain_rms,
+      shadow_density_dmax: evalRes.shadow_density_dmax,
+      highlight_headroom_pct: evalRes.highlight_headroom_pct,
+      silver_retention_pct: evalRes.silver_retention_pct,
+      gate_weave_rms_px: evalRes.gate_weave_rms_px,
+      flicker_delta_ire: evalRes.flicker_delta_ire,
+      halation_energy_pct: evalRes.halation_energy_pct,
+      is_monochrome: evalRes.is_monochrome
+    },
+    curve_samples: evalRes.samples,
+    ffmpeg: {
+      curves_vf: compiled.curves_vf,
+      colorbalance_vf: compiled.colorbalance_vf,
+      eq_vf: compiled.eq_vf,
+      noise_vf: compiled.noise_vf,
+      vignette_vf: compiled.vignette_vf,
+      gate_weave_vf: compiled.gate_weave_vf,
+      vf_chain: compiled.vf_chain
+    }
+  };
+  return {
+    schema_version: "taktcut.film_look_studio.v1",
+    title: cleanTitle,
+    print_stock: cfg.print_stock,
+    compatible_hosts: hosts,
+    json_text: JSON.stringify(payload, null, 2),
+    filename: `${cleanTitle.toLowerCase()}_${cfg.print_stock}_film_look_studio.json`,
+    saved_path: null
+  };
+}
+
+export function applyFilmLookToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const cfg = normalizeFilmLookConfigClient(rawConfig);
+  const trackIndex = Number(opts.track_index || 1);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === "video" && t.index === trackIndex)
+    || (nextDoc.tracks || []).find((t) => t.kind === "video");
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error(`Video track V${trackIndex} has no clips`);
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, Number(opts.clip_index || 0)));
+  const clip = trk.clips[safeIdx];
+  const docFps = nextDoc.fps && nextDoc.fps.num > 0 && nextDoc.fps.den > 0
+    ? nextDoc.fps.num / nextDoc.fps.den
+    : cfg.fps;
+  const scopedCfg = {
+    ...cfg,
+    width: Number(nextDoc.width || cfg.width),
+    height: Number(nextDoc.height || cfg.height),
+    fps: Number(docFps.toFixed(3))
+  };
+  const evalRes = evaluateFilmLookStudioClient(scopedCfg, { sample_count: 33 });
+  const compiled = compileFilmLookFiltergraphClient(scopedCfg);
+
+  trk.clips[safeIdx] = {
+    ...clip,
+    film_look: {
+      enabled: scopedCfg.enabled,
+      print_stock: scopedCfg.print_stock,
+      exposure_ev: scopedCfg.exposure_ev,
+      contrast_pivot: scopedCfg.contrast_pivot,
+      toe_density_pct: scopedCfg.toe_density_pct,
+      shoulder_rolloff_pct: scopedCfg.shoulder_rolloff_pct,
+      split_tone_shadow_hue: scopedCfg.split_tone_shadow_hue,
+      split_tone_highlight_hue: scopedCfg.split_tone_highlight_hue,
+      bleach_bypass_pct: scopedCfg.bleach_bypass_pct,
+      grain_size_mm: scopedCfg.grain_size_mm,
+      grain_strength_pct: scopedCfg.grain_strength_pct,
+      gate_weave_px: scopedCfg.gate_weave_px,
+      flicker_pct: scopedCfg.flicker_pct,
+      halation_red_pct: scopedCfg.halation_red_pct,
+      contrast_ratio: evalRes.contrast_ratio,
+      dynamic_range_stops: evalRes.dynamic_range_stops,
+      grain_rms: evalRes.grain_rms,
+      ffmpeg_vf: compiled.vf_chain.slice(0, 16384)
+    }
+  };
+  return nextDoc;
+}

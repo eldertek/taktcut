@@ -108,6 +108,17 @@ from taktcut.compound import (
     update_compound_subsequence,
 )
 from taktcut.drp import export_otio, load_timeline, validate_timeline
+from taktcut.film_look_studio import (
+    ALLOWED_FILM_LOOK_GRAIN_GAUGES,
+    ALLOWED_FILM_LOOK_PRINT_STOCKS,
+    FilmLookStudioConfig,
+    apply_film_look_to_document,
+    compile_film_look_filtergraph,
+    evaluate_film_look_studio,
+    export_film_look_json,
+    list_film_look_presets,
+    normalize_film_look_config,
+)
 from taktcut.fx import (
     CHROMA_KEY_BLEND_MAX,
     CHROMA_KEY_BLEND_MIN,
@@ -1984,6 +1995,18 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "modes": list(ALLOWED_STABILIZATION_MODES),
                     "edge_modes": list(ALLOWED_STABILIZATION_EDGE_MODES),
                     "default_config": StabilizationStudioConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/film-look/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_film_look_presets()],
+                    "print_stocks": list(ALLOWED_FILM_LOOK_PRINT_STOCKS),
+                    "grain_gauges_mm": list(ALLOWED_FILM_LOOK_GRAIN_GAUGES),
+                    "default_config": FilmLookStudioConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -5358,6 +5381,103 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "document": updated_stab_doc.model_dump(mode="json"),
                     "validation": stab_val.model_dump(mode="json"),
                     "compiled": stab_compiled_apply.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/film-look/evaluate":
+            fl_cfg = normalize_film_look_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_samples = payload.get("sample_count", 33)
+            sample_count = (
+                int(raw_samples)
+                if isinstance(raw_samples, int) and not isinstance(raw_samples, bool)
+                else 33
+            )
+            fl_eval = evaluate_film_look_studio(fl_cfg, sample_count=sample_count)
+            self._send_json(HTTPStatus.OK, fl_eval.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/film-look/compile":
+            fl_cfg = normalize_film_look_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            fl_compiled = compile_film_look_filtergraph(fl_cfg)
+            self._send_json(HTTPStatus.OK, fl_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/film-look/export-json":
+            fl_cfg = normalize_film_look_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            fl_title = str(payload.get("title", "TAKTCUT_FILM_LOOK_STUDIO")).strip() or (
+                "TAKTCUT_FILM_LOOK_STUDIO"
+            )
+            fl_exported = export_film_look_json(fl_cfg, title=fl_title)
+            raw_fl_out = payload.get("out_path")
+            fl_saved_rel: str | None = None
+            if raw_fl_out is not None and str(raw_fl_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_fl_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(fl_exported.json_text, encoding="utf-8")
+                fl_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                fl_exported.model_copy(update={"saved_path": fl_saved_rel}).model_dump(
+                    mode="json"
+                ),
+            )
+            return
+
+        if route == "/api/fx/film-look/download":
+            fl_cfg = normalize_film_look_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            fl_title = str(payload.get("title", "TAKTCUT_FILM_LOOK_STUDIO")).strip() or (
+                "TAKTCUT_FILM_LOOK_STUDIO"
+            )
+            fl_exported_dl = export_film_look_json(fl_cfg, title=fl_title)
+            fl_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or fl_exported_dl.filename),
+                "taktcut_film_look_studio",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                fl_exported_dl.json_text.encode("utf-8"),
+                extra_headers={
+                    "Content-Disposition": f'attachment; filename="{fl_dl_filename}"'
+                },
+            )
+            return
+
+        if route == "/api/fx/film-look/apply":
+            fl_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            fl_cfg = normalize_film_look_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_fl_doc = apply_film_look_to_document(
+                fl_doc,
+                fl_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            fl_compiled_apply = compile_film_look_filtergraph(fl_cfg)
+            fl_val = validate_timeline(updated_fl_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_fl_doc.model_dump(mode="json"),
+                    "validation": fl_val.model_dump(mode="json"),
+                    "compiled": fl_compiled_apply.model_dump(mode="json"),
                 },
             )
             return

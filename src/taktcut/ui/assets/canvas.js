@@ -48,6 +48,8 @@ import {
   normalizeRetimeStudioConfigClient,
   evaluateStabilizationStudioClient,
   normalizeStabilizationStudioConfigClient,
+  evaluateFilmLookStudioClient,
+  normalizeFilmLookConfigClient,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
   evaluateCstRgbClient,
@@ -14326,5 +14328,433 @@ export function drawStabilizationTrajectoryCanvas(canvas, rawConfig, opts = {}) 
 
   const meta = { padL, padT, plotW, plotH };
   canvas._stabTrajMeta = meta;
+  return meta;
+}
+
+
+// ============================================================================
+// Film Look Creator, Print Stock Curve & Split-Screen Preview Canvases (Cycle #112)
+// ============================================================================
+
+function _flSampleChannel(samples, ch, xNorm) {
+  if (!samples || samples.length === 0) return xNorm;
+  const clamped = Math.max(0, Math.min(1, xNorm));
+  const scaled = clamped * (samples.length - 1);
+  const idx0 = Math.floor(scaled);
+  const idx1 = Math.min(samples.length - 1, idx0 + 1);
+  const frac = scaled - idx0;
+  return samples[idx0][ch] * (1 - frac) + samples[idx1][ch] * frac;
+}
+
+function _flTransformRgb(samples, rIn, gIn, bIn) {
+  const rOut = Math.round(Math.max(0, Math.min(1, _flSampleChannel(samples, "r", rIn / 255))) * 255);
+  const gOut = Math.round(Math.max(0, Math.min(1, _flSampleChannel(samples, "g", gIn / 255))) * 255);
+  const bOut = Math.round(Math.max(0, Math.min(1, _flSampleChannel(samples, "b", bIn / 255))) * 255);
+  return `rgb(${rOut}, ${gOut}, ${bOut})`;
+}
+
+export function drawFilmLookPreviewCanvas(canvas, rawConfig, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 224);
+  if (!ctx) return null;
+
+  const cfg = normalizeFilmLookConfigClient(rawConfig);
+  const evalRes = opts.evalResult || evaluateFilmLookStudioClient(cfg, { sample_count: 33 });
+  const samples = evalRes.samples || [];
+
+  ctx.fillStyle = "#08090c";
+  ctx.fillRect(0, 0, w, h);
+
+  const framePadX = 12;
+  const framePadTop = 26;
+  const framePadBottom = 10;
+  const availW = Math.max(120, w - framePadX * 2);
+  const availH = Math.max(96, h - framePadTop - framePadBottom);
+  const targetRatio = 16 / 9;
+  let frameW = availW;
+  let frameH = frameW / targetRatio;
+  if (frameH > availH) {
+    frameH = availH;
+    frameW = frameH * targetRatio;
+  }
+  const frameX = Math.round((w - frameW) * 0.5);
+  const frameY = Math.round(framePadTop + (availH - frameH) * 0.5);
+
+  const drawCinemaScene = (graded) => {
+    const mapColor = (r, g, b) => (graded && cfg.enabled ? _flTransformRgb(samples, r, g, b) : `rgb(${r}, ${g}, ${b})`);
+    const weaveX = graded && cfg.enabled ? Math.sin(1.4) * Math.min(4.0, cfg.gate_weave_px * 0.65) : 0;
+    const weaveY = graded && cfg.enabled ? Math.cos(1.1) * Math.min(3.0, cfg.gate_weave_px * 0.5) : 0;
+
+    ctx.save();
+    ctx.translate(frameX + weaveX, frameY + weaveY);
+
+    // Night exterior / tungsten interior backdrop gradient
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, frameH);
+    skyGrad.addColorStop(0, mapColor(18, 30, 44));
+    skyGrad.addColorStop(0.58, mapColor(34, 48, 60));
+    skyGrad.addColorStop(1, mapColor(16, 18, 22));
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(-6, -6, frameW + 12, frameH + 12);
+
+    // Tungsten practical window light on right
+    const winX = frameW * 0.66;
+    const winY = frameH * 0.16;
+    const winW = frameW * 0.22;
+    const winH = frameH * 0.42;
+    const winGrad = ctx.createRadialGradient(
+      winX + winW * 0.5,
+      winY + winH * 0.5,
+      4,
+      winX + winW * 0.5,
+      winY + winH * 0.5,
+      winW * 0.85
+    );
+    winGrad.addColorStop(0, mapColor(248, 226, 188));
+    winGrad.addColorStop(0.55, mapColor(214, 152, 92));
+    winGrad.addColorStop(1, mapColor(44, 52, 62));
+    ctx.fillStyle = winGrad;
+    ctx.fillRect(winX, winY, winW, winH);
+
+    // Practical lamp specular highlight + red emulsion halation
+    const lampX = frameW * 0.77;
+    const lampY = frameH * 0.31;
+    if (graded && cfg.enabled && cfg.halation_red_pct > 1 && !evalRes.is_monochrome) {
+      const halAlpha = Math.min(0.65, (cfg.halation_red_pct / 100) * 0.58);
+      const halR = 26 + (cfg.halation_red_pct / 100) * 32;
+      const halGrad = ctx.createRadialGradient(lampX, lampY, 3, lampX, lampY, halR);
+      halGrad.addColorStop(0, `rgba(255, 92, 36, ${halAlpha})`);
+      halGrad.addColorStop(0.5, `rgba(232, 48, 22, ${halAlpha * 0.45})`);
+      halGrad.addColorStop(1, "rgba(232, 48, 22, 0)");
+      ctx.fillStyle = halGrad;
+      ctx.beginPath();
+      ctx.arc(lampX, lampY, halR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = mapColor(254, 248, 236);
+    ctx.beginPath();
+    ctx.arc(lampX, lampY, Math.max(7, frameH * 0.055), 0, Math.PI * 2);
+    ctx.fill();
+
+    // Cyan-teal neon accent bar on left
+    ctx.fillStyle = mapColor(42, 168, 188);
+    ctx.fillRect(frameW * 0.08, frameH * 0.22, frameW * 0.04, frameH * 0.48);
+
+    // Midtone skin-tone portrait silhouette & key/fill planes
+    const cx = frameW * 0.39;
+    const cy = frameH * 0.46;
+    const headR = Math.min(frameW, frameH) * 0.16;
+    ctx.fillStyle = mapColor(38, 42, 50);
+    ctx.beginPath();
+    ctx.ellipse(cx, frameH * 0.86, headR * 2.1, frameH * 0.28, 0, Math.PI, Math.PI * 2);
+    ctx.fill();
+
+    const skinGrad = ctx.createLinearGradient(cx - headR, cy - headR, cx + headR, cy + headR);
+    skinGrad.addColorStop(0, mapColor(118, 88, 76));
+    skinGrad.addColorStop(0.55, mapColor(198, 152, 126));
+    skinGrad.addColorStop(1, mapColor(232, 192, 164));
+    ctx.fillStyle = skinGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, headR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Reference grayscale + color swatch ramp along bottom
+    const swatchColors = [
+      [18, 20, 24],
+      [68, 72, 80],
+      [128, 128, 128],
+      [196, 194, 190],
+      [242, 240, 236],
+      [196, 76, 68],
+      [216, 168, 74],
+      [74, 156, 122],
+      [62, 134, 188]
+    ];
+    const swW = (frameW * 0.64) / swatchColors.length;
+    const swH = Math.max(8, frameH * 0.065);
+    const swX0 = frameW * 0.18;
+    const swY = frameH - swH - 8;
+    swatchColors.forEach((rgb, i) => {
+      ctx.fillStyle = mapColor(rgb[0], rgb[1], rgb[2]);
+      ctx.fillRect(swX0 + i * swW, swY, swW - 1, swH);
+    });
+
+    // Organic film grain overlay on graded side
+    if (graded && cfg.enabled && cfg.grain_strength_pct > 1) {
+      const step = cfg.grain_size_mm === 8 ? 5 : cfg.grain_size_mm === 16 ? 4 : cfg.grain_size_mm === 35 ? 3 : 2;
+      const alpha = Math.min(0.28, (cfg.grain_strength_pct / 100) * 0.24);
+      let seed = 1337 + cfg.grain_size_mm * 17;
+      for (let gy = 0; gy < frameH; gy += step * 2) {
+        for (let gx = 0; gx < frameW; gx += step * 2) {
+          seed = (seed * 1664525 + 1013904223) >>> 0;
+          const v = (seed & 0xff) / 255;
+          if (v > 0.62) {
+            ctx.fillStyle = v > 0.82 ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
+            ctx.fillRect(gx, gy, step * 0.85, step * 0.85);
+          }
+        }
+      }
+    }
+
+    // Optical gate vignette on graded side
+    if (graded && cfg.enabled) {
+      const vig = ctx.createRadialGradient(
+        frameW * 0.5,
+        frameH * 0.5,
+        frameW * 0.25,
+        frameW * 0.5,
+        frameH * 0.5,
+        frameW * 0.72
+      );
+      vig.addColorStop(0, "rgba(0,0,0,0)");
+      vig.addColorStop(1, "rgba(0,0,0,0.44)");
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, frameW, frameH);
+    }
+
+    ctx.restore();
+  };
+
+  const splitFrac = cfg.compare_split ? Math.max(0.04, Math.min(0.96, cfg.split_position ?? 0.5)) : 0.0;
+  const splitX = frameX + frameW * splitFrac;
+
+  if (cfg.compare_split) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(frameX, frameY, Math.max(0, splitX - frameX), frameH);
+    ctx.clip();
+    drawCinemaScene(false);
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(splitX, frameY, Math.max(0, frameX + frameW - splitX), frameH);
+    ctx.clip();
+    drawCinemaScene(true);
+    ctx.restore();
+
+    // Vertical wipe bar + draggable handle
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(splitX, frameY);
+    ctx.lineTo(splitX, frameY + frameH);
+    ctx.stroke();
+
+    const handleY = frameY + frameH * 0.5;
+    ctx.fillStyle = "#f59e0b";
+    ctx.strokeStyle = "#090c12";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(splitX, handleY, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#090c12";
+    ctx.font = "800 9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("<>", splitX, handleY + 0.5);
+
+    ctx.fillStyle = "rgba(9, 12, 18, 0.85)";
+    ctx.fillRect(frameX + 6, frameY + 6, 72, 16);
+    ctx.fillRect(frameX + frameW - 96, frameY + 6, 90, 16);
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillText("LOG / RAW", frameX + 12, frameY + 14);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#f59e0b";
+    ctx.fillText("PRINT STOCK", frameX + frameW - 10, frameY + 14);
+  } else {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(frameX, frameY, frameW, frameH);
+    ctx.clip();
+    drawCinemaScene(true);
+    ctx.restore();
+  }
+
+  ctx.strokeStyle = "#2c313c";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(frameX, frameY, frameW, frameH);
+
+  // Top HUD ribbon
+  ctx.fillStyle = "rgba(10, 12, 16, 0.92)";
+  ctx.fillRect(6, 4, w - 12, 18);
+  ctx.fillStyle = "#f59e0b";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const stockTag = cfg.print_stock.toUpperCase().replace(/_/g, " ");
+  ctx.fillText(
+    `${stockTag} | ${cfg.grain_size_mm}MM GRAIN ${Math.round(cfg.grain_strength_pct)}% | BLEACH ${Math.round(cfg.bleach_bypass_pct)}% | WEAVE ${cfg.gate_weave_px.toFixed(1)}px`,
+    12,
+    13
+  );
+
+  const meta = {
+    frameX,
+    frameY,
+    frameW,
+    frameH,
+    splitX,
+    handleY: frameY + frameH * 0.5,
+    hitRadius: 20
+  };
+  canvas._flPreviewMeta = meta;
+  return meta;
+}
+
+export function drawFilmLookCurveCanvas(canvas, rawConfig, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 178);
+  if (!ctx) return null;
+
+  const cfg = normalizeFilmLookConfigClient(rawConfig);
+  const evalRes = opts.evalResult || evaluateFilmLookStudioClient(cfg, { sample_count: 33 });
+  const samples = Array.isArray(evalRes.samples) ? evalRes.samples : [];
+
+  ctx.fillStyle = "#090c12";
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 40;
+  const padR = 14;
+  const padT = 22;
+  const padB = 22;
+  const plotW = Math.max(80, w - padL - padR);
+  const plotH = Math.max(50, h - padT - padB);
+
+  const uToX = (u) => padL + Math.max(0, Math.min(1, u)) * plotW;
+  const yToPx = (y) => padT + (1 - Math.max(0, Math.min(1, y))) * plotH;
+
+  // Grid & logE ticks
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.14)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL, padT, plotW, plotH);
+  for (let i = 1; i < 4; i += 1) {
+    const f = i / 4;
+    const gx = padL + f * plotW;
+    const gy = padT + f * plotH;
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+  }
+
+  // Linear 1:1 reference diagonal
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.42)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(uToX(0), yToPx(0));
+  ctx.lineTo(uToX(1), yToPx(1));
+  ctx.stroke();
+  ctx.restore();
+
+  const drawCurve = (ch, color, lineWidth) => {
+    if (samples.length < 2) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    samples.forEach((s, idx) => {
+      const px = uToX(s.x_norm);
+      const py = yToPx(s[ch]);
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  };
+
+  drawCurve("r", "rgba(248, 113, 113, 0.85)", 1.5);
+  drawCurve("g", "rgba(52, 211, 153, 0.85)", 1.5);
+  drawCurve("b", "rgba(56, 189, 248, 0.85)", 1.5);
+  drawCurve("luma", "#f59e0b", 2.2);
+
+  // Interactive draggable handles: Toe (0.14), Pivot (contrast_pivot), Shoulder (0.84)
+  const toeXNorm = 0.14;
+  const pivotXNorm = cfg.contrast_pivot;
+  const shoulderXNorm = 0.84;
+
+  const handles = [
+    {
+      id: "toe",
+      label: "TOE",
+      x: uToX(toeXNorm),
+      y: yToPx(_flSampleChannel(samples, "luma", toeXNorm)),
+      color: "#38bdf8",
+      r: 14
+    },
+    {
+      id: "pivot",
+      label: "PIVOT",
+      x: uToX(pivotXNorm),
+      y: yToPx(_flSampleChannel(samples, "luma", pivotXNorm)),
+      color: "#f59e0b",
+      r: 14
+    },
+    {
+      id: "shoulder",
+      label: "SHLDR",
+      x: uToX(shoulderXNorm),
+      y: yToPx(_flSampleChannel(samples, "luma", shoulderXNorm)),
+      color: "#fb7185",
+      r: 14
+    }
+  ];
+
+  for (const hnd of handles) {
+    ctx.fillStyle = hnd.color;
+    ctx.strokeStyle = "#090c12";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(hnd.x, hnd.y, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = hnd.color;
+    ctx.font = "700 8.5px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(hnd.label, hnd.x, Math.max(padT + 10, hnd.y - 7));
+  }
+
+  // Axis labels & legend
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText("1.0", padL - 5, padT + 4);
+  ctx.fillText("0.5", padL - 5, padT + plotH * 0.5);
+  ctx.fillText("0.0", padL - 5, padT + plotH - 4);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("-3.2 logE", padL + 24, padT + plotH + 5);
+  ctx.fillText("0.0", padL + plotW * 0.5, padT + plotH + 5);
+  ctx.fillText("+1.2 logE", padL + plotW - 24, padT + plotH + 5);
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillText("D-logE LUMA", padL + 4, 11);
+  ctx.fillStyle = "#f87171";
+  ctx.fillText("R", padL + 84, 11);
+  ctx.fillStyle = "#34d399";
+  ctx.fillText("G", padL + 98, 11);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText("B", padL + 112, 11);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.fillText(
+    `CR ${evalRes.contrast_ratio.toFixed(1)}:1 | DR ${evalRes.dynamic_range_stops.toFixed(1)} stops | RMS ${evalRes.grain_rms.toFixed(2)}`,
+    padL + plotW,
+    11
+  );
+
+  const meta = { padL, padT, plotW, plotH, handles };
+  canvas._flCurveMeta = meta;
   return meta;
 }

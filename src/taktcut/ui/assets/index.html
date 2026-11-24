@@ -1553,6 +1553,16 @@
                   <span data-i18n="stabStudio.btn.toolbar">Stabilizer</span>
                   <span class="kbd-chip mono">Shift+X</span>
                 </button>
+                <button type="button" id="btn-timeline-film-look-studio" class="btn btn-mini tl-fl-studio-btn fl-studio-btn" title="Open 35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio (Shift+N)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <rect x="2" y="2.5" width="12" height="11" rx="1" stroke="#f59e0b" stroke-width="1.2" fill="none"/>
+                    <path d="M3.5 11.5 C6 11.5, 6.5 4.5, 12.5 4" stroke="#fbbf24" stroke-width="1.3" fill="none"/>
+                    <line x1="2" y1="5" x2="3.5" y2="5" stroke="#94a3b8" stroke-width="1"/>
+                    <line x1="12.5" y1="11" x2="14" y2="11" stroke="#94a3b8" stroke-width="1"/>
+                  </svg>
+                  <span data-i18n="flStudio.btn.toolbar">Film Look</span>
+                  <span class="kbd-chip mono">Shift+N</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1777,6 +1787,10 @@
                 <button type="button" id="btn-fx-stabilization-studio" class="btn btn-secondary stab-studio-btn" title="Open Camera Stabilization, Perspective Lock &amp; Rolling-Shutter Jello Studio (Shift+X)">
                   <span data-i18n="stabStudio.btn.fx">Stabilizer Studio</span>
                   <span class="kbd-chip mono">Shift+X</span>
+                </button>
+                <button type="button" id="btn-fx-film-look-studio" class="btn btn-secondary fl-studio-btn" title="Open 35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio (Shift+N)">
+                  <span data-i18n="flStudio.btn.fx">Film Look 35mm</span>
+                  <span class="kbd-chip mono">Shift+N</span>
                 </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
@@ -2607,6 +2621,9 @@
                 <span class="broadcast-quick-sep" aria-hidden="true"></span>
                 <button type="button" id="btn-color-power-window-studio" class="btn btn-chip pw-studio-btn" data-i18n="pwStudio.btn.color" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">Power Window</button>
                 <span id="color-pw-badge" class="nle-tag mono" aria-live="polite">PW OFF</span>
+                <span class="broadcast-quick-sep" aria-hidden="true"></span>
+                <button type="button" id="btn-color-film-look-studio" class="btn btn-chip fl-studio-btn" data-i18n="flStudio.btn.color" title="Open 35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio (Shift+N)">Film Look 35mm</button>
+                <span id="color-fl-badge" class="nle-tag mono" aria-live="polite">FILM OFF</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
@@ -6023,6 +6040,212 @@
         <div class="fg-drawer-body">
           <pre id="stab-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="stab-json-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="film-look-studio-dialog" class="nle-dialog fl-studio-dialog" aria-labelledby="fl-studio-title" aria-describedby="fl-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="fl-studio-title" data-i18n="flStudio.dialog.title">35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio</h2>
+        <p id="fl-studio-subtitle" class="nle-dialog-subtitle" data-i18n="flStudio.dialog.subtitle">DaVinci Film Look Creator / Dehancer Print Stock (Kodak 2383 / Fuji 3513), Organic Grain, Gate Weave &amp; Silver Retention</p>
+      </div>
+      <div class="fl-header-actions">
+        <span id="fl-active-preset-badge" class="nle-tag mono">KODAK 2383 D65</span>
+        <span id="fl-telemetry-badge" class="nle-tag mono fl-telemetry-pill">CR 0.0:1 | DR 0.0 stops</span>
+        <button type="button" id="btn-close-film-look-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body fl-dialog-body">
+      <div class="fl-preset-strip" id="fl-preset-strip" role="group" aria-label="Film Print Stock presets">
+        <span class="pill-label" data-i18n="flStudio.presetsLabel">PRINT STOCK</span>
+        <button type="button" class="btn btn-chip fl-preset-btn is-active" data-fl-stock="kodak_2383_d65" aria-pressed="true" data-i18n="flStudio.preset.kodak_2383_d65">Kodak 2383 D65</button>
+        <button type="button" class="btn btn-chip fl-preset-btn" data-fl-stock="fuji_3513_teal_gold" aria-pressed="false" data-i18n="flStudio.preset.fuji_3513_teal_gold">Fuji 3513 Teal/Gold</button>
+        <button type="button" class="btn btn-chip fl-preset-btn" data-fl-stock="super16_bleach_bypass" aria-pressed="false" data-i18n="flStudio.preset.super16_bleach_bypass">Super 16 Bleach</button>
+        <button type="button" class="btn btn-chip fl-preset-btn" data-fl-stock="ilford_hp5_bw_35mm" aria-pressed="false" data-i18n="flStudio.preset.ilford_hp5_bw_35mm">Ilford HP5 B&amp;W</button>
+        <button type="button" class="btn btn-chip fl-preset-btn" data-fl-stock="vintage_70s_warm_fade" aria-pressed="false" data-i18n="flStudio.preset.vintage_70s_warm_fade">Vintage 70s</button>
+        <button type="button" class="btn btn-chip fl-preset-btn" data-fl-stock="custom" aria-pressed="false" data-i18n="flStudio.preset.custom">Custom</button>
+      </div>
+
+      <div class="fl-toolbar-bar">
+        <div class="fl-gauge-group" role="group" aria-label="Film grain gauge mm">
+          <span class="pill-label" data-i18n="flStudio.gaugeLabel">GAUGE</span>
+          <button type="button" class="btn btn-mini fl-gauge-btn" data-fl-gauge="8" aria-pressed="false">8mm</button>
+          <button type="button" class="btn btn-mini fl-gauge-btn" data-fl-gauge="16" aria-pressed="false">16mm</button>
+          <button type="button" class="btn btn-mini fl-gauge-btn is-active" data-fl-gauge="35" aria-pressed="true">35mm</button>
+          <button type="button" class="btn btn-mini fl-gauge-btn" data-fl-gauge="65" aria-pressed="false">65mm</button>
+        </div>
+
+        <div class="fl-toggles-group">
+          <label class="inline-check" for="fl-compare-split">
+            <input type="checkbox" id="fl-compare-split" checked>
+            <span data-i18n="flStudio.compareLabel">A/B Split Wipe</span>
+          </label>
+          <label class="inline-check" for="fl-enabled">
+            <input type="checkbox" id="fl-enabled" checked>
+            <span data-i18n="flStudio.enabledLabel">Enable Film Look</span>
+          </label>
+          <button type="button" id="btn-fl-reset" class="btn btn-mini" data-i18n="flStudio.btn.reset">Reset</button>
+        </div>
+      </div>
+
+      <div class="fl-workstation-grid">
+        <div class="fl-viewport-col">
+          <div class="fl-card">
+            <div class="pane-subheader">
+              <span data-i18n="flStudio.previewTitle">Print Stock Split-Screen Monitor (Drag Wipe Handle)</span>
+              <span id="fl-split-badge" class="nle-tag mono">WIPE 50%</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="fl-preview-canvas" class="studio-canvas fl-preview-canvas" aria-label="Film Look split-screen before and after preview"></canvas>
+            </div>
+          </div>
+
+          <div class="fl-card">
+            <div class="pane-subheader">
+              <span data-i18n="flStudio.curveTitle">Sensitometric D-logE Print Curve (Drag Toe / Pivot / Shoulder)</span>
+              <span id="fl-gamma-badge" class="nle-tag mono">GAMMA 1.18</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="fl-curve-canvas" class="studio-canvas fl-curve-canvas" aria-label="Interactive sensitometric D-logE RGB tone curve"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="fl-inspector-col fl-card">
+          <div class="fl-inspector-tabs" role="tablist" aria-label="Film Look parameter groups">
+            <button type="button" role="tab" id="btn-fl-tab-tone" class="btn btn-mini fl-tab-btn is-active" data-fl-tab="tone" aria-selected="true" data-i18n="flStudio.tab.tone">Tone &amp; Curve</button>
+            <button type="button" role="tab" id="btn-fl-tab-color" class="btn btn-mini fl-tab-btn" data-fl-tab="color" aria-selected="false" data-i18n="flStudio.tab.color">Bleach &amp; Split</button>
+            <button type="button" role="tab" id="btn-fl-tab-grain" class="btn btn-mini fl-tab-btn" data-fl-tab="grain" aria-selected="false" data-i18n="flStudio.tab.grain">Grain &amp; Gate</button>
+          </div>
+
+          <div id="fl-panel-tone" class="fl-tab-panel" role="tabpanel" aria-labelledby="btn-fl-tab-tone">
+            <div class="fl-param-field">
+              <label for="fl-exposure-ev-num" data-i18n="flStudio.param.exposureEv">Exposure Trim (EV, -2..+2)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-exposure-ev" min="-2" max="2" step="0.05" value="0" aria-label="Exposure EV slider">
+                <input type="number" id="fl-exposure-ev-num" class="input-control input-num mono" min="-2" max="2" step="0.05" value="0">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-contrast-pivot-num" data-i18n="flStudio.param.contrastPivot">Contrast Pivot (0.15..0.85)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-contrast-pivot" min="0.15" max="0.85" step="0.005" value="0.435" aria-label="Contrast pivot slider">
+                <input type="number" id="fl-contrast-pivot-num" class="input-control input-num mono" min="0.15" max="0.85" step="0.005" value="0.435">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-toe-density-num" data-i18n="flStudio.param.toeDensity">Toe Density / D-Max (%)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-toe-density" min="0" max="100" step="1" value="42" aria-label="Toe density slider">
+                <input type="number" id="fl-toe-density-num" class="input-control input-num mono" min="0" max="100" step="1" value="42">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-shoulder-rolloff-num" data-i18n="flStudio.param.shoulderRolloff">Shoulder Highlight Rolloff (%)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-shoulder-rolloff" min="0" max="100" step="1" value="66" aria-label="Shoulder rolloff slider">
+                <input type="number" id="fl-shoulder-rolloff-num" class="input-control input-num mono" min="0" max="100" step="1" value="66">
+              </div>
+            </div>
+          </div>
+
+          <div id="fl-panel-color" class="fl-tab-panel" role="tabpanel" aria-labelledby="btn-fl-tab-color" hidden>
+            <div class="fl-param-field">
+              <label for="fl-bleach-bypass-num" data-i18n="flStudio.param.bleachBypass">Bleach Bypass / Silver Retention (%)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-bleach-bypass" min="0" max="100" step="1" value="0" aria-label="Bleach bypass slider">
+                <input type="number" id="fl-bleach-bypass-num" class="input-control input-num mono" min="0" max="100" step="1" value="0">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-shadow-hue-num" data-i18n="flStudio.param.shadowHue">Split-Tone Shadow Hue (deg)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-shadow-hue" min="0" max="360" step="1" value="205" aria-label="Shadow hue slider">
+                <input type="number" id="fl-shadow-hue-num" class="input-control input-num mono" min="0" max="360" step="1" value="205">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-highlight-hue-num" data-i18n="flStudio.param.highlightHue">Split-Tone Highlight Hue (deg)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-highlight-hue" min="0" max="360" step="1" value="42" aria-label="Highlight hue slider">
+                <input type="number" id="fl-highlight-hue-num" class="input-control input-num mono" min="0" max="360" step="1" value="42">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-halation-red-num" data-i18n="flStudio.param.halationRed">Red Emulsion Halation (%)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-halation-red" min="0" max="100" step="1" value="26" aria-label="Red halation slider">
+                <input type="number" id="fl-halation-red-num" class="input-control input-num mono" min="0" max="100" step="1" value="26">
+              </div>
+            </div>
+          </div>
+
+          <div id="fl-panel-grain" class="fl-tab-panel" role="tabpanel" aria-labelledby="btn-fl-tab-grain" hidden>
+            <div class="fl-param-field">
+              <label for="fl-grain-strength-num" data-i18n="flStudio.param.grainStrength">Organic Grain Strength (%)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-grain-strength" min="0" max="100" step="1" value="28" aria-label="Grain strength slider">
+                <input type="number" id="fl-grain-strength-num" class="input-control input-num mono" min="0" max="100" step="1" value="28">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-gate-weave-num" data-i18n="flStudio.param.gateWeave">Gate Weave Excursion (px, 0..6)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-gate-weave" min="0" max="6" step="0.1" value="0.8" aria-label="Gate weave slider">
+                <input type="number" id="fl-gate-weave-num" class="input-control input-num mono" min="0" max="6" step="0.1" value="0.8">
+              </div>
+            </div>
+            <div class="fl-param-field">
+              <label for="fl-flicker-pct-num" data-i18n="flStudio.param.flickerPct">Gate Luminance Flicker (%, 0..30)</label>
+              <div class="fl-range-pair">
+                <input type="range" id="fl-flicker-pct" min="0" max="30" step="0.5" value="4" aria-label="Gate flicker slider">
+                <input type="number" id="fl-flicker-pct-num" class="input-control input-num mono" min="0" max="30" step="0.5" value="4">
+              </div>
+            </div>
+          </div>
+
+          <div class="fl-metrics-grid">
+            <div class="fl-metric-card">
+              <span class="fl-metric-k" data-i18n="flStudio.metric.contrast">Contrast</span>
+              <span id="fl-metric-contrast" class="fl-metric-v mono">0.0:1</span>
+            </div>
+            <div class="fl-metric-card">
+              <span class="fl-metric-k" data-i18n="flStudio.metric.dynamicRange">Dynamic Range</span>
+              <span id="fl-metric-dr" class="fl-metric-v mono">0.0 stops</span>
+            </div>
+            <div class="fl-metric-card">
+              <span class="fl-metric-k" data-i18n="flStudio.metric.grainRms">Grain RMS</span>
+              <span id="fl-metric-grain" class="fl-metric-v mono">0.00</span>
+            </div>
+            <div class="fl-metric-card">
+              <span class="fl-metric-k" data-i18n="flStudio.metric.dmax">Shadow D-Max</span>
+              <span id="fl-metric-dmax" class="fl-metric-v mono">0.00</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="fl-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="flStudio.status.idle">Drag the split wipe handle on the monitor, adjust Toe/Pivot/Shoulder on the D-logE curve, or switch print stock presets.</div>
+
+      <div class="btn-row fl-actions">
+        <button type="button" id="btn-fl-apply-timeline" class="btn btn-primary" data-i18n="flStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-fl-send-deliver" class="btn btn-secondary" data-i18n="flStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-fl-export-json" class="btn btn-secondary" data-i18n="flStudio.btn.exportJson">Export JSON</button>
+        <button type="button" id="btn-fl-download-json" class="btn btn-secondary" data-i18n="flStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-fl-copy-fg" class="btn btn-mini" data-i18n="flStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="fl-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="flStudio.drawerTitle">FFmpeg Print Stock Pipeline (curves / colorbalance / eq / noise / vignette / gate weave) &amp; JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="fl-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="fl-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

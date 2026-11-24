@@ -11763,3 +11763,270 @@ dialog.nle-dialog.stab-studio-dialog {
     width: 100%;
   }
 }
+
+
+/* ============================================================================
+   35MM / 16MM FILM LOOK CREATOR, PRINT STOCK CURVE & BLEACH BYPASS (CYCLE #112)
+   ============================================================================ */
+
+dialog.nle-dialog.fl-studio-dialog {
+  width: min(1180px, calc(100vw - 24px));
+  max-width: min(1180px, calc(100vw - 24px));
+  max-height: min(92vh, 900px);
+}
+
+.fl-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.fl-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.fl-dialog-body .code-box,
+.fl-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.fl-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fl-telemetry-pill {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: #f59e0b;
+  color: #fde68a;
+  font-weight: 700;
+}
+
+.fl-preset-strip,
+.fl-toolbar-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.fl-toolbar-bar {
+  padding: 7px 9px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  justify-content: space-between;
+}
+
+.fl-gauge-group,
+.fl-toggles-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.fl-preset-btn.is-active,
+.fl-gauge-btn.is-active {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+
+.fl-tab-btn.is-active {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+
+.fl-workstation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.92fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.fl-viewport-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fl-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.fl-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 224px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.fl-curve-canvas {
+  display: block;
+  width: 100%;
+  height: 178px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.fl-inspector-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.fl-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 2px;
+  min-width: 0;
+}
+
+.fl-tab-panel[hidden] {
+  display: none;
+}
+
+.fl-param-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fl-param-field label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.fl-range-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fl-range-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: #f59e0b;
+}
+
+.fl-range-pair .input-num {
+  width: 78px;
+}
+
+.fl-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: auto;
+  min-width: 0;
+}
+
+.fl-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.fl-metric-k {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.fl-metric-v {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #fde68a;
+}
+
+.fl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#film-look-studio-dialog .btn:focus-visible,
+#film-look-studio-dialog .input-control:focus-visible,
+#film-look-studio-dialog input[type="range"]:focus-visible,
+.fl-studio-btn:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 1px;
+}
+
+@media (max-width: 960px) {
+  .fl-workstation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  dialog.nle-dialog.fl-studio-dialog {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: min(94vh, 780px);
+  }
+  .fl-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fl-studio-btn,
+  .fl-preset-btn,
+  .fl-gauge-btn,
+  .fl-tab-btn,
+  .fl-actions .btn,
+  #btn-fl-reset,
+  #btn-close-film-look-studio,
+  #film-look-studio-dialog .input-control,
+  #film-look-studio-dialog .inline-check,
+  #film-look-studio-dialog .fg-drawer-summary {
+    min-width: 44px;
+    min-height: 45px;
+  }
+  #film-look-studio-dialog input[type="range"] {
+    min-height: 44px;
+  }
+  #film-look-studio-dialog .inline-check {
+    display: inline-flex;
+    align-items: center;
+    padding-inline: 6px;
+  }
+  .fl-gauge-group,
+  .fl-toggles-group {
+    width: 100%;
+  }
+}

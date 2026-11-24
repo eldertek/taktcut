@@ -15264,3 +15264,350 @@ def test_ui_playwright_stabilization_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+
+def test_ui_film_look_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/fx/film-look/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 6
+    assert "kodak_2383_d65" in meta["print_stocks"]
+    assert "fuji_3513_teal_gold" in meta["print_stocks"]
+    assert meta["grain_gauges_mm"] == [8, 16, 35, 65]
+
+    ev_status, _, ev_raw = _http_call(
+        f"{base_url}/api/fx/film-look/evaluate",
+        method="POST",
+        payload={"config": {"print_stock": "fuji_3513_teal_gold", "bleach_bypass_pct": 35.0}},
+    )
+    assert ev_status == 200
+    ev_payload = json.loads(ev_raw.decode("utf-8"))
+    assert len(ev_payload["samples"]) == 33
+    assert ev_payload["contrast_ratio"] > 1.2
+    assert ev_payload["silver_retention_pct"] == 35.0
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/film-look/compile",
+        method="POST",
+        payload={
+            "config": {
+                "print_stock": "fuji_3513_teal_gold",
+                "bleach_bypass_pct": 42.0,
+                "grain_size_mm": 16,
+                "gate_weave_px": 2.2,
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert "curves=" in compiled["curves_vf"]
+    assert "colorbalance=" in compiled["colorbalance_vf"]
+    assert "eq=" in compiled["eq_vf"]
+    assert "noise=" in compiled["noise_vf"]
+    assert "vignette=" in compiled["vignette_vf"]
+    assert "pad=" in compiled["gate_weave_vf"]
+    assert "crop=" in compiled["gate_weave_vf"]
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/fx/film-look/export-json",
+        method="POST",
+        payload={
+            "config": {"print_stock": "fuji_3513_teal_gold", "bleach_bypass_pct": 42.0},
+            "title": "Fuji Print Lab",
+            "out_path": "exports/fuji_film_look.json",
+        },
+    )
+    assert ex_status == 200
+    exported = json.loads(ex_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/fuji_film_look.json"
+    assert (workspace / "exports" / "fuji_film_look.json").is_file()
+    assert exported["schema_version"] == "taktcut.film_look_studio.v1"
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/fx/film-look/export-json",
+        method="POST",
+        payload={
+            "config": {"print_stock": "kodak_2383_d65"},
+            "out_path": "../escape_film.json",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    dl_status, dl_headers, dl_raw = _http_call(
+        f"{base_url}/api/fx/film-look/download",
+        method="POST",
+        payload={
+            "config": {"print_stock": "fuji_3513_teal_gold"},
+            "title": "Fuji DL",
+            "filename": "../../evil_film.json",
+        },
+    )
+    assert dl_status == 200
+    disp = dl_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "taktcut.film_look_studio.v1" in dl_raw.decode("utf-8")
+
+    # Apply to Timeline document
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+    ap_status, _, ap_raw = _http_call(
+        f"{base_url}/api/fx/film-look/apply",
+        method="POST",
+        payload={
+            "document": doc_payload,
+            "config": {
+                "print_stock": "fuji_3513_teal_gold",
+                "bleach_bypass_pct": 40.0,
+                "grain_size_mm": 16,
+            },
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert ap_status == 200
+    ap_data = json.loads(ap_raw.decode("utf-8"))
+    assert ap_data["changed"] is True
+    assert ap_data["validation"]["valid"] is True
+    fl_clip = ap_data["document"]["tracks"][0]["clips"][0]["film_look"]
+    assert fl_clip["print_stock"] == "fuji_3513_teal_gold"
+    assert fl_clip["bleach_bypass_pct"] == 40.0
+    assert fl_clip["grain_size_mm"] == 16
+
+    # Node.js static-demo parity check via demo_adapter.js
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getFilmLookPresets();
+assert.equal(pre.presets.length, 6);
+const ev = await api.evaluateFilmLook({{
+  config: {{ print_stock: "fuji_3513_teal_gold", bleach_bypass_pct: 35.0 }}
+}});
+assert.equal(ev.samples.length, 33);
+assert.ok(ev.contrast_ratio > 1.2);
+const comp = await api.compileFilmLook({{
+  config: {{ print_stock: "fuji_3513_teal_gold", bleach_bypass_pct: 42.0, gate_weave_px: 2.2 }}
+}});
+assert.ok(comp.curves_vf.includes("curves="));
+assert.ok(comp.colorbalance_vf.includes("colorbalance="));
+assert.ok(comp.eq_vf.includes("eq="));
+assert.ok(comp.noise_vf.includes("noise="));
+assert.ok(comp.vignette_vf.includes("vignette="));
+assert.ok(comp.gate_weave_vf.includes("crop="));
+const exp = await api.exportFilmLookJson({{
+  config: {{ print_stock: "fuji_3513_teal_gold" }},
+  title: "Demo Film"
+}});
+assert.equal(exp.schema_version, "taktcut.film_look_studio.v1");
+const blob = await api.downloadFilmLookBlob({{
+  config: {{ print_stock: "fuji_3513_teal_gold" }},
+  title: "Demo Film DL"
+}});
+assert.ok((await blob.text()).includes("taktcut.film_look_studio.v1"));
+const sampleDoc = {{
+  title: "Demo",
+  fps: {{ num: 24, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [{{
+    index: 1,
+    kind: "video",
+    name: "V1",
+    clips: [{{
+      name: "C1",
+      track_index: 1,
+      media_type: "video",
+      start_frame: 0,
+      duration_frames: 100
+    }}]
+  }}]
+}};
+const applied = await api.applyFilmLook({{
+  document: sampleDoc,
+  config: {{ print_stock: "fuji_3513_teal_gold", bleach_bypass_pct: 40.0, grain_size_mm: 16 }},
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(applied.changed, true);
+assert.equal(applied.validation.valid, true);
+assert.equal(
+  applied.document.tracks[0].clips[0].film_look.print_stock,
+  "fuji_3513_teal_gold"
+);
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_film_look_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#btn-timeline-film-look-studio")
+
+            # Open Film Look Studio via Shift+N shortcut
+            page.keyboard.press("Shift+N")
+            page.wait_for_selector("#film-look-studio-dialog[open]")
+
+            # Drag split wipe handle on preview canvas
+            wipe_before = page.locator("#fl-split-badge").text_content() or ""
+            wipe_pt = page.evaluate(
+                """() => {
+                  const c = document.getElementById('fl-preview-canvas');
+                  const r = c.getBoundingClientRect();
+                  const m = c._flPreviewMeta;
+                  return { x: r.left + m.splitX, y: r.top + m.handleY };
+                }"""
+            )
+            page.mouse.move(wipe_pt["x"], wipe_pt["y"])
+            page.mouse.down()
+            page.mouse.move(wipe_pt["x"] + 64, wipe_pt["y"], steps=4)
+            page.mouse.up()
+            wipe_after = page.locator("#fl-split-badge").text_content() or ""
+            assert wipe_after != wipe_before
+
+            # Drag Pivot handle on D-logE sensitometric curve canvas
+            pivot_before = float(page.input_value("#fl-contrast-pivot-num"))
+            curve_pt = page.evaluate(
+                """() => {
+                  const c = document.getElementById('fl-curve-canvas');
+                  const r = c.getBoundingClientRect();
+                  const h = c._flCurveMeta.handles.find((x) => x.id === 'pivot');
+                  return { x: r.left + h.x, y: r.top + h.y };
+                }"""
+            )
+            page.mouse.move(curve_pt["x"], curve_pt["y"])
+            page.mouse.down()
+            page.mouse.move(curve_pt["x"] + 42, curve_pt["y"] - 18, steps=4)
+            page.mouse.up()
+            pivot_after = float(page.input_value("#fl-contrast-pivot-num"))
+            assert pivot_after != pivot_before
+
+            # Switch preset to fuji_3513_teal_gold & adjust bleach_bypass_pct
+            page.click(".fl-preset-btn[data-fl-stock='fuji_3513_teal_gold']")
+            page.wait_for_function(
+                "() => (document.getElementById('fl-active-preset-badge')?.textContent || '')"
+                ".includes('FUJI 3513 TEAL GOLD')"
+            )
+            page.click("#btn-fl-tab-color")
+            page.fill("#fl-bleach-bypass-num", "46")
+            page.dispatch_event("#fl-bleach-bypass-num", "change")
+
+            # Export JSON taktcut.film_look_studio.v1
+            page.click("#btn-fl-export-json")
+            page.wait_for_function(
+                "() => (document.getElementById('fl-json-preview')?.textContent || '')"
+                ".includes('taktcut.film_look_studio.v1')"
+            )
+            fg_text = page.locator("#fl-fg-output").text_content() or ""
+            assert "curves=" in fg_text
+            assert "colorbalance=" in fg_text
+            assert "eq=" in fg_text
+            assert "noise=" in fg_text
+            assert "vignette=" in fg_text
+            assert "crop=" in fg_text
+
+            # Apply to Timeline
+            page.click("#btn-fl-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('fl-status-note')?.textContent || '')"
+                ".includes('Timeline')"
+            )
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#btn-close-film-look-studio")
+            page.click("#lang-fr")
+            page.click("#btn-timeline-film-look-studio")
+            page.wait_for_selector("#film-look-studio-dialog[open]")
+            fr_txt = page.locator("#film-look-studio-dialog").text_content() or ""
+            assert "Pellicule" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-film-look-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-timeline-film-look-studio")
+            page.wait_for_selector("#film-look-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('film-look-studio-dialog')"
+                ".getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-timeline-film-look-studio",
+                "btn-fl-reset",
+                "btn-fl-tab-tone",
+                "btn-fl-tab-color",
+                "btn-fl-tab-grain",
+                "btn-fl-apply-timeline",
+                "btn-fl-send-deliver",
+                "btn-fl-export-json",
+                "btn-close-film-look-studio",
+                "fl-bleach-bypass-num",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-fl-tab-tone")
+            ev_h = page.evaluate(
+                "() => document.getElementById('fl-exposure-ev-num').getBoundingClientRect().height"
+            )
+            assert ev_h >= 44, f"Mobile touch target fl-exposure-ev-num too small: {ev_h}px"
+
+            page.click("#btn-close-film-look-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

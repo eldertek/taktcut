@@ -2,6 +2,8 @@ import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ALLOWED_CST_GAMUT_MAPPING_MODES,
   ALLOWED_CST_TONE_MAPPING_MODES,
+  ALLOWED_FILM_LOOK_GRAIN_GAUGES,
+  ALLOWED_FILM_LOOK_PRINT_STOCKS,
   ALLOWED_MOTION_SPLINE_CHANNELS,
   ALLOWED_MOTION_SPLINE_HANDLE_MODES,
   ALLOWED_MOTION_SPLINE_PRESET_IDS,
@@ -85,6 +87,7 @@ import {
   applyAutoReframeToDocumentClient,
   applyAvSyncInDocumentClient,
   applyBroadcastLegalClampClient,
+  applyFilmLookToDocumentClient,
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
   applyOpticalGlowToDocumentClient,
@@ -110,6 +113,7 @@ import {
   compileColorNodeChainClient,
   compileCompoundFiltergraphClient,
   compileCstFiltergraphClient,
+  compileFilmLookFiltergraphClient,
   compileMulticamStudioFiltergraphClient,
   compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
@@ -139,6 +143,7 @@ import {
   createColorNode,
   createCompoundClipInDocument,
   createDefaultCstConfigClient,
+  createDefaultFilmLookConfigClient,
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
   createDefaultOpticalGlowConfigClient,
@@ -152,11 +157,13 @@ import {
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
   estimateRenderFileSize,
+  evaluateFilmLookStudioClient,
   evaluateMotionSplineStudioClient,
   evaluatePowerWindowSamplesClient,
   evaluateRetimeStudioCurveClient,
   evaluateStabilizationStudioClient,
   evaluateTitleMotionState,
+  exportFilmLookJsonClient,
   exportMotionSplineJsonClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
@@ -168,9 +175,11 @@ import {
   generateStudioLutPresetClient,
   getDeliveryPresetClient,
   linkAvClipsInDocument,
+  listFilmLookPresetsClient,
   listStudioLutPresetsClient,
   normalizeBroadcastConfigClient,
   normalizeFairlightAudioParams,
+  normalizeFilmLookConfigClient,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   normalizeOpticalGlowConfigClient,
@@ -4671,6 +4680,84 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/stabilization/apply", { method: "POST", body: payload });
+    },
+    async getFilmLookPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: listFilmLookPresetsClient(),
+          print_stocks: ALLOWED_FILM_LOOK_PRINT_STOCKS,
+          grain_gauges_mm: ALLOWED_FILM_LOOK_GRAIN_GAUGES,
+          default_config: createDefaultFilmLookConfigClient()
+        };
+      }
+      return requestJson("/api/fx/film-look/presets");
+    },
+    async evaluateFilmLook(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeFilmLookConfigClient(p.config ? p.config : p);
+        return evaluateFilmLookStudioClient(cfg, {
+          sample_count: p.sample_count !== undefined ? Number(p.sample_count) : 33
+        });
+      }
+      return requestJson("/api/fx/film-look/evaluate", { method: "POST", body: payload });
+    },
+    async compileFilmLook(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeFilmLookConfigClient(p.config ? p.config : p);
+        return compileFilmLookFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/film-look/compile", { method: "POST", body: payload });
+    },
+    async exportFilmLookJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeFilmLookConfigClient(p.config ? p.config : p);
+        return exportFilmLookJsonClient(cfg, {
+          title: p.title || "TAKTCUT_FILM_LOOK_STUDIO"
+        });
+      }
+      return requestJson("/api/fx/film-look/export-json", { method: "POST", body: payload });
+    },
+    async downloadFilmLookBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeFilmLookConfigClient(p.config ? p.config : p);
+        const exp = exportFilmLookJsonClient(cfg, {
+          title: p.title || "TAKTCUT_FILM_LOOK_STUDIO"
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/film-look/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyFilmLook(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyFilmLookToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compileFilmLookFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/film-look/apply", { method: "POST", body: payload });
     }
   };
 }

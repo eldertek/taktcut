@@ -1471,6 +1471,38 @@ class ClipStabilizationStudioTrack(BaseModel):
     ffmpeg_pass1_vf: str = Field(default="", max_length=4096)
 
 
+class ClipFilmLookTrack(BaseModel):
+    """Non-destructive 35mm/16mm Film Look Creator, Print Stock Curve & Bleach Bypass track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    print_stock: Literal[
+        "kodak_2383_d65",
+        "fuji_3513_teal_gold",
+        "super16_bleach_bypass",
+        "ilford_hp5_bw_35mm",
+        "vintage_70s_warm_fade",
+        "custom",
+    ] = "kodak_2383_d65"
+    exposure_ev: float = Field(default=0.0, ge=-2.0, le=2.0)
+    contrast_pivot: float = Field(default=0.435, ge=0.15, le=0.85)
+    toe_density_pct: float = Field(default=38.0, ge=0.0, le=100.0)
+    shoulder_rolloff_pct: float = Field(default=64.0, ge=0.0, le=100.0)
+    split_tone_shadow_hue: float = Field(default=205.0, ge=0.0, le=360.0)
+    split_tone_highlight_hue: float = Field(default=42.0, ge=0.0, le=360.0)
+    bleach_bypass_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    grain_size_mm: Literal[8, 16, 35, 65] = 35
+    grain_strength_pct: float = Field(default=28.0, ge=0.0, le=100.0)
+    gate_weave_px: float = Field(default=0.8, ge=0.0, le=6.0)
+    flicker_pct: float = Field(default=4.0, ge=0.0, le=30.0)
+    halation_red_pct: float = Field(default=24.0, ge=0.0, le=100.0)
+    contrast_ratio: float = Field(default=1.0, ge=0.1, le=50.0)
+    dynamic_range_stops: float = Field(default=12.0, ge=1.0, le=20.0)
+    grain_rms: float = Field(default=0.0, ge=0.0, le=100.0)
+    ffmpeg_vf: str = Field(default="", max_length=16384)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1503,6 +1535,7 @@ class TimelineClip(BaseModel):
     power_window: ClipPowerWindowTrack | None = None
     retime_studio: ClipRetimeStudioTrack | None = None
     stabilization_studio: ClipStabilizationStudioTrack | None = None
+    film_look: ClipFilmLookTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None
