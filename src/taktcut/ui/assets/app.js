@@ -19,6 +19,7 @@ import {
   drawSceneCutConfidenceCanvas,
   drawSourceMonitorCanvas,
   drawStereoVuMeterCanvas,
+  drawTextEditWaveformCanvas,
   drawTimelineCanvas,
   drawTimelineOverviewCanvas,
   drawTitleMotionCurveCanvas,
@@ -166,6 +167,7 @@ import {
   compileMulticamFiltergraphClient,
   compileProxyPlanClient,
   compileRetimeFilterClient,
+  compileRoughcutSelectFiltergraphClient,
   compileSplitEditFiltergraphClient,
   compileTransitionFilterClient,
   compileVideoFadeFilterClient,
@@ -173,6 +175,7 @@ import {
   computeAvSplitEditInfo,
   computeCompoundDepthClient,
   computeInOutRangeMetrics,
+  computeKeepRangesFromSegmentsClient,
   computeMulticamSegmentsClient,
   computeRetimeRampSummary,
   computeSplitWipePercentFromPointer,
@@ -207,6 +210,7 @@ import {
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
+  exportTranscriptSrtClient,
   filterMediaPoolEntries,
   filterTimelineClips,
   findAdjacentCutForClip,
@@ -833,6 +837,11 @@ const state = {
   sceneCutAnalysis: null,
   sceneCutSelectedOffset: null,
   sceneCutLastDraw: null,
+  textEditAnalysis: null,
+  textEditSelectedSegId: null,
+  textEditFilter: "all",
+  textEditSearch: "",
+  textEditLastDraw: null,
   timelineViewStartFrame: 0,
   timelineOverviewDraw: null,
   sourceTapeState: null,
@@ -966,8 +975,13 @@ function setLanguage(lang) {
   renderUpdateButton();
   renderTimelineUI();
   renderMediaPool();
+  const teSearch = byId("text-edit-search");
+  if (teSearch) {
+    teSearch.placeholder = t("textEdit.searchPlaceholder");
+  }
   if (typeof renderMediaPoolProDialog === "function") renderMediaPoolProDialog();
   if (typeof renderSceneCutUI === "function") renderSceneCutUI();
+  if (typeof renderTextEditUI === "function") renderTextEditUI();
   renderFairlightAudioUI();
   renderColorNodeTreeUI();
   renderLutBrowserUI();
@@ -13028,6 +13042,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+S", descKey: "shortcuts.key.grabStill" },
       { kbd: "Alt+P", descKey: "shortcuts.key.proxyToggle" },
       { kbd: "Shift+P", descKey: "shortcuts.key.mediaPoolPro" },
+      { kbd: "Shift+D", descKey: "shortcuts.key.textEdit" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13328,6 +13343,11 @@ function handleTransportKeydown(ev) {
     if (lower === "c" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       openSceneCutDialog();
+      return;
+    }
+    if (lower === "d" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      openTextEditDialog();
       return;
     }
     if (
@@ -19865,6 +19885,7 @@ function wireEvents() {
   wireMulticamInspectorEvents();
   wireMediaPoolProEvents();
   wireSceneCutEvents();
+  wireTextEditEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -22304,6 +22325,451 @@ function wireSceneCutEvents() {
         setPlayhead(Number(analysis.clip_start_frame || 0) + clickedOff);
       }
       renderSceneCutUI();
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Text-Based Dialogue Rough-Cut & Auto-Silence Studio (Cycle #101)
+// ---------------------------------------------------------------------------
+
+function getTextEditClipOptions() {
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks)) return [];
+  const opts = [];
+  for (const kind of ["video", "audio"]) {
+    const tracks = doc.tracks.filter((t) => t && t.kind === kind);
+    tracks.forEach((trk, tPos) => {
+      const trkIdx = tPos + 1;
+      const prefix = kind === "video" ? "V" : "A";
+      (trk.clips || []).forEach((c, cIdx) => {
+        if (!c || Number(c.duration_frames) < 2) return;
+        opts.push({
+          key: `${kind}:${trkIdx}:${cIdx}`,
+          trackKind: kind,
+          trackIndex: trkIdx,
+          clipIndex: cIdx,
+          label: `${prefix}${trkIdx} | ${c.name} (${c.duration_frames}f)`
+        });
+      });
+    });
+  }
+  return opts;
+}
+
+function populateTextEditClipSelect() {
+  const sel = byId("text-edit-clip-select");
+  if (!sel) return [];
+  const opts = getTextEditClipOptions();
+  const prevVal = sel.value;
+  sel.replaceChildren();
+  for (const opt of opts) {
+    const o = document.createElement("option");
+    o.value = opt.key;
+    o.textContent = opt.label;
+    sel.appendChild(o);
+  }
+  if (opts.some((o) => o.key === prevVal)) {
+    sel.value = prevVal;
+  } else if (state.selectedClip && state.selectedClip.trackIndex != null) {
+    const sk = state.selectedClip.trackKind || "video";
+    const matchKey = `${sk}:${state.selectedClip.trackIndex}:${state.selectedClip.clipIndex}`;
+    if (opts.some((o) => o.key === matchKey)) {
+      sel.value = matchKey;
+    }
+  }
+  return opts;
+}
+
+function parseSelectedTextEditTarget() {
+  const sel = byId("text-edit-clip-select");
+  const raw = sel ? sel.value : "";
+  const parts = raw.split(":");
+  if (parts.length !== 3) return null;
+  const trackKind = parts[0] === "audio" ? "audio" : "video";
+  const trackIndex = Number.parseInt(parts[1], 10);
+  const clipIndex = Number.parseInt(parts[2], 10);
+  if (!Number.isInteger(trackIndex) || !Number.isInteger(clipIndex)) return null;
+  return { trackKind, trackIndex, clipIndex };
+}
+
+function recomputeTextEditMetrics(analysis) {
+  if (!analysis || !Array.isArray(analysis.segments)) return;
+  const padEl = byId("text-edit-padding");
+  const padS = padEl ? Number.parseFloat(padEl.value) : Number(analysis.padding_s || 0.08);
+  const keepRanges = computeKeepRangesFromSegmentsClient(
+    analysis.segments,
+    Number(analysis.clip_duration_frames) || 1,
+    Number(analysis.fps_num) || 25,
+    Number(analysis.fps_den) || 1,
+    Number.isFinite(padS) ? padS : 0.08
+  );
+  const keptS = Number(keepRanges.reduce((acc, r) => acc + (r.end_s - r.start_s), 0).toFixed(3));
+  const totalS = Number(analysis.duration_s || 0);
+  analysis.kept_duration_s = keptS;
+  analysis.saved_duration_s = Number(Math.max(0, totalS - keptS).toFixed(3));
+  analysis.roughcut_filtergraph = compileRoughcutSelectFiltergraphClient(keepRanges, true);
+}
+
+function getFilteredTextEditSegments(analysis) {
+  if (!analysis || !Array.isArray(analysis.segments)) return [];
+  const filter = state.textEditFilter || "all";
+  const query = String(state.textEditSearch || "").trim().toLowerCase();
+  return analysis.segments.filter((seg) => {
+    if (filter === "speech" && seg.kind !== "speech") return false;
+    if (filter === "silence" && seg.kind !== "silence") return false;
+    if (filter === "filler" && seg.kind !== "filler") return false;
+    if (filter === "cut" && !seg.deleted) return false;
+    if (query) {
+      const hay = `${seg.speaker || ""} ${seg.text || ""} ${seg.kind || ""}`.toLowerCase();
+      if (!hay.includes(query)) return false;
+    }
+    return true;
+  });
+}
+
+function renderTextEditUI() {
+  const analysis = state.textEditAnalysis;
+  const listEl = byId("text-edit-transcript-list");
+  const statusEl = byId("text-edit-status");
+  const fgEl = byId("text-edit-fg-preview");
+  const applyBtn = byId("btn-text-edit-apply");
+  const cutSilBtn = byId("btn-text-edit-cut-silences");
+  const cutFilBtn = byId("btn-text-edit-cut-fillers");
+  const restoreBtn = byId("btn-text-edit-restore-all");
+  const exportBtn = byId("btn-text-edit-export-srt");
+  const canvas = byId("text-edit-waveform-canvas");
+
+  if (analysis) {
+    recomputeTextEditMetrics(analysis);
+  }
+
+  for (const pill of document.querySelectorAll(".text-edit-filter-pill")) {
+    const fVal = pill.getAttribute("data-te-filter") || "all";
+    const isAct = fVal === (state.textEditFilter || "all");
+    pill.classList.toggle("is-active", isAct);
+    pill.setAttribute("aria-pressed", isAct ? "true" : "false");
+  }
+
+  if (canvas) {
+    const playheadOffset = analysis
+      ? Math.max(
+          0,
+          Math.min(
+            Number(analysis.clip_duration_frames) || 1,
+            state.playheadFrame - Number(analysis.clip_start_frame || 0)
+          )
+        )
+      : null;
+    state.textEditLastDraw = drawTextEditWaveformCanvas(canvas, analysis, {
+      selectedSegmentId: state.textEditSelectedSegId,
+      playheadOffset,
+      searchQuery: state.textEditSearch,
+      emptyLabel: t("textEdit.canvasEmpty")
+    });
+  }
+
+  const segs = analysis && Array.isArray(analysis.segments) ? analysis.segments : [];
+  const cutCount = segs.filter((s) => s.deleted).length;
+  const keptCount = segs.length - cutCount;
+  const hasAnalysis = Boolean(analysis && segs.length > 0);
+
+  if (cutSilBtn) cutSilBtn.disabled = !hasAnalysis;
+  if (cutFilBtn) cutFilBtn.disabled = !hasAnalysis;
+  if (restoreBtn) restoreBtn.disabled = !hasAnalysis || cutCount === 0;
+  if (exportBtn) exportBtn.disabled = !hasAnalysis || keptCount === 0;
+  if (applyBtn) {
+    applyBtn.disabled = !hasAnalysis || cutCount === 0 || keptCount === 0;
+    applyBtn.textContent = t("textEdit.applyCut").replace("{count}", String(cutCount));
+  }
+  if (fgEl) {
+    fgEl.textContent = analysis
+      ? `${analysis.silencedetect_filtergraph}\n${analysis.roughcut_filtergraph}`
+      : "";
+  }
+  if (statusEl) {
+    if (!analysis) {
+      statusEl.textContent = t("textEdit.statsIdle");
+    } else {
+      statusEl.textContent = t("textEdit.statsSummary")
+        .replace("{orig}", Number(analysis.duration_s || 0).toFixed(2))
+        .replace("{kept}", Number(analysis.kept_duration_s || 0).toFixed(2))
+        .replace("{saved}", Number(analysis.saved_duration_s || 0).toFixed(2))
+        .replace("{silences}", String(analysis.silence_count || 0))
+        .replace("{fillers}", String(analysis.filler_count || 0));
+    }
+  }
+
+  if (!listEl) return;
+  listEl.replaceChildren();
+  if (!analysis) return;
+
+  const visibleSegs = getFilteredTextEditSegments(analysis);
+  if (visibleSegs.length === 0) {
+    listEl.appendChild(dom("div", "telemetry-note mono", t("textEdit.noMatch")));
+    return;
+  }
+
+  const query = String(state.textEditSearch || "").trim().toLowerCase();
+  for (const seg of visibleSegs) {
+    const isSelected = state.textEditSelectedSegId === seg.segment_id;
+    const isMatch = Boolean(query && String(seg.text || "").toLowerCase().includes(query));
+    const row = dom(
+      "div",
+      `text-edit-seg-row${seg.deleted ? " is-deleted" : ""}${isSelected ? " is-selected" : ""}${isMatch ? " is-match" : ""}`
+    );
+    row.setAttribute("role", "listitem");
+
+    const kindBadgeText =
+      seg.kind === "silence"
+        ? t("textEdit.kindSilence")
+        : seg.kind === "filler"
+          ? t("textEdit.kindFiller")
+          : t("textEdit.kindSpeech");
+
+    const main = dom("div", "text-edit-seg-main");
+    main.append(
+      dom("span", `nle-tag mono text-edit-kind-badge is-${seg.kind}`, kindBadgeText),
+      dom("span", "nle-tag mono", seg.timecode),
+      dom("span", "nle-tag mono", `${seg.speaker} (${Number(seg.duration_s || 0).toFixed(2)}s)`),
+      dom("span", "text-edit-seg-text", seg.text)
+    );
+
+    const actions = dom("div", "text-edit-seg-actions");
+    const seekBtn = dom("button", "btn btn-mini", t("textEdit.jump"));
+    seekBtn.type = "button";
+    seekBtn.addEventListener("click", () => {
+      state.textEditSelectedSegId = seg.segment_id;
+      setPlayhead(Number(seg.timeline_start_frame || 0));
+      renderTextEditUI();
+    });
+
+    const toggleBtn = dom(
+      "button",
+      `btn btn-mini${seg.deleted ? "" : " btn-secondary"}`,
+      seg.deleted ? t("textEdit.toggleKeep") : t("textEdit.toggleCut")
+    );
+    toggleBtn.type = "button";
+    toggleBtn.setAttribute("aria-pressed", seg.deleted ? "true" : "false");
+    toggleBtn.addEventListener("click", () => {
+      seg.deleted = !seg.deleted;
+      state.textEditSelectedSegId = seg.segment_id;
+      renderTextEditUI();
+    });
+
+    actions.append(seekBtn, toggleBtn);
+    row.append(main, actions);
+    listEl.appendChild(row);
+  }
+}
+
+async function analyzeTextEditAction() {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  const target = parseSelectedTextEditTarget();
+  if (!target) {
+    state.textEditAnalysis = null;
+    const statusEl = byId("text-edit-status");
+    if (statusEl) statusEl.textContent = t("textEdit.noClip");
+    renderTextEditUI();
+    return;
+  }
+  const noiseNum = byId("text-edit-noise-num");
+  const minSilEl = byId("text-edit-min-silence");
+  const padEl = byId("text-edit-padding");
+  const fillersEl = byId("text-edit-detect-fillers");
+
+  try {
+    const res = await api.analyzeTextEdit({
+      document: doc,
+      track_kind: target.trackKind,
+      track_index: target.trackIndex,
+      clip_index: target.clipIndex,
+      noise_db: noiseNum ? Number.parseFloat(noiseNum.value) : -32,
+      min_silence_s: minSilEl ? Number.parseFloat(minSilEl.value) : 0.45,
+      padding_s: padEl ? Number.parseFloat(padEl.value) : 0.08,
+      detect_fillers: fillersEl ? Boolean(fillersEl.checked) : true
+    });
+    state.textEditAnalysis = res;
+    state.textEditSelectedSegId =
+      res.segments && res.segments.length ? res.segments[0].segment_id : null;
+    renderTextEditUI();
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+function batchMarkTextEditSegments(kindFilter, deletedValue) {
+  const analysis = state.textEditAnalysis;
+  if (!analysis || !Array.isArray(analysis.segments)) return;
+  for (const seg of analysis.segments) {
+    if (!kindFilter || seg.kind === kindFilter) {
+      seg.deleted = Boolean(deletedValue);
+    }
+  }
+  renderTextEditUI();
+}
+
+function exportTextEditSrtAction() {
+  const analysis = state.textEditAnalysis;
+  if (!analysis || !Array.isArray(analysis.segments)) return;
+  const srt = exportTranscriptSrtClient(analysis.segments, false);
+  if (!srt) return;
+  const blob = new Blob([srt], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const safeStem = String(analysis.clip_name || "transcript").replace(/[^a-zA-Z0-9_-]+/g, "_");
+  a.href = url;
+  a.download = `${safeStem}_roughcut.srt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function applyTextEditRoughCutAction() {
+  const doc = state.timelineDoc;
+  const analysis = state.textEditAnalysis;
+  if (!doc || !analysis) return;
+
+  const gapModeEl = byId("text-edit-gap-mode");
+  const syncAvEl = byId("text-edit-sync-av");
+  const padEl = byId("text-edit-padding");
+
+  try {
+    const res = await api.applyTextEditRoughCut({
+      document: doc,
+      track_kind: analysis.track_kind,
+      track_index: analysis.track_index,
+      clip_index: analysis.clip_index,
+      segments: analysis.segments,
+      gap_mode: gapModeEl ? gapModeEl.value : "ripple_delete",
+      sync_linked_track: syncAvEl ? Boolean(syncAvEl.checked) : true,
+      padding_s: padEl ? Number.parseFloat(padEl.value) : 0.08
+    });
+    if (res.document) {
+      commitTimelineMutation(res.document, null);
+    }
+    showBanner(res.summary || "Rough-cut applied.", "success");
+    closeTextEditDialog();
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+function openTextEditDialog() {
+  const dlg = byId("text-edit-dialog");
+  if (!dlg) return;
+  const opts = populateTextEditClipSelect();
+  if (typeof dlg.showModal === "function") {
+    if (!dlg.open) dlg.showModal();
+  } else {
+    dlg.setAttribute("open", "open");
+  }
+  if (opts.length > 0) {
+    analyzeTextEditAction();
+  } else {
+    state.textEditAnalysis = null;
+    renderTextEditUI();
+  }
+}
+
+function closeTextEditDialog() {
+  const dlg = byId("text-edit-dialog");
+  if (!dlg) return;
+  if (typeof dlg.close === "function") {
+    if (dlg.open) dlg.close();
+  } else {
+    dlg.removeAttribute("open");
+  }
+}
+
+function wireTextEditEvents() {
+  byId("btn-timeline-text-edit")?.addEventListener("click", openTextEditDialog);
+  byId("btn-close-text-edit")?.addEventListener("click", closeTextEditDialog);
+
+  const dlg = byId("text-edit-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeTextEditDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeTextEditDialog();
+    });
+  }
+
+  byId("text-edit-clip-select")?.addEventListener("change", () => analyzeTextEditAction());
+  byId("text-edit-min-silence")?.addEventListener("change", () => analyzeTextEditAction());
+  byId("text-edit-padding")?.addEventListener("change", () => renderTextEditUI());
+  byId("text-edit-detect-fillers")?.addEventListener("change", () => analyzeTextEditAction());
+
+  const noiseRange = byId("text-edit-noise-range");
+  const noiseNum = byId("text-edit-noise-num");
+  if (noiseRange && noiseNum) {
+    noiseRange.addEventListener("input", () => {
+      noiseNum.value = String(Math.round(Number(noiseRange.value)));
+    });
+    noiseRange.addEventListener("change", () => analyzeTextEditAction());
+    noiseNum.addEventListener("input", () => {
+      const parsed = Number.parseFloat(noiseNum.value);
+      if (Number.isFinite(parsed) && parsed >= -60 && parsed <= -12) {
+        noiseRange.value = String(parsed);
+      }
+    });
+    noiseNum.addEventListener("change", () => {
+      const parsed = Number.parseFloat(noiseNum.value);
+      const clamped = Number.isFinite(parsed) ? Math.max(-60, Math.min(-12, parsed)) : -32;
+      noiseNum.value = String(Math.round(clamped));
+      noiseRange.value = String(Math.round(clamped));
+      analyzeTextEditAction();
+    });
+  }
+
+  byId("btn-text-edit-analyze")?.addEventListener("click", analyzeTextEditAction);
+  byId("btn-text-edit-cut-silences")?.addEventListener("click", () =>
+    batchMarkTextEditSegments("silence", true)
+  );
+  byId("btn-text-edit-cut-fillers")?.addEventListener("click", () =>
+    batchMarkTextEditSegments("filler", true)
+  );
+  byId("btn-text-edit-restore-all")?.addEventListener("click", () =>
+    batchMarkTextEditSegments(null, false)
+  );
+  byId("btn-text-edit-export-srt")?.addEventListener("click", exportTextEditSrtAction);
+  byId("btn-text-edit-apply")?.addEventListener("click", applyTextEditRoughCutAction);
+
+  byId("text-edit-search")?.addEventListener("input", (ev) => {
+    state.textEditSearch = ev.target ? ev.target.value : "";
+    renderTextEditUI();
+  });
+
+  for (const pill of document.querySelectorAll(".text-edit-filter-pill")) {
+    pill.addEventListener("click", () => {
+      state.textEditFilter = pill.getAttribute("data-te-filter") || "all";
+      renderTextEditUI();
+    });
+  }
+
+  const canvas = byId("text-edit-waveform-canvas");
+  if (canvas) {
+    canvas.addEventListener("click", (ev) => {
+      const analysis = state.textEditAnalysis;
+      const drawInfo = state.textEditLastDraw;
+      if (!analysis || !drawInfo || !drawInfo.plotRect || drawInfo.totalFrames <= 1) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const pr = drawInfo.plotRect;
+      const ratio = Math.max(0, Math.min(1, (x - pr.x) / Math.max(1, pr.w)));
+      const clickedOff = Math.round(ratio * drawInfo.totalFrames);
+      const matched = (analysis.segments || []).find(
+        (s) => clickedOff >= Number(s.start_frame) && clickedOff <= Number(s.end_frame)
+      );
+      if (matched) {
+        state.textEditSelectedSegId = matched.segment_id;
+      }
+      setPlayhead(Number(analysis.clip_start_frame || 0) + clickedOff);
+      renderTextEditUI();
     });
   }
 }

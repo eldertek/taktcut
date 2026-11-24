@@ -276,6 +276,15 @@ from taktcut.subtitles import (
     parse_srt,
     parse_vtt,
 )
+from taktcut.text_edit import (
+    TEXT_EDIT_MIN_SILENCE_DEFAULT,
+    TEXT_EDIT_NOISE_DB_DEFAULT,
+    TEXT_EDIT_PADDING_DEFAULT,
+    analyze_clip_transcript_and_silences,
+    apply_text_edit_rough_cut,
+    normalize_text_edit_gap_mode,
+    normalize_text_edit_track_kind,
+)
 from taktcut.timeline_edit import (
     ALLOWED_THREE_POINT_MODES,
     ALLOWED_TIMELINE_EDIT_OPS,
@@ -3001,6 +3010,106 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "linked_audio_split": sc_split.linked_audio_split,
                     "summary": sc_split.summary,
                     "document": sc_split.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/text-edit/analyze":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            track_kind = normalize_text_edit_track_kind(payload.get("track_kind", "video"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            raw_db = payload.get("noise_db", TEXT_EDIT_NOISE_DB_DEFAULT)
+            db_val = float(raw_db) if not isinstance(raw_db, bool) else 999.0
+            raw_min_s = payload.get("min_silence_s", TEXT_EDIT_MIN_SILENCE_DEFAULT)
+            min_s_val = float(raw_min_s) if not isinstance(raw_min_s, bool) else -1.0
+            raw_pad = payload.get("padding_s", TEXT_EDIT_PADDING_DEFAULT)
+            pad_val = float(raw_pad) if not isinstance(raw_pad, bool) else -1.0
+            detect_fillers = bool(payload.get("detect_fillers", True))
+            exec_ffmpeg = bool(payload.get("execute_ffmpeg", False))
+            raw_fillers = payload.get("custom_fillers")
+            custom_fillers = (
+                [str(item) for item in raw_fillers]
+                if isinstance(raw_fillers, list)
+                else None
+            )
+            raw_env = payload.get("audio_envelope")
+            audio_env = (
+                [float(x) for x in raw_env]
+                if isinstance(raw_env, list) and len(raw_env) >= 8
+                else None
+            )
+            te_analysis = analyze_clip_transcript_and_silences(
+                doc,
+                track_kind=track_kind,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+                noise_db=db_val,
+                min_silence_s=min_s_val,
+                padding_s=pad_val,
+                detect_fillers=detect_fillers,
+                custom_fillers=custom_fillers,
+                audio_envelope=audio_env,
+                workspace_root=self.app_state.workspace_root,
+                execute_ffmpeg=exec_ffmpeg,
+            )
+            self._send_json(HTTPStatus.OK, te_analysis.model_dump(mode="json"))
+            return
+
+        if route == "/api/timeline/text-edit/apply":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            track_kind = normalize_text_edit_track_kind(payload.get("track_kind", "video"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            gap_mode = normalize_text_edit_gap_mode(payload.get("gap_mode", "ripple_delete"))
+            sync_linked = bool(payload.get("sync_linked_track", True))
+            marker_color = str(payload.get("marker_color", "Red"))
+            raw_pad = payload.get("padding_s", TEXT_EDIT_PADDING_DEFAULT)
+            pad_val = float(raw_pad) if not isinstance(raw_pad, bool) else -1.0
+            raw_db = payload.get("noise_db", TEXT_EDIT_NOISE_DB_DEFAULT)
+            db_val = float(raw_db) if not isinstance(raw_db, bool) else 999.0
+            raw_min_s = payload.get("min_silence_s", TEXT_EDIT_MIN_SILENCE_DEFAULT)
+            min_s_val = float(raw_min_s) if not isinstance(raw_min_s, bool) else -1.0
+            raw_segments = payload.get("segments")
+            seg_list = raw_segments if isinstance(raw_segments, list) else None
+            raw_del_ids = payload.get("delete_segment_ids")
+            del_ids = [str(item) for item in raw_del_ids] if isinstance(raw_del_ids, list) else None
+            te_res = apply_text_edit_rough_cut(
+                doc,
+                track_kind=track_kind,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+                segments=seg_list,
+                delete_segment_ids=del_ids,
+                gap_mode=gap_mode,
+                sync_linked_track=sync_linked,
+                marker_color=marker_color,
+                padding_s=pad_val,
+                noise_db=db_val,
+                min_silence_s=min_s_val,
+            )
+            val = validate_timeline(te_res.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "track_kind": te_res.track_kind,
+                    "track_index": te_res.track_index,
+                    "clip_index": te_res.clip_index,
+                    "gap_mode": te_res.gap_mode,
+                    "kept_ranges": [rng.model_dump(mode="json") for rng in te_res.kept_ranges],
+                    "removed_segment_ids": te_res.removed_segment_ids,
+                    "created_clip_names": te_res.created_clip_names,
+                    "created_marker_frames": te_res.created_marker_frames,
+                    "original_duration_frames": te_res.original_duration_frames,
+                    "roughcut_duration_frames": te_res.roughcut_duration_frames,
+                    "saved_frames": te_res.saved_frames,
+                    "linked_track_synced": te_res.linked_track_synced,
+                    "ffmpeg_filtergraph": te_res.ffmpeg_filtergraph,
+                    "transcript_srt": te_res.transcript_srt,
+                    "summary": te_res.summary,
+                    "document": te_res.document.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                 },
             )

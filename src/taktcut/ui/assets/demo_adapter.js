@@ -37,8 +37,10 @@ import {
   analyzeAvSyncClient,
   analyzeAudioSpectrumClient,
   analyzeClipSceneCutsClient,
+  analyzeClipTranscriptClient,
   applyAvSyncInDocumentClient,
   applySplitEditJlInDocument,
+  applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
   autoRelinkAllInDocumentClient,
   clearProxiesInDocument,
@@ -3827,6 +3829,26 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/timeline/scene-cut/split", { method: "POST", body: payload });
+    },
+    async analyzeTextEdit(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        return analyzeClipTranscriptClient(doc, payload || {});
+      }
+      return requestJson("/api/timeline/text-edit/analyze", { method: "POST", body: payload });
+    },
+    async applyTextEditRoughCut(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const res = applyTextEditRoughCutClient(doc, payload || {});
+        return {
+          ...res,
+          validation: validateTimelineClient(res.document)
+        };
+      }
+      return requestJson("/api/timeline/text-edit/apply", { method: "POST", body: payload });
     }
   };
 }

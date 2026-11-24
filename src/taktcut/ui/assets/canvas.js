@@ -9865,3 +9865,146 @@ export function drawSceneCutConfidenceCanvas(canvas, analysis, opts = {}) {
     totalFrames
   };
 }
+
+export function drawTextEditWaveformCanvas(canvas, analysis, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width, height } = setupCanvas(canvas, 156);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+
+  const peaks = analysis && Array.isArray(analysis.waveform_peaks) ? analysis.waveform_peaks : [];
+  const segments = analysis && Array.isArray(analysis.segments) ? analysis.segments : [];
+  if (peaks.length === 0 && segments.length === 0) {
+    ctx.fillStyle = "#7a7b88";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      opts.emptyLabel || "Select a clip and click Analyze Transcript",
+      width * 0.5,
+      height * 0.5
+    );
+    return { width, height, plotRect: null, totalFrames: 0 };
+  }
+
+  const padL = 36;
+  const padR = 12;
+  const padT = 22;
+  const padB = 22;
+  const plotW = Math.max(40, width - padL - padR);
+  const plotH = Math.max(40, height - padT - padB);
+  const totalFrames = Math.max(1, Number(analysis.clip_duration_frames) || 1);
+
+  ctx.fillStyle = "#161820";
+  ctx.fillRect(padL, padT, plotW, plotH);
+  ctx.strokeStyle = "#272a34";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
+
+  const query = String(opts.searchQuery || "").trim().toLowerCase();
+
+  // Segment background zones (speech / filler / silence / deleted)
+  for (const seg of segments) {
+    const x0 = padL + (Number(seg.start_frame) / totalFrames) * plotW;
+    const x1 = padL + (Number(seg.end_frame) / totalFrames) * plotW;
+    const sw = Math.max(1.5, x1 - x0);
+    const matchesSearch = query && String(seg.text || "").toLowerCase().includes(query);
+    if (seg.deleted) {
+      ctx.fillStyle =
+        seg.kind === "silence" ? "rgba(244, 63, 94, 0.24)" : "rgba(239, 68, 68, 0.28)";
+    } else if (matchesSearch) {
+      ctx.fillStyle = "rgba(250, 204, 21, 0.26)";
+    } else if (seg.kind === "filler") {
+      ctx.fillStyle = "rgba(245, 158, 11, 0.20)";
+    } else {
+      ctx.fillStyle = "rgba(20, 184, 166, 0.14)";
+    }
+    ctx.fillRect(x0, padT + 1, sw, plotH - 2);
+
+    if (opts.selectedSegmentId && opts.selectedSegmentId === seg.segment_id) {
+      ctx.strokeStyle = "#f8fafc";
+      ctx.lineWidth = 1.4;
+      ctx.strokeRect(x0 + 0.5, padT + 1.5, Math.max(1, sw - 1), plotH - 3);
+    }
+  }
+
+  // Waveform envelope bars
+  const midY = padT + plotH * 0.5;
+  const barStep = plotW / Math.max(1, peaks.length);
+  const barW = Math.max(1.8, barStep * 0.68);
+  for (let i = 0; i < peaks.length; i += 1) {
+    const amp = Math.max(0.02, Math.min(1, Number(peaks[i]) || 0.05));
+    const tFrame = ((i + 0.5) / Math.max(1, peaks.length)) * totalFrames;
+    const seg = segments.find(
+      (s) => tFrame >= Number(s.start_frame) && tFrame <= Number(s.end_frame)
+    );
+    if (seg && seg.deleted) {
+      ctx.fillStyle = "rgba(244, 63, 94, 0.65)";
+    } else if (seg && seg.kind === "filler") {
+      ctx.fillStyle = "#f59e0b";
+    } else {
+      ctx.fillStyle = "#2dd4bf";
+    }
+    const bh = Math.max(2, amp * (plotH - 8));
+    const bx = padL + i * barStep + (barStep - barW) * 0.5;
+    ctx.fillRect(bx, midY - bh * 0.5, barW, bh);
+  }
+
+  // Noise threshold line
+  const noiseDb = Number.isFinite(Number(analysis.noise_db)) ? Number(analysis.noise_db) : -32;
+  const normDb = Math.max(0, Math.min(1, (noiseDb - -60) / (-12 - -60)));
+  const ampThr = 0.04 + normDb * 0.38;
+  const thrOffset = ampThr * (plotH - 8) * 0.5;
+  ctx.strokeStyle = "#fb7185";
+  ctx.lineWidth = 1.1;
+  ctx.setLineDash([4, 4]);
+  for (const sign of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(padL, midY + sign * thrOffset);
+    ctx.lineTo(padL + plotW, midY + sign * thrOffset);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Playhead cursor
+  if (Number.isFinite(Number(opts.playheadOffset))) {
+    const phOff = Math.max(0, Math.min(totalFrames, Number(opts.playheadOffset)));
+    const phX = padL + (phOff / totalFrames) * plotW;
+    ctx.strokeStyle = "#ff5a36";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(phX, padT - 2);
+    ctx.lineTo(phX, padT + plotH + 2);
+    ctx.stroke();
+  }
+
+  // Header & Footer labels
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.fillText(
+    `${analysis.clip_name || "CLIP"} (${Number(analysis.duration_s || 0).toFixed(2)}s)`,
+    padL,
+    5
+  );
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#fb7185";
+  ctx.fillText(`FLOOR ${noiseDb.toFixed(1)} dB`, padL + plotW, 5);
+
+  ctx.font = "9.5px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("0.00s", padL, height - 4);
+  ctx.textAlign = "right";
+  ctx.fillText(`${Number(analysis.duration_s || 0).toFixed(2)}s`, padL + plotW, height - 4);
+
+  return {
+    width,
+    height,
+    plotRect: { x: padL, y: padT, w: plotW, h: plotH },
+    totalFrames
+  };
+}

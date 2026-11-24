@@ -11982,3 +11982,240 @@ def test_scene_cut_detection_parity_and_playwright(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_ui_text_edit_rough_cut_endpoints_demo_parity_and_playwright(tmp_path: Path) -> None:
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc = build_sample_timeline("clean").model_dump(mode="json")
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+    try:
+        # 1. Server API tests (/api/timeline/text-edit/analyze & /apply)
+        st_an, _, raw_an = _http_call(
+            f"{base_url}/api/timeline/text-edit/analyze",
+            method="POST",
+            payload={
+                "document": doc,
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 0,
+                "noise_db": -32.0,
+                "min_silence_s": 0.45,
+                "padding_s": 0.08,
+                "detect_fillers": True,
+            },
+        )
+        assert st_an == 200
+        an_data = json.loads(raw_an.decode("utf-8"))
+        assert an_data["silencedetect_filtergraph"] == "silencedetect=noise=-32.0dB:d=0.45"
+        assert "select='between(t," in an_data["roughcut_filtergraph"]
+        assert len(an_data["waveform_peaks"]) == 64
+        assert an_data["silence_count"] >= 1
+        assert an_data["saved_duration_s"] > 0
+
+        # Invalid noise_db must return 400
+        st_bad, _, _ = _http_call(
+            f"{base_url}/api/timeline/text-edit/analyze",
+            method="POST",
+            payload={"document": doc, "noise_db": -90.0},
+        )
+        assert st_bad == 400
+
+        st_ap, _, raw_ap = _http_call(
+            f"{base_url}/api/timeline/text-edit/apply",
+            method="POST",
+            payload={
+                "document": doc,
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 0,
+                "segments": an_data["segments"],
+                "gap_mode": "ripple_delete",
+                "sync_linked_track": True,
+                "padding_s": 0.08,
+            },
+        )
+        assert st_ap == 200
+        ap_data = json.loads(raw_ap.decode("utf-8"))
+        assert ap_data["changed"] is True
+        assert ap_data["validation"]["valid"] is True
+        assert ap_data["saved_frames"] > 0
+        assert "-->" in ap_data["transcript_srt"]
+
+        # 2. Asset hygiene & Node ESM demo parity
+        assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+        i18n_text = (assets_dir / "i18n.js").read_text(encoding="utf-8")
+        for key in (
+            "timeline.tool.textEdit",
+            "shortcuts.key.textEdit",
+            "textEdit.title",
+            "textEdit.analyze",
+            "textEdit.cutSilences",
+            "textEdit.cutFillers",
+            "textEdit.applyCut",
+            "textEdit.exportSrt",
+        ):
+            assert i18n_text.count(f'"{key}"') == 2, f"Missing EN/FR key: {key}"
+
+        for asset_name in (
+            "index.html",
+            "app.js",
+            "canvas.js",
+            "timeline_ops.js",
+            "demo_adapter.js",
+            "i18n.js",
+            "styles.css",
+        ):
+            content = (assets_dir / asset_name).read_text(encoding="utf-8")
+            assert "\u2014" not in content, f"U+2014 found in {asset_name}"
+            assert "\u2013" not in content, f"U+2013 found in {asset_name}"
+            if asset_name.endswith(".js"):
+                assert "innerHTML" not in content, f"innerHTML sink found in {asset_name}"
+
+        if shutil.which("node"):
+            ops_uri = (assets_dir / "timeline_ops.js").resolve().as_uri()
+            demo_uri = (assets_dir / "demo_adapter.js").resolve().as_uri()
+            doc_json = json.dumps(doc)
+            node_script = (
+                f"import assert from 'node:assert/strict';\n"
+                f"import {{ analyzeClipTranscriptClient, applyTextEditRoughCutClient, "
+                f"compileSilencedetectFiltergraphClient }} from {json.dumps(ops_uri)};\n"
+                f"import {{ createApiClient }} from {json.dumps(demo_uri)};\n"
+                f"const doc = {doc_json};\n"
+                "const fg = compileSilencedetectFiltergraphClient(-32, 0.45);\n"
+                "assert.equal(fg, 'silencedetect=noise=-32.0dB:d=0.45');\n"
+                "const clientRes = analyzeClipTranscriptClient(doc, "
+                "{ track_index: 1, clip_index: 0 });\n"
+                "assert.ok(clientRes.segments.length >= 3);\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const api = createApiClient();\n"
+                "const aRes = await api.analyzeTextEdit("
+                "{ document: doc, track_index: 1, clip_index: 0 });\n"
+                "assert.ok(aRes.silence_count >= 1);\n"
+                "const rRes = await api.applyTextEditRoughCut({\n"
+                "  document: doc, track_index: 1, clip_index: 0,\n"
+                "  segments: aRes.segments, gap_mode: 'ripple_delete', sync_linked_track: true\n"
+                "});\n"
+                "assert.equal(rRes.changed, true);\n"
+                "assert.equal(rRes.validation.valid, true);\n"
+                "assert.ok(rRes.saved_frames > 0);\n"
+            )
+            proc = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed: {proc.stderr}"
+
+        # 3. Live Playwright E2E check at 1440x900 & 375x812
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#btn-timeline-text-edit")
+
+                # Open Text Edit Studio via button
+                page.click("#btn-timeline-text-edit")
+                page.wait_for_selector("#text-edit-dialog[open]")
+                page.wait_for_selector("#text-edit-transcript-list .text-edit-seg-row")
+
+                fg_txt = page.locator("#text-edit-fg-preview").text_content() or ""
+                assert "silencedetect=noise=" in fg_txt
+                assert "select='between(t," in fg_txt
+
+                # Test filler prune + segment toggle + filter pill
+                page.click("#btn-text-edit-cut-fillers")
+                first_toggle = page.locator(
+                    "#text-edit-transcript-list .text-edit-seg-row button[aria-pressed]"
+                ).first
+                prev_pressed = first_toggle.get_attribute("aria-pressed")
+                first_toggle.click()
+                assert first_toggle.get_attribute("aria-pressed") != prev_pressed
+                first_toggle.click()
+                assert first_toggle.get_attribute("aria-pressed") == prev_pressed
+
+                # Check EN/FR i18n parity
+                page.click("#btn-close-text-edit")
+                page.click("#lang-fr")
+                te_btn_txt = (
+                    page.locator("#btn-timeline-text-edit span").text_content() or ""
+                ).strip()
+                assert te_btn_txt == "Montage Texte"
+                page.click("#btn-timeline-text-edit")
+                page.wait_for_selector("#text-edit-dialog[open]")
+                fr_text = page.locator("#text-edit-dialog").text_content() or ""
+                assert "Studio Montage Texte" in fr_text
+                assert "\u2013" not in fr_text and "\u2014" not in fr_text
+
+                # Commit Rough Cut & verify timeline updates cleanly
+                initial_rows = page.locator("#timeline-index-list .timeline-index-row").count()
+                page.click("#btn-text-edit-apply")
+                page.wait_for_function("() => !document.getElementById('text-edit-dialog')?.open")
+                after_rows = page.locator("#timeline-index-list .timeline-index-row").count()
+                assert after_rows > initial_rows
+
+                page.click("#lang-en")
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check + Shift+D shortcut
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                page.click("#btn-timeline-text-edit")
+                page.wait_for_selector("#text-edit-dialog[open]")
+                overflow_mobile_dlg = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+                dlg_w = page.evaluate(
+                    "() => document.getElementById('text-edit-dialog')"
+                    ".getBoundingClientRect().width"
+                )
+                assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+                for ctrl_id in (
+                    "btn-timeline-text-edit",
+                    "btn-text-edit-analyze",
+                    "btn-text-edit-apply",
+                    "btn-close-text-edit",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+                page.click("#btn-close-text-edit")
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

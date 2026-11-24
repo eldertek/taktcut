@@ -1474,6 +1474,12 @@
                   </svg>
                   <span data-i18n="timeline.tool.sceneCut">Scene Cuts</span>
                 </button>
+                <button type="button" id="btn-timeline-text-edit" class="btn btn-mini tl-textedit-btn" title="Text-Based Dialogue Rough-Cut &amp; Auto-Silence (Shift+D)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M2.5 4h11M2.5 8h7.5M2.5 12h9.5M12.5 7l2 2-2 2" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.textEdit">Text Edit</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -4056,6 +4062,93 @@
       <div class="form-row">
         <label for="scene-cut-fg-preview" data-i18n="sceneCut.ffmpegPreview">Compiled FFmpeg scdet Filtergraph</label>
         <pre id="scene-cut-fg-preview" class="code-box mono"></pre>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="text-edit-dialog" class="nle-dialog text-edit-dialog" aria-labelledby="text-edit-title" aria-describedby="text-edit-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="text-edit-title" data-i18n="textEdit.title">Text-Based Dialogue Rough-Cut Studio</h2>
+        <p id="text-edit-subtitle" class="nle-dialog-subtitle" data-i18n="textEdit.subtitle">FFmpeg silencedetect Dead-Air Remover, Filler-Word Pruner &amp; Transcript Timeline Cutter</p>
+      </div>
+      <div class="viewer-controls">
+        <button type="button" id="btn-close-text-edit" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+    <div class="nle-dialog-body text-edit-body">
+      <div class="text-edit-form-grid">
+        <div class="form-row">
+          <label for="text-edit-clip-select" data-i18n="textEdit.targetClip">Target Clip</label>
+          <select id="text-edit-clip-select" class="input-control mono"></select>
+        </div>
+        <div class="form-row">
+          <label for="text-edit-noise-range" data-i18n="textEdit.noiseDb">Silence Floor (dBFS)</label>
+          <div class="text-edit-threshold-pair">
+            <input type="range" id="text-edit-noise-range" min="-60" max="-12" step="1" value="-32">
+            <input type="number" id="text-edit-noise-num" class="input-control input-num mono" min="-60" max="-12" step="1" value="-32" aria-label="Silence floor dBFS">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="text-edit-min-silence" data-i18n="textEdit.minSilence">Min Silence (s)</label>
+          <input type="number" id="text-edit-min-silence" class="input-control mono" min="0.15" max="5.0" step="0.05" value="0.45">
+        </div>
+        <div class="form-row">
+          <label for="text-edit-padding" data-i18n="textEdit.padding">Speech Padding (s)</label>
+          <input type="number" id="text-edit-padding" class="input-control mono" min="0" max="0.5" step="0.02" value="0.08">
+        </div>
+        <div class="form-row">
+          <label for="text-edit-gap-mode" data-i18n="textEdit.gapMode">Commit Mode</label>
+          <select id="text-edit-gap-mode" class="input-control mono">
+            <option value="ripple_delete" data-i18n="textEdit.modeRipple">Ripple Delete Silences</option>
+            <option value="extract_gaps" data-i18n="textEdit.modeExtract">Extract Gaps (Keep Sync)</option>
+            <option value="markers_only" data-i18n="textEdit.modeMarkers">Drop Cut Markers Only</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="text-edit-checks-row">
+        <label class="check-label">
+          <input type="checkbox" id="text-edit-detect-fillers" checked>
+          <span data-i18n="textEdit.detectFillers">Flag Filler Words (um, uh, euh, like)</span>
+        </label>
+        <label class="check-label">
+          <input type="checkbox" id="text-edit-sync-av" checked>
+          <span data-i18n="textEdit.syncAv">Sync Linked A/V Track</span>
+        </label>
+      </div>
+
+      <div class="btn-row text-edit-actions">
+        <button type="button" id="btn-text-edit-analyze" class="btn btn-secondary" data-i18n="textEdit.analyze">Analyze Transcript</button>
+        <button type="button" id="btn-text-edit-cut-silences" class="btn btn-mini" disabled data-i18n="textEdit.cutSilences">Cut All Silences</button>
+        <button type="button" id="btn-text-edit-cut-fillers" class="btn btn-mini" disabled data-i18n="textEdit.cutFillers">Cut All Fillers</button>
+        <button type="button" id="btn-text-edit-restore-all" class="btn btn-mini" disabled data-i18n="textEdit.restoreAll">Restore All</button>
+        <button type="button" id="btn-text-edit-export-srt" class="btn btn-mini" disabled data-i18n="textEdit.exportSrt">Export .SRT</button>
+        <button type="button" id="btn-text-edit-apply" class="btn btn-primary" disabled>Commit Rough Cut (0)</button>
+      </div>
+
+      <div class="text-edit-filter-bar">
+        <input type="search" id="text-edit-search" class="input-control text-edit-search" placeholder="Search dialogue or filler..." data-i18n-placeholder="textEdit.searchPlaceholder" aria-label="Search transcript">
+        <div class="text-edit-filter-pills" role="group" aria-label="Filter transcript segments">
+          <button type="button" class="btn btn-mini text-edit-filter-pill is-active" data-te-filter="all" aria-pressed="true" data-i18n="textEdit.filterAll">All</button>
+          <button type="button" class="btn btn-mini text-edit-filter-pill" data-te-filter="speech" aria-pressed="false" data-i18n="textEdit.filterSpeech">Speech</button>
+          <button type="button" class="btn btn-mini text-edit-filter-pill" data-te-filter="silence" aria-pressed="false" data-i18n="textEdit.filterSilence">Silences</button>
+          <button type="button" class="btn btn-mini text-edit-filter-pill" data-te-filter="filler" aria-pressed="false" data-i18n="textEdit.filterFiller">Fillers</button>
+          <button type="button" class="btn btn-mini text-edit-filter-pill" data-te-filter="cut" aria-pressed="false" data-i18n="textEdit.filterCut">Cut</button>
+        </div>
+      </div>
+
+      <div class="viewer-well text-edit-canvas-well">
+        <canvas id="text-edit-waveform-canvas" class="studio-canvas" aria-label="Transcript waveform and silence map"></canvas>
+      </div>
+
+      <div id="text-edit-status" class="telemetry-note mono" aria-live="polite" data-i18n="textEdit.statsIdle">Ready to transcribe dialogue and detect dead-air pauses.</div>
+
+      <div id="text-edit-transcript-list" class="text-edit-transcript-list" role="list" aria-label="Editable dialogue transcript segments"></div>
+
+      <div class="form-row">
+        <label for="text-edit-fg-preview" data-i18n="textEdit.ffmpegPreview">Compiled FFmpeg silencedetect + select Filtergraph</label>
+        <pre id="text-edit-fg-preview" class="code-box mono"></pre>
       </div>
     </div>
   </dialog>

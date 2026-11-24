@@ -13353,3 +13353,578 @@ export function splitClipAtSceneCutsClient(doc, opts = {}) {
     document: nextDoc
   };
 }
+
+// ---------------------------------------------------------------------------
+// Text-Based Dialogue Rough-Cut & Auto-Silence Studio (Cycle #101)
+// ---------------------------------------------------------------------------
+
+export const TEXT_EDIT_NOISE_DB_MIN = -60.0;
+export const TEXT_EDIT_NOISE_DB_MAX = -12.0;
+export const TEXT_EDIT_NOISE_DB_DEFAULT = -32.0;
+export const TEXT_EDIT_MIN_SILENCE_MIN = 0.15;
+export const TEXT_EDIT_MIN_SILENCE_MAX = 5.0;
+export const TEXT_EDIT_MIN_SILENCE_DEFAULT = 0.45;
+export const TEXT_EDIT_PADDING_MIN = 0.0;
+export const TEXT_EDIT_PADDING_MAX = 0.5;
+export const TEXT_EDIT_PADDING_DEFAULT = 0.08;
+export const TEXT_EDIT_GAP_MODES = ["ripple_delete", "extract_gaps", "markers_only"];
+export const DEFAULT_TEXT_EDIT_FILLERS = ["um", "uh", "erm", "like", "you know", "euh", "ben", "voila"];
+
+const _SYNTHETIC_TEXT_SENTENCES = [
+  ["Host", "Welcome back to the studio breakdown for today's master cut."],
+  ["Guest", "Every camera roll was synced against our production timecode."],
+  ["Host", "Let's tighten the intro pacing before we send this to color."],
+  ["Guest", "The wide establishing shot carries clean ambient room tone."],
+  ["Host", "Notice how the key light holds skin tones across the pivot."],
+  ["Guest", "We can trim the pause here and jump straight into the demo."],
+  ["Host", "That transition lands right on the downbeat of the cue."],
+  ["Guest", "Final QC checks passed with zero true-peak overshoots."]
+];
+
+function _hashStringU32(text) {
+  let h = 2166136261;
+  const str = String(text || "");
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+function _seededUnitSequenceClient(seedKey, count) {
+  let state = _hashStringU32(seedKey) || 0x9e3779b9;
+  const out = [];
+  for (let i = 0; i < count; i += 1) {
+    state = (Math.imul(state ^ (state >>> 15), 0x85ebca6b) + 0xc2b2ae35) >>> 0;
+    out.push((state % 10000) / 10000);
+  }
+  return out;
+}
+
+export function normalizeTextEditGapModeClient(raw) {
+  const cleaned = String(raw || "ripple_delete").trim().toLowerCase();
+  return TEXT_EDIT_GAP_MODES.includes(cleaned) ? cleaned : "ripple_delete";
+}
+
+export function compileSilencedetectFiltergraphClient(
+  noiseDb = TEXT_EDIT_NOISE_DB_DEFAULT,
+  minSilenceS = TEXT_EDIT_MIN_SILENCE_DEFAULT
+) {
+  const db = clampNum(
+    Number.isFinite(Number(noiseDb)) ? Number(noiseDb) : TEXT_EDIT_NOISE_DB_DEFAULT,
+    TEXT_EDIT_NOISE_DB_MIN,
+    TEXT_EDIT_NOISE_DB_MAX
+  );
+  const dur = clampNum(
+    Number.isFinite(Number(minSilenceS)) ? Number(minSilenceS) : TEXT_EDIT_MIN_SILENCE_DEFAULT,
+    TEXT_EDIT_MIN_SILENCE_MIN,
+    TEXT_EDIT_MIN_SILENCE_MAX
+  );
+  return `silencedetect=noise=${db.toFixed(1)}dB:d=${dur.toFixed(2)}`;
+}
+
+export function compileRoughcutSelectFiltergraphClient(keepRanges, includeAudio = true) {
+  if (!Array.isArray(keepRanges) || keepRanges.length === 0) return "null";
+  const terms = keepRanges
+    .filter((r) => r && Number(r.end_s) > Number(r.start_s))
+    .map((r) => `between(t,${Number(r.start_s).toFixed(3)},${Number(r.end_s).toFixed(3)})`);
+  if (terms.length === 0) return "null";
+  const expr = terms.join("+");
+  const vf = `select='${expr}',setpts=N/FRAME_RATE/TB`;
+  if (!includeAudio) return vf;
+  const af = `aselect='${expr}',asetpts=N/SR/TB`;
+  return `${vf} ; ${af}`;
+}
+
+export function formatSrtTimestampClient(seconds) {
+  const clamped = Math.max(0, Number(seconds) || 0);
+  const totalMs = Math.round(clamped * 1000);
+  const ms = totalMs % 1000;
+  const totalS = Math.floor(totalMs / 1000);
+  const ss = totalS % 60;
+  const mm = Math.floor(totalS / 60) % 60;
+  const hh = Math.floor(totalS / 3600);
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+}
+
+export function exportTranscriptSrtClient(segments, includeDeleted = false) {
+  if (!Array.isArray(segments) || segments.length === 0) return "";
+  const lines = [];
+  let cueNum = 1;
+  let cursorS = 0;
+  for (const seg of segments) {
+    if (!seg || seg.kind === "silence") continue;
+    if (seg.deleted && !includeDeleted) continue;
+    const dur = Math.max(0.05, Number(seg.duration_s) || 0.05);
+    const t0 = includeDeleted ? Number(seg.start_s) || 0 : cursorS;
+    const t1 = t0 + dur;
+    cursorS = t1;
+    lines.push(String(cueNum));
+    lines.push(`${formatSrtTimestampClient(t0)} --> ${formatSrtTimestampClient(t1)}`);
+    lines.push(`${seg.speaker || "Speaker 1"}: ${seg.text || ""}`);
+    lines.push("");
+    cueNum += 1;
+  }
+  return lines.length > 0 ? `${lines.join("\n").trim()}\n` : "";
+}
+
+export function computeKeepRangesFromSegmentsClient(
+  segments,
+  clipDurationFrames,
+  fpsNum = 25,
+  fpsDen = 1,
+  paddingS = TEXT_EDIT_PADDING_DEFAULT
+) {
+  const fpsFloat = Math.max(1, Number(fpsNum) / Math.max(1, Number(fpsDen)));
+  const padVal = clampNum(
+    Number.isFinite(Number(paddingS)) ? Number(paddingS) : TEXT_EDIT_PADDING_DEFAULT,
+    TEXT_EDIT_PADDING_MIN,
+    TEXT_EDIT_PADDING_MAX
+  );
+  const padFrames = Math.max(0, Math.round(padVal * fpsFloat));
+  const kept = (Array.isArray(segments) ? segments : [])
+    .filter((s) => s && !s.deleted && Number(s.end_frame) > Number(s.start_frame))
+    .slice()
+    .sort((a, b) => Number(a.start_frame) - Number(b.start_frame) || Number(a.end_frame) - Number(b.end_frame));
+  if (kept.length === 0) return [];
+
+  const merged = [];
+  for (const seg of kept) {
+    const sf = Math.max(0, Math.round(Number(seg.start_frame)) - padFrames);
+    const ef = Math.min(clipDurationFrames, Math.round(Number(seg.end_frame)) + padFrames);
+    if (merged.length === 0 || sf > merged[merged.length - 1][1]) {
+      merged.push([sf, ef]);
+    } else {
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], ef);
+    }
+  }
+  return merged
+    .filter((rng) => rng[1] > rng[0])
+    .map((rng) => ({
+      start_frame: rng[0],
+      end_frame: rng[1],
+      start_s: Number((rng[0] / fpsFloat).toFixed(3)),
+      end_s: Number((rng[1] / fpsFloat).toFixed(3))
+    }));
+}
+
+export function analyzeClipTranscriptClient(doc, opts = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    throw new Error("Timeline document is required.");
+  }
+  const trackKind = String(opts.track_kind || "video").toLowerCase() === "audio" ? "audio" : "video";
+  const trkIdx = Number.isInteger(opts.track_index) ? opts.track_index : 1;
+  const clpIdx = Number.isInteger(opts.clip_index) ? opts.clip_index : 0;
+  const tracksOfKind = doc.tracks.filter((t) => t && t.kind === trackKind);
+  const track = tracksOfKind[trkIdx - 1];
+  if (!track || !Array.isArray(track.clips) || clpIdx < 0 || clpIdx >= track.clips.length) {
+    throw new Error(`${trackKind} clip not found on track ${trkIdx} [${clpIdx}]`);
+  }
+  const clip = track.clips[clpIdx];
+  const noiseDb = clampNum(
+    Number.isFinite(Number(opts.noise_db)) ? Number(opts.noise_db) : TEXT_EDIT_NOISE_DB_DEFAULT,
+    TEXT_EDIT_NOISE_DB_MIN,
+    TEXT_EDIT_NOISE_DB_MAX
+  );
+  const minSilenceS = clampNum(
+    Number.isFinite(Number(opts.min_silence_s)) ? Number(opts.min_silence_s) : TEXT_EDIT_MIN_SILENCE_DEFAULT,
+    TEXT_EDIT_MIN_SILENCE_MIN,
+    TEXT_EDIT_MIN_SILENCE_MAX
+  );
+  const paddingS = clampNum(
+    Number.isFinite(Number(opts.padding_s)) ? Number(opts.padding_s) : TEXT_EDIT_PADDING_DEFAULT,
+    TEXT_EDIT_PADDING_MIN,
+    TEXT_EDIT_PADDING_MAX
+  );
+  const detectFillers = opts.detect_fillers !== false;
+  const fpsNum = Number(doc.fps && (doc.fps.num || doc.fps.numerator)) || 25;
+  const fpsDen = Number(doc.fps && (doc.fps.den || doc.fps.denominator)) || 1;
+  const fpsFloat = Math.max(1, fpsNum / Math.max(1, fpsDen));
+  const fpsInt = Math.max(1, Math.round(fpsFloat));
+  const durFrames = Math.max(1, Math.round(Number(clip.duration_frames) || 1));
+  const durationS = Number((durFrames / fpsFloat).toFixed(3));
+  const bins = 64;
+  const randVals = _seededUnitSequenceClient(`${clip.name}:${durFrames}`, bins + 8);
+  const pauseCenters = [0.22, 0.54, 0.81];
+  const peaks = [];
+  for (let i = 0; i < bins; i += 1) {
+    const pos = i / Math.max(1, bins - 1);
+    const inValley = pauseCenters.some((c) => Math.abs(pos - c) < 0.065);
+    const amp = inValley ? 0.03 + randVals[i] * 0.06 : 0.36 + randVals[i] * 0.56;
+    peaks.push(Number(Math.min(1, amp).toFixed(4)));
+  }
+
+  const normDb = (noiseDb - TEXT_EDIT_NOISE_DB_MIN) / (TEXT_EDIT_NOISE_DB_MAX - TEXT_EDIT_NOISE_DB_MIN);
+  const ampThreshold = 0.04 + normDb * 0.38;
+  const binDur = durationS / bins;
+  const silences = [];
+  let runStart = null;
+  for (let i = 0; i < bins; i += 1) {
+    if (peaks[i] <= ampThreshold) {
+      if (runStart === null) runStart = i;
+    } else if (runStart !== null) {
+      const s0 = runStart * binDur;
+      const s1 = i * binDur;
+      if (s1 - s0 >= minSilenceS) silences.push({ start_s: s0, end_s: s1 });
+      runStart = null;
+    }
+  }
+  if (runStart !== null) {
+    const s0 = runStart * binDur;
+    if (durationS - s0 >= minSilenceS) silences.push({ start_s: s0, end_s: durationS });
+  }
+
+  const spans = [];
+  let cursorS = 0;
+  for (const iv of silences) {
+    if (iv.start_s > cursorS + 0.05) spans.push(["speech", cursorS, iv.start_s]);
+    if (iv.end_s > Math.max(cursorS, iv.start_s) + 0.04) {
+      spans.push(["silence", Math.max(cursorS, iv.start_s), iv.end_s]);
+      cursorS = iv.end_s;
+    }
+  }
+  if (durationS > cursorS + 0.05) spans.push(["speech", cursorS, durationS]);
+  if (spans.length === 0) spans.push(["speech", 0, durationS]);
+
+  const expanded = [];
+  let fillerToggle = 0;
+  for (const [kind, s0, s1] of spans) {
+    const spanLen = s1 - s0;
+    if (kind === "speech" && detectFillers && spanLen >= 1.4) {
+      const fillerDur = Math.min(0.38, Math.max(0.22, spanLen * 0.14));
+      if (fillerToggle % 2 === 0) {
+        expanded.push(["speech", s0, s1 - fillerDur]);
+        expanded.push(["filler", s1 - fillerDur, s1]);
+      } else {
+        expanded.push(["filler", s0, s0 + fillerDur]);
+        expanded.push(["speech", s0 + fillerDur, s1]);
+      }
+      fillerToggle += 1;
+    } else {
+      expanded.push([kind, s0, s1]);
+    }
+  }
+
+  const seedHash = _hashStringU32(clip.name);
+  const fillerVocab = Array.isArray(opts.custom_fillers) && opts.custom_fillers.length
+    ? opts.custom_fillers
+    : DEFAULT_TEXT_EDIT_FILLERS;
+  const segments = [];
+  let speechIdx = 0;
+  let fillerIdx = 0;
+  let prevEndF = 0;
+
+  for (let idx = 0; idx < expanded.length; idx += 1) {
+    const [kind, s0, s1] = expanded[idx];
+    const startF = Math.max(prevEndF, Math.min(durFrames - 1, Math.round(s0 * fpsFloat)));
+    const endF =
+      idx === expanded.length - 1
+        ? durFrames
+        : Math.max(startF + 1, Math.min(durFrames, Math.round(s1 * fpsFloat)));
+    if (endF <= startF) continue;
+    prevEndF = endF;
+    const realS0 = Number((startF / fpsFloat).toFixed(3));
+    const realS1 = Number((endF / fpsFloat).toFixed(3));
+    const durSec = Number(Math.max(0, realS1 - realS0).toFixed(3));
+    const segId = `seg_${String(idx + 1).padStart(3, "0")}`;
+
+    let speaker = "Speaker 1";
+    let text = "";
+    let deleted = false;
+    if (kind === "silence") {
+      speaker = "Pause";
+      text = `[Silence ${durSec.toFixed(2)}s]`;
+      deleted = true;
+    } else if (kind === "filler") {
+      speaker = "Speaker 1";
+      text = fillerVocab[(seedHash + fillerIdx) % fillerVocab.length];
+      fillerIdx += 1;
+    } else {
+      const pair = _SYNTHETIC_TEXT_SENTENCES[(seedHash + speechIdx) % _SYNTHETIC_TEXT_SENTENCES.length];
+      speaker = pair[0];
+      text = pair[1];
+      speechIdx += 1;
+    }
+
+    const tlStart = (Number(clip.start_frame) || 0) + startF;
+    const tlEnd = (Number(clip.start_frame) || 0) + endF;
+    const tokens = text.split(/\s+/).filter(Boolean);
+    const stepS = Math.max(0.04, realS1 - realS0) / Math.max(1, tokens.length);
+    const words = tokens.map((tok, wIdx) => {
+      const ws0 = Number((realS0 + wIdx * stepS).toFixed(3));
+      const ws1 = Number((realS0 + (wIdx + 1) * stepS).toFixed(3));
+      const wf0 = Math.max(0, Math.min(durFrames - 1, Math.round(ws0 * fpsFloat)));
+      const wf1 = Math.max(wf0 + 1, Math.min(durFrames, Math.round(ws1 * fpsFloat)));
+      return {
+        word_id: `${segId}_w${wIdx + 1}`,
+        text: tok,
+        start_s: ws0,
+        end_s: ws1,
+        start_frame: wf0,
+        end_frame: wf1,
+        is_filler: kind === "filler",
+        is_silence: kind === "silence",
+        deleted,
+        confidence: kind === "filler" ? 0.91 : 0.98
+      };
+    });
+
+    segments.push({
+      segment_id: segId,
+      speaker,
+      kind,
+      start_s: realS0,
+      end_s: realS1,
+      start_frame: startF,
+      end_frame: endF,
+      timeline_start_frame: tlStart,
+      timeline_end_frame: tlEnd,
+      duration_s: durSec,
+      text,
+      timecode: framesToSmpteTimecode(tlStart, fpsInt),
+      deleted,
+      words
+    });
+  }
+
+  const keepRanges = computeKeepRangesFromSegmentsClient(segments, durFrames, fpsNum, fpsDen, paddingS);
+  const hasAudioTrack = trackKind === "audio" || doc.tracks.some((t) => t && t.kind === "audio");
+  const roughcutFg = compileRoughcutSelectFiltergraphClient(keepRanges, hasAudioTrack);
+  const silencedetectFg = compileSilencedetectFiltergraphClient(noiseDb, minSilenceS);
+  const silenceCount = segments.filter((s) => s.kind === "silence").length;
+  const fillerCount = segments.filter((s) => s.kind === "filler").length;
+  const speechCount = segments.filter((s) => s.kind === "speech").length;
+  const totalSilenceS = Number(
+    segments.filter((s) => s.kind === "silence").reduce((acc, s) => acc + s.duration_s, 0).toFixed(3)
+  );
+  const keptS = Number(
+    keepRanges.reduce((acc, r) => acc + (r.end_s - r.start_s), 0).toFixed(3)
+  );
+  const savedS = Number(Math.max(0, durationS - keptS).toFixed(3));
+
+  return {
+    clip_name: clip.name,
+    track_kind: trackKind,
+    track_index: trkIdx,
+    clip_index: clpIdx,
+    clip_start_frame: Number(clip.start_frame) || 0,
+    clip_duration_frames: durFrames,
+    fps_num: fpsNum,
+    fps_den: fpsDen,
+    duration_s: durationS,
+    noise_db: noiseDb,
+    min_silence_s: minSilenceS,
+    padding_s: paddingS,
+    engine: "deterministic_synthetic",
+    silencedetect_filtergraph: silencedetectFg,
+    roughcut_filtergraph: roughcutFg,
+    waveform_peaks: peaks,
+    segments,
+    silence_count: silenceCount,
+    filler_count: fillerCount,
+    speech_count: speechCount,
+    total_silence_s: totalSilenceS,
+    kept_duration_s: keptS,
+    saved_duration_s: savedS
+  };
+}
+
+function _sliceClipByKeepRangesClient(clip, keepRanges, rippleDelete, linkGroups) {
+  const slices = [];
+  let cursor = Number(clip.start_frame) || 0;
+  const total = keepRanges.length;
+  for (let i = 0; i < total; i += 1) {
+    const rng = keepRanges[i];
+    const segDur = rng.end_frame - rng.start_frame;
+    if (segDur <= 0) continue;
+    const srcBase = Number(clip.source_in_frame) || 0;
+    const srcIn = clip.reverse
+      ? srcBase + Math.max(0, Number(clip.duration_frames) - rng.end_frame)
+      : srcBase + rng.start_frame;
+    const segStart = rippleDelete ? cursor : (Number(clip.start_frame) || 0) + rng.start_frame;
+    const seg = JSON.parse(JSON.stringify(clip));
+    seg.name = `${clip.name}_RC${String(i + 1).padStart(2, "0")}`;
+    seg.start_frame = segStart;
+    seg.duration_frames = segDur;
+    seg.source_in_frame = srcIn;
+    if (i > 0) seg.fade_in_s = 0;
+    if (i < total - 1) {
+      seg.fade_out_s = 0;
+      seg.transition_out = null;
+    }
+    if (Array.isArray(linkGroups) && i < linkGroups.length) {
+      seg.link_group_id = linkGroups[i];
+    }
+    slices.push(seg);
+    cursor += segDur;
+  }
+  return slices;
+}
+
+export function applyTextEditRoughCutClient(doc, opts = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    throw new Error("Timeline document is required.");
+  }
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const trackKind = String(opts.track_kind || "video").toLowerCase() === "audio" ? "audio" : "video";
+  const trkIdx = Number.isInteger(opts.track_index) ? opts.track_index : 1;
+  const clpIdx = Number.isInteger(opts.clip_index) ? opts.clip_index : 0;
+  const gapMode = normalizeTextEditGapModeClient(opts.gap_mode || "ripple_delete");
+  const syncLinked = opts.sync_linked_track !== false;
+  const markerColor = String(opts.marker_color || "Red");
+  const paddingS = Number.isFinite(Number(opts.padding_s)) ? Number(opts.padding_s) : TEXT_EDIT_PADDING_DEFAULT;
+
+  const tracksOfKind = nextDoc.tracks.filter((t) => t && t.kind === trackKind);
+  const track = tracksOfKind[trkIdx - 1];
+  if (!track || !Array.isArray(track.clips) || clpIdx < 0 || clpIdx >= track.clips.length) {
+    throw new Error(`${trackKind} clip not found on track ${trkIdx} [${clpIdx}]`);
+  }
+  const clip = track.clips[clpIdx];
+  const dur = Math.max(0, Math.round(Number(clip.duration_frames) || 0));
+  if (dur < 2) {
+    throw new Error(`Clip '${clip.name}' is too short for text rough-cut.`);
+  }
+
+  let segments = Array.isArray(opts.segments)
+    ? opts.segments.map((s) => ({ ...s }))
+    : analyzeClipTranscriptClient(nextDoc, opts).segments;
+
+  if (Array.isArray(opts.delete_segment_ids)) {
+    const delSet = new Set(opts.delete_segment_ids.map(String));
+    segments = segments.map((s) => (delSet.has(s.segment_id) ? { ...s, deleted: true } : s));
+  }
+
+  const fpsNum = Number(nextDoc.fps && (nextDoc.fps.num || nextDoc.fps.numerator)) || 25;
+  const fpsDen = Number(nextDoc.fps && (nextDoc.fps.den || nextDoc.fps.denominator)) || 1;
+  const keepRanges = computeKeepRangesFromSegmentsClient(segments, dur, fpsNum, fpsDen, paddingS);
+  if (keepRanges.length === 0) {
+    throw new Error("Cannot delete every transcript segment; at least one speech segment must remain.");
+  }
+
+  const hasAudio = trackKind === "audio" || nextDoc.tracks.some((t) => t && t.kind === "audio");
+  const ffmpegFg = compileRoughcutSelectFiltergraphClient(keepRanges, hasAudio);
+  const transcriptSrt = exportTranscriptSrtClient(segments, false);
+  const removedIds = segments.filter((s) => s.deleted).map((s) => s.segment_id);
+  const keptDur = keepRanges.reduce((acc, r) => acc + (r.end_frame - r.start_frame), 0);
+  const savedFrames = Math.max(0, dur - keptDur);
+
+  if (gapMode === "markers_only") {
+    if (!Array.isArray(nextDoc.markers)) nextDoc.markers = [];
+    const existing = new Set(nextDoc.markers.map((m) => Number(m.frame)));
+    const createdMarkerFrames = [];
+    for (const seg of segments) {
+      if (!seg.deleted) continue;
+      const tlFrame = (Number(clip.start_frame) || 0) + Number(seg.start_frame);
+      if (!existing.has(tlFrame)) {
+        nextDoc.markers.push({
+          frame: tlFrame,
+          name: `Cut: ${String(seg.text || "").slice(0, 24)}`,
+          color: markerColor,
+          note: `Text Edit (${seg.kind}) ${Number(seg.duration_s || 0).toFixed(2)}s`
+        });
+        existing.add(tlFrame);
+        createdMarkerFrames.push(tlFrame);
+      }
+    }
+    nextDoc.markers.sort((a, b) => Number(a.frame) - Number(b.frame));
+    return {
+      changed: true,
+      track_kind: trackKind,
+      track_index: trkIdx,
+      clip_index: clpIdx,
+      gap_mode: gapMode,
+      kept_ranges: keepRanges,
+      removed_segment_ids: removedIds,
+      created_clip_names: [],
+      created_marker_frames: createdMarkerFrames,
+      original_duration_frames: dur,
+      roughcut_duration_frames: dur,
+      saved_frames: savedFrames,
+      linked_track_synced: false,
+      ffmpeg_filtergraph: ffmpegFg,
+      transcript_srt: transcriptSrt,
+      summary: `Marked ${createdMarkerFrames.length} cut point(s) on '${clip.name}'`,
+      document: nextDoc
+    };
+  }
+
+  const rippleDelete = gapMode === "ripple_delete";
+  const partnerKind = trackKind === "video" ? "audio" : "video";
+  let partnerTrack = null;
+  let partnerIdx = -1;
+  let partnerClip = null;
+  if (syncLinked) {
+    for (const pt of nextDoc.tracks) {
+      if (!pt || pt.kind !== partnerKind || !Array.isArray(pt.clips)) continue;
+      let idx = -1;
+      if (clip.link_group_id) {
+        idx = pt.clips.findIndex((c) => c && c.link_group_id === clip.link_group_id);
+      }
+      if (idx < 0) {
+        idx = pt.clips.findIndex(
+          (c) =>
+            c &&
+            Number(c.start_frame) === Number(clip.start_frame) &&
+            Number(c.duration_frames) === dur
+        );
+      }
+      if (idx >= 0) {
+        partnerTrack = pt;
+        partnerIdx = idx;
+        partnerClip = pt.clips[idx];
+        break;
+      }
+    }
+  }
+
+  const linkGroups = keepRanges.map((_, i) => `te_${clip.name}_${String(i + 1).padStart(2, "0")}`.slice(0, 64));
+  const newSlices = _sliceClipByKeepRangesClient(
+    clip,
+    keepRanges,
+    rippleDelete,
+    partnerClip ? linkGroups : null
+  );
+  const deltaShift = keptDur - dur;
+  const origEnd = (Number(clip.start_frame) || 0) + dur;
+  const downstream = track.clips.slice(clpIdx + 1).map((c) => {
+    if (rippleDelete && deltaShift !== 0 && Number(c.start_frame) >= origEnd) {
+      return { ...c, start_frame: Math.max(0, Number(c.start_frame) + deltaShift) };
+    }
+    return c;
+  });
+  track.clips = [...track.clips.slice(0, clpIdx), ...newSlices, ...downstream];
+
+  let linkedSynced = false;
+  if (partnerTrack && partnerClip && partnerIdx >= 0) {
+    const pSlices = _sliceClipByKeepRangesClient(partnerClip, keepRanges, rippleDelete, linkGroups);
+    const pEnd = (Number(partnerClip.start_frame) || 0) + Number(partnerClip.duration_frames);
+    const pDownstream = partnerTrack.clips.slice(partnerIdx + 1).map((c) => {
+      if (rippleDelete && deltaShift !== 0 && Number(c.start_frame) >= pEnd) {
+        return { ...c, start_frame: Math.max(0, Number(c.start_frame) + deltaShift) };
+      }
+      return c;
+    });
+    partnerTrack.clips = [...partnerTrack.clips.slice(0, partnerIdx), ...pSlices, ...pDownstream];
+    linkedSynced = true;
+  }
+
+  return {
+    changed: true,
+    track_kind: trackKind,
+    track_index: trkIdx,
+    clip_index: clpIdx,
+    gap_mode: gapMode,
+    kept_ranges: keepRanges,
+    removed_segment_ids: removedIds,
+    created_clip_names: newSlices.map((s) => s.name),
+    created_marker_frames: [],
+    original_duration_frames: dur,
+    roughcut_duration_frames: keptDur,
+    saved_frames: savedFrames,
+    linked_track_synced: linkedSynced,
+    ffmpeg_filtergraph: ffmpegFg,
+    transcript_srt: transcriptSrt,
+    summary: `Rough-cut '${clip.name}' into ${newSlices.length} segment(s) (-${savedFrames}f removed)`,
+    document: nextDoc
+  };
+}
