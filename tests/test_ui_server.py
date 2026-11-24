@@ -11479,3 +11479,296 @@ def test_motion_graphics_studio_playwright_e2e_and_responsive(tmp_path: Path) ->
 
 
 
+
+def test_ui_media_pool_pro_proxy_relink_av_sync_e2e(tmp_path: Path) -> None:
+    """Verify Media Pool Pro endpoints, demo_adapter parity, Playwright UI, EN/FR, and 375px."""
+    import shutil
+    import subprocess
+
+    from taktcut.ui.samples import build_sample_timeline
+    from taktcut.ui.server import ASSETS_DIR
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir(parents=True)
+    for fname in ("A001_Opening_Wide.mov", "A002_Studio_Detail.mov", "VO_Field.wav"):
+        (media_dir / fname).write_bytes(b"mock-media")
+
+    sample_doc = build_sample_timeline("clean").model_dump(mode="json")
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        # 1. Proxy generate + clear
+        st_pxy, _, raw_pxy = _http_call(
+            f"{base_url}/api/media-pool/proxy/generate",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "scale": "half",
+                "codec": "prores_proxy",
+                "scope": "all_video",
+                "proxy_dir": ".taktcut-proxies",
+            },
+        )
+        assert st_pxy == 200
+        pxy_res = json.loads(raw_pxy.decode("utf-8"))
+        assert pxy_res["changed"] is True
+        assert pxy_res["generated_count"] >= 2
+        assert "scale=trunc(iw/4)*2:trunc(ih/4)*2" in pxy_res["plans"][0]["video_filter"]
+
+        # Reject traversal in proxy_dir
+        bad_pxy, _, _ = _http_call(
+            f"{base_url}/api/media-pool/proxy/generate",
+            method="POST",
+            payload={"document": sample_doc, "proxy_dir": "../escape"},
+        )
+        assert bad_pxy == 400
+
+        # 2. Offline toggle + audit + auto_relink
+        st_off, _, raw_off = _http_call(
+            f"{base_url}/api/media-pool/relink",
+            method="POST",
+            payload={
+                "document": pxy_res["document"],
+                "op": "mark_offline",
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 0,
+            },
+        )
+        assert st_off == 200
+        off_res = json.loads(raw_off.decode("utf-8"))
+        assert off_res["audit"]["offline_count"] == 1
+
+        st_auto, _, raw_auto = _http_call(
+            f"{base_url}/api/media-pool/relink",
+            method="POST",
+            payload={
+                "document": off_res["document"],
+                "op": "auto_relink",
+                "workspace_files": ["media/A001_Opening_Wide.mov"],
+                "min_confidence": 60,
+            },
+        )
+        assert st_auto == 200
+        auto_res = json.loads(raw_auto.decode("utf-8"))
+        assert auto_res["changed"] is True
+        assert auto_res["audit"]["offline_count"] == 0
+
+        # 3. A/V Auto-Sync analyze + apply
+        st_sync, _, raw_sync = _http_call(
+            f"{base_url}/api/media-pool/av-sync/analyze",
+            method="POST",
+            payload={
+                "document": auto_res["document"],
+                "video_track_index": 1,
+                "video_clip_index": 0,
+                "audio_track_index": 1,
+                "audio_clip_index": 0,
+                "mode": "timecode",
+                "video_tc": "01:00:00:00",
+                "audio_tc": "01:00:00:06",
+            },
+        )
+        assert st_sync == 200
+        sync_res = json.loads(raw_sync.decode("utf-8"))
+        assert sync_res["offset_frames"] == 6
+        assert "adelay=240.00|240.00,asetpts=PTS-STARTPTS" in sync_res["audio_filter"]
+
+        st_apply, _, raw_apply = _http_call(
+            f"{base_url}/api/media-pool/av-sync/apply",
+            method="POST",
+            payload={
+                "document": auto_res["document"],
+                "video_track_index": 1,
+                "video_clip_index": 0,
+                "audio_track_index": 1,
+                "audio_clip_index": 0,
+                "offset_frames": 6,
+                "link_pair": True,
+            },
+        )
+        assert st_apply == 200
+        apply_res = json.loads(raw_apply.decode("utf-8"))
+        assert apply_res["changed"] is True
+
+        # 4. Node.js parity for timeline_ops.js + demo_adapter.js static-demo
+        if shutil.which("node"):
+            demo_url = (ASSETS_DIR / "demo_adapter.js").as_uri()
+            ops_url = (ASSETS_DIR / "timeline_ops.js").as_uri()
+            node_script = (
+                "import assert from 'node:assert/strict';\n"
+                f"import {{ createApiClient }} from '{demo_url}';\n"
+                "import {\n"
+                "  compileProxyPlanClient,\n"
+                "  compileAvSyncFiltergraphClient\n"
+                f"}} from '{ops_url}';\n"
+                f"const doc = {json.dumps(sample_doc)};\n"
+                "const pPlan = compileProxyPlanClient(\n"
+                "  { clip_name: 'Shot1', scale: 'quarter', codec: 'h264_proxy' }\n"
+                ");\n"
+                "assert.equal(pPlan.proxy_width, 480);\n"
+                "assert.equal(pPlan.proxy_height, 270);\n"
+                "const fg = compileAvSyncFiltergraphClient(6, { num: 25, den: 1 });\n"
+                "assert.ok(fg.includes('asetpts=PTS-STARTPTS'));\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const api = createApiClient();\n"
+                "const g = await api.generateMediaPoolProxies({\n"
+                "  document: doc, scale: 'half', codec: 'prores_proxy', scope: 'all_video'\n"
+                "});\n"
+                "assert.equal(g.changed, true);\n"
+                "const mOff = await api.relinkMediaPoolClips({\n"
+                "  document: g.document, op: 'mark_offline',\n"
+                "  track_kind: 'video', track_index: 1, clip_index: 0\n"
+                "});\n"
+                "assert.equal(mOff.audit.offline_count, 1);\n"
+                "const mAuto = await api.relinkMediaPoolClips({\n"
+                "  document: mOff.document, op: 'auto_relink',\n"
+                "  workspace_files: ['media/A001_Opening_Wide.mov']\n"
+                "});\n"
+                "assert.equal(mAuto.changed, true);\n"
+                "const aSync = await api.analyzeMediaPoolAvSync({\n"
+                "  document: mAuto.document, mode: 'waveform',\n"
+                "  video_track_index: 1, video_clip_index: 0,\n"
+                "  audio_track_index: 1, audio_clip_index: 0\n"
+                "});\n"
+                "assert.ok(aSync.correlation_curve.length > 5);\n"
+                "const apSync = await api.applyMediaPoolAvSync({\n"
+                "  document: mAuto.document,\n"
+                "  video_track_index: 1, video_clip_index: 0,\n"
+                "  audio_track_index: 1, audio_clip_index: 0,\n"
+                "  offset_frames: aSync.offset_frames, link_pair: true\n"
+                "});\n"
+                "assert.equal(apSync.changed, true);\n"
+            )
+            proc = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed: {proc.stderr}"
+
+        # 5. Live Playwright E2E check
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#media-pool-list .media-pool-card")
+
+                # Toggle PROXY ON directly from Master Bin header
+                page.click("#btn-proxy-mode-toggle")
+                proxy_btn = page.locator("#btn-proxy-mode-toggle")
+                assert proxy_btn.get_attribute("aria-pressed") == "true"
+
+                # Open Media Pool Pro Studio dialog
+                page.click("#btn-media-pool-pro")
+                page.wait_for_selector("#media-pool-pro-dialog[open]")
+
+                # Generate 1/2 ProRes Proxies
+                page.click("#btn-pool-proxy-generate")
+                page.wait_for_function(
+                    "() => (document.getElementById('pool-proxy-feedback')?.textContent || '')"
+                    ".includes('Generated')"
+                )
+                assert "scale=trunc(iw/4)*2" in (
+                    page.locator("#pool-proxy-cmd-preview").text_content() or ""
+                )
+
+                # Switch to Offline & Relink tab, mark selected clip offline & auto-relink
+                page.click("#tab-pool-pro-relink")
+                page.click("#btn-pool-toggle-offline")
+                page.wait_for_function(
+                    "() => (document.getElementById('pool-audit-summary')?.textContent || '')"
+                    ".includes('1 OFFLINE')"
+                )
+                page.click("#btn-pool-auto-relink")
+                page.wait_for_function(
+                    "() => (document.getElementById('pool-audit-summary')?.textContent || '')"
+                    ".includes('0 OFFLINE')"
+                )
+
+                # Switch to A/V Auto-Sync tab, analyze & apply
+                page.click("#tab-pool-pro-sync")
+                page.click("#btn-pool-analyze-sync")
+                page.wait_for_function(
+                    "() => (document.getElementById('pool-sync-fg-preview')?.textContent || '')"
+                    ".includes('asetpts=PTS-STARTPTS')"
+                )
+                page.click("#btn-pool-apply-sync")
+                page.wait_for_function(
+                    "() => (document.getElementById('pool-sync-feedback')?.textContent || '')"
+                    ".includes('Synced')"
+                )
+
+                # Check EN/FR i18n parity & zero U+2013/U+2014
+                page.click("#btn-close-media-pool-pro")
+                page.click("#lang-fr")
+                fr_pxy_lbl = (page.locator("#btn-proxy-mode-toggle").text_content() or "").strip()
+                assert fr_pxy_lbl == "PROXY ON"
+                page.click("#btn-media-pool-pro")
+                fr_dlg = page.locator("#media-pool-pro-dialog").text_content() or ""
+                assert "Studio Media Pool Pro" in fr_dlg
+                assert "Générateur Proxy" in fr_dlg
+                assert "\u2013" not in fr_dlg and "\u2014" not in fr_dlg
+                page.click("#btn-close-media-pool-pro")
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 responsive & >= 44px touch targets
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                page.click("#btn-media-pool-pro")
+                page.wait_for_selector("#media-pool-pro-dialog[open]")
+                overflow_mobile_dlg = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+
+                for ctrl_id in (
+                    "btn-proxy-mode-toggle",
+                    "btn-media-pool-pro",
+                    "media-pool-offline-badge",
+                    "tab-pool-pro-proxy",
+                    "tab-pool-pro-relink",
+                    "tab-pool-pro-sync",
+                    "btn-pool-proxy-generate",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+                page.click("#btn-close-media-pool-pro")
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

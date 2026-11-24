@@ -103,6 +103,21 @@ from taktcut.fx import (
     list_planar_tracker_presets,
     list_stabilizer_presets,
 )
+from taktcut.media_pool import (
+    AV_SYNC_MAX_LAG_DEFAULT,
+    DEFAULT_PROXY_DIR,
+    analyze_av_sync,
+    apply_av_sync_to_document,
+    audit_media_pool_links,
+    auto_relink_all_in_document,
+    clear_proxies_for_document,
+    generate_proxies_for_document,
+    normalize_av_sync_mode,
+    normalize_proxy_codec,
+    normalize_proxy_scale,
+    relink_clip_in_document,
+    toggle_clip_offline_in_document,
+)
 from taktcut.models import (
     ALLOWED_COMPOUND_COLOR_TAGS,
     ALLOWED_MULTICAM_CUT_MODES,
@@ -2674,6 +2689,233 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "active_angle": mc_res.active_angle,
                     "detail": mc_res.detail,
                     "document": mc_res.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/media-pool/proxy/generate":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            scale = normalize_proxy_scale(str(payload.get("scale", "half")))
+            codec = normalize_proxy_codec(str(payload.get("codec", "prores_proxy")))
+            raw_scope = str(payload.get("scope", "all_video")).strip().lower()
+            scope: Literal["selected", "all_video"] = (
+                "selected" if raw_scope == "selected" else "all_video"
+            )
+            tk_kind: Literal["video", "audio"] = (
+                "audio" if payload.get("track_kind") == "audio" else "video"
+            )
+            tk_idx = int(payload.get("track_index", 1))
+            c_idx = int(payload.get("clip_index", 0))
+            proxy_dir = str(payload.get("proxy_dir", DEFAULT_PROXY_DIR))
+            execute = bool(payload.get("execute", False))
+            proxy_res = generate_proxies_for_document(
+                doc,
+                scale=scale,
+                codec=codec,
+                scope=scope,
+                track_kind=tk_kind,
+                track_index=tk_idx,
+                clip_index=c_idx,
+                proxy_dir=proxy_dir,
+                workspace_root=self.app_state.workspace_root,
+                execute=execute,
+            )
+            val = validate_timeline(proxy_res.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": proxy_res.changed,
+                    "generated_count": proxy_res.generated_count,
+                    "proxy_dir": proxy_res.proxy_dir,
+                    "scale": proxy_res.scale,
+                    "codec": proxy_res.codec,
+                    "plans": [p.model_dump(mode="json") for p in proxy_res.plans],
+                    "detail": proxy_res.detail,
+                    "document": proxy_res.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/media-pool/proxy/clear":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_scope = str(payload.get("scope", "all_video")).strip().lower()
+            scope_c: Literal["selected", "all_video"] = (
+                "selected" if raw_scope == "selected" else "all_video"
+            )
+            tk_kind_c: Literal["video", "audio"] = (
+                "audio" if payload.get("track_kind") == "audio" else "video"
+            )
+            tk_idx_c = int(payload.get("track_index", 1))
+            c_idx_c = int(payload.get("clip_index", 0))
+            next_doc, cleared_count = clear_proxies_for_document(
+                doc,
+                scope=scope_c,
+                track_kind=tk_kind_c,
+                track_index=tk_idx_c,
+                clip_index=c_idx_c,
+            )
+            val = validate_timeline(next_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": cleared_count > 0,
+                    "cleared_count": cleared_count,
+                    "detail": f"Cleared proxy metadata from {cleared_count} clip(s).",
+                    "document": next_doc.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/media-pool/audit":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_ws = payload.get("workspace_files")
+            ws_files: list[str] | None = (
+                [str(item) for item in raw_ws] if isinstance(raw_ws, list) else None
+            )
+            strict_ws = bool(payload.get("strict_workspace_check", False))
+            audit = audit_media_pool_links(
+                doc,
+                workspace_files=ws_files,
+                workspace_root=self.app_state.workspace_root,
+                strict_workspace_check=strict_ws,
+            )
+            self._send_json(HTTPStatus.OK, audit.model_dump(mode="json"))
+            return
+
+        if route == "/api/media-pool/relink":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            op = str(payload.get("op", "relink")).strip().lower()
+            tk_kind_r: Literal["video", "audio"] = (
+                "audio" if payload.get("track_kind") == "audio" else "video"
+            )
+            tk_idx_r = int(payload.get("track_index", 1))
+            c_idx_r = int(payload.get("clip_index", 0))
+
+            if op in {"mark_offline", "mark_online"}:
+                next_doc, changed, detail = toggle_clip_offline_in_document(
+                    doc,
+                    track_kind=tk_kind_r,
+                    track_index=tk_idx_r,
+                    clip_index=c_idx_r,
+                    offline=(op == "mark_offline"),
+                )
+            elif op == "relink":
+                new_src = str(payload.get("new_source_path", ""))
+                enforce_disk = bool(payload.get("verify_on_disk", False))
+                next_doc, changed, detail = relink_clip_in_document(
+                    doc,
+                    track_kind=tk_kind_r,
+                    track_index=tk_idx_r,
+                    clip_index=c_idx_r,
+                    new_source_path=new_src,
+                    workspace_root=self.app_state.workspace_root if enforce_disk else None,
+                )
+            elif op == "auto_relink":
+                raw_ws_r = payload.get("workspace_files")
+                ws_files_r: list[str] | None = (
+                    [str(item) for item in raw_ws_r] if isinstance(raw_ws_r, list) else None
+                )
+                min_conf = int(payload.get("min_confidence", 60))
+                next_doc, relinked_cnt, msgs = auto_relink_all_in_document(
+                    doc,
+                    workspace_files=ws_files_r,
+                    workspace_root=self.app_state.workspace_root,
+                    min_confidence=min_conf,
+                )
+                changed = relinked_cnt > 0
+                detail = (
+                    f"Auto-relinked {relinked_cnt} clip(s): " + "; ".join(msgs)
+                    if relinked_cnt > 0
+                    else "No offline clips matched workspace media candidates."
+                )
+            else:
+                raise ValueError(f"Unsupported relink op {op!r}")
+
+            val = validate_timeline(next_doc)
+            audit_after = audit_media_pool_links(
+                next_doc,
+                workspace_root=self.app_state.workspace_root,
+                strict_workspace_check=False,
+            )
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": changed,
+                    "op": op,
+                    "detail": detail,
+                    "audit": audit_after.model_dump(mode="json"),
+                    "document": next_doc.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/media-pool/av-sync/analyze":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            mode = normalize_av_sync_mode(str(payload.get("mode", "waveform")))
+            v_trk = int(payload.get("video_track_index", 1))
+            v_idx = int(payload.get("video_clip_index", 0))
+            a_trk = int(payload.get("audio_track_index", 1))
+            a_idx = int(payload.get("audio_clip_index", 0))
+            max_lag = int(payload.get("max_lag_frames", AV_SYNC_MAX_LAG_DEFAULT))
+            v_tc = str(payload.get("video_tc", ""))
+            a_tc = str(payload.get("audio_tc", ""))
+            raw_venv = payload.get("video_envelope")
+            raw_aenv = payload.get("audio_envelope")
+            v_env = (
+                [float(x) for x in raw_venv]
+                if isinstance(raw_venv, list) and len(raw_venv) >= 4
+                else None
+            )
+            a_env = (
+                [float(x) for x in raw_aenv]
+                if isinstance(raw_aenv, list) and len(raw_aenv) >= 4
+                else None
+            )
+            analysis = analyze_av_sync(
+                doc,
+                video_track_index=v_trk,
+                video_clip_index=v_idx,
+                audio_track_index=a_trk,
+                audio_clip_index=a_idx,
+                mode=mode,
+                max_lag_frames=max_lag,
+                video_tc=v_tc,
+                audio_tc=a_tc,
+                video_envelope=v_env,
+                audio_envelope=a_env,
+            )
+            self._send_json(HTTPStatus.OK, analysis.model_dump(mode="json"))
+            return
+
+        if route == "/api/media-pool/av-sync/apply":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            v_trk = int(payload.get("video_track_index", 1))
+            v_idx = int(payload.get("video_clip_index", 0))
+            a_trk = int(payload.get("audio_track_index", 1))
+            a_idx = int(payload.get("audio_clip_index", 0))
+            offset_frames = int(payload.get("offset_frames", 0))
+            link_pair = bool(payload.get("link_pair", True))
+            next_doc, detail = apply_av_sync_to_document(
+                doc,
+                video_track_index=v_trk,
+                video_clip_index=v_idx,
+                audio_track_index=a_trk,
+                audio_clip_index=a_idx,
+                offset_frames=offset_frames,
+                link_pair=link_pair,
+            )
+            val = validate_timeline(next_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "offset_frames": offset_frames,
+                    "detail": detail,
+                    "document": next_doc.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                 },
             )

@@ -34,8 +34,16 @@ import {
   bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
   alignAvSplitInDocument,
+  analyzeAvSyncClient,
   analyzeAudioSpectrumClient,
+  applyAvSyncInDocumentClient,
   applySplitEditJlInDocument,
+  auditMediaPoolLinksClient,
+  autoRelinkAllInDocumentClient,
+  clearProxiesInDocument,
+  generateProxiesInDocument,
+  relinkClipInDocumentClient,
+  toggleClipOfflineInDocumentClient,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
   compileColorNodeChainClient,
@@ -3680,6 +3688,123 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/timeline/three-point-edit", { method: "POST", body: payload });
+    },
+    async generateMediaPoolProxies(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const res = generateProxiesInDocument(doc, {
+          scale: payload && payload.scale,
+          codec: payload && payload.codec,
+          scope: payload && payload.scope,
+          track_kind: payload && payload.track_kind,
+          track_index: payload && payload.track_index,
+          clip_index: payload && payload.clip_index,
+          proxy_dir: payload && payload.proxy_dir
+        });
+        return {
+          ...res,
+          validation: validateTimelineClient(res.document)
+        };
+      }
+      return requestJson("/api/media-pool/proxy/generate", { method: "POST", body: payload });
+    },
+    async clearMediaPoolProxies(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const res = clearProxiesInDocument(doc, {
+          scope: payload && payload.scope,
+          track_kind: payload && payload.track_kind,
+          track_index: payload && payload.track_index,
+          clip_index: payload && payload.clip_index
+        });
+        return {
+          ...res,
+          validation: validateTimelineClient(res.document)
+        };
+      }
+      return requestJson("/api/media-pool/proxy/clear", { method: "POST", body: payload });
+    },
+    async auditMediaPoolLinks(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const demoMedia = [];
+        for (const trk of doc.tracks || []) {
+          for (const clip of trk.clips || []) {
+            if (clip && clip.source_path && !clip.media_offline && !clip.source_path.startsWith("gfx/")) {
+              demoMedia.push(clip.source_path);
+            }
+          }
+        }
+        demoMedia.push("media/A001_Opening_Wide.mov", "media/A002_Studio_Detail.mov", "media/B001_Host_CloseUp.mov", "audio/VO_Narrator_Master.wav", "audio/Music_Bed_Stereo.wav");
+        const wsFiles = Array.isArray(payload && payload.workspace_files) ? payload.workspace_files : demoMedia;
+        return auditMediaPoolLinksClient(doc, {
+          workspace_files: wsFiles,
+          strict_workspace_check: Boolean(payload && payload.strict_workspace_check)
+        });
+      }
+      return requestJson("/api/media-pool/audit", { method: "POST", body: payload });
+    },
+    async relinkMediaPoolClips(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const op = String((payload && payload.op) || "relink").trim().toLowerCase();
+        const tkKind = payload && payload.track_kind === "audio" ? "audio" : "video";
+        const tkIdx = Number.isInteger(payload && payload.track_index) ? payload.track_index : 1;
+        const cIdx = Number.isInteger(payload && payload.clip_index) ? payload.clip_index : 0;
+        const demoMedia = [
+          "media/A001_Opening_Wide.mov",
+          "media/A002_Studio_Detail.mov",
+          "media/B001_Host_CloseUp.mov",
+          "media/B002_Product_Hero.mov",
+          "audio/VO_Narrator_Master.wav",
+          "audio/Music_Bed_Stereo.wav"
+        ];
+        let res;
+        if (op === "mark_offline" || op === "mark_online") {
+          res = toggleClipOfflineInDocumentClient(doc, tkKind, tkIdx, cIdx, op === "mark_offline");
+        } else if (op === "relink") {
+          res = relinkClipInDocumentClient(doc, tkKind, tkIdx, cIdx, payload && payload.new_source_path);
+        } else if (op === "auto_relink") {
+          const wsFiles = Array.isArray(payload && payload.workspace_files) ? payload.workspace_files : demoMedia;
+          res = autoRelinkAllInDocumentClient(doc, wsFiles, payload && payload.min_confidence ? payload.min_confidence : 60);
+        } else {
+          throw new Error(`Unsupported relink op: ${op}`);
+        }
+        const nextDoc = res.document || doc;
+        return {
+          changed: Boolean(res.changed),
+          op,
+          detail: res.detail || "",
+          audit: auditMediaPoolLinksClient(nextDoc, { workspace_files: demoMedia, strict_workspace_check: false }),
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc)
+        };
+      }
+      return requestJson("/api/media-pool/relink", { method: "POST", body: payload });
+    },
+    async analyzeMediaPoolAvSync(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        return analyzeAvSyncClient(doc, payload || {});
+      }
+      return requestJson("/api/media-pool/av-sync/analyze", { method: "POST", body: payload });
+    },
+    async applyMediaPoolAvSync(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const res = applyAvSyncInDocumentClient(doc, payload || {});
+        return {
+          ...res,
+          validation: validateTimelineClient(res.document)
+        };
+      }
+      return requestJson("/api/media-pool/av-sync/apply", { method: "POST", body: payload });
     }
   };
 }

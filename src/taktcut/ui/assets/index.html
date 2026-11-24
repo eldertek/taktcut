@@ -67,6 +67,27 @@
                   <div class="viewer-controls media-pool-header-controls">
                     <button
                       type="button"
+                      id="btn-proxy-mode-toggle"
+                      class="btn btn-mini media-pool-proxy-btn"
+                      aria-pressed="false"
+                      title="Toggle Proxy Media Playback (Alt+P)"
+                      data-i18n="timeline.mediapool.proxyOff"
+                    >PROXY OFF</button>
+                    <button
+                      type="button"
+                      id="btn-media-pool-pro"
+                      class="btn btn-mini media-pool-pro-btn"
+                      title="Open Media Pool Pro: Proxies, Relink &amp; A/V Sync (Shift+P)"
+                      data-i18n="timeline.mediapool.proBtn"
+                    >Media Pool Pro</button>
+                    <button
+                      type="button"
+                      id="media-pool-offline-badge"
+                      class="btn btn-mini nle-tag mono media-pool-offline-badge"
+                      title="Inspect Offline Clips &amp; Relink Recovery"
+                    >0 OFFLINE</button>
+                    <button
+                      type="button"
                       id="btn-media-pool-source-tape"
                       class="btn btn-mini media-pool-tape-btn"
                       aria-pressed="false"
@@ -3821,9 +3842,132 @@
     <div class="nle-dialog-body">
       <div id="media-pool-info-kv" class="kv-grid mono"></div>
       <div class="btn-row media-pool-info-actions">
+        <button type="button" id="btn-pool-info-proxy" class="btn btn-secondary" data-i18n="poolPro.info.proxyBtn">Proxy</button>
+        <button type="button" id="btn-pool-info-relink" class="btn btn-secondary" data-i18n="poolPro.info.relinkBtn">Relink</button>
+        <button type="button" id="btn-pool-info-sync" class="btn btn-secondary" data-i18n="poolPro.info.syncBtn">A/V Sync</button>
         <button type="button" id="btn-media-pool-info-jump" class="btn btn-primary" data-i18n="timeline.mediapool.jump">Jump to Clip</button>
         <button type="button" id="btn-media-pool-info-close-footer" class="btn btn-secondary" data-i18n="timeline.mediapool.close">Close</button>
       </div>
+    </div>
+  </dialog>
+
+  <dialog id="media-pool-pro-dialog" class="nle-dialog media-pool-pro-dialog" aria-labelledby="media-pool-pro-title">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="media-pool-pro-title" data-i18n="poolPro.title">Media Pool Pro Studio</h2>
+        <p id="media-pool-pro-subtitle" class="nle-dialog-subtitle" data-i18n="poolPro.subtitle">Proxy Media Generator, Offline Relink Watchdog &amp; Waveform/Timecode A/V Sync</p>
+      </div>
+      <div class="viewer-controls">
+        <button type="button" id="btn-pool-pro-proxy-switch" class="btn btn-mini media-pool-proxy-btn" aria-pressed="false" data-i18n="timeline.mediapool.proxyOff">PROXY OFF</button>
+        <button type="button" id="btn-close-media-pool-pro" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+    <div class="pool-pro-tabs" role="tablist" aria-label="Media Pool Pro Modules">
+      <button type="button" role="tab" id="tab-pool-pro-proxy" class="btn btn-mini pool-pro-tab is-active" data-pool-pro-tab="proxy" aria-selected="true" aria-controls="pool-pro-pane-proxy" data-i18n="poolPro.tab.proxy">Proxy Generator</button>
+      <button type="button" role="tab" id="tab-pool-pro-relink" class="btn btn-mini pool-pro-tab" data-pool-pro-tab="relink" aria-selected="false" aria-controls="pool-pro-pane-relink" data-i18n="poolPro.tab.relink">Offline &amp; Relink</button>
+      <button type="button" role="tab" id="tab-pool-pro-sync" class="btn btn-mini pool-pro-tab" data-pool-pro-tab="sync" aria-selected="false" aria-controls="pool-pro-pane-sync" data-i18n="poolPro.tab.sync">A/V Auto-Sync</button>
+    </div>
+    <div class="nle-dialog-body pool-pro-body">
+      <!-- TAB 1: PROXY MEDIA GENERATOR -->
+      <section id="pool-pro-pane-proxy" class="pool-pro-pane" role="tabpanel" aria-labelledby="tab-pool-pro-proxy">
+        <div class="pool-pro-form-grid">
+          <div class="form-row">
+            <label for="pool-proxy-scale" data-i18n="poolPro.proxy.scale">Proxy Resolution</label>
+            <select id="pool-proxy-scale" class="input-control mono">
+              <option value="half" data-i18n="poolPro.proxy.scaleHalf">1/2 Half Resolution (960x540)</option>
+              <option value="quarter" data-i18n="poolPro.proxy.scaleQuarter">1/4 Quarter Resolution (480x270)</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="pool-proxy-codec" data-i18n="poolPro.proxy.codec">Proxy Codec</label>
+            <select id="pool-proxy-codec" class="input-control mono">
+              <option value="prores_proxy">Apple ProRes 422 Proxy (.mov)</option>
+              <option value="dnxhr_lb">Avid DNxHR LB (.mov)</option>
+              <option value="h264_proxy">H.264 Fast Proxy (.mp4)</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="pool-proxy-scope" data-i18n="poolPro.proxy.scope">Target Scope</label>
+            <select id="pool-proxy-scope" class="input-control mono">
+              <option value="all_video" data-i18n="poolPro.proxy.scopeAll">All Video Clips</option>
+              <option value="selected" data-i18n="poolPro.proxy.scopeSelected">Selected Clip Only</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="pool-proxy-dir" data-i18n="poolPro.proxy.dir">Proxy Folder (Workspace)</label>
+            <input type="text" id="pool-proxy-dir" class="input-control mono" value=".taktcut-proxies" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div class="btn-row pool-pro-actions">
+          <button type="button" id="btn-pool-proxy-generate" class="btn btn-primary" data-i18n="poolPro.proxy.generate">Generate Proxies</button>
+          <button type="button" id="btn-pool-proxy-clear" class="btn btn-secondary" data-i18n="poolPro.proxy.clear">Clear Proxies</button>
+        </div>
+        <div id="pool-proxy-feedback" class="telemetry-note mono" aria-live="polite"></div>
+        <div id="pool-proxy-plan-list" class="pool-pro-list" role="list"></div>
+        <div class="form-row">
+          <label for="pool-proxy-cmd-preview" data-i18n="poolPro.proxy.ffmpegPreview">FFmpeg Scale &amp; Codec Command</label>
+          <pre id="pool-proxy-cmd-preview" class="code-box mono"></pre>
+        </div>
+      </section>
+
+      <!-- TAB 2: OFFLINE WATCHDOG & RELINK RECOVERY -->
+      <section id="pool-pro-pane-relink" class="pool-pro-pane is-hidden" role="tabpanel" aria-labelledby="tab-pool-pro-relink">
+        <div class="pool-pro-audit-bar">
+          <span id="pool-audit-summary" class="nle-tag mono" aria-live="polite">0 ONLINE | 0 OFFLINE</span>
+          <div class="pool-pro-audit-btns">
+            <button type="button" id="btn-pool-scan-disk" class="btn btn-mini btn-secondary" data-i18n="poolPro.relink.scanDisk">Scan Workspace Disk</button>
+            <button type="button" id="btn-pool-toggle-offline" class="btn btn-mini btn-secondary" data-i18n="poolPro.relink.toggleOffline">Toggle Selected Offline</button>
+            <button type="button" id="btn-pool-auto-relink" class="btn btn-mini btn-primary" data-i18n="poolPro.relink.autoRelink">Auto-Relink All</button>
+          </div>
+        </div>
+        <div id="pool-relink-feedback" class="telemetry-note mono" aria-live="polite"></div>
+        <div id="pool-relink-list" class="pool-pro-list" role="list"></div>
+      </section>
+
+      <!-- TAB 3: WAVEFORM / TIMECODE A/V AUTO-SYNC -->
+      <section id="pool-pro-pane-sync" class="pool-pro-pane is-hidden" role="tabpanel" aria-labelledby="tab-pool-pro-sync">
+        <div class="pool-pro-form-grid">
+          <div class="form-row">
+            <label for="pool-sync-video-select" data-i18n="poolPro.sync.videoClip">Camera Video Clip</label>
+            <select id="pool-sync-video-select" class="input-control mono"></select>
+          </div>
+          <div class="form-row">
+            <label for="pool-sync-audio-select" data-i18n="poolPro.sync.audioClip">External Audio Clip</label>
+            <select id="pool-sync-audio-select" class="input-control mono"></select>
+          </div>
+          <div class="form-row">
+            <label for="pool-sync-mode" data-i18n="poolPro.sync.mode">Sync Method</label>
+            <select id="pool-sync-mode" class="input-control mono">
+              <option value="waveform" data-i18n="poolPro.sync.modeWaveform">Waveform Cross-Correlation</option>
+              <option value="timecode" data-i18n="poolPro.sync.modeTimecode">SMPTE Timecode Jam-Sync</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="pool-sync-max-lag" data-i18n="poolPro.sync.maxLag">Max Search Lag (frames)</label>
+            <input type="number" id="pool-sync-max-lag" class="input-control mono" min="4" max="240" step="1" value="48">
+          </div>
+          <div class="form-row">
+            <label for="pool-sync-vtc" data-i18n="poolPro.sync.videoTc">Video Start TC</label>
+            <input type="text" id="pool-sync-vtc" class="input-control mono" value="01:00:00:00" placeholder="01:00:00:00" spellcheck="false">
+          </div>
+          <div class="form-row">
+            <label for="pool-sync-atc" data-i18n="poolPro.sync.audioTc">Audio Start TC</label>
+            <input type="text" id="pool-sync-atc" class="input-control mono" value="01:00:00:06" placeholder="01:00:00:06" spellcheck="false">
+          </div>
+        </div>
+        <div class="btn-row pool-pro-actions">
+          <button type="button" id="btn-pool-analyze-sync" class="btn btn-secondary" data-i18n="poolPro.sync.analyze">Analyze Offset</button>
+          <button type="button" id="btn-pool-apply-sync" class="btn btn-primary" data-i18n="poolPro.sync.apply">Apply A/V Sync &amp; Link</button>
+        </div>
+        <div class="viewer-well pool-sync-canvas-well">
+          <canvas id="media-pool-sync-canvas" class="studio-canvas"></canvas>
+        </div>
+        <div id="pool-sync-feedback" class="telemetry-note mono" aria-live="polite"></div>
+        <div class="form-row">
+          <label for="pool-sync-fg-preview" data-i18n="poolPro.sync.ffmpegPreview">Compiled FFmpeg asetpts Filtergraph</label>
+          <pre id="pool-sync-fg-preview" class="code-box mono"></pre>
+        </div>
+      </section>
     </div>
   </dialog>
 

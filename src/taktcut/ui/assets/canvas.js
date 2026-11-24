@@ -4432,6 +4432,53 @@ export function drawProgramMonitorCanvas(
     ctx.restore();
   }
 
+  // Media Pool Pro: Offline slate & Proxy Mode HUD
+  const offlineActive = activeClips.find((entry) => entry.clip && entry.clip.media_offline);
+  if (offlineActive) {
+    ctx.save();
+    ctx.fillStyle = "rgba(42, 10, 14, 0.88)";
+    ctx.fillRect(fx, fy, frameW, frameH);
+    ctx.strokeStyle = "#ef4444";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(fx + 2, fy + 2, frameW - 4, frameH - 4);
+    ctx.fillStyle = "#fca5a5";
+    ctx.font = "800 14px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("MEDIA OFFLINE", fx + frameW * 0.5, fy + frameH * 0.5 - 10);
+    ctx.fillStyle = "#f87171";
+    ctx.font = "600 10px ui-monospace, monospace";
+    ctx.fillText(
+      String(offlineActive.clip.source_path || offlineActive.clip.name || ""),
+      fx + frameW * 0.5,
+      fy + frameH * 0.5 + 12,
+      frameW - 24
+    );
+    ctx.restore();
+  } else if (renderOpts && renderOpts.proxyModeEnabled) {
+    const pxyClip = activeClips.find((entry) => entry.clip && entry.clip.proxy_path);
+    if (pxyClip && pxyClip.clip) {
+      const scaleLbl = pxyClip.clip.proxy_scale === "quarter" ? "1/4" : "1/2";
+      const pxyText = `PROXY ON (${scaleLbl})`;
+      ctx.save();
+      ctx.font = "700 9.5px ui-monospace, monospace";
+      const pw = ctx.measureText(pxyText).width + 14;
+      const px = fx + frameW - pw - 8;
+      const py = fy + 8;
+      ctx.fillStyle = "rgba(15, 23, 34, 0.90)";
+      roundRectPath(ctx, px, py, pw, 18, 2);
+      ctx.fill();
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#7dd3fc";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(pxyText, px + pw * 0.5, py + 9.5);
+      ctx.restore();
+    }
+  }
+
   ctx.restore();
 
   // Frame border
@@ -9458,6 +9505,39 @@ export function drawSourceMonitorCanvas(
   ctx.textBaseline = "middle";
   ctx.fillText(opts.badgeLabel || "SOURCE", fx + 41, fy + 15);
 
+  if (sourceClip.media_offline) {
+    ctx.save();
+    ctx.fillStyle = "rgba(42, 10, 14, 0.88)";
+    ctx.fillRect(fx, fy, bw, bh);
+    ctx.strokeStyle = "#ef4444";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(fx + 2, fy + 2, bw - 4, bh - 4);
+    ctx.fillStyle = "#fca5a5";
+    ctx.font = "800 13px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("MEDIA OFFLINE", fx + bw * 0.5, fy + bh * 0.5);
+    ctx.restore();
+  } else if (opts.proxyModeEnabled && sourceClip.proxy_path) {
+    const scaleLbl = sourceClip.proxy_scale === "quarter" ? "1/4" : "1/2";
+    const pxyText = `PROXY (${scaleLbl})`;
+    ctx.save();
+    ctx.font = "700 9.5px ui-monospace, monospace";
+    const pw = ctx.measureText(pxyText).width + 12;
+    const px = fx + bw - pw - 6;
+    const py = fy + 6;
+    ctx.fillStyle = "rgba(15, 23, 34, 0.90)";
+    ctx.fillRect(px, py, pw, 17);
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, 16);
+    ctx.fillStyle = "#7dd3fc";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(pxyText, px + pw * 0.5, py + 9);
+    ctx.restore();
+  }
+
   // Source I/O Scrub Strip
   const barX = fx;
   const barY = height - scrubBandH - 3;
@@ -9501,4 +9581,119 @@ export function drawSourceMonitorCanvas(
   );
 
   return { width, height, barRect: { x: barX, y: barY, w: barW, h: barH }, totalFrames };
+}
+
+export function drawAvSyncWaveformCanvas(canvas, analysis, labels = {}) {
+  if (!canvas) return null;
+  const { ctx, width, height } = setupCanvas(canvas, 172);
+  ctx.fillStyle = "#121317";
+  ctx.fillRect(0, 0, width, height);
+
+  if (!analysis || !Array.isArray(analysis.video_envelope) || analysis.video_envelope.length === 0) {
+    ctx.fillStyle = "#7a7b88";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      labels.empty || "Select a Video & Audio clip pair and run Analyze Sync",
+      width * 0.5,
+      height * 0.5
+    );
+    return { width, height };
+  }
+
+  const padX = 10;
+  const topH = Math.floor(height * 0.54);
+  const botY = topH + 8;
+  const botH = height - botY - 12;
+  const plotW = Math.max(40, width - padX * 2);
+
+  // Top lane: Camera scratch waveform (amber) vs External audio waveform (cyan)
+  ctx.fillStyle = "#171920";
+  ctx.fillRect(padX, 8, plotW, topH - 10);
+  ctx.strokeStyle = "#272a34";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padX + 0.5, 8.5, plotW - 1, topH - 11);
+
+  const vEnv = analysis.video_envelope;
+  const aEnv = Array.isArray(analysis.audio_envelope) ? analysis.audio_envelope : [];
+  const bins = Math.max(1, vEnv.length);
+  const laneMid = 8 + (topH - 10) * 0.5;
+  const maxAmp = (topH - 22) * 0.44;
+
+  const drawEnv = (env, color, yBias) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < env.length; i++) {
+      const x = padX + (i / Math.max(1, bins - 1)) * plotW;
+      const y = laneMid + yBias - env[i] * maxAmp;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  };
+
+  drawEnv(vEnv, "#f59e0b", 0);
+  if (aEnv.length > 0) {
+    drawEnv(aEnv, "#38bdf8", 6);
+  }
+
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillText(labels.cam || "CAM SCRATCH", padX + 6, 12);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText(labels.ext || "EXT AUDIO", padX + 86, 12);
+
+  // Bottom lane: Cross-correlation curve across [-maxLag, +maxLag]
+  ctx.fillStyle = "#15171d";
+  ctx.fillRect(padX, botY, plotW, botH);
+  ctx.strokeStyle = "#272a34";
+  ctx.strokeRect(padX + 0.5, botY + 0.5, plotW - 1, botH - 1);
+
+  const curve = Array.isArray(analysis.correlation_curve) ? analysis.correlation_curve : [];
+  if (curve.length > 1) {
+    const minLag = curve[0].lag;
+    const maxLag = curve[curve.length - 1].lag;
+    const lagSpan = Math.max(1, maxLag - minLag);
+    const zeroX = padX + ((0 - minLag) / lagSpan) * plotW;
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(zeroX, botY + 2);
+    ctx.lineTo(zeroX, botY + botH - 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = "#2dd4bf";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 0; i < curve.length; i++) {
+      const pt = curve[i];
+      const x = padX + ((pt.lag - minLag) / lagSpan) * plotW;
+      const normY = (pt.score + 1) * 0.5;
+      const y = botY + botH - 4 - normY * (botH - 8);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    const peakX = padX + ((analysis.offset_frames - minLag) / lagSpan) * plotW;
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(peakX, botY + 2);
+    ctx.lineTo(peakX, botY + botH - 2);
+    ctx.stroke();
+  }
+
+  const sign = analysis.offset_frames >= 0 ? "+" : "";
+  const badgeTxt = `OFFSET ${sign}${analysis.offset_frames}f (${sign}${Number(analysis.offset_ms || 0).toFixed(1)} ms | ${Math.round((analysis.confidence || 0) * 100)}%)`;
+  ctx.fillStyle = "#e2e8f0";
+  ctx.textAlign = "right";
+  ctx.fillText(badgeTxt, padX + plotW - 6, botY + 4);
+
+  return { width, height };
 }

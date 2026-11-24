@@ -3,6 +3,7 @@ import {
   captureCleanFxStill,
   clientPosToColorWarperOffset,
   computeCueWordTimingsCanvas,
+  drawAvSyncWaveformCanvas,
   drawColorCurvesCanvas,
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
@@ -147,6 +148,7 @@ import {
   appendStillBounded,
   applyFairlightRackPresetClient,
   applySplitEditJlInDocument,
+  auditMediaPoolLinksClient,
   buildFourUpTrimMonitorState,
   buildSourceTapeSegments,
   classifyMediaPoolEntry,
@@ -161,6 +163,7 @@ import {
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
   compileMulticamFiltergraphClient,
+  compileProxyPlanClient,
   compileRetimeFilterClient,
   compileSplitEditFiltergraphClient,
   compileTransitionFilterClient,
@@ -820,6 +823,12 @@ const state = {
   mediaPoolType: "all",
   mediaPoolSourceTape: false,
   mediaPoolActiveClipId: null,
+  mediaPoolProxyMode: false,
+  mediaPoolProTab: "proxy",
+  mediaPoolAudit: null,
+  mediaPoolProxyPlans: [],
+  mediaPoolAvSyncAnalysis: null,
+  mediaPoolStrictAudit: false,
   timelineViewStartFrame: 0,
   timelineOverviewDraw: null,
   sourceTapeState: null,
@@ -953,6 +962,7 @@ function setLanguage(lang) {
   renderUpdateButton();
   renderTimelineUI();
   renderMediaPool();
+  if (typeof renderMediaPoolProDialog === "function") renderMediaPoolProDialog();
   renderFairlightAudioUI();
   renderColorNodeTreeUI();
   renderLutBrowserUI();
@@ -1259,7 +1269,8 @@ function redrawActiveCanvases() {
         state.timelineDoc,
         {
           badgeLabel: "SOURCE",
-          trackLabel: state.sourceMonitor.trackKind === "audio" ? "A1" : "V1"
+          trackLabel: state.sourceMonitor.trackKind === "audio" ? "A1" : "V1",
+          proxyModeEnabled: Boolean(state.mediaPoolProxyMode)
         }
       );
     }
@@ -1310,7 +1321,8 @@ function redrawActiveCanvases() {
         trimMonitorState,
         multicamQuadView: Boolean(state.multicamQuadView && mcCtx),
         multicamClip: mcCtx ? mcCtx.clip : null,
-        multicamHoveredAngle: state.multicamHoveredAngle
+        multicamHoveredAngle: state.multicamHoveredAngle,
+        proxyModeEnabled: Boolean(state.mediaPoolProxyMode)
       }
     );
     const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
@@ -3913,11 +3925,16 @@ function openMediaPoolInfoDialog(entry) {
   const kvEl = byId("media-pool-info-kv");
   if (kvEl) {
     const sourceText =
-      clip && (clip.media_path || clip.source_url)
-        ? String(clip.media_path || clip.source_url)
+      clip && (clip.source_path || clip.media_path || clip.source_url)
+        ? String(clip.source_path || clip.media_path || clip.source_url)
         : entry.label;
+    const proxyText =
+      clip && clip.proxy_path
+        ? `${clip.proxy_path} (${clip.proxy_scale === "quarter" ? "1/4" : "1/2"})`
+        : t("poolPro.proxy.none");
+    const linkText = clip && clip.media_offline ? "OFFLINE" : "ONLINE";
     const gainDb = clip && Number.isFinite(Number(clip.audio_gain_db)) ? Number(clip.audio_gain_db) : 0;
-    const speed = clip && Number.isFinite(Number(clip.speed)) ? Number(clip.speed) : 1;
+    const speed = clip && Number.isFinite(Number(clip.speed_rate ?? clip.speed)) ? Number(clip.speed_rate ?? clip.speed) : 1;
     const inspectorText = `Gain ${gainDb.toFixed(1)} dB | Speed ${speed.toFixed(2)}x`;
     const rows = [
       [t("timeline.mediapool.field.track"), `${entry.trackId} (${kindText})`],
@@ -3927,6 +3944,8 @@ function openMediaPoolInfoDialog(entry) {
       [t("timeline.mediapool.field.end"), `${endTc} (${endFrames}f)`],
       [t("timeline.mediapool.field.format"), `${doc.width || 1920}x${doc.height || 1080} @ ${fpsFloat.toFixed(2)} fps`],
       [t("timeline.mediapool.field.source"), sourceText],
+      [t("timeline.mediapool.field.proxy"), proxyText],
+      [t("timeline.mediapool.field.linkStatus"), linkText],
       [t("timeline.mediapool.field.inspector"), inspectorText]
     ];
     const children = [];
@@ -4469,7 +4488,32 @@ function renderMediaPoolSourceTape(clipEntries) {
   syncSourceTapeScrubToPlayhead();
 }
 
+function syncMediaPoolProHeaderBadges() {
+  const isProxy = Boolean(state.mediaPoolProxyMode);
+  const proxyLabel = t(isProxy ? "timeline.mediapool.proxyOn" : "timeline.mediapool.proxyOff");
+  for (const id of ["btn-proxy-mode-toggle", "btn-pool-pro-proxy-switch"]) {
+    const btn = byId(id);
+    if (!btn) continue;
+    btn.textContent = proxyLabel;
+    btn.classList.toggle("is-active", isProxy);
+    btn.setAttribute("aria-pressed", isProxy ? "true" : "false");
+  }
+  const offlineBadge = byId("media-pool-offline-badge");
+  if (offlineBadge) {
+    const doc = state.timelineDoc;
+    const audit = doc
+      ? state.mediaPoolAudit && state.mediaPoolStrictAudit
+        ? state.mediaPoolAudit
+        : auditMediaPoolLinksClient(doc, { strict_workspace_check: false })
+      : { offline_count: 0 };
+    const offCount = Number(audit.offline_count || 0);
+    offlineBadge.textContent = t("timeline.mediapool.offlineCount").replace("{count}", String(offCount));
+    offlineBadge.classList.toggle("is-alert", offCount > 0);
+  }
+}
+
 function renderMediaPool() {
+  syncMediaPoolProHeaderBadges();
   const list = byId("media-pool-list");
   if (!list) return;
   const countEl = byId("media-pool-count");
@@ -4573,9 +4617,17 @@ function renderMediaPool() {
     const colorId = entry.labelColor || "default";
     const pal = computeClipThumbPalette(entry);
 
+    const foundRaw = findTrackAndClip(doc, entry.trackKind, entry.trackIndex, entry.clipIndex);
+    const rawClip = foundRaw ? foundRaw.clip : null;
+    const isOffline = Boolean(rawClip && rawClip.media_offline);
+    const hasProxy = Boolean(rawClip && rawClip.proxy_path);
+    const proxyScale = rawClip && rawClip.proxy_scale ? rawClip.proxy_scale : "half";
+    const syncOff = rawClip && Number.isFinite(Number(rawClip.av_sync_offset_frames))
+      ? Math.round(Number(rawClip.av_sync_offset_frames))
+      : 0;
     const card = dom(
       "button",
-      `media-pool-card${isAudio ? " is-audio" : isTitle ? " is-title" : " is-video"}${isSel ? " is-selected" : ""}`
+      `media-pool-card${isAudio ? " is-audio" : isTitle ? " is-title" : " is-video"}${isSel ? " is-selected" : ""}${isOffline ? " is-offline" : ""}`
     );
     card.type = "button";
     card.setAttribute("role", "listitem");
@@ -4592,6 +4644,18 @@ function renderMediaPool() {
 
     const thumbTop = dom("div", "media-pool-thumb-top");
     thumbTop.appendChild(dom("span", "media-pool-track mono", entry.trackId));
+    if (isOffline) {
+      thumbTop.appendChild(dom("span", "media-pool-status-pill is-offline mono", "OFFLINE"));
+    } else if (hasProxy) {
+      const sc = proxyScale === "quarter" ? "1/4" : "1/2";
+      thumbTop.appendChild(
+        dom("span", `media-pool-status-pill is-proxy${state.mediaPoolProxyMode ? " is-active" : ""} mono`, `PXY ${sc}`)
+      );
+    } else if (syncOff !== 0) {
+      thumbTop.appendChild(
+        dom("span", "media-pool-status-pill is-sync mono", `SYNC ${syncOff > 0 ? "+" : ""}${syncOff}f`)
+      );
+    }
     thumbTop.appendChild(dom("span", "media-pool-dur mono", `${durSec}s`));
 
     const visual = dom("div", `media-pool-visual${isAudio ? " is-wave" : " is-film"}`);
@@ -12957,6 +13021,8 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+Up / Down", descKey: "shortcuts.key.prevNextMarker" },
       { kbd: "Shift+T", descKey: "shortcuts.key.trimMonitor" },
       { kbd: "Shift+S", descKey: "shortcuts.key.grabStill" },
+      { kbd: "Alt+P", descKey: "shortcuts.key.proxyToggle" },
+      { kbd: "Shift+P", descKey: "shortcuts.key.mediaPoolPro" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13147,6 +13213,9 @@ function handleTransportKeydown(ev) {
     } else if (state.activeTab === "timeline" && !ev.ctrlKey && !ev.metaKey && lower === "l") {
       ev.preventDefault();
       toggleAvLinkForSelectionAction();
+    } else if (!ev.ctrlKey && !ev.metaKey && lower === "p") {
+      ev.preventDefault();
+      toggleProxyModeAction();
     } else if (state.activeTab === "color" && !ev.ctrlKey && !ev.metaKey && lower === "o") {
       ev.preventDefault();
       addOutsideColorNodeAction();
@@ -13244,6 +13313,11 @@ function handleTransportKeydown(ev) {
     if (lower === "t" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       toggleTrimMonitorAction();
+      return;
+    }
+    if (lower === "p" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      openMediaPoolProDialog("proxy");
       return;
     }
     if (
@@ -19779,6 +19853,7 @@ function wireEvents() {
   wireFairlightAudioRackEvents();
   wireCompoundInspectorEvents();
   wireMulticamInspectorEvents();
+  wireMediaPoolProEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -21214,6 +21289,595 @@ function wireMulticamInspectorEvents() {
       if (delta !== 0) nudgeMulticamAngleOffsetAction(delta);
     });
   }
+}
+
+function getMediaPoolSelectedRef() {
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks)) return { track_kind: "video", track_index: 1, clip_index: 0 };
+  const ref = getSelectedClipRef();
+  if (ref && ref.trackKind && Number.isInteger(ref.trackIndex) && Number.isInteger(ref.clipIndex)) {
+    return {
+      track_kind: ref.trackKind,
+      track_index: ref.trackIndex,
+      clip_index: ref.clipIndex
+    };
+  }
+  const activeEntry = getActiveMediaPoolEntry();
+  if (activeEntry) {
+    return {
+      track_kind: activeEntry.trackKind,
+      track_index: activeEntry.trackIndex,
+      clip_index: activeEntry.clipIndex
+    };
+  }
+  return { track_kind: "video", track_index: 1, clip_index: 0 };
+}
+
+function toggleProxyModeAction() {
+  state.mediaPoolProxyMode = !state.mediaPoolProxyMode;
+  syncMediaPoolProHeaderBadges();
+  renderMediaPool();
+  renderMediaPoolProProxyPane();
+  redrawActiveCanvases();
+  showBanner(
+    state.mediaPoolProxyMode ? t("timeline.mediapool.proxyOn") : t("timeline.mediapool.proxyOff"),
+    "info"
+  );
+  return state.mediaPoolProxyMode;
+}
+
+function switchMediaPoolProTab(tabId) {
+  const next = tabId === "relink" || tabId === "sync" ? tabId : "proxy";
+  state.mediaPoolProTab = next;
+  for (const btn of document.querySelectorAll(".pool-pro-tab[data-pool-pro-tab]")) {
+    const id = btn.getAttribute("data-pool-pro-tab");
+    const active = id === next;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  for (const id of ["proxy", "relink", "sync"]) {
+    const pane = byId(`pool-pro-pane-${id}`);
+    if (pane) pane.classList.toggle("is-hidden", id !== next);
+  }
+  if (next === "proxy") renderMediaPoolProProxyPane();
+  if (next === "relink") renderMediaPoolProRelinkPane();
+  if (next === "sync") renderMediaPoolProSyncPane();
+}
+
+function openMediaPoolProDialog(initialTab = null) {
+  const dlg = byId("media-pool-pro-dialog");
+  if (!dlg) return;
+  if (initialTab) state.mediaPoolProTab = initialTab;
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") {
+      dlg.showModal();
+    } else {
+      dlg.setAttribute("open", "");
+    }
+  }
+  switchMediaPoolProTab(state.mediaPoolProTab || "proxy");
+  if (state.mediaPoolProTab === "relink") {
+    refreshMediaPoolAuditAction(false);
+  }
+}
+
+function closeMediaPoolProDialog() {
+  const dlg = byId("media-pool-pro-dialog");
+  if (!dlg || !dlg.open) return;
+  if (typeof dlg.close === "function") {
+    dlg.close();
+  } else {
+    dlg.removeAttribute("open");
+  }
+}
+
+function renderMediaPoolProDialog() {
+  syncMediaPoolProHeaderBadges();
+  const dlg = byId("media-pool-pro-dialog");
+  if (!dlg || !dlg.open) return;
+  if (state.mediaPoolProTab === "proxy") renderMediaPoolProProxyPane();
+  else if (state.mediaPoolProTab === "relink") renderMediaPoolProRelinkPane();
+  else if (state.mediaPoolProTab === "sync") renderMediaPoolProSyncPane();
+}
+
+function renderMediaPoolProProxyPane() {
+  const listEl = byId("pool-proxy-plan-list");
+  const cmdEl = byId("pool-proxy-cmd-preview");
+  if (!listEl) return;
+
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks)) {
+    listEl.replaceChildren(dom("div", "timeline-index-empty mono", t("poolPro.proxy.empty")));
+    if (cmdEl) cmdEl.textContent = "";
+    return;
+  }
+
+  const scale = byId("pool-proxy-scale")?.value || "half";
+  const codec = byId("pool-proxy-codec")?.value || "prores_proxy";
+  const proxyDir = byId("pool-proxy-dir")?.value || ".taktcut-proxies";
+
+  const rows = [];
+  let previewCmd = "";
+  for (const trk of doc.tracks) {
+    if (!trk || trk.kind !== "video" || !Array.isArray(trk.clips)) continue;
+    for (let i = 0; i < trk.clips.length; i++) {
+      const clip = trk.clips[i];
+      if (!clip) continue;
+      if (String(clip.source_path || "").trim().toLowerCase().startsWith("gfx/")) continue;
+      const plan =
+        state.mediaPoolProxyPlans.find(
+          (p) => p.track_index === trk.index && p.clip_index === i
+        ) ||
+        compileProxyPlanClient({
+          track_kind: "video",
+          track_index: trk.index,
+          clip_index: i,
+          clip_name: clip.name,
+          source_path: clip.source_path,
+          scale,
+          codec,
+          source_width: doc.width || 1920,
+          source_height: doc.height || 1080,
+          proxy_dir: proxyDir
+        });
+      if (!previewCmd) previewCmd = plan.command_preview;
+
+      const hasProxy = Boolean(clip.proxy_path);
+      const badgeKey = hasProxy
+        ? state.mediaPoolProxyMode
+          ? "poolPro.proxy.active"
+          : "poolPro.proxy.ready"
+        : "poolPro.proxy.none";
+      const badgeCls = hasProxy
+        ? state.mediaPoolProxyMode
+          ? "is-active"
+          : "is-ready"
+        : "is-none";
+
+      const item = dom("div", "pool-pro-item");
+      item.setAttribute("role", "listitem");
+      const main = dom("div", "pool-pro-item-main");
+      main.appendChild(dom("span", "pool-pro-item-title mono", `V${trk.index}: ${clip.name}`));
+      main.appendChild(
+        dom(
+          "span",
+          "pool-pro-item-sub mono",
+          hasProxy
+            ? `${clip.proxy_path} (${plan.proxy_width}x${plan.proxy_height} | -${plan.estimated_savings_pct}%)`
+            : `${clip.source_path || clip.name} -> ${plan.proxy_width}x${plan.proxy_height} (-${plan.estimated_savings_pct}%)`
+        )
+      );
+      const pill = dom("span", `nle-tag mono pool-pro-pill ${badgeCls}`, t(badgeKey));
+      item.replaceChildren(main, pill);
+      rows.push(item);
+    }
+  }
+
+  if (rows.length === 0) {
+    listEl.replaceChildren(dom("div", "timeline-index-empty mono", t("poolPro.proxy.empty")));
+  } else {
+    listEl.replaceChildren(...rows);
+  }
+  if (cmdEl) cmdEl.textContent = previewCmd;
+}
+
+async function generateMediaPoolProxiesAction() {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  const scale = byId("pool-proxy-scale")?.value || "half";
+  const codec = byId("pool-proxy-codec")?.value || "prores_proxy";
+  const scope = byId("pool-proxy-scope")?.value || "all_video";
+  const proxyDir = byId("pool-proxy-dir")?.value || ".taktcut-proxies";
+  const sel = getMediaPoolSelectedRef();
+  const fb = byId("pool-proxy-feedback");
+
+  try {
+    const res = await api.generateMediaPoolProxies({
+      document: doc,
+      scale,
+      codec,
+      scope,
+      track_kind: sel.track_kind,
+      track_index: sel.track_index,
+      clip_index: sel.clip_index,
+      proxy_dir: proxyDir,
+      execute: false
+    });
+    state.mediaPoolProxyPlans = Array.isArray(res.plans) ? res.plans : [];
+    if (res.document) {
+      commitTimelineMutation(res.document, state.timelineSelected);
+    }
+    if (fb) fb.textContent = res.detail || "";
+    renderMediaPoolProProxyPane();
+    showBanner(res.detail || "Proxies generated.", "success");
+  } catch (err) {
+    if (fb) fb.textContent = err.message;
+    showBanner(err.message, "error");
+  }
+}
+
+async function clearMediaPoolProxiesAction() {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  const scope = byId("pool-proxy-scope")?.value || "all_video";
+  const sel = getMediaPoolSelectedRef();
+  const fb = byId("pool-proxy-feedback");
+  try {
+    const res = await api.clearMediaPoolProxies({
+      document: doc,
+      scope,
+      track_kind: sel.track_kind,
+      track_index: sel.track_index,
+      clip_index: sel.clip_index
+    });
+    state.mediaPoolProxyPlans = [];
+    if (res.document) {
+      commitTimelineMutation(res.document, state.timelineSelected);
+    }
+    if (fb) fb.textContent = res.detail || "";
+    renderMediaPoolProProxyPane();
+    showBanner(res.detail || "Proxies cleared.", "info");
+  } catch (err) {
+    if (fb) fb.textContent = err.message;
+    showBanner(err.message, "error");
+  }
+}
+
+async function refreshMediaPoolAuditAction(strictWorkspaceCheck = false) {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  try {
+    const audit = await api.auditMediaPoolLinks({
+      document: doc,
+      strict_workspace_check: Boolean(strictWorkspaceCheck)
+    });
+    state.mediaPoolAudit = audit;
+    state.mediaPoolStrictAudit = Boolean(strictWorkspaceCheck);
+    syncMediaPoolProHeaderBadges();
+    renderMediaPoolProRelinkPane();
+  } catch (err) {
+    const fb = byId("pool-relink-feedback");
+    if (fb) fb.textContent = err.message;
+  }
+}
+
+function renderMediaPoolProRelinkPane() {
+  const listEl = byId("pool-relink-list");
+  const summaryEl = byId("pool-audit-summary");
+  if (!listEl) return;
+
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks)) {
+    if (summaryEl) summaryEl.textContent = "0 ONLINE | 0 OFFLINE";
+    listEl.replaceChildren(dom("div", "timeline-index-empty mono", t("poolPro.relink.empty")));
+    return;
+  }
+
+  const audit =
+    state.mediaPoolAudit ||
+    auditMediaPoolLinksClient(doc, { strict_workspace_check: false });
+  if (summaryEl) {
+    summaryEl.textContent = t("poolPro.relink.summary")
+      .replace("{online}", String(audit.online_count || 0))
+      .replace("{proxy}", String(audit.proxy_only_count || 0))
+      .replace("{offline}", String(audit.offline_count || 0));
+  }
+
+  const entries = Array.isArray(audit.entries) ? audit.entries : [];
+  if (entries.length === 0) {
+    listEl.replaceChildren(dom("div", "timeline-index-empty mono", t("poolPro.relink.empty")));
+    return;
+  }
+
+  const rows = entries.map((entry) => {
+    const isOffline = entry.status === "offline";
+    const isProxyOnly = entry.status === "proxy_only";
+    const item = dom("div", `pool-pro-item${isOffline ? " is-offline" : ""}`);
+    item.setAttribute("role", "listitem");
+
+    const topRow = dom("div", "pool-pro-relink-top");
+    const prefix = entry.track_kind === "audio" ? "A" : "V";
+    const titleSpan = dom("span", "pool-pro-item-title mono", `${prefix}${entry.track_index}: ${entry.clip_name}`);
+    const statusCls = isOffline ? "is-offline" : isProxyOnly ? "is-ready" : "is-active";
+    const statusLabel = isOffline ? "OFFLINE" : isProxyOnly ? "PROXY ONLY" : "ONLINE";
+    const statusPill = dom("span", `nle-tag mono pool-pro-pill ${statusCls}`, statusLabel);
+    topRow.replaceChildren(titleSpan, statusPill);
+
+    const pathLine = dom("div", "pool-pro-item-sub mono", entry.source_path || entry.clip_name);
+    const actionRow = dom("div", "pool-pro-relink-actions");
+
+    const toggleBtn = dom(
+      "button",
+      "btn btn-mini btn-secondary",
+      t(isOffline ? "poolPro.relink.btnOnline" : "poolPro.relink.btnOffline")
+    );
+    toggleBtn.type = "button";
+    toggleBtn.addEventListener("click", async () => {
+      await relinkMediaPoolAction(
+        isOffline ? "mark_online" : "mark_offline",
+        entry.track_kind,
+        entry.track_index,
+        entry.clip_index
+      );
+    });
+    actionRow.appendChild(toggleBtn);
+
+    if (isOffline || isProxyOnly) {
+      const input = dom("input", "input-control mono pool-pro-relink-input");
+      input.type = "text";
+      input.setAttribute("aria-label", `Relink source path for ${entry.clip_name}`);
+      const cands = Array.isArray(entry.candidates) ? entry.candidates : [];
+      if (cands.length > 0) {
+        const sel = dom("select", "input-control mono pool-pro-relink-select");
+        sel.setAttribute("aria-label", `Candidate matches for ${entry.clip_name}`);
+        for (const c of cands) {
+          const opt = document.createElement("option");
+          opt.value = c.path;
+          opt.textContent = `${c.path} (${c.confidence}%)`;
+          sel.appendChild(opt);
+        }
+        input.value = cands[0].path;
+        sel.addEventListener("change", () => {
+          input.value = sel.value;
+        });
+        actionRow.appendChild(sel);
+      } else {
+        input.value = entry.source_path || `media/${entry.clip_name}.mov`;
+      }
+      actionRow.appendChild(input);
+
+      const relinkBtn = dom("button", "btn btn-mini btn-primary", t("poolPro.relink.btnRelink"));
+      relinkBtn.type = "button";
+      relinkBtn.addEventListener("click", async () => {
+        await relinkMediaPoolAction(
+          "relink",
+          entry.track_kind,
+          entry.track_index,
+          entry.clip_index,
+          input.value
+        );
+      });
+      actionRow.appendChild(relinkBtn);
+    }
+
+    item.replaceChildren(topRow, pathLine, actionRow);
+    return item;
+  });
+
+  listEl.replaceChildren(...rows);
+}
+
+async function relinkMediaPoolAction(op, trackKind, trackIndex, clipIndex, newSourcePath = "") {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  const fb = byId("pool-relink-feedback");
+  try {
+    const res = await api.relinkMediaPoolClips({
+      document: doc,
+      op,
+      track_kind: trackKind,
+      track_index: trackIndex,
+      clip_index: clipIndex,
+      new_source_path: newSourcePath,
+      verify_on_disk: false
+    });
+    if (res.audit) state.mediaPoolAudit = res.audit;
+    if (res.document) {
+      commitTimelineMutation(res.document, state.timelineSelected);
+    }
+    if (fb) fb.textContent = res.detail || "";
+    renderMediaPoolProRelinkPane();
+    showBanner(res.detail || "Relink updated.", res.changed ? "success" : "info");
+  } catch (err) {
+    if (fb) fb.textContent = err.message;
+    showBanner(err.message, "error");
+  }
+}
+
+function populateAvSyncClipSelectors() {
+  const vSel = byId("pool-sync-video-select");
+  const aSel = byId("pool-sync-audio-select");
+  if (!vSel || !aSel) return;
+  const doc = state.timelineDoc;
+  const vOpts = [];
+  const aOpts = [];
+  if (doc && Array.isArray(doc.tracks)) {
+    for (const trk of doc.tracks) {
+      if (!trk || !Array.isArray(trk.clips)) continue;
+      for (let i = 0; i < trk.clips.length; i++) {
+        const clip = trk.clips[i];
+        if (!clip) continue;
+        const val = `${trk.index}:${i}`;
+        const opt = document.createElement("option");
+        opt.value = val;
+        if (trk.kind === "video") {
+          opt.textContent = `V${trk.index}: ${clip.name}`;
+          vOpts.push(opt);
+        } else if (trk.kind === "audio") {
+          opt.textContent = `A${trk.index}: ${clip.name}`;
+          aOpts.push(opt);
+        }
+      }
+    }
+  }
+  const prevV = vSel.value;
+  const prevA = aSel.value;
+  vSel.replaceChildren(...vOpts);
+  aSel.replaceChildren(...aOpts);
+  if (prevV && Array.from(vSel.options).some((o) => o.value === prevV)) vSel.value = prevV;
+  if (prevA && Array.from(aSel.options).some((o) => o.value === prevA)) aSel.value = prevA;
+}
+
+function parsePairKey(val) {
+  const parts = String(val || "1:0").split(":");
+  return {
+    track_index: Number.parseInt(parts[0] || "1", 10) || 1,
+    clip_index: Number.parseInt(parts[1] || "0", 10) || 0
+  };
+}
+
+function renderMediaPoolProSyncPane() {
+  populateAvSyncClipSelectors();
+  const canvas = byId("media-pool-sync-canvas");
+  const fgEl = byId("pool-sync-fg-preview");
+  const fb = byId("pool-sync-feedback");
+  if (canvas) {
+    drawAvSyncWaveformCanvas(canvas, state.mediaPoolAvSyncAnalysis, {
+      empty: t("poolPro.sync.canvasEmpty"),
+      cam: t("poolPro.sync.camLabel"),
+      ext: t("poolPro.sync.extLabel")
+    });
+  }
+  if (fgEl) {
+    fgEl.textContent = state.mediaPoolAvSyncAnalysis ? state.mediaPoolAvSyncAnalysis.audio_filter || "" : "";
+  }
+  if (fb && state.mediaPoolAvSyncAnalysis) {
+    fb.textContent = state.mediaPoolAvSyncAnalysis.detail || "";
+  }
+}
+
+async function analyzeMediaPoolAvSyncAction() {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  populateAvSyncClipSelectors();
+  const vSel = byId("pool-sync-video-select");
+  const aSel = byId("pool-sync-audio-select");
+  const fb = byId("pool-sync-feedback");
+  if (!vSel || !aSel || !vSel.value || !aSel.value) {
+    if (fb) fb.textContent = t("poolPro.sync.needPair");
+    showBanner(t("poolPro.sync.needPair"), "error");
+    return;
+  }
+  const vRef = parsePairKey(vSel.value);
+  const aRef = parsePairKey(aSel.value);
+  const mode = byId("pool-sync-mode")?.value || "waveform";
+  const maxLag = Number.parseInt(byId("pool-sync-max-lag")?.value || "48", 10) || 48;
+  const vTc = byId("pool-sync-vtc")?.value || "";
+  const aTc = byId("pool-sync-atc")?.value || "";
+
+  try {
+    const analysis = await api.analyzeMediaPoolAvSync({
+      document: doc,
+      video_track_index: vRef.track_index,
+      video_clip_index: vRef.clip_index,
+      audio_track_index: aRef.track_index,
+      audio_clip_index: aRef.clip_index,
+      mode,
+      max_lag_frames: maxLag,
+      video_tc: vTc,
+      audio_tc: aTc
+    });
+    state.mediaPoolAvSyncAnalysis = analysis;
+    renderMediaPoolProSyncPane();
+  } catch (err) {
+    if (fb) fb.textContent = err.message;
+    showBanner(err.message, "error");
+  }
+}
+
+async function applyMediaPoolAvSyncAction() {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  if (!state.mediaPoolAvSyncAnalysis) {
+    await analyzeMediaPoolAvSyncAction();
+  }
+  const analysis = state.mediaPoolAvSyncAnalysis;
+  if (!analysis) return;
+  const fb = byId("pool-sync-feedback");
+  try {
+    const res = await api.applyMediaPoolAvSync({
+      document: doc,
+      video_track_index: analysis.video_track_index,
+      video_clip_index: analysis.video_clip_index,
+      audio_track_index: analysis.audio_track_index,
+      audio_clip_index: analysis.audio_clip_index,
+      offset_frames: analysis.offset_frames,
+      link_pair: true
+    });
+    if (res.document) {
+      commitTimelineMutation(res.document, state.timelineSelected);
+    }
+    if (fb) fb.textContent = res.detail || "";
+    showBanner(res.detail || "A/V sync applied.", "success");
+  } catch (err) {
+    if (fb) fb.textContent = err.message;
+    showBanner(err.message, "error");
+  }
+}
+
+function wireMediaPoolProEvents() {
+  byId("btn-proxy-mode-toggle")?.addEventListener("click", () => {
+    toggleProxyModeAction();
+  });
+  byId("btn-pool-pro-proxy-switch")?.addEventListener("click", () => {
+    toggleProxyModeAction();
+  });
+  byId("btn-media-pool-pro")?.addEventListener("click", () => {
+    openMediaPoolProDialog("proxy");
+  });
+  byId("media-pool-offline-badge")?.addEventListener("click", () => {
+    openMediaPoolProDialog("relink");
+  });
+  byId("btn-close-media-pool-pro")?.addEventListener("click", () => {
+    closeMediaPoolProDialog();
+  });
+  const proDlg = byId("media-pool-pro-dialog");
+  if (proDlg) {
+    proDlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeMediaPoolProDialog();
+    });
+    proDlg.addEventListener("click", (ev) => {
+      if (ev.target === proDlg) closeMediaPoolProDialog();
+    });
+  }
+  for (const tabBtn of document.querySelectorAll(".pool-pro-tab[data-pool-pro-tab]")) {
+    tabBtn.addEventListener("click", () => {
+      const tabId = tabBtn.getAttribute("data-pool-pro-tab") || "proxy";
+      switchMediaPoolProTab(tabId);
+      if (tabId === "relink") refreshMediaPoolAuditAction(false);
+    });
+  }
+
+  byId("btn-pool-info-proxy")?.addEventListener("click", () => {
+    closeMediaPoolInfoDialog();
+    openMediaPoolProDialog("proxy");
+  });
+  byId("btn-pool-info-relink")?.addEventListener("click", () => {
+    closeMediaPoolInfoDialog();
+    openMediaPoolProDialog("relink");
+  });
+  byId("btn-pool-info-sync")?.addEventListener("click", () => {
+    closeMediaPoolInfoDialog();
+    openMediaPoolProDialog("sync");
+  });
+
+  byId("pool-proxy-scale")?.addEventListener("change", () => renderMediaPoolProProxyPane());
+  byId("pool-proxy-codec")?.addEventListener("change", () => renderMediaPoolProProxyPane());
+  byId("pool-proxy-dir")?.addEventListener("input", () => renderMediaPoolProProxyPane());
+  byId("btn-pool-proxy-generate")?.addEventListener("click", generateMediaPoolProxiesAction);
+  byId("btn-pool-proxy-clear")?.addEventListener("click", clearMediaPoolProxiesAction);
+
+  byId("btn-pool-scan-disk")?.addEventListener("click", () => refreshMediaPoolAuditAction(true));
+  byId("btn-pool-toggle-offline")?.addEventListener("click", () => {
+    const sel = getMediaPoolSelectedRef();
+    const doc = state.timelineDoc;
+    const trk = doc && Array.isArray(doc.tracks)
+      ? doc.tracks.find((t) => t && t.kind === sel.track_kind && Number(t.index) === sel.track_index)
+      : null;
+    const clip = trk && Array.isArray(trk.clips) ? trk.clips[sel.clip_index] : null;
+    const op = clip && clip.media_offline ? "mark_online" : "mark_offline";
+    relinkMediaPoolAction(op, sel.track_kind, sel.track_index, sel.clip_index);
+  });
+  byId("btn-pool-auto-relink")?.addEventListener("click", () => {
+    relinkMediaPoolAction("auto_relink", "video", 1, 0);
+  });
+
+  byId("btn-pool-analyze-sync")?.addEventListener("click", analyzeMediaPoolAvSyncAction);
+  byId("btn-pool-apply-sync")?.addEventListener("click", applyMediaPoolAvSyncAction);
+  byId("pool-sync-mode")?.addEventListener("change", () => {
+    analyzeMediaPoolAvSyncAction();
+  });
 }
 
 bootstrap();

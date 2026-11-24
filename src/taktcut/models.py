@@ -198,6 +198,18 @@ VignetteMode = Literal["forward", "backward"]
 VoiceCleanupPresetId = Literal["youtube_voice", "podcast_warm", "broadcast_crisp", "custom"]
 ExportFpsOption = Literal["source", "24", "25", "30", "60"]
 AudioOnlyFormatId = Literal["off", "wav24", "mp3_320", "aac_256"]
+ProxyScaleOption = Literal["half", "quarter"]
+ProxyCodecId = Literal["prores_proxy", "dnxhr_lb", "h264_proxy"]
+MediaLinkStatus = Literal["online", "proxy_only", "offline"]
+AvSyncMode = Literal["waveform", "timecode"]
+
+ALLOWED_PROXY_SCALES: tuple[ProxyScaleOption, ...] = ("half", "quarter")
+ALLOWED_PROXY_CODECS: tuple[ProxyCodecId, ...] = (
+    "prores_proxy",
+    "dnxhr_lb",
+    "h264_proxy",
+)
+ALLOWED_AV_SYNC_MODES: tuple[AvSyncMode, ...] = ("waveform", "timecode")
 RetimeProcessMode = Literal["nearest", "frame_blend", "optical_flow"]
 RetimeRampPresetId = Literal[
     "constant",
@@ -1246,6 +1258,56 @@ class TimelineClip(BaseModel):
     transform: ClipTransformParams | None = None
     compound_subsequence: CompoundSubSequence | None = None
     multicam_bank: MulticamBank | None = None
+    proxy_path: str = ""
+    proxy_scale: ProxyScaleOption | None = None
+    proxy_codec: ProxyCodecId | None = None
+    media_offline: bool = False
+    av_sync_offset_frames: int = Field(default=0, ge=-100000, le=100000)
+    timecode_start: str = ""
+
+    @field_validator("proxy_path", "timecode_start", mode="before")
+    @classmethod
+    def _validate_media_pool_str(cls, raw: Any) -> str:
+        if raw is None:
+            return ""
+        return str(raw).strip()[:260]
+
+    @field_validator("proxy_scale", mode="before")
+    @classmethod
+    def _validate_clip_proxy_scale(cls, raw: Any) -> ProxyScaleOption | None:
+        if raw is None or raw == "":
+            return None
+        cleaned = str(raw).strip().lower()
+        if cleaned == "half":
+            return "half"
+        if cleaned == "quarter":
+            return "quarter"
+        allowed = ", ".join(ALLOWED_PROXY_SCALES)
+        raise ValueError(f"Unsupported proxy_scale {raw!r}; expected one of: {allowed}")
+
+    @field_validator("proxy_codec", mode="before")
+    @classmethod
+    def _validate_clip_proxy_codec(cls, raw: Any) -> ProxyCodecId | None:
+        if raw is None or raw == "":
+            return None
+        cleaned = str(raw).strip().lower()
+        if cleaned == "prores_proxy":
+            return "prores_proxy"
+        if cleaned == "dnxhr_lb":
+            return "dnxhr_lb"
+        if cleaned == "h264_proxy":
+            return "h264_proxy"
+        allowed = ", ".join(ALLOWED_PROXY_CODECS)
+        raise ValueError(f"Unsupported proxy_codec {raw!r}; expected one of: {allowed}")
+
+    @field_validator("media_offline", mode="before")
+    @classmethod
+    def _validate_clip_media_offline(cls, raw: Any) -> bool:
+        if raw is None:
+            return False
+        if not isinstance(raw, bool):
+            raise ValueError(f"media_offline must be a boolean, got {raw!r}")
+        return raw
 
     @field_validator("link_group_id", mode="before")
     @classmethod

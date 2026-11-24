@@ -12329,3 +12329,615 @@ export function snapTitleAnchor(posX, posY, snapEnabled = true) {
   return { pos_x: Number(x.toFixed(3)), pos_y: Number(y.toFixed(3)), snapGuides };
 }
 
+
+export const PROXY_CODEC_SPECS_CLIENT = Object.freeze({
+  prores_proxy: {
+    codec_id: "prores_proxy",
+    label: "Apple ProRes 422 Proxy",
+    container_ext: ".mov",
+    video_encoder: "prores_ks",
+    video_args: ["-c:v", "prores_ks", "-profile:v", "0", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"],
+    audio_args: ["-c:a", "pcm_s16le"],
+    estimated_size_ratio: 0.36
+  },
+  dnxhr_lb: {
+    codec_id: "dnxhr_lb",
+    label: "Avid DNxHR LB",
+    container_ext: ".mov",
+    video_encoder: "dnxhd",
+    video_args: ["-c:v", "dnxhd", "-profile:v", "dnxhr_lb", "-pix_fmt", "yuv422p"],
+    audio_args: ["-c:a", "pcm_s16le"],
+    estimated_size_ratio: 0.32
+  },
+  h264_proxy: {
+    codec_id: "h264_proxy",
+    label: "H.264 Fast Proxy",
+    container_ext: ".mp4",
+    video_encoder: "libx264",
+    video_args: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+    audio_args: ["-c:a", "aac", "-b:a", "128k"],
+    estimated_size_ratio: 0.14
+  }
+});
+
+export function normalizeProxyScaleClient(raw) {
+  const cleaned = String(raw || "half").trim().toLowerCase();
+  if (cleaned === "1/4" || cleaned === "quarter" || cleaned === "0.25") return "quarter";
+  return "half";
+}
+
+export function normalizeProxyCodecClient(raw) {
+  const cleaned = String(raw || "prores_proxy").trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(PROXY_CODEC_SPECS_CLIENT, cleaned)) return cleaned;
+  return "prores_proxy";
+}
+
+export function sanitizeProxyDirClient(rawDir) {
+  const text = String(rawDir || ".taktcut-proxies").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!text) return ".taktcut-proxies";
+  const parts = text.split("/").filter((p) => p && p !== ".");
+  if (parts.some((p) => p === ".." || p.includes(":")) || parts.length === 0) {
+    return ".taktcut-proxies";
+  }
+  return parts.join("/");
+}
+
+export function computeProxyDimensionsClient(width, height, scale) {
+  const srcW = Math.max(16, Math.round(Number(width) || 1920));
+  const srcH = Math.max(16, Math.round(Number(height) || 1080));
+  const div = normalizeProxyScaleClient(scale) === "quarter" ? 4 : 2;
+  const pw = Math.max(2, Math.floor(Math.floor(srcW / div) / 2) * 2);
+  const ph = Math.max(2, Math.floor(Math.floor(srcH / div) / 2) * 2);
+  return { width: pw, height: ph };
+}
+
+function safeMediaStemClient(rawPathOrName) {
+  const base = String(rawPathOrName || "").split(/[\\/]/).pop() || "";
+  const stem = base.replace(/\.[A-Za-z0-9]+$/, "");
+  const clean = stem.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "");
+  return clean || "clip";
+}
+
+export function compileProxyPlanClient(opts = {}) {
+  const scale = normalizeProxyScaleClient(opts.scale);
+  const codec = normalizeProxyCodecClient(opts.codec);
+  const spec = PROXY_CODEC_SPECS_CLIENT[codec];
+  const dir = sanitizeProxyDirClient(opts.proxy_dir);
+  const clipName = String(opts.clip_name || "clip");
+  const srcPath = String(opts.source_path || "").trim() || `media/${safeMediaStemClient(clipName)}.mov`;
+  const stem = safeMediaStemClient(srcPath || clipName);
+  const scaleTag = scale === "quarter" ? "qtr" : "half";
+  const proxyPath = `${dir}/${stem}_${scaleTag}_${codec}${spec.container_ext}`;
+  const dims = computeProxyDimensionsClient(opts.source_width || 1920, opts.source_height || 1080, scale);
+  const vf =
+    scale === "half"
+      ? "scale=trunc(iw/4)*2:trunc(ih/4)*2:flags=bicubic"
+      : "scale=trunc(iw/8)*2:trunc(ih/8)*2:flags=bicubic";
+  const argv = ["ffmpeg", "-y", "-i", srcPath, "-vf", vf, ...spec.video_args, ...spec.audio_args, proxyPath];
+  const areaRatio = scale === "half" ? 0.25 : 0.0625;
+  const estRatio = Math.min(0.95, Math.max(0.03, spec.estimated_size_ratio * (0.45 + 0.55 * areaRatio)));
+  const savingsPct = Math.max(10, Math.min(97, Math.round((1 - estRatio) * 100)));
+
+  return {
+    track_kind: opts.track_kind === "audio" ? "audio" : "video",
+    track_index: Number.isInteger(opts.track_index) ? opts.track_index : 1,
+    clip_index: Number.isInteger(opts.clip_index) ? opts.clip_index : 0,
+    clip_name: clipName,
+    source_path: srcPath,
+    proxy_path: proxyPath,
+    scale,
+    codec,
+    source_width: Math.max(16, Math.round(Number(opts.source_width) || 1920)),
+    source_height: Math.max(16, Math.round(Number(opts.source_height) || 1080)),
+    proxy_width: dims.width,
+    proxy_height: dims.height,
+    video_filter: vf,
+    estimated_savings_pct: savingsPct,
+    argv,
+    command_preview: argv.join(" "),
+    executed: false,
+    status: "ready",
+    detail: `${spec.label} (${dims.width}x${dims.height})`
+  };
+}
+
+function isSyntheticGfxClipClient(clip, track) {
+  if (!track || track.kind === "audio") return false;
+  const src = String((clip && clip.source_path) || "").trim().toLowerCase();
+  return src.startsWith("gfx/");
+}
+
+export function generateProxiesInDocument(doc, opts = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return { changed: false, generated_count: 0, plans: [], document: doc, detail: "No timeline loaded." };
+  }
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const scale = normalizeProxyScaleClient(opts.scale);
+  const codec = normalizeProxyCodecClient(opts.codec);
+  const scope = opts.scope === "selected" ? "selected" : "all_video";
+  const tkKind = opts.track_kind === "audio" ? "audio" : "video";
+  const tkIdx = Number.isInteger(opts.track_index) ? opts.track_index : 1;
+  const cIdx = Number.isInteger(opts.clip_index) ? opts.clip_index : 0;
+  const proxyDir = sanitizeProxyDirClient(opts.proxy_dir);
+
+  const plans = [];
+  let generatedCount = 0;
+
+  for (const trk of nextDoc.tracks) {
+    if (!trk || trk.kind !== "video" || !Array.isArray(trk.clips)) continue;
+    for (let i = 0; i < trk.clips.length; i++) {
+      const clip = trk.clips[i];
+      if (!clip) continue;
+      if (scope === "selected" && (tkKind !== "video" || Number(trk.index) !== tkIdx || i !== cIdx)) {
+        continue;
+      }
+      if (scope !== "selected" && isSyntheticGfxClipClient(clip, trk)) {
+        continue;
+      }
+      const plan = compileProxyPlanClient({
+        track_kind: "video",
+        track_index: Number(trk.index),
+        clip_index: i,
+        clip_name: clip.name,
+        source_path: clip.source_path,
+        scale,
+        codec,
+        source_width: nextDoc.width || 1920,
+        source_height: nextDoc.height || 1080,
+        proxy_dir: proxyDir
+      });
+      clip.proxy_path = plan.proxy_path;
+      clip.proxy_scale = scale;
+      clip.proxy_codec = codec;
+      generatedCount += 1;
+      plans.push(plan);
+    }
+  }
+
+  return {
+    changed: generatedCount > 0,
+    generated_count: generatedCount,
+    proxy_dir: proxyDir,
+    scale,
+    codec,
+    plans,
+    detail:
+      generatedCount > 0
+        ? `Generated ${generatedCount} proxy asset(s) (${scale}, ${PROXY_CODEC_SPECS_CLIENT[codec].label}).`
+        : "No eligible video clips matched proxy generation scope.",
+    document: nextDoc
+  };
+}
+
+export function clearProxiesInDocument(doc, opts = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return { changed: false, cleared_count: 0, document: doc, detail: "No timeline loaded." };
+  }
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const scope = opts.scope === "selected" ? "selected" : "all_video";
+  const tkKind = opts.track_kind === "audio" ? "audio" : "video";
+  const tkIdx = Number.isInteger(opts.track_index) ? opts.track_index : 1;
+  const cIdx = Number.isInteger(opts.clip_index) ? opts.clip_index : 0;
+  let clearedCount = 0;
+
+  for (const trk of nextDoc.tracks) {
+    if (!trk || trk.kind !== "video" || !Array.isArray(trk.clips)) continue;
+    for (let i = 0; i < trk.clips.length; i++) {
+      const clip = trk.clips[i];
+      if (!clip) continue;
+      if (scope === "selected" && (tkKind !== "video" || Number(trk.index) !== tkIdx || i !== cIdx)) {
+        continue;
+      }
+      if (clip.proxy_path || clip.proxy_scale || clip.proxy_codec) {
+        clip.proxy_path = "";
+        clip.proxy_scale = null;
+        clip.proxy_codec = null;
+        clearedCount += 1;
+      }
+    }
+  }
+  return {
+    changed: clearedCount > 0,
+    cleared_count: clearedCount,
+    detail: `Cleared proxy metadata from ${clearedCount} clip(s).`,
+    document: nextDoc
+  };
+}
+
+function normPosixPathClient(raw) {
+  return String(raw || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function tokenizeStemClient(text) {
+  const base = String(text || "").split(/[\\/]/).pop() || "";
+  const stem = base.replace(/\.[A-Za-z0-9]+$/, "").toLowerCase();
+  return new Set(stem.split(/[^a-z0-9]+/).filter((t) => t.length >= 2));
+}
+
+export function suggestRelinkCandidatesClient(sourcePath, clipName, workspaceFiles = [], limit = 5) {
+  const targetPath = normPosixPathClient(sourcePath || clipName);
+  const targetName = (targetPath.split("/").pop() || "").toLowerCase();
+  const targetStem = targetName.replace(/\.[A-Za-z0-9]+$/, "") || safeMediaStemClient(clipName).toLowerCase();
+  const targetTokens = tokenizeStemClient(targetPath || clipName);
+  const seen = new Set();
+  const scored = [];
+
+  for (const raw of workspaceFiles) {
+    const norm = normPosixPathClient(raw);
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm);
+    const candName = (norm.split("/").pop() || "").toLowerCase();
+    const candStem = candName.replace(/\.[A-Za-z0-9]+$/, "");
+    const candTokens = tokenizeStemClient(norm);
+
+    if (targetName && candName === targetName) {
+      scored.push({ path: norm, confidence: 100, match_reason: "exact_filename" });
+    } else if (targetStem && candStem === targetStem) {
+      scored.push({ path: norm, confidence: 88, match_reason: "stem_match" });
+    } else if (targetTokens.size > 0 && candTokens.size > 0) {
+      let overlap = 0;
+      for (const tok of targetTokens) {
+        if (candTokens.has(tok)) overlap += 1;
+      }
+      const union = new Set([...targetTokens, ...candTokens]).size;
+      if (overlap > 0 && union > 0) {
+        const pct = Math.max(45, Math.min(82, Math.round(40 + 45 * (overlap / union))));
+        scored.push({ path: norm, confidence: pct, match_reason: "token_match" });
+      } else {
+        scored.push({ path: norm, confidence: 20, match_reason: "workspace_media" });
+      }
+    } else {
+      scored.push({ path: norm, confidence: 15, match_reason: "workspace_media" });
+    }
+  }
+
+  scored.sort((a, b) => (b.confidence !== a.confidence ? b.confidence - a.confidence : a.path.localeCompare(b.path)));
+  return scored.slice(0, Math.max(1, limit));
+}
+
+export function auditMediaPoolLinksClient(doc, opts = {}) {
+  const wsFiles = Array.isArray(opts.workspace_files) ? opts.workspace_files.map(normPosixPathClient).filter(Boolean) : [];
+  const strictCheck = Boolean(opts.strict_workspace_check);
+  const mediaSet = new Set(wsFiles.map((p) => p.toLowerCase()));
+  const entries = [];
+  let onlineCount = 0;
+  let proxyOnlyCount = 0;
+  let offlineCount = 0;
+
+  if (doc && Array.isArray(doc.tracks)) {
+    for (const trk of doc.tracks) {
+      if (!trk || !Array.isArray(trk.clips)) continue;
+      for (let i = 0; i < trk.clips.length; i++) {
+        const clip = trk.clips[i];
+        if (!clip) continue;
+        const srcNorm = normPosixPathClient(clip.source_path);
+        const pxyNorm = normPosixPathClient(clip.proxy_path);
+        let status = "online";
+        if (clip.media_offline) {
+          status = "offline";
+        } else if (isSyntheticGfxClipClient(clip, trk)) {
+          status = "online";
+        } else if (strictCheck || (Array.isArray(opts.workspace_files) && opts.workspace_files.length > 0 && strictCheck)) {
+          if (srcNorm && mediaSet.has(srcNorm.toLowerCase())) {
+            status = "online";
+          } else if (pxyNorm && mediaSet.has(pxyNorm.toLowerCase())) {
+            status = "proxy_only";
+          } else {
+            status = "offline";
+          }
+        }
+
+        if (status === "online") onlineCount += 1;
+        else if (status === "proxy_only") proxyOnlyCount += 1;
+        else offlineCount += 1;
+
+        const cands =
+          status === "online"
+            ? []
+            : suggestRelinkCandidatesClient(clip.source_path, clip.name, wsFiles);
+        entries.push({
+          track_kind: trk.kind === "audio" ? "audio" : "video",
+          track_index: Number(trk.index) || 1,
+          clip_index: i,
+          clip_name: clip.name || "",
+          source_path: clip.source_path || "",
+          proxy_path: clip.proxy_path || "",
+          status,
+          candidates: cands
+        });
+      }
+    }
+  }
+
+  return {
+    total_clips: entries.length,
+    online_count: onlineCount,
+    proxy_only_count: proxyOnlyCount,
+    offline_count: offlineCount,
+    entries,
+    workspace_media: wsFiles
+  };
+}
+
+export function toggleClipOfflineInDocumentClient(doc, trackKind, trackIndex, clipIndex, offline = null) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return { changed: false, document: doc, detail: "No timeline loaded." };
+  }
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const trk = nextDoc.tracks.find((t) => t && t.kind === trackKind && Number(t.index) === Number(trackIndex));
+  const clip = trk && Array.isArray(trk.clips) ? trk.clips[clipIndex] : null;
+  if (!clip) throw new Error(`Clip not found at ${trackKind}:${trackIndex}:${clipIndex}`);
+  const target = offline === null ? !Boolean(clip.media_offline) : Boolean(offline);
+  const changed = Boolean(clip.media_offline) !== target;
+  clip.media_offline = target;
+  return {
+    changed,
+    document: nextDoc,
+    detail: `Marked '${clip.name}' as ${target ? "OFFLINE" : "ONLINE"}.`
+  };
+}
+
+export function relinkClipInDocumentClient(doc, trackKind, trackIndex, clipIndex, newSourcePath) {
+  const cleaned = normPosixPathClient(newSourcePath);
+  if (!cleaned || cleaned.includes("..")) {
+    throw new Error("Invalid workspace source path for relink.");
+  }
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const trk = nextDoc.tracks.find((t) => t && t.kind === trackKind && Number(t.index) === Number(trackIndex));
+  const clip = trk && Array.isArray(trk.clips) ? trk.clips[clipIndex] : null;
+  if (!clip) throw new Error(`Clip not found at ${trackKind}:${trackIndex}:${clipIndex}`);
+  clip.source_path = cleaned;
+  clip.media_ref = cleaned;
+  clip.media_offline = false;
+  return {
+    changed: true,
+    document: nextDoc,
+    detail: `Relinked '${clip.name}' -> ${cleaned}`
+  };
+}
+
+export function autoRelinkAllInDocumentClient(doc, workspaceFiles = [], minConfidence = 60) {
+  const audit = auditMediaPoolLinksClient(doc, { workspace_files: workspaceFiles, strict_workspace_check: false });
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  let relinked = 0;
+  const msgs = [];
+  for (const entry of audit.entries) {
+    if (entry.status === "online" || !entry.candidates || entry.candidates.length === 0) continue;
+    const best = entry.candidates[0];
+    if (best.confidence < minConfidence) continue;
+    const trk = nextDoc.tracks.find((t) => t && t.kind === entry.track_kind && Number(t.index) === entry.track_index);
+    const clip = trk && Array.isArray(trk.clips) ? trk.clips[entry.clip_index] : null;
+    if (!clip) continue;
+    clip.source_path = best.path;
+    clip.media_ref = best.path;
+    clip.media_offline = false;
+    relinked += 1;
+    msgs.push(`${clip.name} -> ${best.path} (${best.confidence}%)`);
+  }
+  return {
+    changed: relinked > 0,
+    relinked_count: relinked,
+    document: nextDoc,
+    detail:
+      relinked > 0
+        ? `Auto-relinked ${relinked} clip(s): ${msgs.join("; ")}`
+        : "No offline clips matched workspace media candidates."
+  };
+}
+
+function resolvePoolFpsFloat(fps) {
+  if (fps && typeof fps === "object" && Number(fps.num) > 0) {
+    return Math.max(1, Number(fps.num) / Math.max(1, Number(fps.den || 1)));
+  }
+  const n = Number(fps);
+  return Number.isFinite(n) && n > 0 ? Math.max(1, n) : 25;
+}
+
+export function compileAvSyncFiltergraphClient(offsetFrames, fps, opts = {}) {
+  const fpsVal = resolvePoolFpsFloat(fps);
+  const off = Math.max(-100000, Math.min(100000, Math.round(Number(offsetFrames) || 0)));
+  const aPad = String(opts.audio_pad || "1:a").trim();
+  const oPad = String(opts.out_pad || "a_sync").trim();
+  if (off > 0) {
+    const delayMs = ((off / fpsVal) * 1000).toFixed(2);
+    return `[${aPad}]adelay=${delayMs}|${delayMs},asetpts=PTS-STARTPTS[${oPad}]`;
+  }
+  if (off < 0) {
+    const trimS = (Math.abs(off) / fpsVal).toFixed(4);
+    return `[${aPad}]atrim=start=${trimS},asetpts=PTS-STARTPTS[${oPad}]`;
+  }
+  return `[${aPad}]anull,asetpts=PTS-STARTPTS[${oPad}]`;
+}
+
+export function analyzeAvSyncClient(doc, opts = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    throw new Error("Timeline document is required.");
+  }
+  const mode = opts.mode === "timecode" ? "timecode" : "waveform";
+  const vTrkIdx = Number.isInteger(opts.video_track_index) ? opts.video_track_index : 1;
+  const vClipIdx = Number.isInteger(opts.video_clip_index) ? opts.video_clip_index : 0;
+  const aTrkIdx = Number.isInteger(opts.audio_track_index) ? opts.audio_track_index : 1;
+  const aClipIdx = Number.isInteger(opts.audio_clip_index) ? opts.audio_clip_index : 0;
+  const maxLag = Math.max(4, Math.min(240, Math.round(Number(opts.max_lag_frames) || 48)));
+
+  const vTrk = doc.tracks.find((t) => t && t.kind === "video" && Number(t.index) === vTrkIdx);
+  const aTrk = doc.tracks.find((t) => t && t.kind === "audio" && Number(t.index) === aTrkIdx);
+  const vClip = vTrk && Array.isArray(vTrk.clips) ? vTrk.clips[vClipIdx] : null;
+  const aClip = aTrk && Array.isArray(aTrk.clips) ? aTrk.clips[aClipIdx] : null;
+  if (!vClip || !aClip) {
+    throw new Error("Video and Audio clips are required for A/V Auto-Sync.");
+  }
+
+  const fpsFloat = resolvePoolFpsFloat(doc.fps);
+  const fpsInt = Math.max(1, Math.round(fpsFloat));
+  const vTc =
+    String(opts.video_tc || "").trim() ||
+    String(vClip.timecode_start || "").trim() ||
+    framesToSmpteTimecode(3600 * fpsInt + (Number(vClip.start_frame) || 0), doc.fps);
+  const aTc =
+    String(opts.audio_tc || "").trim() ||
+    String(aClip.timecode_start || "").trim() ||
+    framesToSmpteTimecode(3600 * fpsInt + (Number(aClip.start_frame) || 0), doc.fps);
+
+  let vEnv = Array.isArray(opts.video_envelope) ? opts.video_envelope.map((v) => clampNum(Number(v) || 0, 0, 1)) : null;
+  let aEnv = Array.isArray(opts.audio_envelope) ? opts.audio_envelope.map((v) => clampNum(Number(v) || 0, 0, 1)) : null;
+
+  if (!vEnv || !aEnv || vEnv.length < 4 || aEnv.length < 4) {
+    const seedStr = `${vClip.name || ""}:${aClip.name || ""}`;
+    let seedSrc = 0;
+    for (let i = 0; i < seedStr.length; i++) seedSrc += seedStr.charCodeAt(i);
+    const clapPos = 24 + (seedSrc % 16);
+    const trueLagRaw = (Number(vClip.source_in_frame) || 0) - (Number(aClip.source_in_frame) || 0) + (seedSrc % 13) - 6;
+    let clampedLag = Math.max(-Math.floor(maxLag / 2), Math.min(Math.floor(maxLag / 2), trueLagRaw));
+    if (clampedLag === 0 && Number(aClip.start_frame) !== Number(vClip.start_frame)) {
+      clampedLag = Math.max(
+        -Math.floor(maxLag / 2),
+        Math.min(Math.floor(maxLag / 2), (Number(vClip.start_frame) || 0) - (Number(aClip.start_frame) || 0))
+      );
+    }
+    if (clampedLag === 0) clampedLag = 6;
+    vEnv = [];
+    aEnv = [];
+    for (let i = 0; i < 96; i++) {
+      const base = 0.08 + 0.06 * Math.abs(Math.sin(i * 0.37 + seedSrc * 0.11));
+      const clapV = 0.88 * Math.exp(-((i - clapPos) ** 2) / 3.2);
+      const speechV = 0.35 * Math.exp(-((i - (clapPos + 22)) ** 2) / 22.0) * (0.6 + 0.4 * Math.sin(i * 0.9));
+      vEnv.push(Number(Math.min(1, base + clapV + Math.max(0, speechV)).toFixed(4)));
+      const j = i + clampedLag;
+      const baseA = 0.07 + 0.05 * Math.abs(Math.sin(j * 0.37 + seedSrc * 0.11));
+      const clapA = 0.92 * Math.exp(-((j - clapPos) ** 2) / 3.0);
+      const speechA = 0.38 * Math.exp(-((j - (clapPos + 22)) ** 2) / 22.0) * (0.6 + 0.4 * Math.sin(j * 0.9));
+      aEnv.push(Number(Math.min(1, baseA + clapA + Math.max(0, speechA)).toFixed(4)));
+    }
+  }
+
+  const bound = Math.max(1, Math.min(maxLag, Math.max(vEnv.length, aEnv.length) - 2));
+  const curve = [];
+  let bestLag = 0;
+  let bestScore = -2;
+  for (let lag = -bound; lag <= bound; lag++) {
+    const pA = [];
+    const pB = [];
+    for (let i = 0; i < vEnv.length; i++) {
+      const j = i + lag;
+      if (j >= 0 && j < aEnv.length) {
+        pA.push(vEnv[i]);
+        pB.push(aEnv[j]);
+      }
+    }
+    let score = 0;
+    if (pA.length >= 4) {
+      const mA = pA.reduce((s, x) => s + x, 0) / pA.length;
+      const mB = pB.reduce((s, x) => s + x, 0) / pB.length;
+      let num = 0;
+      let dA = 0;
+      let dB = 0;
+      for (let k = 0; k < pA.length; k++) {
+        const da = pA[k] - mA;
+        const db = pB[k] - mB;
+        num += da * db;
+        dA += da * da;
+        dB += db * db;
+      }
+      const den = Math.sqrt(dA) * Math.sqrt(dB);
+      score = den > 1e-9 ? num / den : 0;
+    }
+    const sc = Math.max(-1, Math.min(1, Number(score.toFixed(4))));
+    curve.push({ lag, score: sc });
+    if (sc > bestScore) {
+      bestScore = sc;
+      bestLag = lag;
+    }
+  }
+
+  let offsetFrames = bestLag;
+  let confidence = Number(Math.max(0, Math.min(1, bestScore)).toFixed(4));
+  let detail = `Waveform cross-correlation peak at ${offsetFrames >= 0 ? "+" : ""}${offsetFrames}f (${Math.round(confidence * 100)}% confidence)`;
+
+  if (mode === "timecode") {
+    const parseTc = (tcText) => {
+      const m = /^(\d{2}):(\d{2}):(\d{2})[:;](\d{2})$/.exec(String(tcText || "").trim());
+      if (!m) throw new Error(`Invalid SMPTE timecode '${tcText}'; expected HH:MM:SS:FF`);
+      const hh = Number.parseInt(m[1], 10);
+      const mm = Number.parseInt(m[2], 10);
+      const ss = Number.parseInt(m[3], 10);
+      const ff = Number.parseInt(m[4], 10);
+      return (hh * 3600 + mm * 60 + ss) * fpsInt + (ff % fpsInt);
+    };
+    const vF = parseTc(vTc);
+    const aF = parseTc(aTc);
+    offsetFrames = Math.max(-100000, Math.min(100000, aF - vF));
+    confidence = 1;
+    detail = `SMPTE TC Jam-Sync: ${offsetFrames >= 0 ? "+" : ""}${offsetFrames}f (${vTc} vs ${aTc})`;
+  }
+
+  const offsetMs = Number(((offsetFrames / fpsFloat) * 1000).toFixed(2));
+  const af = compileAvSyncFiltergraphClient(offsetFrames, doc.fps);
+  const vSrc = vClip.source_path || `${vClip.name}.mov`;
+  const aSrc = aClip.source_path || `${aClip.name}.wav`;
+  const ffmpegArgv = [
+    "ffmpeg", "-y", "-i", vSrc, "-i", aSrc,
+    "-filter_complex", af, "-map", "0:v", "-map", "[a_sync]",
+    "-c:v", "copy", "-c:a", "aac", "synced_clip.mp4"
+  ];
+
+  return {
+    mode,
+    video_track_index: vTrkIdx,
+    video_clip_index: vClipIdx,
+    video_clip_name: vClip.name || "",
+    audio_track_index: aTrkIdx,
+    audio_clip_index: aClipIdx,
+    audio_clip_name: aClip.name || "",
+    offset_frames: offsetFrames,
+    offset_ms: offsetMs,
+    confidence,
+    fps_float: fpsFloat,
+    video_tc: vTc,
+    audio_tc: aTc,
+    video_envelope: vEnv,
+    audio_envelope: aEnv,
+    correlation_curve: curve,
+    audio_filter: af,
+    ffmpeg_argv: ffmpegArgv,
+    detail
+  };
+}
+
+export function applyAvSyncInDocumentClient(doc, opts = {}) {
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const vTrkIdx = Number.isInteger(opts.video_track_index) ? opts.video_track_index : 1;
+  const vClipIdx = Number.isInteger(opts.video_clip_index) ? opts.video_clip_index : 0;
+  const aTrkIdx = Number.isInteger(opts.audio_track_index) ? opts.audio_track_index : 1;
+  const aClipIdx = Number.isInteger(opts.audio_clip_index) ? opts.audio_clip_index : 0;
+  const off = Math.max(-100000, Math.min(100000, Math.round(Number(opts.offset_frames) || 0)));
+  const linkPair = opts.link_pair !== false;
+
+  const vTrk = nextDoc.tracks.find((t) => t && t.kind === "video" && Number(t.index) === vTrkIdx);
+  const aTrk = nextDoc.tracks.find((t) => t && t.kind === "audio" && Number(t.index) === aTrkIdx);
+  const vClip = vTrk && Array.isArray(vTrk.clips) ? vTrk.clips[vClipIdx] : null;
+  const aClip = aTrk && Array.isArray(aTrk.clips) ? aTrk.clips[aClipIdx] : null;
+  if (!vClip || !aClip) {
+    throw new Error("Video and Audio clips are required to apply A/V Auto-Sync.");
+  }
+
+  aClip.start_frame = Math.max(0, (Number(vClip.start_frame) || 0) + off);
+  aClip.av_sync_offset_frames = off;
+  vClip.av_sync_offset_frames = off;
+  if (linkPair) {
+    const linkId = (
+      vClip.link_group_id ||
+      aClip.link_group_id ||
+      `avsync_v${vTrkIdx}_${vClipIdx}_a${aTrkIdx}_${aClipIdx}`
+    ).slice(0, 64);
+    vClip.link_group_id = linkId;
+    aClip.link_group_id = linkId;
+  }
+  const sign = off >= 0 ? "+" : "";
+  return {
+    changed: true,
+    offset_frames: off,
+    detail: `Synced '${aClip.name}' to '${vClip.name}' (${sign}${off}f)${linkPair ? " & linked A/V" : ""}.`,
+    document: nextDoc
+  };
+}
