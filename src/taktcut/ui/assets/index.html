@@ -1514,6 +1514,15 @@
                   <span data-i18n="msStudio.btn.toolbar">Spline &amp; Blur</span>
                   <span class="kbd-chip mono">Shift+E</span>
                 </button>
+                <button type="button" id="btn-timeline-optical-glow-studio" class="btn btn-mini tl-og-studio-btn og-studio-btn" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <circle cx="8" cy="8" r="3" fill="#f59e0b"/>
+                    <circle cx="8" cy="8" r="5.5" stroke="#ef4444" stroke-width="1.2" fill="none" opacity="0.8"/>
+                    <line x1="1" y1="8" x2="15" y2="8" stroke="#38bdf8" stroke-width="1.2"/>
+                  </svg>
+                  <span data-i18n="ogStudio.btn.toolbar">Halation &amp; Glow</span>
+                  <span class="kbd-chip mono">Shift+A</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1722,6 +1731,10 @@
                 <button type="button" id="btn-fx-motion-spline-studio" class="btn btn-secondary ms-studio-btn" title="Open Keyframe Spline, Speed Graph &amp; Optical Motion Blur Studio (Shift+E)">
                   <span data-i18n="msStudio.btn.fx">Spline Graph</span>
                   <span class="kbd-chip mono">Shift+E</span>
+                </button>
+                <button type="button" id="btn-fx-optical-glow-studio" class="btn btn-secondary og-studio-btn" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">
+                  <span data-i18n="ogStudio.btn.fx">Halation / S_Glow</span>
+                  <span class="kbd-chip mono">Shift+A</span>
                 </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
@@ -2546,6 +2559,9 @@
                 <button type="button" id="btn-color-qk-toggle" class="btn btn-chip qk-toggle-btn" aria-pressed="false" data-i18n="qk.btn.toggle" title="Toggle Qualifier Keyer &amp; Light-Wrap">Keyer</button>
                 <button type="button" id="btn-open-qk-studio" class="btn btn-chip qk-studio-btn" data-i18n="qk.btn.studio" title="Open Qualifier Keyer, Despill &amp; Light-Wrap Studio (Shift+Q)">Keyer Studio</button>
                 <span id="color-qk-badge" class="nle-tag mono" aria-live="polite">KEYER OFF</span>
+                <span class="broadcast-quick-sep" aria-hidden="true"></span>
+                <button type="button" id="btn-color-optical-glow-studio" class="btn btn-chip og-studio-btn" data-i18n="ogStudio.btn.color" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">Halation / S_Glow</button>
+                <span id="color-og-badge" class="nle-tag mono" aria-live="polite">GLOW OFF</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
@@ -5099,6 +5115,248 @@
         <div class="fg-drawer-body">
           <pre id="ms-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="ms-json-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="og-studio-dialog" class="nle-dialog og-studio-dialog" aria-labelledby="og-studio-title" aria-describedby="og-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="og-studio-title" data-i18n="ogStudio.dialog.title">Boris FX S_Glow / 35mm Optical Halation &amp; Anamorphic Streak Studio</h2>
+        <p id="og-studio-subtitle" class="nle-dialog-subtitle" data-i18n="ogStudio.dialog.subtitle">DaVinci Resolve 35mm Silver-Halide Emulsion Halation, Multi-Octave Inverse-Square Bloom &amp; Anamorphic Streak</p>
+      </div>
+      <div class="og-header-actions">
+        <span id="og-active-preset-badge" class="nle-tag mono">KODAK 2383 HALATION</span>
+        <span id="og-telemetry-badge" class="nle-tag mono og-telemetry-pill">TRIG 0.0% | +0.000</span>
+        <button type="button" id="btn-close-og-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body og-dialog-body">
+      <div class="og-preset-strip" id="og-preset-strip" role="group" aria-label="Optical Glow presets">
+        <span class="pill-label" data-i18n="ogStudio.presetsLabel">OPTICAL PRESETS</span>
+        <button type="button" class="btn btn-chip og-preset-btn is-active" data-og-preset="kodak_2383_halation" aria-pressed="true" data-i18n="ogStudio.preset.kodak_2383_halation">Kodak 2383 35mm</button>
+        <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="sapphire_dream_bloom" aria-pressed="false" data-i18n="ogStudio.preset.sapphire_dream_bloom">Sapphire S_Glow</button>
+        <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="anamorphic_blue_streak" aria-pressed="false" data-i18n="ogStudio.preset.anamorphic_blue_streak">Anamorphic Streak</button>
+        <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="neon_night_club" aria-pressed="false" data-i18n="ogStudio.preset.neon_night_club">Neon Night Club</button>
+        <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="subtle_cinema_aura" aria-pressed="false" data-i18n="ogStudio.preset.subtle_cinema_aura">Subtle Aura</button>
+        <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="custom" aria-pressed="false" data-i18n="ogStudio.preset.custom">Custom</button>
+      </div>
+
+      <div class="og-toolbar-bar">
+        <div class="og-view-group" role="group" aria-label="Inspection view mode">
+          <span class="pill-label" data-i18n="ogStudio.viewLabel">VIEW</span>
+          <button type="button" id="btn-og-view-final" class="btn btn-mini og-view-btn is-active" data-og-view="final_composite" aria-pressed="true" data-i18n="ogStudio.view.final_composite">Final Composite</button>
+          <button type="button" id="btn-og-view-matte" class="btn btn-mini og-view-btn" data-og-view="highlight_matte" aria-pressed="false" data-i18n="ogStudio.view.highlight_matte">Highlight Matte</button>
+          <button type="button" id="btn-og-view-halation" class="btn btn-mini og-view-btn" data-og-view="halation_only" aria-pressed="false" data-i18n="ogStudio.view.halation_only">Halation Pass</button>
+          <button type="button" id="btn-og-view-split" class="btn btn-mini og-view-btn" data-og-view="split_compare" aria-pressed="false" data-i18n="ogStudio.view.split_compare">Split Compare</button>
+        </div>
+
+        <div class="og-split-ctrl">
+          <label class="inline-label" for="og-split-slider" data-i18n="ogStudio.splitLabel">Split</label>
+          <input type="range" id="og-split-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="Optical Glow split compare position">
+          <span id="og-split-label" class="mono nle-tag">50%</span>
+        </div>
+
+        <div class="og-fusion-ctrl">
+          <label class="inline-label" for="og-blend-mode" data-i18n="ogStudio.blendLabel">HDR Blend</label>
+          <select id="og-blend-mode" class="input-control mono">
+            <option value="filmic_rolloff">Filmic Rolloff</option>
+            <option value="screen">Screen</option>
+            <option value="add_clamp">Add (Clamp)</option>
+            <option value="soft_light">Soft Light</option>
+          </select>
+          <label class="inline-check" for="og-enabled">
+            <input type="checkbox" id="og-enabled" checked>
+            <span data-i18n="ogStudio.enabledLabel">Enable Optical FX</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="og-workstation-grid">
+        <div class="og-viewport-col">
+          <div class="og-card">
+            <div class="pane-subheader">
+              <span data-i18n="ogStudio.previewTitle">Optical Halation &amp; S_Glow Viewport (Interactive Split Wipe)</span>
+              <span id="og-headroom-badge" class="nle-tag mono">HEADROOM 0.00</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="og-preview-canvas" class="studio-canvas og-preview-canvas" aria-label="Optical Halation and Bloom interactive viewport"></canvas>
+            </div>
+          </div>
+
+          <div class="og-card">
+            <div class="pane-subheader">
+              <span data-i18n="ogStudio.responseTitle">Highlight Threshold Transfer &amp; Exponential Falloff Curves</span>
+              <span id="og-energy-badge" class="nle-tag mono">+0.000 ENERGY</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="og-response-canvas" class="studio-canvas og-response-canvas" aria-label="Optical highlight threshold and exponential falloff graph"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="og-inspector-col og-card">
+          <div class="og-inspector-tabs" role="tablist" aria-label="Optical Glow parameter groups">
+            <button type="button" role="tab" id="btn-og-tab-bloom" class="btn btn-mini og-tab-btn is-active" data-og-tab="bloom" aria-selected="true" data-i18n="ogStudio.tab.bloom">Bloom &amp; Threshold</button>
+            <button type="button" role="tab" id="btn-og-tab-halation" class="btn btn-mini og-tab-btn" data-og-tab="halation" aria-selected="false" data-i18n="ogStudio.tab.halation">35mm Halation</button>
+            <button type="button" role="tab" id="btn-og-tab-streak" class="btn btn-mini og-tab-btn" data-og-tab="streak" aria-selected="false" data-i18n="ogStudio.tab.streak">Anamorphic Streak</button>
+          </div>
+
+          <div id="og-panel-bloom" class="og-tab-panel" role="tabpanel" aria-labelledby="btn-og-tab-bloom">
+            <div class="og-param-field">
+              <label for="og-highlight-threshold-num" data-i18n="ogStudio.param.highlightThreshold">Highlight Threshold</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-highlight-threshold" min="0" max="1" step="0.01" value="0.70" aria-label="Highlight threshold slider">
+                <input type="number" id="og-highlight-threshold-num" class="input-control input-num mono" min="0" max="1" step="0.01" value="0.70">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-threshold-softness-num" data-i18n="ogStudio.param.thresholdSoftness">Threshold Softness</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-threshold-softness" min="0" max="0.5" step="0.01" value="0.14" aria-label="Threshold softness slider">
+                <input type="number" id="og-threshold-softness-num" class="input-control input-num mono" min="0" max="0.5" step="0.01" value="0.14">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-glow-intensity-num" data-i18n="ogStudio.param.glowIntensity">Glow Intensity (S_Glow)</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-glow-intensity" min="0" max="2" step="0.02" value="0.45" aria-label="Glow intensity slider">
+                <input type="number" id="og-glow-intensity-num" class="input-control input-num mono" min="0" max="2" step="0.02" value="0.45">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-glow-radius-num" data-i18n="ogStudio.param.glowRadius">Glow Radius (px)</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-glow-radius" min="2" max="128" step="1" value="20" aria-label="Glow radius slider">
+                <input type="number" id="og-glow-radius-num" class="input-control input-num mono" min="2" max="128" step="1" value="20">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-glow-warmth-num" data-i18n="ogStudio.param.warmthShift">Warmth Shift (-Cool / +Warm)</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-glow-warmth" min="-1" max="1" step="0.02" value="0.22" aria-label="Glow warmth shift slider">
+                <input type="number" id="og-glow-warmth-num" class="input-control input-num mono" min="-1" max="1" step="0.02" value="0.22">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-bloom-sat-num" data-i18n="ogStudio.param.bloomSaturation">Bloom Saturation</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-bloom-sat" min="0" max="2" step="0.02" value="1.12" aria-label="Bloom saturation slider">
+                <input type="number" id="og-bloom-sat-num" class="input-control input-num mono" min="0" max="2" step="0.02" value="1.12">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-octaves-num" data-i18n="ogStudio.param.octaves">Inverse-Square Octaves</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-octaves" min="2" max="6" step="1" value="4" aria-label="Inverse-square octaves slider">
+                <input type="number" id="og-octaves-num" class="input-control input-num mono" min="2" max="6" step="1" value="4">
+              </div>
+            </div>
+          </div>
+
+          <div id="og-panel-halation" class="og-tab-panel" role="tabpanel" aria-labelledby="btn-og-tab-halation" hidden>
+            <div class="og-param-field">
+              <label for="og-halation-strength-num" data-i18n="ogStudio.param.halationStrength">Halation Strength</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-halation-strength" min="0" max="1" step="0.02" value="0.68" aria-label="Halation strength slider">
+                <input type="number" id="og-halation-strength-num" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.68">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-halation-spread-num" data-i18n="ogStudio.param.halationSpread">Halation Spread (px)</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-halation-spread" min="1" max="64" step="1" value="16" aria-label="Halation spread slider">
+                <input type="number" id="og-halation-spread-num" class="input-control input-num mono" min="1" max="64" step="1" value="16">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <div class="og-rgb-header">
+                <label data-i18n="ogStudio.param.halationSpectrum">35mm Emulsion Spectrum (R / G / B)</label>
+                <span id="og-halation-swatch" class="og-color-swatch" aria-hidden="true"></span>
+              </div>
+              <div class="og-rgb-grid">
+                <div class="og-rgb-item">
+                  <label for="og-hal-r">R</label>
+                  <input type="number" id="og-hal-r" class="input-control input-num mono" min="0" max="1" step="0.02" value="1.00">
+                </div>
+                <div class="og-rgb-item">
+                  <label for="og-hal-g">G</label>
+                  <input type="number" id="og-hal-g" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.28">
+                </div>
+                <div class="og-rgb-item">
+                  <label for="og-hal-b">B</label>
+                  <input type="number" id="og-hal-b" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.06">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="og-panel-streak" class="og-tab-panel" role="tabpanel" aria-labelledby="btn-og-tab-streak" hidden>
+            <div class="og-param-field">
+              <label for="og-streak-intensity-num" data-i18n="ogStudio.param.streakIntensity">Streak / Glint Intensity</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-streak-intensity" min="0" max="2" step="0.02" value="0.10" aria-label="Anamorphic streak intensity slider">
+                <input type="number" id="og-streak-intensity-num" class="input-control input-num mono" min="0" max="2" step="0.02" value="0.10">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-streak-length-num" data-i18n="ogStudio.param.streakLength">Anamorphic Length (px)</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-streak-length" min="4" max="240" step="2" value="48" aria-label="Anamorphic streak length slider">
+                <input type="number" id="og-streak-length-num" class="input-control input-num mono" min="4" max="240" step="2" value="48">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <label for="og-streak-angle-num" data-i18n="ogStudio.param.streakAngle">Streak Angle (deg)</label>
+              <div class="og-range-pair">
+                <input type="range" id="og-streak-angle" min="-180" max="180" step="1" value="0" aria-label="Anamorphic streak angle slider">
+                <input type="number" id="og-streak-angle-num" class="input-control input-num mono" min="-180" max="180" step="1" value="0">
+              </div>
+            </div>
+            <div class="og-param-field">
+              <div class="og-rgb-header">
+                <label data-i18n="ogStudio.param.streakTint">Anamorphic Tint (R / G / B)</label>
+                <span id="og-streak-swatch" class="og-color-swatch" aria-hidden="true"></span>
+              </div>
+              <div class="og-rgb-grid">
+                <div class="og-rgb-item">
+                  <label for="og-stk-r">R</label>
+                  <input type="number" id="og-stk-r" class="input-control input-num mono" min="0" max="1" step="0.02" value="1.00">
+                </div>
+                <div class="og-rgb-item">
+                  <label for="og-stk-g">G</label>
+                  <input type="number" id="og-stk-g" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.56">
+                </div>
+                <div class="og-rgb-item">
+                  <label for="og-stk-b">B</label>
+                  <input type="number" id="og-stk-b" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.28">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="og-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="ogStudio.status.idle">Adjust highlight threshold, 35mm emulsion halation, or anamorphic streak to inspect optical response.</div>
+
+      <div class="btn-row og-actions">
+        <button type="button" id="btn-og-apply-timeline" class="btn btn-primary" data-i18n="ogStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-og-send-deliver" class="btn btn-secondary" data-i18n="ogStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-og-export-json" class="btn btn-secondary" data-i18n="ogStudio.btn.exportJson">Export OFX JSON</button>
+        <button type="button" id="btn-og-download-json" class="btn btn-secondary" data-i18n="ogStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-og-copy-fg" class="btn btn-mini" data-i18n="ogStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="og-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="ogStudio.drawerTitle">Multi-Tap FFmpeg Filtergraph (split/lutrgb/gblur/avgblur/blend) &amp; OFX JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="og-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="og-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

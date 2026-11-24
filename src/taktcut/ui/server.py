@@ -231,6 +231,18 @@ from taktcut.multicam_studio import (
     normalize_multicam_studio_config,
     sync_multicam_studio_angles,
 )
+from taktcut.optical_glow_studio import (
+    ALLOWED_OPTICAL_GLOW_BLEND_MODES,
+    ALLOWED_OPTICAL_GLOW_PRESET_IDS,
+    ALLOWED_OPTICAL_GLOW_VIEW_MODES,
+    OpticalGlowConfig,
+    analyze_optical_glow_samples,
+    apply_optical_glow_to_document,
+    compile_optical_glow_filtergraph,
+    export_optical_glow_json,
+    list_optical_glow_presets,
+    normalize_optical_glow_config,
+)
 from taktcut.project import (
     PROJECT_FILE_SUFFIX,
     PROJECT_SCHEMA_VERSION,
@@ -1879,6 +1891,19 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "channel_ids": list(ALLOWED_MOTION_SPLINE_CHANNELS),
                     "handle_modes": list(ALLOWED_MOTION_SPLINE_HANDLE_MODES),
                     "default_config": MotionSplineStudioConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/optical-glow/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_optical_glow_presets()],
+                    "preset_ids": list(ALLOWED_OPTICAL_GLOW_PRESET_IDS),
+                    "blend_modes": list(ALLOWED_OPTICAL_GLOW_BLEND_MODES),
+                    "view_modes": list(ALLOWED_OPTICAL_GLOW_VIEW_MODES),
+                    "default_config": OpticalGlowConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -4817,6 +4842,105 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "document": updated_doc.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                     "compiled": ms_compiled_apply.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/optical-glow/analyze":
+            og_cfg = normalize_optical_glow_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_samples = payload.get("samples")
+            raw_pixels = payload.get("pixels")
+            raw_w = payload.get("width", 0)
+            raw_h = payload.get("height", 0)
+            og_w = int(raw_w) if isinstance(raw_w, int) and not isinstance(raw_w, bool) else 0
+            og_h = int(raw_h) if isinstance(raw_h, int) and not isinstance(raw_h, bool) else 0
+            og_analysis = analyze_optical_glow_samples(
+                og_cfg,
+                raw_samples if isinstance(raw_samples, list) else None,
+                width=og_w,
+                height=og_h,
+                pixels=raw_pixels if isinstance(raw_pixels, list) else None,
+            )
+            self._send_json(HTTPStatus.OK, og_analysis.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/optical-glow/compile":
+            og_cfg = normalize_optical_glow_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            og_compiled = compile_optical_glow_filtergraph(og_cfg)
+            self._send_json(HTTPStatus.OK, og_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/optical-glow/export-json":
+            og_cfg = normalize_optical_glow_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            og_title = str(payload.get("title", "TAKTCUT_OPTICAL_GLOW")).strip() or (
+                "TAKTCUT_OPTICAL_GLOW"
+            )
+            og_exported = export_optical_glow_json(og_cfg, title=og_title)
+            raw_og_out = payload.get("out_path")
+            og_saved_rel: str | None = None
+            if raw_og_out is not None and str(raw_og_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_og_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(og_exported.json_text, encoding="utf-8")
+                og_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                og_exported.model_copy(update={"saved_path": og_saved_rel}).model_dump(mode="json"),
+            )
+            return
+
+        if route == "/api/fx/optical-glow/download":
+            og_cfg = normalize_optical_glow_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            og_title = str(payload.get("title", "TAKTCUT_OPTICAL_GLOW")).strip() or (
+                "TAKTCUT_OPTICAL_GLOW"
+            )
+            og_exported_dl = export_optical_glow_json(og_cfg, title=og_title)
+            og_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or og_exported_dl.filename),
+                "taktcut_optical_glow",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                og_exported_dl.json_text.encode("utf-8"),
+                extra_headers={"Content-Disposition": f'attachment; filename="{og_dl_filename}"'},
+            )
+            return
+
+        if route == "/api/fx/optical-glow/apply":
+            og_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            og_cfg = normalize_optical_glow_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_og_doc = apply_optical_glow_to_document(
+                og_doc,
+                og_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            og_compiled_apply = compile_optical_glow_filtergraph(og_cfg)
+            og_val = validate_timeline(updated_og_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_og_doc.model_dump(mode="json"),
+                    "validation": og_val.model_dump(mode="json"),
+                    "compiled": og_compiled_apply.model_dump(mode="json"),
                 },
             )
             return

@@ -13954,3 +13954,330 @@ def test_ui_playwright_motion_spline_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_ui_optical_glow_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/fx/optical-glow/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 6
+    assert "anamorphic_blue_streak" in meta["preset_ids"]
+    assert "filmic_rolloff" in meta["blend_modes"]
+    assert "highlight_matte" in meta["view_modes"]
+
+    an_status, _, an_raw = _http_call(
+        f"{base_url}/api/fx/optical-glow/analyze",
+        method="POST",
+        payload={"config": {"preset_id": "kodak_2383_halation"}},
+    )
+    assert an_status == 200
+    an_payload = json.loads(an_raw.decode("utf-8"))
+    assert an_payload["triggered_highlight_pct"] > 1.0
+    assert an_payload["halo_energy_added"] > 0.0
+    assert len(an_payload["luma_histogram_after"]) == 16
+    assert len(an_payload["response_curve"]["falloff_curve"]) == 33
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/optical-glow/compile",
+        method="POST",
+        payload={"config": {"preset_id": "anamorphic_blue_streak"}},
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert "split=" in compiled["vf_chain"]
+    assert "lutrgb=" in compiled["vf_chain"]
+    assert "gblur=" in compiled["vf_chain"]
+    assert "avgblur=" in compiled["vf_chain"]
+    assert "blend=" in compiled["vf_chain"]
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/fx/optical-glow/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "sapphire_dream_bloom"},
+            "title": "Dream Bloom",
+            "out_path": "exports/dream_glow.json",
+        },
+    )
+    assert ex_status == 200
+    exported = json.loads(ex_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/dream_glow.json"
+    assert (workspace / "exports" / "dream_glow.json").is_file()
+    assert exported["schema_version"] == "taktcut.optical_glow.v1"
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/fx/optical-glow/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "kodak_2383_halation"},
+            "out_path": "../escape_glow.json",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    dl_status, dl_headers, dl_raw = _http_call(
+        f"{base_url}/api/fx/optical-glow/download",
+        method="POST",
+        payload={
+            "config": {"preset_id": "anamorphic_blue_streak"},
+            "title": "Anamorphic Streak",
+            "filename": "../../evil_glow.json",
+        },
+    )
+    assert dl_status == 200
+    disp = dl_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "taktcut.optical_glow.v1" in dl_raw.decode("utf-8")
+
+    # Apply to Timeline document
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+    ap_status, _, ap_raw = _http_call(
+        f"{base_url}/api/fx/optical-glow/apply",
+        method="POST",
+        payload={
+            "document": doc_payload,
+            "config": {"preset_id": "anamorphic_blue_streak"},
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert ap_status == 200
+    ap_data = json.loads(ap_raw.decode("utf-8"))
+    assert ap_data["changed"] is True
+    assert ap_data["validation"]["valid"] is True
+    assert (
+        ap_data["document"]["tracks"][0]["clips"][0]["optical_glow"]["preset_id"]
+        == "anamorphic_blue_streak"
+    )
+
+    # Node.js static-demo parity check via demo_adapter.js
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getOpticalGlowPresets();
+assert.equal(pre.presets.length, 6);
+const an = await api.analyzeOpticalGlow({{
+  config: {{ preset_id: "anamorphic_blue_streak" }}
+}});
+assert.ok(an.triggered_highlight_pct > 1);
+assert.ok(an.halo_energy_added > 0);
+const comp = await api.compileOpticalGlow({{
+  config: {{ preset_id: "anamorphic_blue_streak" }}
+}});
+assert.ok(comp.vf_chain.includes("split="));
+assert.ok(comp.vf_chain.includes("avgblur="));
+const exp = await api.exportOpticalGlowJson({{
+  config: {{ preset_id: "anamorphic_blue_streak" }},
+  title: "Demo Glow"
+}});
+assert.equal(exp.schema_version, "taktcut.optical_glow.v1");
+const blob = await api.downloadOpticalGlowBlob({{
+  config: {{ preset_id: "anamorphic_blue_streak" }},
+  title: "Demo DL"
+}});
+assert.ok((await blob.text()).includes("taktcut.optical_glow.v1"));
+const sampleDoc = {{
+  title: "Demo",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [{{
+    index: 1,
+    kind: "video",
+    name: "V1",
+    clips: [{{
+      name: "C1",
+      track_index: 1,
+      media_type: "video",
+      start_frame: 0,
+      duration_frames: 100
+    }}]
+  }}]
+}};
+const applied = await api.applyOpticalGlow({{
+  document: sampleDoc,
+  config: {{ preset_id: "anamorphic_blue_streak" }},
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(applied.changed, true);
+assert.equal(
+  applied.document.tracks[0].clips[0].optical_glow.preset_id,
+  "anamorphic_blue_streak"
+);
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_optical_glow_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#tab-fx")
+            page.click("#tab-fx")
+            page.wait_for_selector("#btn-fx-optical-glow-studio")
+
+            # Open Optical Glow Studio via Shift+A shortcut
+            page.keyboard.press("Shift+A")
+            page.wait_for_selector("#og-studio-dialog[open]")
+
+            # Switch preset to anamorphic_blue_streak
+            page.click(".og-preset-btn[data-og-preset='anamorphic_blue_streak']")
+            page.wait_for_function(
+                "() => (document.getElementById('og-active-preset-badge')?.textContent || '')"
+                ".includes('ANAMORPHIC BLUE STREAK')"
+            )
+
+            # Switch view to highlight_matte and verify canvas updates
+            comp_img = page.evaluate(
+                "() => document.getElementById('og-preview-canvas').toDataURL()"
+            )
+            page.click("#btn-og-view-matte")
+            page.wait_for_function(
+                "() => document.getElementById('btn-og-view-matte')?.getAttribute('aria-pressed')"
+                " === 'true'"
+            )
+            matte_img = page.evaluate(
+                "() => document.getElementById('og-preview-canvas').toDataURL()"
+            )
+            assert matte_img != comp_img
+
+            # Switch to Split Compare and adjust split slider
+            page.click("#btn-og-view-split")
+            page.wait_for_function(
+                "() => document.getElementById('btn-og-view-split')?.getAttribute('aria-pressed')"
+                " === 'true'"
+            )
+            split_before = page.evaluate(
+                "() => document.getElementById('og-preview-canvas').toDataURL()"
+            )
+            page.locator("#og-split-slider").fill("72")
+            page.dispatch_event("#og-split-slider", "input")
+            page.wait_for_function(
+                "() => (document.getElementById('og-split-label')?.textContent || '') === '72%'"
+            )
+            split_after = page.evaluate(
+                "() => document.getElementById('og-preview-canvas').toDataURL()"
+            )
+            assert split_after != split_before
+
+            # Switch inspector tabs and adjust 35mm Halation & Streak params
+            page.click("#btn-og-tab-halation")
+            page.wait_for_selector("#og-halation-spread-num")
+            page.fill("#og-halation-spread-num", "28")
+            page.dispatch_event("#og-halation-spread-num", "change")
+            page.click("#btn-og-tab-streak")
+            page.wait_for_selector("#og-streak-angle-num")
+            page.fill("#og-streak-angle-num", "15")
+            page.dispatch_event("#og-streak-angle-num", "change")
+            page.click("#btn-og-tab-bloom")
+
+            # Export OFX JSON
+            page.click("#btn-og-export-json")
+            page.wait_for_function(
+                "() => (document.getElementById('og-json-preview')?.textContent || '')"
+                ".includes('taktcut.optical_glow.v1')"
+            )
+
+            # Apply to Timeline & Use in Deliver
+            page.click("#btn-og-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('og-status-note')?.textContent || '')"
+                ".includes('Timeline')"
+            )
+            page.click("#btn-og-send-deliver")
+            page.wait_for_function(
+                "() => !document.getElementById('og-studio-dialog')?.open"
+            )
+            assert page.locator("#tab-render").get_attribute("aria-selected") == "true"
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#lang-fr")
+            page.click("#tab-color")
+            page.click("#btn-color-optical-glow-studio")
+            page.wait_for_selector("#og-studio-dialog[open]")
+            fr_txt = page.locator("#og-studio-dialog").text_content() or ""
+            assert "Halation 35mm" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-og-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-color-optical-glow-studio")
+            page.wait_for_selector("#og-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('og-studio-dialog').getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-color-optical-glow-studio",
+                "btn-og-view-final",
+                "btn-og-view-matte",
+                "btn-og-tab-bloom",
+                "btn-og-apply-timeline",
+                "btn-og-send-deliver",
+                "btn-close-og-studio",
+                "og-highlight-threshold-num",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-og-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

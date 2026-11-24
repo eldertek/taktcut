@@ -32,6 +32,7 @@ import {
   evaluateSplineAtTClient,
   computeBpmBeatFrames,
   computeCstGamutMatrixClient,
+  computeHighlightMatteAndEnergyClient,
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
   computeTimelineZoomViewport,
@@ -48,6 +49,7 @@ import {
   evaluateFairlightDynamicsTransferDb,
   evaluateFairlightEqBandDb,
   evaluateFairlightEqCurveDb,
+  evaluateOpticalGlowResponseClient,
   evaluatePeriodicHueCurveClient,
   evaluateQualifierKeyerPixelClient,
   evaluateRetimeSourceOffset,
@@ -84,6 +86,7 @@ import {
   normalizeCurvePoints,
   normalizeFairlightAudioRackParams,
   normalizeHslCurves,
+  normalizeOpticalGlowConfigClient,
   normalizePlanarTrackerClient,
   normalizePowerWindow,
   normalizeQualifier,
@@ -12522,4 +12525,518 @@ export function drawMotionSplinePreviewCanvas(
   ctx.font = "700 9.5px ui-monospace, monospace";
   const shutterLabel = mb.enabled ? `${Number(mb.shutter_angle_deg || 0).toFixed(0)} deg` : "OFF";
   ctx.fillText(`SHUTTER ${shutterLabel} | BLUR ${blurPx.toFixed(1)}px`, fx + 12, fy + 18);
+}
+
+// =============================================================================
+// BORIS FX SAPPHIRE S_GLOW / 35MM OPTICAL HALATION VIEWPORT (CYCLE #108)
+// =============================================================================
+
+let _ogBaseSceneCache = null;
+
+function getOgBaseSceneBuffer(bufW = 240, bufH = 135) {
+  if (_ogBaseSceneCache && _ogBaseSceneCache.w === bufW && _ogBaseSceneCache.h === bufH) {
+    return _ogBaseSceneCache;
+  }
+  const rgb = new Float32Array(bufW * bufH * 3);
+  for (let y = 0; y < bufH; y += 1) {
+    const ny = y / Math.max(1, bufH - 1);
+    for (let x = 0; x < bufW; x += 1) {
+      const nx = x / Math.max(1, bufW - 1);
+      // Moody cinema night gradient
+      let r = 0.04 + 0.05 * (1 - ny) + 0.03 * Math.sin(nx * 3.14);
+      let g = 0.05 + 0.06 * (1 - ny);
+      let b = 0.10 + 0.08 * (1 - ny);
+
+      // Architectural window grids in background
+      if (ny > 0.16 && ny < 0.68 && nx > 0.06 && nx < 0.94) {
+        const wx = (nx * 18) % 1;
+        const wy = (ny * 10) % 1;
+        if (wx > 0.25 && wx < 0.72 && wy > 0.25 && wy < 0.65 && ((Math.floor(nx * 18) + Math.floor(ny * 10)) % 3 === 0)) {
+          r = Math.max(r, 0.36);
+          g = Math.max(g, 0.28);
+          b = Math.max(b, 0.20);
+        }
+      }
+
+      // Warm tungsten streetlamp practical (left-upper)
+      const dLamp = Math.hypot((nx - 0.24) * 1.6, ny - 0.26);
+      if (dLamp < 0.13) {
+        const k = clamp01((0.13 - dLamp) / 0.13);
+        const core = k * k * k;
+        r = Math.max(r, 0.99 * core + 0.42 * k);
+        g = Math.max(g, 0.92 * core + 0.26 * k);
+        b = Math.max(b, 0.78 * core + 0.10 * k);
+      }
+
+      // Cyan-cobalt neon marquee sign (right-upper)
+      const inSignBox = Math.abs(nx - 0.75) < 0.11 && Math.abs(ny - 0.30) < 0.055;
+      if (inSignBox) {
+        const edge = Math.max(Math.abs(nx - 0.75) / 0.11, Math.abs(ny - 0.30) / 0.055);
+        const tube = edge > 0.72 || (Math.abs(ny - 0.30) < 0.015 && Math.abs(nx - 0.75) < 0.085);
+        if (tube) {
+          r = Math.max(r, 0.74);
+          g = Math.max(g, 0.96);
+          b = Math.max(b, 1.00);
+        } else {
+          r = Math.max(r, 0.10);
+          g = Math.max(g, 0.28);
+          b = Math.max(b, 0.48);
+        }
+      }
+
+      // Specular chrome point source (center-right mid)
+      const dPoint = Math.hypot((nx - 0.60) * 1.75, ny - 0.56);
+      if (dPoint < 0.05) {
+        const k = clamp01((0.05 - dPoint) / 0.05);
+        r = Math.max(r, 0.96 * k + 0.25);
+        g = Math.max(g, 0.94 * k + 0.22);
+        b = Math.max(b, 0.99 * k + 0.28);
+      }
+
+      // Subject silhouette + key skin highlight + warm rim light
+      const dHead = Math.hypot((nx - 0.47) * 1.7, (ny - 0.48) * 1.25);
+      const dTorso = Math.hypot((nx - 0.47) * 1.1, (ny - 0.80) * 0.95);
+      if (dHead < 0.13) {
+        r = 0.48 + 0.18 * (nx - 0.40);
+        g = 0.33 + 0.12 * (nx - 0.40);
+        b = 0.26 + 0.08 * (nx - 0.40);
+        if (dHead > 0.095 && nx > 0.48) {
+          r = Math.max(r, 0.90);
+          g = Math.max(g, 0.76);
+          b = Math.max(b, 0.58);
+        }
+      } else if (dTorso < 0.22 && ny > 0.58) {
+        r = 0.14;
+        g = 0.16;
+        b = 0.21;
+        if (nx > 0.55) {
+          r = 0.52;
+          g = 0.42;
+          b = 0.34;
+        }
+      }
+
+      // Wet asphalt specular reflections at bottom
+      if (ny > 0.78) {
+        const reflLamp = Math.exp(-(((nx - 0.24) / 0.032) ** 2)) * (0.45 + 0.35 * Math.sin(ny * 85));
+        const reflNeon = Math.exp(-(((nx - 0.75) / 0.045) ** 2)) * (0.42 + 0.30 * Math.cos(ny * 75));
+        r = Math.max(r, 0.86 * reflLamp + 0.25 * reflNeon);
+        g = Math.max(g, 0.64 * reflLamp + 0.72 * reflNeon);
+        b = Math.max(b, 0.34 * reflLamp + 0.95 * reflNeon);
+      }
+
+      const off = (y * bufW + x) * 3;
+      rgb[off] = clamp01(r);
+      rgb[off + 1] = clamp01(g);
+      rgb[off + 2] = clamp01(b);
+    }
+  }
+  _ogBaseSceneCache = { w: bufW, h: bufH, rgb };
+  return _ogBaseSceneCache;
+}
+
+function ogBoxBlurRgbPass(src, dst, w, h, radius) {
+  const r = Math.max(1, Math.min(18, Math.round(radius)));
+  const tmp = new Float32Array(w * h * 3);
+  const invSpan = 1 / (2 * r + 1);
+  for (let y = 0; y < h; y += 1) {
+    const row = y * w;
+    for (let x = 0; x < w; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      for (let dx = -r; dx <= r; dx += 1) {
+        const sx = Math.min(w - 1, Math.max(0, x + dx));
+        const off = (row + sx) * 3;
+        ar += src[off];
+        ag += src[off + 1];
+        ab += src[off + 2];
+      }
+      const outOff = (row + x) * 3;
+      tmp[outOff] = ar * invSpan;
+      tmp[outOff + 1] = ag * invSpan;
+      tmp[outOff + 2] = ab * invSpan;
+    }
+  }
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      for (let dy = -r; dy <= r; dy += 1) {
+        const sy = Math.min(h - 1, Math.max(0, y + dy));
+        const off = (sy * w + x) * 3;
+        ar += tmp[off];
+        ag += tmp[off + 1];
+        ab += tmp[off + 2];
+      }
+      const outOff = (y * w + x) * 3;
+      dst[outOff] = ar * invSpan;
+      dst[outOff + 1] = ag * invSpan;
+      dst[outOff + 2] = ab * invSpan;
+    }
+  }
+}
+
+function ogDirectionalStreakPass(src, dst, w, h, lengthPx, angleDeg) {
+  const halfLen = Math.max(2, Math.min(42, Math.round(lengthPx * 0.22)));
+  const rad = (angleDeg * Math.PI) / 180;
+  const ux = Math.cos(rad);
+  const uy = Math.sin(rad);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      let wSum = 0;
+      for (let s = -halfLen; s <= halfLen; s += 2) {
+        const weight = Math.exp(-Math.abs(s) / Math.max(2, halfLen * 0.45));
+        const sx = Math.min(w - 1, Math.max(0, Math.round(x + ux * s)));
+        const sy = Math.min(h - 1, Math.max(0, Math.round(y + uy * s)));
+        const off = (sy * w + sx) * 3;
+        ar += src[off] * weight;
+        ag += src[off + 1] * weight;
+        ab += src[off + 2] * weight;
+        wSum += weight;
+      }
+      const outOff = (y * w + x) * 3;
+      dst[outOff] = ar / wSum;
+      dst[outOff + 1] = ag / wSum;
+      dst[outOff + 2] = ab / wSum;
+    }
+  }
+}
+
+function ogBlendChannel(base, fx, mode) {
+  const b = clamp01(base);
+  const e = Math.max(0, fx);
+  if (mode === "add_clamp") return clamp01(b + e);
+  if (mode === "screen") {
+    const ec = clamp01(e);
+    return clamp01(1 - (1 - b) * (1 - ec));
+  }
+  if (mode === "soft_light") {
+    const ec = clamp01(e * 0.85);
+    return clamp01(b + 2 * ec * (1 - b) * (0.5 + 0.5 * b));
+  }
+  const combined = b + e;
+  if (combined <= 0.72) return clamp01(combined);
+  const ex = combined - 0.72;
+  return clamp01(0.72 + 0.28 * (ex / (ex + 0.35)));
+}
+
+let _ogOffscreenCanvas = null;
+
+export function drawOpticalGlowPreviewCanvas(canvas, rawConfig, analysisResult = null) {
+  if (!canvas) return;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 240);
+  if (!ctx) return;
+  const cfg = normalizeOpticalGlowConfigClient(rawConfig);
+  ctx.fillStyle = "#080b10";
+  ctx.fillRect(0, 0, w, h);
+
+  const bufW = 240;
+  const bufH = 135;
+  const baseScene = getOgBaseSceneBuffer(bufW, bufH);
+  const baseRgb = baseScene.rgb;
+  const count = bufW * bufH;
+
+  const hiRgb = new Float32Array(count * 3);
+  const matteBuf = new Float32Array(count);
+  for (let i = 0; i < count; i += 1) {
+    const off = i * 3;
+    const r = baseRgb[off];
+    const g = baseRgb[off + 1];
+    const b = baseRgb[off + 2];
+    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const [matte, energy] = computeHighlightMatteAndEnergyClient(
+      lum,
+      cfg.highlight_threshold,
+      cfg.threshold_softness
+    );
+    matteBuf[i] = matte;
+    const satR = lum + (r - lum) * cfg.bloom_saturation;
+    const satG = lum + (g - lum) * cfg.bloom_saturation;
+    const satB = lum + (b - lum) * cfg.bloom_saturation;
+    hiRgb[off] = Math.max(0, satR) * energy;
+    hiRgb[off + 1] = Math.max(0, satG) * energy;
+    hiRgb[off + 2] = Math.max(0, satB) * energy;
+  }
+
+  const bloomTight = new Float32Array(count * 3);
+  const bloomWide = new Float32Array(count * 3);
+  const halBlur = new Float32Array(count * 3);
+  const streakBlur = new Float32Array(count * 3);
+
+  const rScaled = Math.max(1, cfg.glow_radius_px * 0.16);
+  ogBoxBlurRgbPass(hiRgb, bloomTight, bufW, bufH, Math.max(1, rScaled * 0.6));
+  ogBoxBlurRgbPass(hiRgb, bloomWide, bufW, bufH, Math.max(2, rScaled * 1.9));
+  ogBoxBlurRgbPass(hiRgb, halBlur, bufW, bufH, Math.max(1, cfg.halation_spread_px * 0.22));
+  ogDirectionalStreakPass(hiRgb, streakBlur, bufW, bufH, cfg.streak_length_px, cfg.streak_angle_deg);
+
+  const warm = cfg.glow_warmth_shift;
+  const warmR = 1 + Math.max(0, warm) * 0.45 - Math.max(0, -warm) * 0.35;
+  const warmG = 1 + warm * 0.08;
+  const warmB = 1 + Math.max(0, -warm) * 0.50 - Math.max(0, warm) * 0.40;
+  const [hrSpec, hgSpec, hbSpec] = cfg.halation_spectrum_rgb;
+  const [srTint, sgTint, sbTint] = cfg.streak_tint_rgb;
+
+  if (!_ogOffscreenCanvas) {
+    _ogOffscreenCanvas = document.createElement("canvas");
+  }
+  _ogOffscreenCanvas.width = bufW;
+  _ogOffscreenCanvas.height = bufH;
+  const offCtx = _ogOffscreenCanvas.getContext("2d");
+  if (!offCtx) return;
+  const imgData = offCtx.createImageData(bufW, bufH);
+  const data = imgData.data;
+
+  const splitX = Math.round(cfg.split_position * bufW);
+  for (let y = 0; y < bufH; y += 1) {
+    for (let x = 0; x < bufW; x += 1) {
+      const idx = y * bufW + x;
+      const off = idx * 3;
+      const br = baseRgb[off];
+      const bg = baseRgb[off + 1];
+      const bb = baseRgb[off + 2];
+
+      let outR = br;
+      let outG = bg;
+      let outB = bb;
+
+      const isLeftBefore = cfg.view_mode === "split_compare" && x < splitX;
+      if (cfg.enabled && !isLeftBefore) {
+        const blR = (0.56 * bloomTight[off] + 0.44 * bloomWide[off]) * warmR * cfg.glow_intensity * 1.55;
+        const blG = (0.56 * bloomTight[off + 1] + 0.44 * bloomWide[off + 1]) * warmG * cfg.glow_intensity * 1.55;
+        const blB = (0.56 * bloomTight[off + 2] + 0.44 * bloomWide[off + 2]) * warmB * cfg.glow_intensity * 1.55;
+
+        const haR = halBlur[off] * hrSpec * cfg.halation_strength * 1.9;
+        const haG = halBlur[off + 1] * hgSpec * cfg.halation_strength * 1.9;
+        const haB = halBlur[off + 2] * hbSpec * cfg.halation_strength * 1.9;
+
+        const stLum = 0.2126 * streakBlur[off] + 0.7152 * streakBlur[off + 1] + 0.0722 * streakBlur[off + 2];
+        const stR = stLum * srTint * cfg.streak_intensity * 1.6;
+        const stG = stLum * sgTint * cfg.streak_intensity * 1.6;
+        const stB = stLum * sbTint * cfg.streak_intensity * 1.6;
+
+        if (cfg.view_mode === "highlight_matte") {
+          const m = clamp01(matteBuf[idx]);
+          outR = m;
+          outG = m;
+          outB = m;
+        } else if (cfg.view_mode === "halation_only") {
+          outR = clamp01(haR + blR * 0.35 + stR * 0.45);
+          outG = clamp01(haG + blG * 0.35 + stG * 0.45);
+          outB = clamp01(haB + blB * 0.35 + stB * 0.45);
+        } else {
+          outR = ogBlendChannel(br, blR + haR + stR, cfg.blend_mode);
+          outG = ogBlendChannel(bg, blG + haG + stG, cfg.blend_mode);
+          outB = ogBlendChannel(bb, blB + haB + stB, cfg.blend_mode);
+        }
+      }
+
+      const p = idx * 4;
+      data[p] = Math.round(clamp01(outR) * 255);
+      data[p + 1] = Math.round(clamp01(outG) * 255);
+      data[p + 2] = Math.round(clamp01(outB) * 255);
+      data[p + 3] = 255;
+    }
+  }
+  offCtx.putImageData(imgData, 0, 0);
+
+  // Fit 16:9 viewport cleanly inside canvas
+  const pad = 8;
+  const availW = Math.max(80, w - pad * 2);
+  const availH = Math.max(60, h - pad * 2);
+  let frameW = availW;
+  let frameH = Math.round((frameW * 9) / 16);
+  if (frameH > availH) {
+    frameH = availH;
+    frameW = Math.round((frameH * 16) / 9);
+  }
+  const fx = Math.round((w - frameW) * 0.5);
+  const fy = Math.round((h - frameH) * 0.5);
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(_ogOffscreenCanvas, fx, fy, frameW, frameH);
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(fx, fy, frameW, frameH);
+
+  if (cfg.view_mode === "split_compare") {
+    const divX = fx + cfg.split_position * frameW;
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(divX, fy);
+    ctx.lineTo(divX, fy + frameH);
+    ctx.stroke();
+
+    ctx.fillStyle = "#f59e0b";
+    ctx.beginPath();
+    ctx.arc(divX, fy + frameH * 0.5, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#0a0d12";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(10, 12, 16, 0.85)";
+    ctx.fillRect(fx + 6, fy + frameH - 22, 54, 16);
+    ctx.fillRect(fx + frameW - 56, fy + frameH - 22, 50, 16);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.fillText("BEFORE", fx + 12, fy + frameH - 11);
+    ctx.fillStyle = "#fbbf24";
+    ctx.fillText("AFTER", fx + frameW - 48, fy + frameH - 11);
+  }
+
+  canvas._ogPreviewMeta = {
+    fx,
+    fy,
+    frameW,
+    frameH,
+    viewMode: cfg.view_mode
+  };
+
+  // Top-left HUD badge
+  const trigPct = analysisResult ? Number(analysisResult.triggered_highlight_pct || 0).toFixed(1) : "0.0";
+  const viewTag = cfg.view_mode.toUpperCase().replace(/_/g, " ");
+  ctx.fillStyle = "rgba(10, 12, 16, 0.86)";
+  ctx.fillRect(fx + 6, fy + 6, Math.min(frameW - 12, 232), 18);
+  ctx.fillStyle = cfg.enabled ? "#38bdf8" : "#94a3b8";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.fillText(`${viewTag} | TRIG ${trigPct}%`, fx + 12, fy + 18);
+}
+
+export function drawOpticalGlowResponseCanvas(canvas, rawConfig, analysisResult = null) {
+  if (!canvas) return;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 148);
+  if (!ctx) return;
+  const cfg = normalizeOpticalGlowConfigClient(rawConfig);
+  const resp = (analysisResult && analysisResult.response_curve) || evaluateOpticalGlowResponseClient(cfg);
+
+  ctx.fillStyle = "#090c12";
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 34;
+  const padR = 12;
+  const padT = 22;
+  const padB = 22;
+  const plotW = Math.max(40, w - padL - padR);
+  const plotH = Math.max(40, h - padT - padB);
+
+  // Grid
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.14)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const gy = padT + (i / 4) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+    const gx = padL + (i / 4) * plotW;
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+  }
+
+  // Luminance histogram backdrop (after)
+  const histAfter = analysisResult && Array.isArray(analysisResult.luma_histogram_after)
+    ? analysisResult.luma_histogram_after
+    : [];
+  if (histAfter.length > 0) {
+    const maxBin = Math.max(1, ...histAfter);
+    const barW = plotW / histAfter.length;
+    ctx.fillStyle = "rgba(56, 189, 248, 0.16)";
+    for (let i = 0; i < histAfter.length; i += 1) {
+      const bh = (histAfter[i] / maxBin) * plotH * 0.45;
+      ctx.fillRect(padL + i * barW + 1, padT + plotH - bh, Math.max(1, barW - 2), bh);
+    }
+  }
+
+  // Highlight threshold knee zone
+  const loX = padL + clamp01(cfg.highlight_threshold - cfg.threshold_softness) * plotW;
+  const hiX = padL + clamp01(cfg.highlight_threshold + cfg.threshold_softness) * plotW;
+  const thX = padL + clamp01(cfg.highlight_threshold) * plotW;
+  ctx.fillStyle = "rgba(245, 158, 11, 0.10)";
+  ctx.fillRect(loX, padT, Math.max(2, hiX - loX), plotH);
+  ctx.strokeStyle = "rgba(245, 158, 11, 0.65)";
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(thX, padT);
+  ctx.lineTo(thX, padT + plotH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Threshold matte transfer curve (amber)
+  const thCurve = resp.threshold_curve || [];
+  if (thCurve.length > 1) {
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    thCurve.forEach((pt, idx) => {
+      const px = padL + pt.input_luma * plotW;
+      const py = padT + (1 - clamp01(pt.matte_weight)) * plotH;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  }
+
+  // Exponential inverse-square bloom falloff curve (cyan)
+  const falloff = resp.falloff_curve || [];
+  if (falloff.length > 1) {
+    const maxAmp = 2.0;
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    falloff.forEach((pt, idx) => {
+      const px = padL + (idx / (falloff.length - 1)) * plotW;
+      const py = padT + (1 - clamp01(pt.bloom_response / maxAmp)) * plotH;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+
+    // 35mm Halation curve (vermilion)
+    ctx.strokeStyle = "#f87171";
+    ctx.lineWidth = 1.75;
+    ctx.beginPath();
+    falloff.forEach((pt, idx) => {
+      const px = padL + (idx / (falloff.length - 1)) * plotW;
+      const py = padT + (1 - clamp01(pt.halation_response / maxAmp)) * plotH;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+
+    // Anamorphic Streak curve (violet)
+    ctx.strokeStyle = "#c084fc";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    falloff.forEach((pt, idx) => {
+      const px = padL + (idx / (falloff.length - 1)) * plotW;
+      const py = padT + (1 - clamp01(pt.streak_response / maxAmp)) * plotH;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  }
+
+  // Labels & legend
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.fillText("1.0", 6, padT + 6);
+  ctx.fillText("0.0", 6, padT + plotH);
+  ctx.fillText("THRESH / RADIAL FALLOFF", padL, 13);
+
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillText("MATTE", padL + plotW - 185, 13);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText("BLOOM", padL + plotW - 140, 13);
+  ctx.fillStyle = "#f87171";
+  ctx.fillText("HALATION", padL + plotW - 95, 13);
+  ctx.fillStyle = "#c084fc";
+  ctx.fillText("STREAK", padL + plotW - 38, 13);
 }

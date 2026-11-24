@@ -18241,3 +18241,946 @@ export function applyMotionSplineToDocumentClient(doc, rawConfig, opts = {}) {
   };
   return nextDoc;
 }
+
+// =============================================================================
+// BORIS FX SAPPHIRE S_GLOW / 35MM OPTICAL HALATION & ANAMORPHIC STREAK (CYCLE #108)
+// =============================================================================
+
+export const ALLOWED_OPTICAL_GLOW_PRESET_IDS = [
+  "kodak_2383_halation",
+  "sapphire_dream_bloom",
+  "anamorphic_blue_streak",
+  "neon_night_club",
+  "subtle_cinema_aura",
+  "custom"
+];
+
+export const ALLOWED_OPTICAL_GLOW_BLEND_MODES = [
+  "screen",
+  "add_clamp",
+  "soft_light",
+  "filmic_rolloff"
+];
+
+export const ALLOWED_OPTICAL_GLOW_VIEW_MODES = [
+  "final_composite",
+  "highlight_matte",
+  "halation_only",
+  "split_compare"
+];
+
+export const OPTICAL_GLOW_PRESETS_CLIENT = [
+  {
+    preset_id: "kodak_2383_halation",
+    label: "Kodak 2383 35mm Halation",
+    category: "Film Emulsion",
+    description: "Authentic 35mm silver-halide red-amber back-scatter halation paired with filmic highlight rolloff.",
+    default_config: {
+      enabled: true,
+      preset_id: "kodak_2383_halation",
+      highlight_threshold: 0.70,
+      threshold_softness: 0.14,
+      halation_strength: 0.68,
+      halation_spread_px: 16.0,
+      halation_spectrum_rgb: [1.0, 0.28, 0.06],
+      glow_intensity: 0.45,
+      glow_radius_px: 20.0,
+      glow_warmth_shift: 0.22,
+      bloom_saturation: 1.12,
+      octaves: 4,
+      streak_intensity: 0.10,
+      streak_length_px: 48.0,
+      streak_angle_deg: 0.0,
+      streak_tint_rgb: [1.0, 0.56, 0.28],
+      blend_mode: "filmic_rolloff",
+      view_mode: "final_composite",
+      split_position: 0.5,
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "sapphire_dream_bloom",
+    label: "Sapphire S_Glow Dream Bloom",
+    category: "Boris FX S_Glow",
+    description: "Multi-octave exponential inverse-square glow inspired by Boris FX Sapphire S_Glow.",
+    default_config: {
+      enabled: true,
+      preset_id: "sapphire_dream_bloom",
+      highlight_threshold: 0.56,
+      threshold_softness: 0.22,
+      halation_strength: 0.28,
+      halation_spread_px: 12.0,
+      halation_spectrum_rgb: [1.0, 0.36, 0.14],
+      glow_intensity: 1.05,
+      glow_radius_px: 42.0,
+      glow_warmth_shift: 0.10,
+      bloom_saturation: 1.28,
+      octaves: 5,
+      streak_intensity: 0.18,
+      streak_length_px: 56.0,
+      streak_angle_deg: 15.0,
+      streak_tint_rgb: [1.0, 0.88, 0.76],
+      blend_mode: "screen",
+      view_mode: "final_composite",
+      split_position: 0.5,
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "anamorphic_blue_streak",
+    label: "Anamorphic Blue Streak",
+    category: "Anamorphic Optics",
+    description: "Panavision-style horizontal cobalt-cyan optical streak triggered by specular highlights.",
+    default_config: {
+      enabled: true,
+      preset_id: "anamorphic_blue_streak",
+      highlight_threshold: 0.66,
+      threshold_softness: 0.12,
+      halation_strength: 0.18,
+      halation_spread_px: 10.0,
+      halation_spectrum_rgb: [0.95, 0.28, 0.08],
+      glow_intensity: 0.52,
+      glow_radius_px: 22.0,
+      glow_warmth_shift: -0.28,
+      bloom_saturation: 1.25,
+      octaves: 4,
+      streak_intensity: 1.25,
+      streak_length_px: 148.0,
+      streak_angle_deg: 0.0,
+      streak_tint_rgb: [0.18, 0.62, 1.0],
+      blend_mode: "screen",
+      view_mode: "final_composite",
+      split_position: 0.5,
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "neon_night_club",
+    label: "Neon Night Club",
+    category: "Stylized VFX",
+    description: "High-saturation night bloom with diagonal magenta-cyan star glints.",
+    default_config: {
+      enabled: true,
+      preset_id: "neon_night_club",
+      highlight_threshold: 0.48,
+      threshold_softness: 0.18,
+      halation_strength: 0.42,
+      halation_spread_px: 14.0,
+      halation_spectrum_rgb: [1.0, 0.24, 0.10],
+      glow_intensity: 1.18,
+      glow_radius_px: 34.0,
+      glow_warmth_shift: -0.12,
+      bloom_saturation: 1.55,
+      octaves: 5,
+      streak_intensity: 0.68,
+      streak_length_px: 96.0,
+      streak_angle_deg: 22.0,
+      streak_tint_rgb: [0.94, 0.34, 0.98],
+      blend_mode: "add_clamp",
+      view_mode: "final_composite",
+      split_position: 0.5,
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "subtle_cinema_aura",
+    label: "Subtle Cinema Aura",
+    category: "Narrative Drama",
+    description: "Restrained highlight rolloff and gentle warmth aura protecting narrative skin tones.",
+    default_config: {
+      enabled: true,
+      preset_id: "subtle_cinema_aura",
+      highlight_threshold: 0.78,
+      threshold_softness: 0.16,
+      halation_strength: 0.32,
+      halation_spread_px: 10.0,
+      halation_spectrum_rgb: [1.0, 0.30, 0.08],
+      glow_intensity: 0.34,
+      glow_radius_px: 18.0,
+      glow_warmth_shift: 0.14,
+      bloom_saturation: 1.05,
+      octaves: 3,
+      streak_intensity: 0.06,
+      streak_length_px: 36.0,
+      streak_angle_deg: 0.0,
+      streak_tint_rgb: [1.0, 0.85, 0.68],
+      blend_mode: "soft_light",
+      view_mode: "final_composite",
+      split_position: 0.5,
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "custom",
+    label: "Custom Optical Studio",
+    category: "User Custom",
+    description: "User-defined highlight threshold, 35mm halation, bloom, and streak settings.",
+    default_config: {
+      enabled: true,
+      preset_id: "custom",
+      highlight_threshold: 0.70,
+      threshold_softness: 0.14,
+      halation_strength: 0.68,
+      halation_spread_px: 16.0,
+      halation_spectrum_rgb: [1.0, 0.28, 0.06],
+      glow_intensity: 0.45,
+      glow_radius_px: 20.0,
+      glow_warmth_shift: 0.22,
+      bloom_saturation: 1.12,
+      octaves: 4,
+      streak_intensity: 0.10,
+      streak_length_px: 48.0,
+      streak_angle_deg: 0.0,
+      streak_tint_rgb: [1.0, 0.56, 0.28],
+      blend_mode: "filmic_rolloff",
+      view_mode: "final_composite",
+      split_position: 0.5,
+      width: 1920,
+      height: 1080
+    }
+  }
+];
+
+function ogClamp(val, lo, hi) {
+  return Math.min(hi, Math.max(lo, val));
+}
+
+function ogClamp01(val) {
+  return Math.min(1, Math.max(0, val));
+}
+
+function ogRec709Luma(r, g, b) {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function ogNum(val, fallback, lo, hi) {
+  if (typeof val === "boolean" || val === null || val === undefined || val === "") {
+    return fallback;
+  }
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return ogClamp(n, lo, hi);
+}
+
+function ogRgbTuple(raw, fallback) {
+  if (!Array.isArray(raw) || raw.length !== 3) return [...fallback];
+  return [
+    ogNum(raw[0], fallback[0], 0, 1),
+    ogNum(raw[1], fallback[1], 0, 1),
+    ogNum(raw[2], fallback[2], 0, 1)
+  ];
+}
+
+export function createDefaultOpticalGlowConfigClient(presetId = "kodak_2383_halation") {
+  const found = OPTICAL_GLOW_PRESETS_CLIENT.find((p) => p.preset_id === presetId)
+    || OPTICAL_GLOW_PRESETS_CLIENT[0];
+  return {
+    ...found.default_config,
+    halation_spectrum_rgb: [...found.default_config.halation_spectrum_rgb],
+    streak_tint_rgb: [...found.default_config.streak_tint_rgb]
+  };
+}
+
+export function normalizeOpticalGlowConfigClient(raw) {
+  if (!raw || typeof raw !== "object") {
+    return createDefaultOpticalGlowConfigClient("kodak_2383_halation");
+  }
+  const pid = ALLOWED_OPTICAL_GLOW_PRESET_IDS.includes(raw.preset_id)
+    ? raw.preset_id
+    : "kodak_2383_halation";
+  const base = createDefaultOpticalGlowConfigClient(pid);
+  const blend = ALLOWED_OPTICAL_GLOW_BLEND_MODES.includes(raw.blend_mode)
+    ? raw.blend_mode
+    : base.blend_mode;
+  const view = ALLOWED_OPTICAL_GLOW_VIEW_MODES.includes(raw.view_mode)
+    ? raw.view_mode
+    : base.view_mode;
+  let width = Math.round(ogNum(raw.width, base.width, 64, 7680));
+  let height = Math.round(ogNum(raw.height, base.height, 64, 4320));
+  if (width % 2 !== 0) width -= 1;
+  if (height % 2 !== 0) height -= 1;
+  return {
+    enabled: raw.enabled === undefined ? base.enabled : Boolean(raw.enabled),
+    preset_id: pid,
+    highlight_threshold: ogNum(raw.highlight_threshold, base.highlight_threshold, 0, 1),
+    threshold_softness: ogNum(raw.threshold_softness, base.threshold_softness, 0, 0.5),
+    halation_strength: ogNum(raw.halation_strength, base.halation_strength, 0, 1),
+    halation_spread_px: ogNum(raw.halation_spread_px, base.halation_spread_px, 1, 64),
+    halation_spectrum_rgb: ogRgbTuple(raw.halation_spectrum_rgb, base.halation_spectrum_rgb),
+    glow_intensity: ogNum(raw.glow_intensity, base.glow_intensity, 0, 2),
+    glow_radius_px: ogNum(raw.glow_radius_px, base.glow_radius_px, 2, 128),
+    glow_warmth_shift: ogNum(raw.glow_warmth_shift, base.glow_warmth_shift, -1, 1),
+    bloom_saturation: ogNum(raw.bloom_saturation, base.bloom_saturation, 0, 2),
+    octaves: Math.round(ogNum(raw.octaves, base.octaves, 2, 6)),
+    streak_intensity: ogNum(raw.streak_intensity, base.streak_intensity, 0, 2),
+    streak_length_px: ogNum(raw.streak_length_px, base.streak_length_px, 4, 240),
+    streak_angle_deg: ogNum(raw.streak_angle_deg, base.streak_angle_deg, -180, 180),
+    streak_tint_rgb: ogRgbTuple(raw.streak_tint_rgb, base.streak_tint_rgb),
+    blend_mode: blend,
+    view_mode: view,
+    split_position: ogNum(raw.split_position, base.split_position, 0, 1),
+    width,
+    height
+  };
+}
+
+export function computeHighlightMatteAndEnergyClient(luma, threshold, softness) {
+  const lum = ogClamp01(luma);
+  const lo = ogClamp01(threshold - softness);
+  const hi = ogClamp01(threshold + softness);
+  let matte = 0;
+  if (hi <= lo + 1e-6) {
+    matte = lum >= threshold ? 1 : 0;
+  } else {
+    const t = ogClamp01((lum - lo) / (hi - lo));
+    matte = t * t * (3 - 2 * t);
+  }
+  const energy = ogClamp01(matte * Math.max(0, lum - lo * 0.65));
+  return [matte, energy];
+}
+
+export function evaluateExponentialFalloffAtDistanceClient(distancePx, radiusPx, octaves = 4) {
+  const d = Math.max(0, Number(distancePx || 0));
+  const baseR = Math.max(1, Number(radiusPx || 20));
+  let total = 0;
+  let wSum = 0;
+  const octCount = Math.max(1, Math.round(octaves));
+  for (let i = 0; i < octCount; i += 1) {
+    const scale = 0.25 * (2 ** i);
+    const rk = Math.max(0.75, (baseR * scale) / (2 ** Math.max(0, octCount - 2)));
+    const wk = 1 / (1.45 ** i);
+    const invSq = 1 / (1 + (d * d) / (rk * rk));
+    total += wk * invSq;
+    wSum += wk;
+  }
+  return ogClamp01(total / Math.max(1e-6, wSum));
+}
+
+export function evaluateOpticalGlowResponseClient(rawConfig) {
+  const cfg = normalizeOpticalGlowConfigClient(rawConfig);
+  const thresholdCurve = [];
+  for (let i = 0; i <= 32; i += 1) {
+    const lum = i / 32;
+    const [matte, energy] = computeHighlightMatteAndEnergyClient(
+      lum,
+      cfg.highlight_threshold,
+      cfg.threshold_softness
+    );
+    thresholdCurve.push({
+      input_luma: Number(lum.toFixed(4)),
+      matte_weight: Number(matte.toFixed(4)),
+      extracted_energy: Number(energy.toFixed(4))
+    });
+  }
+  const maxDist = Math.max(24, cfg.glow_radius_px * 1.6, cfg.halation_spread_px * 2.0);
+  const falloffCurve = [];
+  for (let i = 0; i <= 32; i += 1) {
+    const dist = (i / 32) * maxDist;
+    const bloomResp = cfg.enabled
+      ? cfg.glow_intensity * evaluateExponentialFalloffAtDistanceClient(dist, cfg.glow_radius_px, cfg.octaves)
+      : 0;
+    const halSigma = Math.max(1, cfg.halation_spread_px * 0.45);
+    const halResp = cfg.enabled
+      ? cfg.halation_strength * Math.exp(-0.5 * ((dist / halSigma) ** 2))
+      : 0;
+    const stkScale = Math.max(2, cfg.streak_length_px * 0.35);
+    const stkResp = cfg.enabled
+      ? cfg.streak_intensity * Math.exp(-dist / stkScale)
+      : 0;
+    falloffCurve.push({
+      distance_px: Number(dist.toFixed(2)),
+      bloom_response: Number(Math.min(2, bloomResp).toFixed(4)),
+      halation_response: Number(Math.min(1, halResp).toFixed(4)),
+      streak_response: Number(Math.min(2, stkResp).toFixed(4))
+    });
+  }
+  return {
+    threshold_curve: thresholdCurve,
+    falloff_curve: falloffCurve
+  };
+}
+
+function synthesizeOpticalTestFrameClient(width = 24, height = 16) {
+  const pixels = [];
+  for (let y = 0; y < height; y += 1) {
+    const ny = y / Math.max(1, height - 1);
+    for (let x = 0; x < width; x += 1) {
+      const nx = x / Math.max(1, width - 1);
+      let r = 0.05 + 0.04 * (1 - ny);
+      let g = 0.06 + 0.05 * (1 - ny);
+      let b = 0.11 + 0.07 * (1 - ny);
+
+      const dLamp = Math.hypot((nx - 0.28) * 1.45, ny - 0.28);
+      if (dLamp < 0.24) {
+        const k = ogClamp01((0.24 - dLamp) / 0.24);
+        const k2 = k * k;
+        r = Math.max(r, 0.98 * k2 + 0.35 * k);
+        g = Math.max(g, 0.88 * k2 + 0.24 * k);
+        b = Math.max(b, 0.70 * k2 + 0.12 * k);
+      }
+
+      const dNeon = Math.hypot((nx - 0.74) * 1.35, ny - 0.34);
+      if (dNeon < 0.20) {
+        const k = ogClamp01((0.20 - dNeon) / 0.20);
+        const k2 = k * k;
+        r = Math.max(r, 0.62 * k2 + 0.12 * k);
+        g = Math.max(g, 0.92 * k2 + 0.36 * k);
+        b = Math.max(b, 1.00 * k2 + 0.48 * k);
+      }
+
+      const dSubj = Math.hypot((nx - 0.50) * 1.25, (ny - 0.62) * 1.1);
+      if (dSubj < 0.22) {
+        r = Math.max(r, 0.54);
+        g = Math.max(g, 0.38);
+        b = Math.max(b, 0.30);
+        if (nx > 0.54) {
+          r = Math.max(r, 0.82);
+          g = Math.max(g, 0.72);
+          b = Math.max(b, 0.64);
+        }
+      }
+
+      if (ny > 0.76 && (Math.abs(nx - 0.28) < 0.06 || Math.abs(nx - 0.74) < 0.06)) {
+        r = Math.max(r, 0.76);
+        g = Math.max(g, 0.74);
+        b = Math.max(b, 0.78);
+      }
+
+      pixels.push([ogClamp01(r), ogClamp01(g), ogClamp01(b)]);
+    }
+  }
+  return pixels;
+}
+
+function ogSeparableGaussian2d(grid, width, height, sigmaPx) {
+  if (width <= 1 || height <= 1 || sigmaPx <= 0.15) return grid.map((p) => [...p]);
+  const radius = Math.max(1, Math.min(6, Math.ceil(sigmaPx * 1.5)));
+  const sigmaSq = Math.max(0.04, sigmaPx * sigmaPx);
+  const weights = [];
+  let wSum = 0;
+  for (let dx = -radius; dx <= radius; dx += 1) {
+    const w = Math.exp((-0.5 * dx * dx) / sigmaSq);
+    weights.push(w);
+    wSum += w;
+  }
+  const normW = weights.map((w) => w / wSum);
+  const horiz = new Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowOff = y * width;
+    for (let x = 0; x < width; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      for (let k = 0; k < normW.length; k += 1) {
+        const dx = k - radius;
+        const sx = Math.min(width - 1, Math.max(0, x + dx));
+        const p = grid[rowOff + sx];
+        ar += p[0] * normW[k];
+        ag += p[1] * normW[k];
+        ab += p[2] * normW[k];
+      }
+      horiz[rowOff + x] = [ar, ag, ab];
+    }
+  }
+  const out = new Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      for (let k = 0; k < normW.length; k += 1) {
+        const dy = k - radius;
+        const sy = Math.min(height - 1, Math.max(0, y + dy));
+        const p = horiz[sy * width + x];
+        ar += p[0] * normW[k];
+        ag += p[1] * normW[k];
+        ab += p[2] * normW[k];
+      }
+      out[y * width + x] = [ar, ag, ab];
+    }
+  }
+  return out;
+}
+
+function ogDirectionalStreak2d(grid, width, height, lengthPx, angleDeg) {
+  if (width <= 1 || height <= 1 || lengthPx < 1) return grid.map((p) => [...p]);
+  const rad = (angleDeg * Math.PI) / 180;
+  const ux = Math.cos(rad);
+  const uy = Math.sin(rad);
+  const steps = Math.max(2, Math.min(8, Math.round(lengthPx / 18)));
+  const out = new Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      let wSum = 0;
+      for (let s = -steps; s <= steps; s += 1) {
+        const w = Math.exp(-Math.abs(s) / Math.max(1, steps * 0.55));
+        const sx = Math.min(width - 1, Math.max(0, Math.round(x + ux * s)));
+        const sy = Math.min(height - 1, Math.max(0, Math.round(y + uy * s)));
+        const p = grid[sy * width + sx];
+        ar += p[0] * w;
+        ag += p[1] * w;
+        ab += p[2] * w;
+        wSum += w;
+      }
+      out[y * width + x] = [ar / wSum, ag / wSum, ab / wSum];
+    }
+  }
+  return out;
+}
+
+function ogApplyHdrBlend(base, effect, blendMode) {
+  const b = ogClamp01(base);
+  const e = Math.max(0, effect);
+  if (blendMode === "add_clamp") return ogClamp01(b + e);
+  if (blendMode === "screen") {
+    const ec = ogClamp01(e);
+    return ogClamp01(1 - (1 - b) * (1 - ec));
+  }
+  if (blendMode === "soft_light") {
+    const ec = ogClamp01(e * 0.85);
+    return ogClamp01(b + 2 * ec * (1 - b) * (0.5 + 0.5 * b));
+  }
+  const combined = b + e;
+  if (combined <= 0.72) return ogClamp01(combined);
+  const excess = combined - 0.72;
+  return ogClamp01(0.72 + 0.28 * (excess / (excess + 0.35)));
+}
+
+export function analyzeOpticalGlowSamplesClient(rawConfig, opts = {}) {
+  const cfg = normalizeOpticalGlowConfigClient(rawConfig);
+  const responseCurve = evaluateOpticalGlowResponseClient(cfg);
+  let rgbList = [];
+  let w = Number(opts.width || 0);
+  let h = Number(opts.height || 0);
+
+  if (Array.isArray(opts.pixels) && opts.pixels.length > 0) {
+    const stride = w > 0 && h > 0 && opts.pixels.length === w * h * 4 ? 4 : 3;
+    if (w <= 0 || h <= 0) {
+      w = Math.max(1, Math.floor(opts.pixels.length / stride));
+      h = 1;
+    }
+    const count = Math.min(w * h, Math.floor(opts.pixels.length / stride));
+    let maxVal = 1;
+    for (let i = 0; i < count * stride; i += 1) {
+      if (Number(opts.pixels[i]) > maxVal) maxVal = Number(opts.pixels[i]);
+    }
+    const scale = maxVal > 1.001 ? 1 / 255 : 1;
+    for (let i = 0; i < count; i += 1) {
+      const b = i * stride;
+      rgbList.push([
+        ogClamp01(Number(opts.pixels[b]) * scale),
+        ogClamp01(Number(opts.pixels[b + 1]) * scale),
+        ogClamp01(Number(opts.pixels[b + 2]) * scale)
+      ]);
+    }
+  } else if (Array.isArray(opts.samples) && opts.samples.length > 0) {
+    let maxVal = 1;
+    for (const row of opts.samples) {
+      for (let c = 0; c < 3; c += 1) {
+        if (Number(row[c]) > maxVal) maxVal = Number(row[c]);
+      }
+    }
+    const scale = maxVal > 1.001 ? 1 / 255 : 1;
+    rgbList = opts.samples.map((row) => [
+      ogClamp01(Number(row[0]) * scale),
+      ogClamp01(Number(row[1]) * scale),
+      ogClamp01(Number(row[2]) * scale)
+    ]);
+    if (!(w > 0 && h > 0 && w * h === rgbList.length)) {
+      w = rgbList.length;
+      h = 1;
+    }
+  } else {
+    w = 24;
+    h = 16;
+    rgbList = synthesizeOpticalTestFrameClient(w, h);
+  }
+
+  const total = rgbList.length;
+  const mattes = [];
+  const hiRgb = [];
+  const histBefore = new Array(16).fill(0);
+  let triggeredCount = 0;
+  let lumaBeforeSum = 0;
+  let peakBefore = 0;
+
+  const warm = cfg.glow_warmth_shift;
+  const warmR = 1 + Math.max(0, warm) * 0.45 - Math.max(0, -warm) * 0.35;
+  const warmG = 1 + warm * 0.08;
+  const warmB = 1 + Math.max(0, -warm) * 0.50 - Math.max(0, warm) * 0.40;
+
+  for (const [r, g, b] of rgbList) {
+    const lum = ogRec709Luma(r, g, b);
+    lumaBeforeSum += lum;
+    if (lum > peakBefore) peakBefore = lum;
+    const binIdx = Math.min(15, Math.max(0, Math.floor(ogClamp01(lum) * 15.9999)));
+    histBefore[binIdx] += 1;
+
+    const [matte, energy] = computeHighlightMatteAndEnergyClient(
+      lum,
+      cfg.highlight_threshold,
+      cfg.threshold_softness
+    );
+    mattes.push(matte);
+    if (matte > 0.05) triggeredCount += 1;
+
+    const satR = lum + (r - lum) * cfg.bloom_saturation;
+    const satG = lum + (g - lum) * cfg.bloom_saturation;
+    const satB = lum + (b - lum) * cfg.bloom_saturation;
+    hiRgb.push([
+      Math.max(0, satR) * energy,
+      Math.max(0, satG) * energy,
+      Math.max(0, satB) * energy
+    ]);
+  }
+
+  let bloomPass;
+  let halBlur;
+  let stkBlur;
+  if (w > 1 && h > 1 && hiRgb.length === w * h) {
+    const sigmaBloom = Math.max(0.5, cfg.glow_radius_px / 12);
+    const octTight = ogSeparableGaussian2d(hiRgb, w, h, Math.max(0.45, sigmaBloom * 0.55));
+    const octWide = ogSeparableGaussian2d(hiRgb, w, h, Math.max(0.8, sigmaBloom * 1.45));
+    bloomPass = hiRgb.map((_, idx) => [
+      (0.58 * octTight[idx][0] + 0.42 * octWide[idx][0]) * warmR * cfg.glow_intensity,
+      (0.58 * octTight[idx][1] + 0.42 * octWide[idx][1]) * warmG * cfg.glow_intensity,
+      (0.58 * octTight[idx][2] + 0.42 * octWide[idx][2]) * warmB * cfg.glow_intensity
+    ]);
+    halBlur = ogSeparableGaussian2d(hiRgb, w, h, Math.max(0.5, cfg.halation_spread_px / 10));
+    stkBlur = ogDirectionalStreak2d(hiRgb, w, h, cfg.streak_length_px, cfg.streak_angle_deg);
+  } else {
+    bloomPass = hiRgb.map((p) => [
+      p[0] * warmR * cfg.glow_intensity,
+      p[1] * warmG * cfg.glow_intensity,
+      p[2] * warmB * cfg.glow_intensity
+    ]);
+    halBlur = hiRgb;
+    stkBlur = hiRgb;
+  }
+
+  const [hrSpec, hgSpec, hbSpec] = cfg.halation_spectrum_rgb;
+  const [srTint, sgTint, sbTint] = cfg.streak_tint_rgb;
+  const histAfter = new Array(16).fill(0);
+  let lumaAfterSum = 0;
+  let peakAfter = 0;
+  let haloEnergySum = 0;
+  const previewRgb = [];
+
+  for (let i = 0; i < total; i += 1) {
+    const [br, bg, bb] = rgbList[i];
+    let outR = br;
+    let outG = bg;
+    let outB = bb;
+    let addedEnergy = 0;
+    if (cfg.enabled) {
+      const [blR, blG, blB] = bloomPass[i];
+      const haR = halBlur[i][0] * hrSpec * cfg.halation_strength * 1.35;
+      const haG = halBlur[i][1] * hgSpec * cfg.halation_strength * 1.35;
+      const haB = halBlur[i][2] * hbSpec * cfg.halation_strength * 1.35;
+      const stLum = ogRec709Luma(stkBlur[i][0], stkBlur[i][1], stkBlur[i][2]);
+      const stR = stLum * srTint * cfg.streak_intensity * 1.15;
+      const stG = stLum * sgTint * cfg.streak_intensity * 1.15;
+      const stB = stLum * sbTint * cfg.streak_intensity * 1.15;
+
+      const fxR = blR + haR + stR;
+      const fxG = blG + haG + stG;
+      const fxB = blB + haB + stB;
+      addedEnergy = ogRec709Luma(fxR, fxG, fxB);
+
+      if (cfg.view_mode === "highlight_matte") {
+        const m = ogClamp01(mattes[i]);
+        outR = m;
+        outG = m;
+        outB = m;
+      } else if (cfg.view_mode === "halation_only") {
+        outR = ogClamp01(haR + blR * 0.25 + stR * 0.25);
+        outG = ogClamp01(haG + blG * 0.25 + stG * 0.25);
+        outB = ogClamp01(haB + blB * 0.25 + stB * 0.25);
+      } else {
+        outR = ogApplyHdrBlend(br, fxR, cfg.blend_mode);
+        outG = ogApplyHdrBlend(bg, fxG, cfg.blend_mode);
+        outB = ogApplyHdrBlend(bb, fxB, cfg.blend_mode);
+      }
+    }
+    haloEnergySum += addedEnergy;
+    const lumAfter = ogRec709Luma(outR, outG, outB);
+    lumaAfterSum += lumAfter;
+    if (lumAfter > peakAfter) peakAfter = lumAfter;
+    const aIdx = Math.min(15, Math.max(0, Math.floor(ogClamp01(lumAfter) * 15.9999)));
+    histAfter[aIdx] += 1;
+    if (i < 384) {
+      previewRgb.push([Number(outR.toFixed(4)), Number(outG.toFixed(4)), Number(outB.toFixed(4))]);
+    }
+  }
+
+  return {
+    preset_id: cfg.preset_id,
+    view_mode: cfg.view_mode,
+    blend_mode: cfg.blend_mode,
+    sample_count: total,
+    width: w,
+    height: h,
+    triggered_highlight_pct: Number(((100 * triggeredCount) / Math.max(1, total)).toFixed(2)),
+    halo_energy_added: Number((haloEnergySum / Math.max(1, total)).toFixed(4)),
+    mean_luma_before: Number((lumaBeforeSum / Math.max(1, total)).toFixed(4)),
+    mean_luma_after: Number((lumaAfterSum / Math.max(1, total)).toFixed(4)),
+    peak_luma_before: Number(peakBefore.toFixed(4)),
+    peak_luma_after: Number(peakAfter.toFixed(4)),
+    peak_headroom: Number(ogClamp01(1 - peakAfter).toFixed(4)),
+    luma_histogram_before: histBefore,
+    luma_histogram_after: histAfter,
+    highlight_matte_map: mattes.slice(0, 2048).map((m) => Number(m.toFixed(4))),
+    preview_rgb_map: previewRgb,
+    response_curve: responseCurve
+  };
+}
+
+function ogFormatLutrgbExpr(threshold, softness, gain) {
+  const lo255 = Number((ogClamp01(threshold - softness) * 255).toFixed(2));
+  const hi255 = Number(Math.max(lo255 + 1, ogClamp01(threshold + softness) * 255).toFixed(2));
+  const span = Number(Math.max(1, hi255 - lo255).toFixed(2));
+  const g = Number(Math.max(0, gain).toFixed(4));
+  return `clip(val*clip((val-${lo255})/${span},0,1)*${g},0,255)`;
+}
+
+export function compileOpticalGlowFiltergraphClient(rawConfig) {
+  const cfg = normalizeOpticalGlowConfigClient(rawConfig);
+  const effRadius = Number(
+    Math.max(cfg.glow_radius_px, cfg.halation_spread_px, cfg.streak_length_px * 0.5).toFixed(2)
+  );
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      preset_id: cfg.preset_id,
+      blend_mode: cfg.blend_mode,
+      view_mode: cfg.view_mode,
+      tap_count: 1,
+      effective_radius_px: 0,
+      vf_chain: "null",
+      filter_complex: "[0:v]null[vout]",
+      ffmpeg_command: 'ffmpeg -i input.mp4 -vf "null" output.mp4',
+      warnings: ["Optical Glow & Halation bypass active (enabled=false)."]
+    };
+  }
+  if (cfg.view_mode === "highlight_matte") {
+    const expr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, 1.0);
+    const chain = `format=rgb24,lutrgb=r='${expr}':g='${expr}':b='${expr}',format=yuv420p`;
+    return {
+      enabled: true,
+      preset_id: cfg.preset_id,
+      blend_mode: cfg.blend_mode,
+      view_mode: cfg.view_mode,
+      tap_count: 1,
+      effective_radius_px: effRadius,
+      vf_chain: chain,
+      filter_complex: `[0:v]${chain}[vout]`,
+      ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "[0:v]${chain}[vout]" -map "[vout]" output.mp4`,
+      warnings: []
+    };
+  }
+
+  const warm = cfg.glow_warmth_shift;
+  const wr = ogClamp(1 + Math.max(0, warm) * 0.40 - Math.max(0, -warm) * 0.30, 0.2, 2.0);
+  const wg = ogClamp(1 + warm * 0.06, 0.2, 2.0);
+  const wb = ogClamp(1 + Math.max(0, -warm) * 0.45 - Math.max(0, warm) * 0.35, 0.2, 2.0);
+  const rBloomExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.glow_intensity * wr);
+  const gBloomExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.glow_intensity * wg);
+  const bBloomExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.glow_intensity * wb);
+  const sigma1 = Number(Math.max(0.8, cfg.glow_radius_px * 0.32).toFixed(2));
+  const sigma2 = Number(Math.max(1.4, cfg.glow_radius_px * 0.85).toFixed(2));
+
+  const [hr, hg, hb] = cfg.halation_spectrum_rgb;
+  const rHalExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.halation_strength * hr * 1.4);
+  const gHalExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.halation_strength * hg * 1.4);
+  const bHalExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.halation_strength * hb * 1.4);
+  const halSigma = Number(Math.max(1.0, cfg.halation_spread_px * 0.65).toFixed(2));
+
+  if (cfg.view_mode === "halation_only") {
+    const halChain = `format=rgb24,lutrgb=r='${rHalExpr}':g='${gHalExpr}':b='${bHalExpr}',gblur=sigma=${halSigma}:steps=2,format=yuv420p`;
+    return {
+      enabled: true,
+      preset_id: cfg.preset_id,
+      blend_mode: cfg.blend_mode,
+      view_mode: cfg.view_mode,
+      tap_count: 1,
+      effective_radius_px: Number(cfg.halation_spread_px.toFixed(2)),
+      vf_chain: halChain,
+      filter_complex: `[0:v]${halChain}[vout]`,
+      ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "[0:v]${halChain}[vout]" -map "[vout]" output.mp4`,
+      warnings: []
+    };
+  }
+
+  const [sr, sg, sb] = cfg.streak_tint_rgb;
+  const rStkExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.streak_intensity * sr * 1.2);
+  const gStkExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.streak_intensity * sg * 1.2);
+  const bStkExpr = ogFormatLutrgbExpr(cfg.highlight_threshold, cfg.threshold_softness, cfg.streak_intensity * sb * 1.2);
+  const stkSizeX = Math.max(2, Math.min(160, Math.round(cfg.streak_length_px * 0.5)));
+  const rotRad = Number(((cfg.streak_angle_deg * Math.PI) / 180).toFixed(4));
+  const streakFilter = Math.abs(cfg.streak_angle_deg) > 0.5
+    ? `lutrgb=r='${rStkExpr}':g='${gStkExpr}':b='${bStkExpr}',rotate=a=${rotRad}:fillcolor=black,avgblur=sizeX=${stkSizeX}:sizeY=1,rotate=a=${-rotRad}:fillcolor=black`
+    : `lutrgb=r='${rStkExpr}':g='${gStkExpr}':b='${bStkExpr}',avgblur=sizeX=${stkSizeX}:sizeY=1`;
+
+  const ffBlendMode = {
+    screen: "screen",
+    add_clamp: "addition",
+    soft_light: "softlight",
+    filmic_rolloff: "screen"
+  }[cfg.blend_mode];
+
+  const parts = [
+    "[0:v]format=rgb24,split=5[og_orig][og_base][og_bl1][og_bl2][og_hal_stk]",
+    "[og_hal_stk]split=2[og_hal][og_stk]",
+    `[og_bl1]lutrgb=r='${rBloomExpr}':g='${gBloomExpr}':b='${bBloomExpr}',gblur=sigma=${sigma1}:steps=2[og_bl1_out]`,
+    `[og_bl2]lutrgb=r='${rBloomExpr}':g='${gBloomExpr}':b='${bBloomExpr}',gblur=sigma=${sigma2}:steps=3[og_bl2_out]`,
+    "[og_bl1_out][og_bl2_out]blend=all_mode=addition:all_opacity=0.65[og_bloom_mix]",
+    `[og_hal]lutrgb=r='${rHalExpr}':g='${gHalExpr}':b='${bHalExpr}',gblur=sigma=${halSigma}:steps=2[og_hal_out]`,
+    `[og_stk]${streakFilter}[og_stk_out]`,
+    "[og_bloom_mix][og_hal_out]blend=all_mode=addition:all_opacity=1.0[og_fx_bh]",
+    "[og_fx_bh][og_stk_out]blend=all_mode=addition:all_opacity=1.0[og_fx_all]"
+  ];
+
+  if (cfg.blend_mode === "filmic_rolloff") {
+    parts.push(
+      "[og_base][og_fx_all]blend=all_mode=screen:all_opacity=0.92,"
+      + "lutrgb=r='clip(val-0.08*max(val-190,0),0,255)':"
+      + "g='clip(val-0.08*max(val-190,0),0,255)':"
+      + "b='clip(val-0.08*max(val-190,0),0,255)'[og_graded]"
+    );
+  } else {
+    parts.push(`[og_base][og_fx_all]blend=all_mode=${ffBlendMode}:all_opacity=1.0[og_graded]`);
+  }
+
+  if (cfg.view_mode === "split_compare") {
+    let splitW = Math.max(2, Math.min(cfg.width - 2, Math.round(cfg.width * cfg.split_position)));
+    splitW -= splitW % 2;
+    const rightW = Math.max(2, cfg.width - splitW);
+    parts.push(`[og_orig]crop=w=${splitW}:h=${cfg.height}:x=0:y=0[og_left]`);
+    parts.push(`[og_graded]crop=w=${rightW}:h=${cfg.height}:x=${splitW}:y=0[og_right]`);
+    parts.push("[og_left][og_right]hstack=inputs=2,format=yuv420p[vout]");
+  } else {
+    parts.push("[og_orig]nullsink;[og_graded]format=yuv420p[vout]");
+  }
+
+  const filterComplex = parts.join(";");
+  return {
+    enabled: true,
+    preset_id: cfg.preset_id,
+    blend_mode: cfg.blend_mode,
+    view_mode: cfg.view_mode,
+    tap_count: 4,
+    effective_radius_px: effRadius,
+    vf_chain: filterComplex,
+    filter_complex: filterComplex,
+    ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "${filterComplex}" -map "[vout]" output.mp4`,
+    warnings: []
+  };
+}
+
+export function exportOpticalGlowJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizeOpticalGlowConfigClient(rawConfig);
+  const compiled = compileOpticalGlowFiltergraphClient(cfg);
+  const cleanTitle = String(opts.title || "TAKTCUT_OPTICAL_GLOW")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "TAKTCUT_OPTICAL_GLOW";
+  const payload = {
+    schema_version: "taktcut.optical_glow.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: [
+      "DaVinci Resolve Studio OFX",
+      "Boris FX Sapphire S_Glow",
+      "FFmpeg Multi-Tap Graph"
+    ],
+    highlight_extraction: {
+      highlight_threshold: cfg.highlight_threshold,
+      threshold_softness: cfg.threshold_softness
+    },
+    halation_35mm: {
+      halation_strength: cfg.halation_strength,
+      halation_spread_px: cfg.halation_spread_px,
+      halation_spectrum_rgb: [...cfg.halation_spectrum_rgb]
+    },
+    exponential_bloom: {
+      glow_intensity: cfg.glow_intensity,
+      glow_radius_px: cfg.glow_radius_px,
+      glow_warmth_shift: cfg.glow_warmth_shift,
+      bloom_saturation: cfg.bloom_saturation,
+      octaves: cfg.octaves
+    },
+    anamorphic_streak: {
+      streak_intensity: cfg.streak_intensity,
+      streak_length_px: cfg.streak_length_px,
+      streak_angle_deg: cfg.streak_angle_deg,
+      streak_tint_rgb: [...cfg.streak_tint_rgb]
+    },
+    composite: {
+      enabled: cfg.enabled,
+      blend_mode: cfg.blend_mode,
+      view_mode: cfg.view_mode,
+      split_position: cfg.split_position
+    },
+    ffmpeg_filter_complex: compiled.filter_complex
+  };
+  const filename = `${cleanTitle.toLowerCase()}_${cfg.preset_id}_optical_glow.json`;
+  return {
+    schema_version: "taktcut.optical_glow.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: payload.compatible_hosts,
+    json_text: JSON.stringify(payload, null, 2),
+    filename: String(opts.filename || filename),
+    saved_path: null
+  };
+}
+
+export function applyOpticalGlowToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const cfg = normalizeOpticalGlowConfigClient(rawConfig);
+  const analysis = analyzeOpticalGlowSamplesClient(cfg);
+  const compiled = compileOpticalGlowFiltergraphClient(cfg);
+  const trackIndex = Number(opts.track_index || 1);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === "video" && t.index === trackIndex)
+    || (nextDoc.tracks || []).find((t) => t.kind === "video");
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error(`Video track V${trackIndex} has no clips`);
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, Number(opts.clip_index || 0)));
+  trk.clips[safeIdx] = {
+    ...trk.clips[safeIdx],
+    optical_glow: {
+      enabled: cfg.enabled,
+      preset_id: cfg.preset_id,
+      highlight_threshold: cfg.highlight_threshold,
+      threshold_softness: cfg.threshold_softness,
+      halation_strength: cfg.halation_strength,
+      halation_spread_px: cfg.halation_spread_px,
+      halation_spectrum_rgb: [...cfg.halation_spectrum_rgb],
+      glow_intensity: cfg.glow_intensity,
+      glow_radius_px: cfg.glow_radius_px,
+      glow_warmth_shift: cfg.glow_warmth_shift,
+      bloom_saturation: cfg.bloom_saturation,
+      octaves: cfg.octaves,
+      streak_intensity: cfg.streak_intensity,
+      streak_length_px: cfg.streak_length_px,
+      streak_angle_deg: cfg.streak_angle_deg,
+      streak_tint_rgb: [...cfg.streak_tint_rgb],
+      blend_mode: cfg.blend_mode,
+      view_mode: cfg.view_mode,
+      split_position: cfg.split_position,
+      triggered_highlight_pct: analysis.triggered_highlight_pct,
+      halo_energy_added: analysis.halo_energy_added,
+      ffmpeg_vf: compiled.vf_chain.slice(0, 16384)
+    }
+  };
+  return nextDoc;
+}

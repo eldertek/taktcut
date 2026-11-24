@@ -9,6 +9,9 @@ import {
   ALLOWED_MULTICAM_STUDIO_CUT_MODES,
   ALLOWED_MULTICAM_STUDIO_PRESET_IDS,
   ALLOWED_MULTICAM_STUDIO_SYNC_MODES,
+  ALLOWED_OPTICAL_GLOW_BLEND_MODES,
+  ALLOWED_OPTICAL_GLOW_PRESET_IDS,
+  ALLOWED_OPTICAL_GLOW_VIEW_MODES,
   ALLOWED_QUALIFIER_CUBE_MODES,
   ALLOWED_QUALIFIER_DESPILL_MODES,
   ALLOWED_QUALIFIER_HIGHLIGHT_MODES,
@@ -32,6 +35,7 @@ import {
   MOTION_SPLINE_CHANNEL_SPECS_CLIENT,
   MOTION_SPLINE_PRESETS_CLIENT,
   MULTICAM_STUDIO_PRESETS_CLIENT,
+  OPTICAL_GLOW_PRESETS_CLIENT,
   PLANAR_TRACKER_PRESETS_CLIENT,
   QUALIFIER_KEYER_PRESETS_CLIENT,
   QUALIFIER_PRESETS,
@@ -62,6 +66,7 @@ import {
   analyzeAvSyncClient,
   analyzeBroadcastComplianceClient,
   analyzeCstPipelineClient,
+  analyzeOpticalGlowSamplesClient,
   analyzeQualifierKeyerSamplesClient,
   analyzeAudioSpectrumClient,
   analyzeClipSceneCutsClient,
@@ -71,6 +76,7 @@ import {
   applyBroadcastLegalClampClient,
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
+  applyOpticalGlowToDocumentClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
@@ -98,6 +104,7 @@ import {
   compileFramingFilterClient,
   compileMinterpolateFilterClient,
   compileMotionSplineFiltergraphClient,
+  compileOpticalGlowFiltergraphClient,
   compileMulticamFiltergraphClient,
   compilePlanarTrackerFilterClient,
   compileRetimeFilterClient,
@@ -117,6 +124,7 @@ import {
   createDefaultCstConfigClient,
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
+  createDefaultOpticalGlowConfigClient,
   createDefaultQualifierKeyerConfigClient,
   createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
@@ -127,6 +135,7 @@ import {
   evaluateMotionSplineStudioClient,
   evaluateTitleMotionState,
   exportMotionSplineJsonClient,
+  exportOpticalGlowJsonClient,
   exportMulticamEdlClient,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
@@ -138,6 +147,7 @@ import {
   normalizeFairlightAudioParams,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
+  normalizeOpticalGlowConfigClient,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
   syncMulticamStudioAnglesClient,
@@ -4294,6 +4304,89 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/motion-spline/apply", { method: "POST", body: payload });
+    },
+    async getOpticalGlowPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: OPTICAL_GLOW_PRESETS_CLIENT,
+          preset_ids: ALLOWED_OPTICAL_GLOW_PRESET_IDS,
+          blend_modes: ALLOWED_OPTICAL_GLOW_BLEND_MODES,
+          view_modes: ALLOWED_OPTICAL_GLOW_VIEW_MODES,
+          default_config: createDefaultOpticalGlowConfigClient()
+        };
+      }
+      return requestJson("/api/fx/optical-glow/presets");
+    },
+    async analyzeOpticalGlow(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalGlowConfigClient(p.config ? p.config : p);
+        return analyzeOpticalGlowSamplesClient(cfg, {
+          samples: Array.isArray(p.samples) ? p.samples : undefined,
+          pixels: Array.isArray(p.pixels) ? p.pixels : undefined,
+          width: Number(p.width || 0),
+          height: Number(p.height || 0)
+        });
+      }
+      return requestJson("/api/fx/optical-glow/analyze", { method: "POST", body: payload });
+    },
+    async compileOpticalGlow(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalGlowConfigClient(p.config ? p.config : p);
+        return compileOpticalGlowFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/optical-glow/compile", { method: "POST", body: payload });
+    },
+    async exportOpticalGlowJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalGlowConfigClient(p.config ? p.config : p);
+        return exportOpticalGlowJsonClient(cfg, {
+          title: p.title || "TAKTCUT_OPTICAL_GLOW"
+        });
+      }
+      return requestJson("/api/fx/optical-glow/export-json", { method: "POST", body: payload });
+    },
+    async downloadOpticalGlowBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalGlowConfigClient(p.config ? p.config : p);
+        const exp = exportOpticalGlowJsonClient(cfg, {
+          title: p.title || "TAKTCUT_OPTICAL_GLOW",
+          filename: p.filename || undefined
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/optical-glow/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyOpticalGlow(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyOpticalGlowToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compileOpticalGlowFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/optical-glow/apply", { method: "POST", body: payload });
     }
   };
 }

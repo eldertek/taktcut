@@ -1323,6 +1323,37 @@ class ClipMotionSplineTrack(BaseModel):
     channels: dict[str, list[ClipMotionSplineKeyframeRef]] = Field(default_factory=dict)
 
 
+class ClipOpticalGlowTrack(BaseModel):
+    """Non-destructive 35mm Optical Halation, Exponential Bloom & Streak FX track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    preset_id: str = Field(default="kodak_2383_halation", max_length=64)
+    highlight_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    threshold_softness: float = Field(default=0.14, ge=0.0, le=0.5)
+    halation_strength: float = Field(default=0.68, ge=0.0, le=1.0)
+    halation_spread_px: float = Field(default=16.0, ge=1.0, le=64.0)
+    halation_spectrum_rgb: tuple[float, float, float] = (1.0, 0.28, 0.06)
+    glow_intensity: float = Field(default=0.45, ge=0.0, le=2.0)
+    glow_radius_px: float = Field(default=20.0, ge=2.0, le=128.0)
+    glow_warmth_shift: float = Field(default=0.22, ge=-1.0, le=1.0)
+    bloom_saturation: float = Field(default=1.12, ge=0.0, le=2.0)
+    octaves: int = Field(default=4, ge=2, le=6)
+    streak_intensity: float = Field(default=0.10, ge=0.0, le=2.0)
+    streak_length_px: float = Field(default=48.0, ge=4.0, le=240.0)
+    streak_angle_deg: float = Field(default=0.0, ge=-180.0, le=180.0)
+    streak_tint_rgb: tuple[float, float, float] = (1.0, 0.56, 0.28)
+    blend_mode: Literal["screen", "add_clamp", "soft_light", "filmic_rolloff"] = "filmic_rolloff"
+    view_mode: Literal[
+        "final_composite", "highlight_matte", "halation_only", "split_compare"
+    ] = "final_composite"
+    split_position: float = Field(default=0.5, ge=0.0, le=1.0)
+    triggered_highlight_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    halo_energy_added: float = Field(default=0.0, ge=0.0)
+    ffmpeg_vf: str = Field(default="", max_length=16384)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1351,6 +1382,7 @@ class TimelineClip(BaseModel):
     multicam_bank: MulticamBank | None = None
     auto_reframe: ClipAutoReframeTrack | None = None
     motion_spline: ClipMotionSplineTrack | None = None
+    optical_glow: ClipOpticalGlowTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

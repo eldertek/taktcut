@@ -22,6 +22,8 @@ import {
   drawMulticamStudioProgramCanvas,
   drawMulticamStudioQuadCanvas,
   drawMulticamStudioTimelineCanvas,
+  drawOpticalGlowPreviewCanvas,
+  drawOpticalGlowResponseCanvas,
   drawProgramMonitorCanvas,
   drawQualifierKeyerHistogramCanvas,
   drawQualifierKeyerHslBarCanvas,
@@ -171,12 +173,14 @@ import {
   addOutsideColorNodeInTree,
   alignAvSplitInDocument,
   analyzeAudioSpectrumClient,
+  analyzeOpticalGlowSamplesClient,
   analyzeQualifierKeyerSamplesClient,
   appendClipToTrackInDocument,
   appendStillBounded,
   applyFairlightRackPresetClient,
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
+  applyOpticalGlowToDocumentClient,
   applySplitEditJlInDocument,
   auditMediaPoolLinksClient,
   autoSwitchMulticamSpeakersClient,
@@ -199,6 +203,7 @@ import {
   compileMulticamFiltergraphClient,
   compileMotionSplineFiltergraphClient,
   compileMulticamStudioFiltergraphClient,
+  compileOpticalGlowFiltergraphClient,
   compileProxyPlanClient,
   compileRetimeFilterClient,
   compileRoughcutSelectFiltergraphClient,
@@ -227,6 +232,7 @@ import {
   createDefaultHslCurves,
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
+  createDefaultOpticalGlowConfigClient,
   createDefaultPowerWindow,
   createDefaultQualifier,
   createDefaultQualifierKeyerConfigClient,
@@ -253,10 +259,12 @@ import {
   evaluateTimelineAudioLevels,
   exportMotionSplineJsonClient,
   exportMulticamEdlClient,
+  exportOpticalGlowJsonClient,
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
+  normalizeOpticalGlowConfigClient,
   resolveMulticamStudioSegmentsClient,
   syncMulticamStudioAnglesClient,
   filterTimelineClips,
@@ -705,6 +713,16 @@ const state = {
     playing: false,
     rafId: null,
     lastTs: 0,
+    syncSeq: 0
+  },
+  ogStudio: {
+    isOpen: false,
+    activeTab: "bloom",
+    config: createDefaultOpticalGlowConfigClient("kodak_2383_halation"),
+    analysisResult: null,
+    compiled: null,
+    exportedJson: null,
+    draggingSplit: false,
     syncSeq: 0
   },
   autoReframeStudio: {
@@ -13228,6 +13246,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+R", descKey: "shortcuts.key.autoReframe" },
       { kbd: "Shift+V", descKey: "shortcuts.key.multicamStudio" },
       { kbd: "Shift+E", descKey: "shortcuts.key.motionSplineStudio" },
+      { kbd: "Shift+A", descKey: "shortcuts.key.opticalGlowStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13313,6 +13332,15 @@ function handleTransportKeydown(ev) {
     } else if (ev.key === "Escape") {
       ev.preventDefault();
       closeShortcutsDialog();
+    }
+    return;
+  }
+
+  const ogStudioDlg = byId("og-studio-dialog");
+  if (ogStudioDlg && ogStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeOpticalGlowStudioDialog();
     }
     return;
   }
@@ -13482,6 +13510,11 @@ function handleTransportKeydown(ev) {
     if (lower === "e") {
       ev.preventDefault();
       openMotionSplineStudioDialog();
+      return;
+    }
+    if (lower === "a") {
+      ev.preventDefault();
+      openOpticalGlowStudioDialog();
       return;
     }
   }
@@ -20165,6 +20198,7 @@ function wireEvents() {
   wireQualifierKeyerStudioEvents();
   wireMulticamStudioEvents();
   wireMotionSplineStudioEvents();
+  wireOpticalGlowStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -26586,6 +26620,516 @@ function wireMotionSplineStudioEvents() {
       // Clipboard may be unavailable in headless mode
     }
     setMsStudioStatus(t("msStudio.status.copied"));
+  });
+}
+
+// =============================================================================
+// BORIS FX S_GLOW / 35MM OPTICAL HALATION & ANAMORPHIC STREAK STUDIO (CYCLE #108)
+// =============================================================================
+
+function setOgStudioStatus(text) {
+  const el = byId("og-status-note");
+  if (el) el.textContent = text;
+}
+
+function rgbTupleToCssHex(rgb) {
+  const r = Math.min(255, Math.max(0, Math.round(Number(rgb?.[0] ?? 1) * 255)));
+  const g = Math.min(255, Math.max(0, Math.round(Number(rgb?.[1] ?? 0.28) * 255)));
+  const b = Math.min(255, Math.max(0, Math.round(Number(rgb?.[2] ?? 0.06) * 255)));
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
+
+function refreshOgStudioLocalDerived() {
+  const st = state.ogStudio;
+  st.config = normalizeOpticalGlowConfigClient(st.config);
+  st.analysisResult = analyzeOpticalGlowSamplesClient(st.config);
+  st.compiled = compileOpticalGlowFiltergraphClient(st.config);
+  st.exportedJson = exportOpticalGlowJsonClient(st.config, {
+    title: `TAKTCUT_${st.config.preset_id}`
+  });
+}
+
+function renderOpticalGlowCanvases() {
+  const st = state.ogStudio;
+  const previewCanvas = byId("og-preview-canvas");
+  const responseCanvas = byId("og-response-canvas");
+  if (previewCanvas) {
+    drawOpticalGlowPreviewCanvas(previewCanvas, st.config, st.analysisResult);
+  }
+  if (responseCanvas) {
+    drawOpticalGlowResponseCanvas(responseCanvas, st.config, st.analysisResult);
+  }
+}
+
+function switchOpticalGlowTab(tabId) {
+  const validTab = ["bloom", "halation", "streak"].includes(tabId) ? tabId : "bloom";
+  state.ogStudio.activeTab = validTab;
+  for (const btn of document.querySelectorAll(".og-tab-btn[data-og-tab]")) {
+    const active = btn.getAttribute("data-og-tab") === validTab;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  for (const panelId of ["og-panel-bloom", "og-panel-halation", "og-panel-streak"]) {
+    const p = byId(panelId);
+    if (p) {
+      p.hidden = panelId !== `og-panel-${validTab}`;
+    }
+  }
+}
+
+function syncOpticalGlowStudioUI() {
+  const st = state.ogStudio;
+  if (!st.analysisResult || !st.compiled) {
+    refreshOgStudioLocalDerived();
+  }
+  const cfg = st.config;
+  const res = st.analysisResult;
+
+  const presetBadge = byId("og-active-preset-badge");
+  if (presetBadge) {
+    presetBadge.textContent = String(cfg.preset_id || "custom").toUpperCase().replace(/_/g, " ");
+  }
+  const colorBadge = byId("color-og-badge");
+  if (colorBadge) {
+    colorBadge.textContent = cfg.enabled
+      ? String(cfg.preset_id || "GLOW").toUpperCase().replace(/_/g, " ")
+      : "GLOW OFF";
+  }
+
+  const trigPct = Number(res?.triggered_highlight_pct || 0).toFixed(1);
+  const haloEnergy = Number(res?.halo_energy_added || 0).toFixed(3);
+  const headroom = Number(res?.peak_headroom || 0).toFixed(2);
+
+  const telBadge = byId("og-telemetry-badge");
+  if (telBadge) {
+    telBadge.textContent = `TRIG ${trigPct}% | +${haloEnergy}`;
+  }
+  const hrBadge = byId("og-headroom-badge");
+  if (hrBadge) {
+    hrBadge.textContent = `HEADROOM ${headroom}`;
+  }
+  const enBadge = byId("og-energy-badge");
+  if (enBadge) {
+    enBadge.textContent = `+${haloEnergy} ENERGY`;
+  }
+
+  for (const btn of document.querySelectorAll(".og-preset-btn[data-og-preset]")) {
+    const active = btn.getAttribute("data-og-preset") === cfg.preset_id;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  for (const vBtn of document.querySelectorAll(".og-view-btn[data-og-view]")) {
+    const active = vBtn.getAttribute("data-og-view") === cfg.view_mode;
+    vBtn.classList.toggle("is-active", active);
+    vBtn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const splitPct = Math.round(Number(cfg.split_position ?? 0.5) * 100);
+  const splitSlider = byId("og-split-slider");
+  if (splitSlider && document.activeElement !== splitSlider) {
+    splitSlider.value = String(splitPct);
+  }
+  const splitLabel = byId("og-split-label");
+  if (splitLabel) splitLabel.textContent = `${splitPct}%`;
+
+  const blendSel = byId("og-blend-mode");
+  if (blendSel && document.activeElement !== blendSel) {
+    blendSel.value = cfg.blend_mode;
+  }
+  const enChk = byId("og-enabled");
+  if (enChk) enChk.checked = Boolean(cfg.enabled);
+
+  const syncPair = (rangeId, numId, val) => {
+    const rEl = byId(rangeId);
+    if (rEl && document.activeElement !== rEl) rEl.value = String(val);
+    const nEl = byId(numId);
+    if (nEl && document.activeElement !== nEl) nEl.value = String(val);
+  };
+
+  syncPair("og-highlight-threshold", "og-highlight-threshold-num", cfg.highlight_threshold);
+  syncPair("og-threshold-softness", "og-threshold-softness-num", cfg.threshold_softness);
+  syncPair("og-glow-intensity", "og-glow-intensity-num", cfg.glow_intensity);
+  syncPair("og-glow-radius", "og-glow-radius-num", cfg.glow_radius_px);
+  syncPair("og-glow-warmth", "og-glow-warmth-num", cfg.glow_warmth_shift);
+  syncPair("og-bloom-sat", "og-bloom-sat-num", cfg.bloom_saturation);
+  syncPair("og-octaves", "og-octaves-num", cfg.octaves);
+  syncPair("og-halation-strength", "og-halation-strength-num", cfg.halation_strength);
+  syncPair("og-halation-spread", "og-halation-spread-num", cfg.halation_spread_px);
+  syncPair("og-streak-intensity", "og-streak-intensity-num", cfg.streak_intensity);
+  syncPair("og-streak-length", "og-streak-length-num", cfg.streak_length_px);
+  syncPair("og-streak-angle", "og-streak-angle-num", cfg.streak_angle_deg);
+
+  const setNumIfIdle = (id, val) => {
+    const el = byId(id);
+    if (el && document.activeElement !== el) el.value = Number(val).toFixed(2);
+  };
+  setNumIfIdle("og-hal-r", cfg.halation_spectrum_rgb[0]);
+  setNumIfIdle("og-hal-g", cfg.halation_spectrum_rgb[1]);
+  setNumIfIdle("og-hal-b", cfg.halation_spectrum_rgb[2]);
+  setNumIfIdle("og-stk-r", cfg.streak_tint_rgb[0]);
+  setNumIfIdle("og-stk-g", cfg.streak_tint_rgb[1]);
+  setNumIfIdle("og-stk-b", cfg.streak_tint_rgb[2]);
+
+  const halSwatch = byId("og-halation-swatch");
+  if (halSwatch) halSwatch.style.background = rgbTupleToCssHex(cfg.halation_spectrum_rgb);
+  const stkSwatch = byId("og-streak-swatch");
+  if (stkSwatch) stkSwatch.style.background = rgbTupleToCssHex(cfg.streak_tint_rgb);
+
+  const fgOut = byId("og-fg-output");
+  if (fgOut && st.compiled) {
+    fgOut.textContent = st.compiled.ffmpeg_command || st.compiled.filter_complex || "";
+  }
+  const jsonOut = byId("og-json-preview");
+  if (jsonOut && st.exportedJson) {
+    jsonOut.textContent = st.exportedJson.json_text || "";
+  }
+
+  switchOpticalGlowTab(st.activeTab);
+  renderOpticalGlowCanvases();
+}
+
+async function syncOpticalGlowStudioServer() {
+  const st = state.ogStudio;
+  const seq = (st.syncSeq += 1);
+  refreshOgStudioLocalDerived();
+  syncOpticalGlowStudioUI();
+  try {
+    const [anRes, compRes] = await Promise.all([
+      api.analyzeOpticalGlow({ config: st.config }),
+      api.compileOpticalGlow({ config: st.config })
+    ]);
+    if (seq !== state.ogStudio.syncSeq) return;
+    if (anRes) state.ogStudio.analysisResult = anRes;
+    if (compRes) state.ogStudio.compiled = compRes;
+    syncOpticalGlowStudioUI();
+  } catch {
+    // Keep client deterministic simulation when offline
+  }
+}
+
+function openOpticalGlowStudioDialog() {
+  const dlg = byId("og-studio-dialog");
+  if (!dlg) return;
+  state.ogStudio.isOpen = true;
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  refreshOgStudioLocalDerived();
+  syncOpticalGlowStudioUI();
+  syncOpticalGlowStudioServer();
+}
+
+function closeOpticalGlowStudioDialog() {
+  const dlg = byId("og-studio-dialog");
+  if (dlg) {
+    if (typeof dlg.close === "function" && dlg.open) dlg.close();
+    else dlg.removeAttribute("open");
+  }
+  state.ogStudio.isOpen = false;
+}
+
+async function applyOpticalGlowToTimelineAction() {
+  if (!state.timelineDoc) return;
+  const st = state.ogStudio;
+  const selInfo = getSelectedClipTrack();
+  const trackIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyOpticalGlow({
+      document: state.timelineDoc,
+      config: st.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      pushTimelineUndoSnapshot("Apply Optical Glow");
+      applyTimelineMutationResponse(res, { syncClipSelection: true });
+      setOgStudioStatus(t("ogStudio.status.applied"));
+    }
+  } catch (err) {
+    try {
+      const nextDoc = applyOpticalGlowToDocumentClient(state.timelineDoc, st.config, {
+        track_index: trackIndex,
+        clip_index: clipIndex
+      });
+      pushTimelineUndoSnapshot("Apply Optical Glow");
+      state.timelineDoc = nextDoc;
+      renderTimelineUI();
+      setOgStudioStatus(t("ogStudio.status.applied"));
+    } catch {
+      setOgStudioStatus(`Apply failed: ${err.message || err}`);
+    }
+  }
+}
+
+async function sendOpticalGlowToDeliverAction() {
+  const st = state.ogStudio;
+  let compiled = st.compiled;
+  try {
+    compiled = await api.compileOpticalGlow({ config: st.config });
+    if (compiled) st.compiled = compiled;
+  } catch {
+    compiled = compileOpticalGlowFiltergraphClient(st.config);
+  }
+  const outEl = byId("render-filtergraph-preview") || byId("fx-filtergraph-output");
+  if (outEl && compiled && compiled.filter_complex) {
+    outEl.textContent = compiled.filter_complex;
+  }
+  const chk = byId("render-use-studio-fx");
+  if (chk) chk.checked = true;
+  closeOpticalGlowStudioDialog();
+  switchTab("render");
+  setOgStudioStatus(t("ogStudio.status.deliver"));
+}
+
+async function exportOpticalGlowJsonAction() {
+  const st = state.ogStudio;
+  try {
+    const res = await api.exportOpticalGlowJson({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`
+    });
+    st.exportedJson = res;
+    const drawer = byId("og-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncOpticalGlowStudioUI();
+    setOgStudioStatus(
+      t("ogStudio.status.exportedJson").replace(
+        "{schema}",
+        String(res.schema_version || "taktcut.optical_glow.v1")
+      )
+    );
+  } catch (err) {
+    setOgStudioStatus(`JSON export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadOpticalGlowJsonAction() {
+  const st = state.ogStudio;
+  const filename = `taktcut_${st.config.preset_id}_optical_glow.json`;
+  try {
+    const blob = await api.downloadOpticalGlowBlob({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`,
+      filename
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setOgStudioStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+function wireOpticalGlowStudioEvents() {
+  byId("btn-timeline-optical-glow-studio")?.addEventListener("click", openOpticalGlowStudioDialog);
+  byId("btn-fx-optical-glow-studio")?.addEventListener("click", openOpticalGlowStudioDialog);
+  byId("btn-color-optical-glow-studio")?.addEventListener("click", openOpticalGlowStudioDialog);
+  byId("btn-close-og-studio")?.addEventListener("click", closeOpticalGlowStudioDialog);
+
+  const dlg = byId("og-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeOpticalGlowStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeOpticalGlowStudioDialog();
+    });
+    dlg.addEventListener("close", () => {
+      state.ogStudio.isOpen = false;
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".og-preset-btn[data-og-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-og-preset") || "kodak_2383_halation";
+      const curView = state.ogStudio.config.view_mode || "final_composite";
+      const curSplit = state.ogStudio.config.split_position ?? 0.5;
+      const nextCfg = createDefaultOpticalGlowConfigClient(pid);
+      state.ogStudio.config = normalizeOpticalGlowConfigClient({
+        ...nextCfg,
+        view_mode: curView,
+        split_position: curSplit
+      });
+      refreshOgStudioLocalDerived();
+      syncOpticalGlowStudioServer();
+      const res = state.ogStudio.analysisResult;
+      setOgStudioStatus(
+        t("ogStudio.status.presetApplied")
+          .replace("{preset}", pid)
+          .replace("{trig}", String(Number(res?.triggered_highlight_pct || 0).toFixed(1)))
+          .replace("{energy}", String(Number(res?.halo_energy_added || 0).toFixed(3)))
+      );
+    });
+  }
+
+  for (const vBtn of document.querySelectorAll(".og-view-btn[data-og-view]")) {
+    vBtn.addEventListener("click", () => {
+      const vm = vBtn.getAttribute("data-og-view") || "final_composite";
+      state.ogStudio.config = normalizeOpticalGlowConfigClient({
+        ...state.ogStudio.config,
+        view_mode: vm
+      });
+      refreshOgStudioLocalDerived();
+      syncOpticalGlowStudioUI();
+      syncOpticalGlowStudioServer();
+    });
+  }
+
+  for (const tabBtn of document.querySelectorAll(".og-tab-btn[data-og-tab]")) {
+    tabBtn.addEventListener("click", () => {
+      switchOpticalGlowTab(tabBtn.getAttribute("data-og-tab") || "bloom");
+    });
+  }
+
+  const updateOgConfig = (patch, { customPreset = true, syncServer = false } = {}) => {
+    state.ogStudio.config = normalizeOpticalGlowConfigClient({
+      ...state.ogStudio.config,
+      ...(customPreset ? { preset_id: "custom" } : {}),
+      ...patch
+    });
+    refreshOgStudioLocalDerived();
+    syncOpticalGlowStudioUI();
+    if (syncServer) {
+      syncOpticalGlowStudioServer();
+    }
+  };
+
+  byId("og-split-slider")?.addEventListener("input", (ev) => {
+    const pct = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(pct)) {
+      updateOgConfig(
+        {
+          split_position: Math.max(0, Math.min(1, pct / 100)),
+          view_mode: "split_compare"
+        },
+        { customPreset: false }
+      );
+    }
+  });
+  byId("og-blend-mode")?.addEventListener("change", (ev) => {
+    updateOgConfig({ blend_mode: ev.target.value }, { customPreset: true, syncServer: true });
+  });
+  byId("og-enabled")?.addEventListener("change", (ev) => {
+    updateOgConfig({ enabled: Boolean(ev.target.checked) }, { customPreset: false, syncServer: true });
+  });
+
+  const bindRangeAndNum = (rangeId, numId, key, lo, hi, isInt = false) => {
+    const parseVal = (raw) => (isInt ? Number.parseInt(raw, 10) : Number.parseFloat(raw));
+    byId(rangeId)?.addEventListener("input", (ev) => {
+      const v = parseVal(ev.target.value);
+      if (Number.isFinite(v)) {
+        updateOgConfig({ [key]: Math.max(lo, Math.min(hi, v)) });
+      }
+    });
+    byId(rangeId)?.addEventListener("change", () => {
+      syncOpticalGlowStudioServer();
+    });
+    byId(numId)?.addEventListener("input", (ev) => {
+      const v = parseVal(ev.target.value);
+      if (Number.isFinite(v) && v >= lo && v <= hi) {
+        updateOgConfig({ [key]: v });
+      }
+    });
+    byId(numId)?.addEventListener("change", (ev) => {
+      const v = parseVal(ev.target.value);
+      const fallback = state.ogStudio.config[key];
+      updateOgConfig(
+        { [key]: Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback },
+        { customPreset: true, syncServer: true }
+      );
+    });
+  };
+
+  bindRangeAndNum("og-highlight-threshold", "og-highlight-threshold-num", "highlight_threshold", 0, 1);
+  bindRangeAndNum("og-threshold-softness", "og-threshold-softness-num", "threshold_softness", 0, 0.5);
+  bindRangeAndNum("og-glow-intensity", "og-glow-intensity-num", "glow_intensity", 0, 2);
+  bindRangeAndNum("og-glow-radius", "og-glow-radius-num", "glow_radius_px", 2, 128);
+  bindRangeAndNum("og-glow-warmth", "og-glow-warmth-num", "glow_warmth_shift", -1, 1);
+  bindRangeAndNum("og-bloom-sat", "og-bloom-sat-num", "bloom_saturation", 0, 2);
+  bindRangeAndNum("og-octaves", "og-octaves-num", "octaves", 2, 6, true);
+  bindRangeAndNum("og-halation-strength", "og-halation-strength-num", "halation_strength", 0, 1);
+  bindRangeAndNum("og-halation-spread", "og-halation-spread-num", "halation_spread_px", 1, 64);
+  bindRangeAndNum("og-streak-intensity", "og-streak-intensity-num", "streak_intensity", 0, 2);
+  bindRangeAndNum("og-streak-length", "og-streak-length-num", "streak_length_px", 4, 240);
+  bindRangeAndNum("og-streak-angle", "og-streak-angle-num", "streak_angle_deg", -180, 180);
+
+  const bindRgbTriplet = (ids, key) => {
+    ids.forEach((id, chIdx) => {
+      byId(id)?.addEventListener("input", (ev) => {
+        const v = Number.parseFloat(ev.target.value);
+        if (Number.isFinite(v) && v >= 0 && v <= 1) {
+          const next = [...state.ogStudio.config[key]];
+          next[chIdx] = v;
+          updateOgConfig({ [key]: next });
+        }
+      });
+      byId(id)?.addEventListener("change", (ev) => {
+        const v = Number.parseFloat(ev.target.value);
+        const next = [...state.ogStudio.config[key]];
+        if (Number.isFinite(v)) next[chIdx] = Math.max(0, Math.min(1, v));
+        updateOgConfig({ [key]: next }, { customPreset: true, syncServer: true });
+      });
+    });
+  };
+  bindRgbTriplet(["og-hal-r", "og-hal-g", "og-hal-b"], "halation_spectrum_rgb");
+  bindRgbTriplet(["og-stk-r", "og-stk-g", "og-stk-b"], "streak_tint_rgb");
+
+  // Interactive Split Compare drag directly on #og-preview-canvas
+  const prevCanvas = byId("og-preview-canvas");
+  if (prevCanvas) {
+    const updateSplitFromPointer = (ev) => {
+      const meta = prevCanvas._ogPreviewMeta;
+      if (!meta) return;
+      const rect = prevCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const u = Math.max(0, Math.min(1, (x - meta.fx) / Math.max(1, meta.frameW)));
+      updateOgConfig(
+        {
+          view_mode: "split_compare",
+          split_position: Number(u.toFixed(3))
+        },
+        { customPreset: false }
+      );
+    };
+    prevCanvas.addEventListener("pointerdown", (ev) => {
+      state.ogStudio.draggingSplit = true;
+      if (typeof prevCanvas.setPointerCapture === "function") {
+        try { prevCanvas.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
+      }
+      updateSplitFromPointer(ev);
+    });
+    prevCanvas.addEventListener("pointermove", (ev) => {
+      if (state.ogStudio.draggingSplit) {
+        updateSplitFromPointer(ev);
+      }
+    });
+    const endSplit = () => {
+      state.ogStudio.draggingSplit = false;
+    };
+    prevCanvas.addEventListener("pointerup", endSplit);
+    prevCanvas.addEventListener("pointercancel", endSplit);
+  }
+
+  byId("btn-og-apply-timeline")?.addEventListener("click", applyOpticalGlowToTimelineAction);
+  byId("btn-og-send-deliver")?.addEventListener("click", sendOpticalGlowToDeliverAction);
+  byId("btn-og-export-json")?.addEventListener("click", exportOpticalGlowJsonAction);
+  byId("btn-og-download-json")?.addEventListener("click", downloadOpticalGlowJsonAction);
+  byId("btn-og-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.ogStudio.compiled || compileOpticalGlowFiltergraphClient(state.ogStudio.config);
+    try {
+      await navigator.clipboard.writeText(compiled.filter_complex || "");
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    setOgStudioStatus(t("ogStudio.status.copied"));
   });
 }
 
