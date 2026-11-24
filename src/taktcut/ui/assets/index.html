@@ -1523,6 +1523,15 @@
                   <span data-i18n="ogStudio.btn.toolbar">Halation &amp; Glow</span>
                   <span class="kbd-chip mono">Shift+A</span>
                 </button>
+                <button type="button" id="btn-timeline-power-window-studio" class="btn btn-mini tl-pw-studio-btn pw-studio-btn" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <ellipse cx="8" cy="8" rx="5.5" ry="4" stroke="#38bdf8" stroke-width="1.3" fill="none"/>
+                    <ellipse cx="8" cy="8" rx="7" ry="5.5" stroke="#f59e0b" stroke-width="0.9" stroke-dasharray="2 1.5" fill="none"/>
+                    <circle cx="8" cy="8" r="1.4" fill="#38bdf8"/>
+                  </svg>
+                  <span data-i18n="pwStudio.btn.toolbar">Power Window</span>
+                  <span class="kbd-chip mono">Shift+W</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1735,6 +1744,10 @@
                 <button type="button" id="btn-fx-optical-glow-studio" class="btn btn-secondary og-studio-btn" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">
                   <span data-i18n="ogStudio.btn.fx">Halation / S_Glow</span>
                   <span class="kbd-chip mono">Shift+A</span>
+                </button>
+                <button type="button" id="btn-fx-power-window-studio" class="btn btn-secondary pw-studio-btn" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">
+                  <span data-i18n="pwStudio.btn.fx">Power Windows</span>
+                  <span class="kbd-chip mono">Shift+W</span>
                 </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
@@ -2562,6 +2575,9 @@
                 <span class="broadcast-quick-sep" aria-hidden="true"></span>
                 <button type="button" id="btn-color-optical-glow-studio" class="btn btn-chip og-studio-btn" data-i18n="ogStudio.btn.color" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">Halation / S_Glow</button>
                 <span id="color-og-badge" class="nle-tag mono" aria-live="polite">GLOW OFF</span>
+                <span class="broadcast-quick-sep" aria-hidden="true"></span>
+                <button type="button" id="btn-color-power-window-studio" class="btn btn-chip pw-studio-btn" data-i18n="pwStudio.btn.color" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">Power Window</button>
+                <span id="color-pw-badge" class="nle-tag mono" aria-live="polite">PW OFF</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
@@ -5357,6 +5373,241 @@
         <div class="fg-drawer-body">
           <pre id="og-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="og-json-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="pw-studio-dialog" class="nle-dialog pw-studio-dialog" aria-labelledby="pw-studio-title" aria-describedby="pw-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="pw-studio-title" data-i18n="pwStudio.dialog.title">DaVinci Resolve Power Windows &amp; 4-Point Planar Tracker Studio</h2>
+        <p id="pw-studio-subtitle" class="nle-dialog-subtitle" data-i18n="pwStudio.dialog.subtitle">Keyframed Shape Mask (Inside/Outside Grade, Blur &amp; Privacy Pixelate) and 3x3 DLT Planar Screen-Pin Tracker</p>
+      </div>
+      <div class="pw-header-actions">
+        <span id="pw-active-preset-badge" class="nle-tag mono">PORTRAIT SPOTLIGHT OVAL</span>
+        <span id="pw-telemetry-badge" class="nle-tag mono pw-telemetry-pill">COV 0.0% | KF 0</span>
+        <button type="button" id="btn-close-pw-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body pw-dialog-body">
+      <div class="pw-preset-strip" id="pw-preset-strip" role="group" aria-label="Power Window presets">
+        <span class="pill-label" data-i18n="pwStudio.presetsLabel">WINDOW PRESETS</span>
+        <button type="button" class="btn btn-chip pw-preset-btn is-active" data-pw-preset="portrait_spotlight_oval" aria-pressed="true" data-i18n="pwStudio.preset.portrait_spotlight_oval">Portrait Spotlight</button>
+        <button type="button" class="btn btn-chip pw-preset-btn" data-pw-preset="privacy_plate_pixelate" aria-pressed="false" data-i18n="pwStudio.preset.privacy_plate_pixelate">Privacy Plate</button>
+        <button type="button" class="btn btn-chip pw-preset-btn" data-pw-preset="cinema_horizon_grad" aria-pressed="false" data-i18n="pwStudio.preset.cinema_horizon_grad">Cinema Horizon</button>
+        <button type="button" class="btn btn-chip pw-preset-btn" data-pw-preset="billboard_corner_pin" aria-pressed="false" data-i18n="pwStudio.preset.billboard_corner_pin">Billboard Corner-Pin</button>
+        <button type="button" class="btn btn-chip pw-preset-btn" data-pw-preset="custom" aria-pressed="false" data-i18n="pwStudio.preset.custom">Custom</button>
+      </div>
+
+      <div class="pw-toolbar-bar">
+        <div class="pw-view-group" role="group" aria-label="Highlight inspection mode">
+          <span class="pill-label" data-i18n="pwStudio.highlightLabel">HIGHLIGHT</span>
+          <button type="button" id="btn-pw-view-composite" class="btn btn-mini pw-view-btn is-active" data-pw-view="final_composite" aria-pressed="true" data-i18n="pwStudio.view.final_composite">Composite</button>
+          <button type="button" id="btn-pw-view-matte" class="btn btn-mini pw-view-btn" data-pw-view="matte_bw" aria-pressed="false" data-i18n="pwStudio.view.matte_bw">Alpha B&amp;W</button>
+          <button type="button" id="btn-pw-view-overlay" class="btn btn-mini pw-view-btn" data-pw-view="red_overlay" aria-pressed="false" data-i18n="pwStudio.view.red_overlay">Overlay</button>
+          <button type="button" id="btn-pw-view-handles" class="btn btn-mini pw-view-btn" data-pw-view="wireframe_handles" aria-pressed="false" data-i18n="pwStudio.view.wireframe_handles">Handles</button>
+        </div>
+
+        <div class="pw-shape-ctrl">
+          <label class="inline-label" for="pw-shape-type" data-i18n="pwStudio.shapeLabel">Shape</label>
+          <select id="pw-shape-type" class="input-control mono">
+            <option value="ellipse">Ellipse / Oval</option>
+            <option value="rounded_box">Rounded Box</option>
+            <option value="linear_gradient">Linear Gradient</option>
+            <option value="planar_quad">4-Pt Planar Quad</option>
+          </select>
+          <label class="inline-check" for="pw-invert-matte">
+            <input type="checkbox" id="pw-invert-matte">
+            <span data-i18n="pwStudio.invertLabel">Invert Matte</span>
+          </label>
+          <label class="inline-check" for="pw-enabled">
+            <input type="checkbox" id="pw-enabled" checked>
+            <span data-i18n="pwStudio.enabledLabel">Enable Window</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="pw-workstation-grid">
+        <div class="pw-viewport-col">
+          <div class="pw-card">
+            <div class="pane-subheader">
+              <span data-i18n="pwStudio.viewportTitle">Power Window Interactive OSC Viewport (Drag Handles / 4-Pt Pin)</span>
+              <span id="pw-luma-badge" class="nle-tag mono">IN 0.00 | OUT 0.00</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="pw-viewport-canvas" class="studio-canvas pw-viewport-canvas" aria-label="Power Window interactive mask viewport with draggable handles"></canvas>
+            </div>
+          </div>
+
+          <div class="pw-card">
+            <div class="pane-subheader">
+              <span data-i18n="pwStudio.trackTitle">Planar &amp; Keyframe Motion Tracker</span>
+              <span id="pw-homography-badge" class="nle-tag mono">H 1.00 | CONF --</span>
+            </div>
+            <div class="pw-track-toolbar">
+              <button type="button" id="btn-pw-play-track" class="btn btn-mini" aria-pressed="false" data-i18n="pwStudio.btn.playTrack">Play</button>
+              <button type="button" id="btn-pw-run-track" class="btn btn-mini pw-track-run-btn" data-i18n="pwStudio.btn.runTrack">Track Motion</button>
+              <button type="button" id="btn-pw-add-kf" class="btn btn-mini" data-i18n="pwStudio.btn.addKf">+ Keyframe</button>
+              <button type="button" id="btn-pw-clear-kf" class="btn btn-mini" data-i18n="pwStudio.btn.clearKf">Clear Keys</button>
+              <div class="pw-time-ctrl">
+                <label class="inline-label" for="pw-time-slider" data-i18n="pwStudio.timeLabel">Time</label>
+                <input type="range" id="pw-time-slider" min="0" max="100" step="1" value="0" aria-label="Power Window normalized timeline scrubber">
+                <span id="pw-time-label" class="mono nle-tag">0.00</span>
+              </div>
+            </div>
+            <div class="viewer-well">
+              <canvas id="pw-track-canvas" class="studio-canvas pw-track-canvas" aria-label="Power Window keyframe trajectory graph"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="pw-inspector-col pw-card">
+          <div class="pw-inspector-tabs" role="tablist" aria-label="Power Window parameter groups">
+            <button type="button" role="tab" id="btn-pw-tab-geometry" class="btn btn-mini pw-tab-btn is-active" data-pw-tab="geometry" aria-selected="true" data-i18n="pwStudio.tab.geometry">Geometry &amp; Track</button>
+            <button type="button" role="tab" id="btn-pw-tab-inside" class="btn btn-mini pw-tab-btn" data-pw-tab="inside" aria-selected="false" data-i18n="pwStudio.tab.inside">Inside Grade / Blur</button>
+            <button type="button" role="tab" id="btn-pw-tab-outside" class="btn btn-mini pw-tab-btn" data-pw-tab="outside" aria-selected="false" data-i18n="pwStudio.tab.outside">Outside Grade / Vignette</button>
+          </div>
+
+          <div id="pw-panel-geometry" class="pw-tab-panel" role="tabpanel" aria-labelledby="btn-pw-tab-geometry">
+            <div class="pw-param-grid-2">
+              <div class="pw-param-field">
+                <label for="pw-studio-cx-num" data-i18n="pwStudio.param.cx">Center X</label>
+                <div class="pw-range-pair">
+                  <input type="range" id="pw-studio-cx" min="0" max="1" step="0.01" value="0.48" aria-label="Window center X slider">
+                  <input type="number" id="pw-studio-cx-num" class="input-control input-num mono" min="0" max="1" step="0.01" value="0.48">
+                </div>
+              </div>
+              <div class="pw-param-field">
+                <label for="pw-studio-cy-num" data-i18n="pwStudio.param.cy">Center Y</label>
+                <div class="pw-range-pair">
+                  <input type="range" id="pw-studio-cy" min="0" max="1" step="0.01" value="0.43" aria-label="Window center Y slider">
+                  <input type="number" id="pw-studio-cy-num" class="input-control input-num mono" min="0" max="1" step="0.01" value="0.43">
+                </div>
+              </div>
+              <div class="pw-param-field">
+                <label for="pw-rx-num" data-i18n="pwStudio.param.rx">Radius / Width</label>
+                <div class="pw-range-pair">
+                  <input type="range" id="pw-rx" min="0.02" max="0.95" step="0.01" value="0.20" aria-label="Window width radius slider">
+                  <input type="number" id="pw-rx-num" class="input-control input-num mono" min="0.02" max="0.95" step="0.01" value="0.20">
+                </div>
+              </div>
+              <div class="pw-param-field">
+                <label for="pw-ry-num" data-i18n="pwStudio.param.ry">Radius / Height</label>
+                <div class="pw-range-pair">
+                  <input type="range" id="pw-ry" min="0.02" max="0.95" step="0.01" value="0.30" aria-label="Window height radius slider">
+                  <input type="number" id="pw-ry-num" class="input-control input-num mono" min="0.02" max="0.95" step="0.01" value="0.30">
+                </div>
+              </div>
+            </div>
+
+            <div class="pw-param-field">
+              <label for="pw-rotation-num" data-i18n="pwStudio.param.rotation">Rotation (deg)</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-rotation" min="-180" max="180" step="1" value="-4" aria-label="Window rotation angle slider">
+                <input type="number" id="pw-rotation-num" class="input-control input-num mono" min="-180" max="180" step="1" value="-4">
+              </div>
+            </div>
+            <div class="pw-param-field">
+              <label for="pw-softness-num" data-i18n="pwStudio.param.softness">Feather Softness (px)</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-softness" min="0" max="180" step="1" value="38" aria-label="Feather softness slider">
+                <input type="number" id="pw-softness-num" class="input-control input-num mono" min="0" max="180" step="1" value="38">
+              </div>
+            </div>
+            <div class="pw-param-field">
+              <label for="pw-corner-radius-num" data-i18n="pwStudio.param.cornerRadius">Box Corner Radius</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-corner-radius" min="0" max="1" step="0.02" value="0.22" aria-label="Rounded box corner radius slider">
+                <input type="number" id="pw-corner-radius-num" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.22">
+              </div>
+            </div>
+
+            <div class="pw-param-grid-3">
+              <div class="pw-param-field">
+                <label for="pw-drift-x-num" data-i18n="pwStudio.param.driftX">Track Drift X</label>
+                <input type="number" id="pw-drift-x-num" class="input-control input-num mono" min="-0.5" max="0.5" step="0.01" value="0.05">
+              </div>
+              <div class="pw-param-field">
+                <label for="pw-drift-y-num" data-i18n="pwStudio.param.driftY">Track Drift Y</label>
+                <input type="number" id="pw-drift-y-num" class="input-control input-num mono" min="-0.5" max="0.5" step="0.01" value="-0.02">
+              </div>
+              <div class="pw-param-field">
+                <label for="pw-jitter-num" data-i18n="pwStudio.param.jitter">Planar Jitter</label>
+                <input type="number" id="pw-jitter-num" class="input-control input-num mono" min="0" max="0.1" step="0.001" value="0.005">
+              </div>
+            </div>
+          </div>
+
+          <div id="pw-panel-inside" class="pw-tab-panel" role="tabpanel" aria-labelledby="btn-pw-tab-inside" hidden>
+            <div class="pw-param-field">
+              <label for="pw-inside-ev-num" data-i18n="pwStudio.param.insideEv">Inside Exposure (EV)</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-inside-ev" min="-3" max="3" step="0.05" value="0.55" aria-label="Inside exposure EV slider">
+                <input type="number" id="pw-inside-ev-num" class="input-control input-num mono" min="-3" max="3" step="0.05" value="0.55">
+              </div>
+            </div>
+            <div class="pw-param-field">
+              <label for="pw-inside-blur-num" data-i18n="pwStudio.param.insideBlur">Inside Gaussian Blur (px)</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-inside-blur" min="0" max="48" step="0.5" value="0" aria-label="Inside blur px slider">
+                <input type="number" id="pw-inside-blur-num" class="input-control input-num mono" min="0" max="48" step="0.5" value="0">
+              </div>
+            </div>
+            <div class="pw-param-field">
+              <label for="pw-pixelate-num" data-i18n="pwStudio.param.pixelate">Privacy Pixelate Block (px)</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-pixelate" min="1" max="64" step="1" value="1" aria-label="Privacy pixelation block size slider">
+                <input type="number" id="pw-pixelate-num" class="input-control input-num mono" min="1" max="64" step="1" value="1">
+              </div>
+            </div>
+          </div>
+
+          <div id="pw-panel-outside" class="pw-tab-panel" role="tabpanel" aria-labelledby="btn-pw-tab-outside" hidden>
+            <div class="pw-param-field">
+              <label for="pw-outside-ev-num" data-i18n="pwStudio.param.outsideEv">Outside Exposure (EV)</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-outside-ev" min="-3" max="3" step="0.05" value="-0.65" aria-label="Outside exposure EV slider">
+                <input type="number" id="pw-outside-ev-num" class="input-control input-num mono" min="-3" max="3" step="0.05" value="-0.65">
+              </div>
+            </div>
+            <div class="pw-param-field">
+              <label for="pw-outside-blur-num" data-i18n="pwStudio.param.outsideBlur">Outside Defocus Blur (px)</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-outside-blur" min="0" max="48" step="0.5" value="10" aria-label="Outside defocus blur slider">
+                <input type="number" id="pw-outside-blur-num" class="input-control input-num mono" min="0" max="48" step="0.5" value="10">
+              </div>
+            </div>
+            <div class="pw-param-field">
+              <label for="pw-vignette-num" data-i18n="pwStudio.param.vignette">Outside Vignette Opacity</label>
+              <div class="pw-range-pair">
+                <input type="range" id="pw-vignette" min="0" max="1" step="0.02" value="0.35" aria-label="Radial vignette opacity slider">
+                <input type="number" id="pw-vignette-num" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.35">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="pw-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="pwStudio.status.idle">Drag mask handles on the viewport, scrub keyframes, or run planar tracking.</div>
+
+      <div class="btn-row pw-actions">
+        <button type="button" id="btn-pw-apply-timeline" class="btn btn-primary" data-i18n="pwStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-pw-send-deliver" class="btn btn-secondary" data-i18n="pwStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-pw-export-json" class="btn btn-secondary" data-i18n="pwStudio.btn.exportJson">Export JSON</button>
+        <button type="button" id="btn-pw-download-json" class="btn btn-secondary" data-i18n="pwStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-pw-copy-fg" class="btn btn-mini" data-i18n="pwStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="pw-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="pwStudio.drawerTitle">FFmpeg MaskedMerge / Perspective Corner-Pin Graph &amp; Keyframes JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="pw-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="pw-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

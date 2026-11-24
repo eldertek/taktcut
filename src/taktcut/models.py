@@ -1354,6 +1354,63 @@ class ClipOpticalGlowTrack(BaseModel):
     ffmpeg_vf: str = Field(default="", max_length=16384)
 
 
+class ClipPowerWindowKeyframeRef(BaseModel):
+    """Keyframe entry attached to a non-destructive ClipPowerWindowTrack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    t_norm: float = Field(ge=0.0, le=1.0)
+    cx: float = Field(ge=0.0, le=1.0)
+    cy: float = Field(ge=0.0, le=1.0)
+    rx: float = Field(ge=0.02, le=0.95)
+    ry: float = Field(ge=0.02, le=0.95)
+    rotation_deg: float = Field(default=0.0, ge=-180.0, le=180.0)
+    softness_px: float = Field(default=28.0, ge=0.0, le=180.0)
+    quad_corners: tuple[
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ] = ((0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75))
+
+
+class ClipPowerWindowTrack(BaseModel):
+    """Non-destructive DaVinci Resolve Power Window, Keyframed Mask & Planar Pin track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    preset_id: str = Field(default="portrait_spotlight_oval", max_length=64)
+    shape_type: Literal["ellipse", "rounded_box", "linear_gradient", "planar_quad"] = "ellipse"
+    cx: float = Field(default=0.5, ge=0.0, le=1.0)
+    cy: float = Field(default=0.45, ge=0.0, le=1.0)
+    rx: float = Field(default=0.22, ge=0.02, le=0.95)
+    ry: float = Field(default=0.28, ge=0.02, le=0.95)
+    rotation_deg: float = Field(default=0.0, ge=-180.0, le=180.0)
+    corner_radius: float = Field(default=0.22, ge=0.0, le=1.0)
+    softness_px: float = Field(default=32.0, ge=0.0, le=180.0)
+    invert_matte: bool = False
+    quad_corners: tuple[
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ] = ((0.28, 0.22), (0.72, 0.18), (0.76, 0.68), (0.24, 0.72))
+    inside_exposure_ev: float = Field(default=0.0, ge=-3.0, le=3.0)
+    outside_exposure_ev: float = Field(default=0.0, ge=-3.0, le=3.0)
+    inside_blur_px: float = Field(default=0.0, ge=0.0, le=48.0)
+    outside_blur_px: float = Field(default=0.0, ge=0.0, le=48.0)
+    inside_pixelate_size: int = Field(default=1, ge=1, le=64)
+    vignette_opacity: float = Field(default=0.0, ge=0.0, le=1.0)
+    view_mode: Literal[
+        "final_composite", "matte_bw", "red_overlay", "wireframe_handles"
+    ] = "final_composite"
+    inside_coverage_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    homography_3x3: list[list[float]] = Field(default_factory=list)
+    ffmpeg_vf: str = Field(default="", max_length=16384)
+    track_keyframes: list[ClipPowerWindowKeyframeRef] = Field(default_factory=list)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1383,6 +1440,7 @@ class TimelineClip(BaseModel):
     auto_reframe: ClipAutoReframeTrack | None = None
     motion_spline: ClipMotionSplineTrack | None = None
     optical_glow: ClipOpticalGlowTrack | None = None
+    power_window: ClipPowerWindowTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

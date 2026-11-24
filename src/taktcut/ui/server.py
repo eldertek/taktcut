@@ -243,6 +243,19 @@ from taktcut.optical_glow_studio import (
     list_optical_glow_presets,
     normalize_optical_glow_config,
 )
+from taktcut.power_window_studio import (
+    ALLOWED_POWER_WINDOW_PRESET_IDS,
+    ALLOWED_POWER_WINDOW_SHAPE_TYPES,
+    ALLOWED_POWER_WINDOW_VIEW_MODES,
+    PowerWindowConfig,
+    apply_power_window_to_document,
+    compile_power_window_filtergraph,
+    evaluate_power_window_samples,
+    export_power_window_json,
+    list_power_window_presets,
+    normalize_power_window_config,
+    simulate_power_window_track,
+)
 from taktcut.project import (
     PROJECT_FILE_SUFFIX,
     PROJECT_SCHEMA_VERSION,
@@ -1904,6 +1917,19 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "blend_modes": list(ALLOWED_OPTICAL_GLOW_BLEND_MODES),
                     "view_modes": list(ALLOWED_OPTICAL_GLOW_VIEW_MODES),
                     "default_config": OpticalGlowConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/power-window/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_power_window_presets()],
+                    "preset_ids": list(ALLOWED_POWER_WINDOW_PRESET_IDS),
+                    "shape_types": list(ALLOWED_POWER_WINDOW_SHAPE_TYPES),
+                    "view_modes": list(ALLOWED_POWER_WINDOW_VIEW_MODES),
+                    "default_config": PowerWindowConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -4941,6 +4967,153 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "document": updated_og_doc.model_dump(mode="json"),
                     "validation": og_val.model_dump(mode="json"),
                     "compiled": og_compiled_apply.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/power-window/evaluate":
+            pw_cfg = normalize_power_window_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_samples = payload.get("samples")
+            raw_pixels = payload.get("pixels")
+            raw_w = payload.get("width", 0)
+            raw_h = payload.get("height", 0)
+            raw_t = payload.get("t_norm")
+            pw_w = int(raw_w) if isinstance(raw_w, int) and not isinstance(raw_w, bool) else 0
+            pw_h = int(raw_h) if isinstance(raw_h, int) and not isinstance(raw_h, bool) else 0
+            pw_t: float | None = (
+                float(raw_t)
+                if isinstance(raw_t, (int, float)) and not isinstance(raw_t, bool)
+                else None
+            )
+            pw_eval = evaluate_power_window_samples(
+                pw_cfg,
+                raw_samples if isinstance(raw_samples, list) else None,
+                width=pw_w,
+                height=pw_h,
+                pixels=raw_pixels if isinstance(raw_pixels, list) else None,
+                t_norm=pw_t,
+            )
+            self._send_json(HTTPStatus.OK, pw_eval.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/power-window/track":
+            pw_cfg = normalize_power_window_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_nf = payload.get("num_keyframes", 9)
+            num_kf = int(raw_nf) if isinstance(raw_nf, int) and not isinstance(raw_nf, bool) else 9
+            raw_dx = payload.get("drift_x")
+            raw_dy = payload.get("drift_y")
+            raw_jit = payload.get("jitter")
+            raw_rd = payload.get("rotation_drift_deg", 4.0)
+            dx_arg = (
+                float(raw_dx)
+                if isinstance(raw_dx, (int, float)) and not isinstance(raw_dx, bool)
+                else None
+            )
+            dy_arg = (
+                float(raw_dy)
+                if isinstance(raw_dy, (int, float)) and not isinstance(raw_dy, bool)
+                else None
+            )
+            jit_arg = (
+                float(raw_jit)
+                if isinstance(raw_jit, (int, float)) and not isinstance(raw_jit, bool)
+                else None
+            )
+            rot_drift = (
+                float(raw_rd)
+                if isinstance(raw_rd, (int, float)) and not isinstance(raw_rd, bool)
+                else 4.0
+            )
+            pw_track = simulate_power_window_track(
+                pw_cfg,
+                num_keyframes=num_kf,
+                drift_x=dx_arg,
+                drift_y=dy_arg,
+                jitter=jit_arg,
+                rotation_drift_deg=rot_drift,
+            )
+            self._send_json(HTTPStatus.OK, pw_track.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/power-window/compile":
+            pw_cfg = normalize_power_window_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            pw_compiled = compile_power_window_filtergraph(pw_cfg)
+            self._send_json(HTTPStatus.OK, pw_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/power-window/export-json":
+            pw_cfg = normalize_power_window_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            pw_title = str(payload.get("title", "TAKTCUT_POWER_WINDOW")).strip() or (
+                "TAKTCUT_POWER_WINDOW"
+            )
+            pw_exported = export_power_window_json(pw_cfg, title=pw_title)
+            raw_pw_out = payload.get("out_path")
+            pw_saved_rel: str | None = None
+            if raw_pw_out is not None and str(raw_pw_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_pw_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(pw_exported.json_text, encoding="utf-8")
+                pw_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                pw_exported.model_copy(update={"saved_path": pw_saved_rel}).model_dump(mode="json"),
+            )
+            return
+
+        if route == "/api/fx/power-window/download":
+            pw_cfg = normalize_power_window_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            pw_title = str(payload.get("title", "TAKTCUT_POWER_WINDOW")).strip() or (
+                "TAKTCUT_POWER_WINDOW"
+            )
+            pw_exported_dl = export_power_window_json(pw_cfg, title=pw_title)
+            pw_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or pw_exported_dl.filename),
+                "taktcut_power_window",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                pw_exported_dl.json_text.encode("utf-8"),
+                extra_headers={"Content-Disposition": f'attachment; filename="{pw_dl_filename}"'},
+            )
+            return
+
+        if route == "/api/fx/power-window/apply":
+            pw_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            pw_cfg = normalize_power_window_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_pw_doc = apply_power_window_to_document(
+                pw_doc,
+                pw_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            pw_compiled_apply = compile_power_window_filtergraph(pw_cfg)
+            pw_val = validate_timeline(updated_pw_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_pw_doc.model_dump(mode="json"),
+                    "validation": pw_val.model_dump(mode="json"),
+                    "compiled": pw_compiled_apply.model_dump(mode="json"),
                 },
             )
             return

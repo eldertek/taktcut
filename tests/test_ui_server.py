@@ -14281,3 +14281,366 @@ def test_ui_playwright_optical_glow_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_ui_power_window_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/fx/power-window/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 5
+    assert "privacy_plate_pixelate" in meta["preset_ids"]
+    assert "planar_quad" in meta["shape_types"]
+    assert "matte_bw" in meta["view_modes"]
+
+    ev_status, _, ev_raw = _http_call(
+        f"{base_url}/api/fx/power-window/evaluate",
+        method="POST",
+        payload={"config": {"preset_id": "portrait_spotlight_oval"}},
+    )
+    assert ev_status == 200
+    ev_payload = json.loads(ev_raw.decode("utf-8"))
+    assert ev_payload["inside_coverage_pct"] > 1.0
+    assert ev_payload["mean_luma_inside"] > ev_payload["mean_luma_outside"]
+    assert len(ev_payload["interpolated_geometry"]["homography_3x3"]) == 3
+
+    trk_status, _, trk_raw = _http_call(
+        f"{base_url}/api/fx/power-window/track",
+        method="POST",
+        payload={"config": {"preset_id": "billboard_corner_pin"}, "num_keyframes": 7},
+    )
+    assert trk_status == 200
+    trk_payload = json.loads(trk_raw.decode("utf-8"))
+    assert trk_payload["frame_count"] == 7
+    assert len(trk_payload["keyframes"]) == 7
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/power-window/compile",
+        method="POST",
+        payload={"config": {"preset_id": "billboard_corner_pin"}},
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert "geq=" in compiled["vf_chain"]
+    assert "perspective=" in compiled["vf_chain"]
+    assert "maskedmerge" in compiled["vf_chain"]
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/fx/power-window/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "privacy_plate_pixelate"},
+            "title": "Plate Mask",
+            "out_path": "exports/plate_pw.json",
+        },
+    )
+    assert ex_status == 200
+    exported = json.loads(ex_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/plate_pw.json"
+    assert (workspace / "exports" / "plate_pw.json").is_file()
+    assert exported["schema_version"] == "taktcut.power_window.v1"
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/fx/power-window/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "portrait_spotlight_oval"},
+            "out_path": "../escape_pw.json",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    dl_status, dl_headers, dl_raw = _http_call(
+        f"{base_url}/api/fx/power-window/download",
+        method="POST",
+        payload={
+            "config": {"preset_id": "billboard_corner_pin"},
+            "title": "Billboard Pin",
+            "filename": "../../evil_pw.json",
+        },
+    )
+    assert dl_status == 200
+    disp = dl_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "taktcut.power_window.v1" in dl_raw.decode("utf-8")
+
+    # Apply to Timeline document
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+    ap_status, _, ap_raw = _http_call(
+        f"{base_url}/api/fx/power-window/apply",
+        method="POST",
+        payload={
+            "document": doc_payload,
+            "config": {
+                "preset_id": "billboard_corner_pin",
+                "track_keyframes": trk_payload["keyframes"],
+            },
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert ap_status == 200
+    ap_data = json.loads(ap_raw.decode("utf-8"))
+    assert ap_data["changed"] is True
+    assert ap_data["validation"]["valid"] is True
+    pw_clip = ap_data["document"]["tracks"][0]["clips"][0]["power_window"]
+    assert pw_clip["preset_id"] == "billboard_corner_pin"
+    assert len(pw_clip["track_keyframes"]) == 7
+
+    # Node.js static-demo parity check via demo_adapter.js
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getPowerWindowPresets();
+assert.equal(pre.presets.length, 5);
+const ev = await api.evaluatePowerWindow({{
+  config: {{ preset_id: "portrait_spotlight_oval" }}
+}});
+assert.ok(ev.inside_coverage_pct > 1);
+assert.ok(ev.mean_luma_inside > ev.mean_luma_outside);
+const trk = await api.trackPowerWindow({{
+  config: {{ preset_id: "billboard_corner_pin" }},
+  num_keyframes: 7
+}});
+assert.equal(trk.frame_count, 7);
+assert.equal(trk.keyframes.length, 7);
+const comp = await api.compilePowerWindow({{
+  config: {{ preset_id: "billboard_corner_pin" }}
+}});
+assert.ok(comp.vf_chain.includes("perspective="));
+assert.ok(comp.vf_chain.includes("maskedmerge"));
+const exp = await api.exportPowerWindowJson({{
+  config: {{ preset_id: "billboard_corner_pin", track_keyframes: trk.keyframes }},
+  title: "Demo PW"
+}});
+assert.equal(exp.schema_version, "taktcut.power_window.v1");
+const blob = await api.downloadPowerWindowBlob({{
+  config: {{ preset_id: "billboard_corner_pin" }},
+  title: "Demo PW DL"
+}});
+assert.ok((await blob.text()).includes("taktcut.power_window.v1"));
+const sampleDoc = {{
+  title: "Demo",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [{{
+    index: 1,
+    kind: "video",
+    name: "V1",
+    clips: [{{
+      name: "C1",
+      track_index: 1,
+      media_type: "video",
+      start_frame: 0,
+      duration_frames: 100
+    }}]
+  }}]
+}};
+const applied = await api.applyPowerWindow({{
+  document: sampleDoc,
+  config: {{ preset_id: "billboard_corner_pin", track_keyframes: trk.keyframes }},
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(applied.changed, true);
+assert.equal(
+  applied.document.tracks[0].clips[0].power_window.preset_id,
+  "billboard_corner_pin"
+);
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_power_window_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#tab-color")
+            page.click("#tab-color")
+            page.wait_for_selector("#btn-color-power-window-studio")
+
+            # Open Power Window Studio via Shift+W shortcut
+            page.keyboard.press("Shift+W")
+            page.wait_for_selector("#pw-studio-dialog[open]")
+
+            # Switch preset to privacy_plate_pixelate
+            page.click(".pw-preset-btn[data-pw-preset='privacy_plate_pixelate']")
+            page.wait_for_function(
+                "() => (document.getElementById('pw-active-preset-badge')?.textContent || '')"
+                ".includes('PRIVACY PLATE PIXELATE')"
+            )
+
+            # Switch highlight mode to matte_bw and verify canvas updates
+            comp_img = page.evaluate(
+                "() => document.getElementById('pw-viewport-canvas').toDataURL()"
+            )
+            page.click("#btn-pw-view-matte")
+            page.wait_for_function(
+                "() => document.getElementById('btn-pw-view-matte')?.getAttribute('aria-pressed')"
+                " === 'true'"
+            )
+            matte_img = page.evaluate(
+                "() => document.getElementById('pw-viewport-canvas').toDataURL()"
+            )
+            assert matte_img != comp_img
+
+            # Switch back to composite and drag mask center handle directly on canvas
+            page.click("#btn-pw-view-composite")
+            page.wait_for_function(
+                "() => document.getElementById('btn-pw-view-composite')"
+                "?.getAttribute('aria-pressed') === 'true'"
+            )
+            cx_before = float(page.input_value("#pw-studio-cx-num"))
+            drag_info = page.evaluate(
+                """() => {
+                  const c = document.getElementById('pw-viewport-canvas');
+                  const r = c.getBoundingClientRect();
+                  const m = c._pwViewportMeta;
+                  return {
+                    x: r.left + m.handles.move.x,
+                    y: r.top + m.handles.move.y
+                  };
+                }"""
+            )
+            page.mouse.move(drag_info["x"], drag_info["y"])
+            page.mouse.down()
+            page.mouse.move(drag_info["x"] + 48, drag_info["y"] - 24, steps=4)
+            page.mouse.up()
+            cx_after = float(page.input_value("#pw-studio-cx-num"))
+            assert cx_after > cx_before
+
+            # Run Track Motion & scrub keyframes
+            page.click("#btn-pw-run-track")
+            page.wait_for_function(
+                "() => (document.getElementById('pw-telemetry-badge')?.textContent || '')"
+                ".includes('KF 9')"
+            )
+            page.locator("#pw-time-slider").fill("75")
+            page.dispatch_event("#pw-time-slider", "input")
+            page.wait_for_function(
+                "() => (document.getElementById('pw-time-label')?.textContent || '') === '0.75'"
+            )
+
+            # Switch to billboard_corner_pin (4-Pt Planar Quad), inspect tabs, and export JSON
+            page.click(".pw-preset-btn[data-pw-preset='billboard_corner_pin']")
+            page.wait_for_function(
+                "() => (document.getElementById('pw-active-preset-badge')?.textContent || '')"
+                ".includes('BILLBOARD CORNER PIN')"
+            )
+            page.click("#btn-pw-tab-inside")
+            page.wait_for_selector("#pw-inside-ev-num")
+            page.click("#btn-pw-tab-outside")
+            page.wait_for_selector("#pw-vignette-num")
+            page.click("#btn-pw-tab-geometry")
+
+            page.click("#btn-pw-export-json")
+            page.wait_for_function(
+                "() => (document.getElementById('pw-json-preview')?.textContent || '')"
+                ".includes('taktcut.power_window.v1')"
+            )
+            fg_text = page.locator("#pw-fg-output").text_content() or ""
+            assert "perspective=" in fg_text
+
+            # Apply to Timeline & Use in Deliver
+            page.click("#btn-pw-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('pw-status-note')?.textContent || '')"
+                ".includes('Timeline')"
+            )
+            page.click("#btn-pw-send-deliver")
+            page.wait_for_function(
+                "() => !document.getElementById('pw-studio-dialog')?.open"
+            )
+            assert page.locator("#tab-render").get_attribute("aria-selected") == "true"
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#lang-fr")
+            page.click("#tab-color")
+            page.click("#btn-color-power-window-studio")
+            page.wait_for_selector("#pw-studio-dialog[open]")
+            fr_txt = page.locator("#pw-studio-dialog").text_content() or ""
+            assert "Traqueur Planaire" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-pw-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-color-power-window-studio")
+            page.wait_for_selector("#pw-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('pw-studio-dialog').getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-color-power-window-studio",
+                "btn-pw-view-composite",
+                "btn-pw-view-matte",
+                "btn-pw-tab-geometry",
+                "btn-pw-run-track",
+                "btn-pw-apply-timeline",
+                "btn-pw-send-deliver",
+                "btn-close-pw-studio",
+                "pw-studio-cx-num",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-pw-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

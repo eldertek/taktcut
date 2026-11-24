@@ -51,6 +51,7 @@ import {
   evaluateFairlightEqCurveDb,
   evaluateOpticalGlowResponseClient,
   evaluatePeriodicHueCurveClient,
+  evaluatePowerWindowMaskAtUvClient,
   evaluateQualifierKeyerPixelClient,
   evaluateRetimeSourceOffset,
   evaluateTitleMotionState,
@@ -70,6 +71,7 @@ import {
   hasClipDveCrop,
   hasClipDveStyling,
   hasTransformKeyframes,
+  interpolatePowerWindowAtTimeClient,
   isClipTransformIdentity,
   isColorWarperIdentity,
   isCurveChannelIdentity,
@@ -89,6 +91,7 @@ import {
   normalizeOpticalGlowConfigClient,
   normalizePlanarTrackerClient,
   normalizePowerWindow,
+  normalizePowerWindowConfigClient,
   normalizeQualifier,
   normalizeQualifierKeyerConfigClient,
   normalizeStabilizerClient,
@@ -13039,4 +13042,628 @@ export function drawOpticalGlowResponseCanvas(canvas, rawConfig, analysisResult 
   ctx.fillText("HALATION", padL + plotW - 95, 13);
   ctx.fillStyle = "#c084fc";
   ctx.fillText("STREAK", padL + plotW - 38, 13);
+}
+
+// =============================================================================
+// DAVINCI RESOLVE POWER WINDOWS & 4-POINT PLANAR TRACKER VIEWPORT (CYCLE #109)
+// =============================================================================
+
+let _pwBaseSceneCache = null;
+
+function getPwBaseSceneBuffer(bufW = 240, bufH = 135) {
+  if (_pwBaseSceneCache && _pwBaseSceneCache.w === bufW && _pwBaseSceneCache.h === bufH) {
+    return _pwBaseSceneCache;
+  }
+  const rgb = new Float32Array(bufW * bufH * 3);
+  for (let y = 0; y < bufH; y += 1) {
+    const ny = y / Math.max(1, bufH - 1);
+    for (let x = 0; x < bufW; x += 1) {
+      const nx = x / Math.max(1, bufW - 1);
+      let r = 0.09 + 0.05 * (1 - ny);
+      let g = 0.11 + 0.06 * (1 - ny);
+      let b = 0.16 + 0.07 * (1 - ny);
+
+      // Dramatic twilight horizon sky (ny < 0.42)
+      if (ny < 0.42) {
+        const skyT = 1 - ny / 0.42;
+        r = 0.24 + 0.36 * (1 - skyT) + 0.08 * Math.sin(nx * 4.2);
+        g = 0.30 + 0.24 * skyT;
+        b = 0.56 + 0.32 * skyT;
+        if (ny > 0.31 && ny < 0.42) {
+          r += 0.22;
+          g += 0.10;
+        }
+      }
+
+      // City skyline silhouette along horizon
+      const skyLineH = 0.35 + 0.04 * Math.sin(Math.floor(nx * 24) * 1.7);
+      if (ny >= skyLineH && ny < 0.48) {
+        r = 0.07;
+        g = 0.09;
+        b = 0.13;
+      }
+
+      // Road & foreground asphalt (ny >= 0.48)
+      if (ny >= 0.48) {
+        r = 0.13 + 0.04 * Math.sin(nx * 9);
+        g = 0.14 + 0.03 * (1 - ny);
+        b = 0.18 + 0.04 * ny;
+      }
+
+      // Angled rooftop billboard on right (matching billboard_corner_pin quad)
+      const qTop = 0.16 + (nx - 0.53) * 0.20;
+      const qBot = 0.48 + (nx - 0.50) * 0.23;
+      if (nx >= 0.50 && nx <= 0.88 && ny >= qTop && ny <= qBot) {
+        r = 0.84;
+        g = 0.80;
+        b = 0.72;
+        if (nx >= 0.55 && nx <= 0.83 && ny >= qTop + 0.04 && ny <= qBot - 0.04) {
+          r = 0.16 + 0.20 * ((nx - 0.55) / 0.28);
+          g = 0.52;
+          b = 0.88;
+          // Geometric graphic stripe inside billboard
+          if (Math.abs((ny - (qTop + qBot) * 0.5)) < 0.035) {
+            r = 0.96;
+            g = 0.74;
+            b = 0.24;
+          }
+        }
+      }
+
+      // Subject portrait in center-left (matching portrait_spotlight_oval)
+      const dHead = Math.hypot((nx - 0.48) * 1.65, (ny - 0.39) * 1.15);
+      const dTorso = Math.hypot((nx - 0.48) * 1.05, (ny - 0.74) * 0.92);
+      if (dHead < 0.15) {
+        r = 0.72 - 0.22 * dHead + 0.08 * (0.48 - nx);
+        g = 0.52 - 0.16 * dHead + 0.05 * (0.48 - nx);
+        b = 0.42 - 0.12 * dHead;
+        if (dHead > 0.115 && nx < 0.48) {
+          r = 0.92;
+          g = 0.78;
+          b = 0.62;
+        }
+      } else if (dTorso < 0.22 && ny > 0.52) {
+        r = 0.20;
+        g = 0.26;
+        b = 0.38;
+      }
+
+      // Lower-left vehicle bumper & license plate target (matching privacy_plate_pixelate)
+      if (nx >= 0.20 && nx <= 0.48 && ny >= 0.56 && ny <= 0.76) {
+        r = 0.18;
+        g = 0.22;
+        b = 0.28;
+        if (nx >= 0.25 && nx <= 0.43 && ny >= 0.61 && ny <= 0.71) {
+          r = 0.92;
+          g = 0.93;
+          b = 0.95;
+          // Crisp dark alphanumeric bars inside plate so pixelation mosaic is dramatic
+          const cell = Math.floor((nx - 0.25) * 45);
+          if (cell % 2 === 1 && ny >= 0.635 && ny <= 0.685) {
+            r = 0.10;
+            g = 0.12;
+            b = 0.20;
+          }
+        }
+      }
+
+      const idx = (y * bufW + x) * 3;
+      rgb[idx] = clamp01(r);
+      rgb[idx + 1] = clamp01(g);
+      rgb[idx + 2] = clamp01(b);
+    }
+  }
+  _pwBaseSceneCache = { w: bufW, h: bufH, rgb };
+  return _pwBaseSceneCache;
+}
+
+function pwBoxBlurFloatRgb(srcRgb, bufW, bufH, blurPx) {
+  if (blurPx < 0.5) return srcRgb;
+  const rad = Math.max(1, Math.min(5, Math.round(blurPx / 6.0)));
+  const horiz = new Float32Array(srcRgb.length);
+  const denom = rad * 2 + 1;
+  for (let y = 0; y < bufH; y += 1) {
+    const rowOff = y * bufW;
+    for (let x = 0; x < bufW; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      for (let dx = -rad; dx <= rad; dx += 1) {
+        const sx = Math.min(bufW - 1, Math.max(0, x + dx));
+        const si = (rowOff + sx) * 3;
+        ar += srcRgb[si];
+        ag += srcRgb[si + 1];
+        ab += srcRgb[si + 2];
+      }
+      const di = (rowOff + x) * 3;
+      horiz[di] = ar / denom;
+      horiz[di + 1] = ag / denom;
+      horiz[di + 2] = ab / denom;
+    }
+  }
+  const out = new Float32Array(srcRgb.length);
+  for (let y = 0; y < bufH; y += 1) {
+    for (let x = 0; x < bufW; x += 1) {
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      for (let dy = -rad; dy <= rad; dy += 1) {
+        const sy = Math.min(bufH - 1, Math.max(0, y + dy));
+        const si = (sy * bufW + x) * 3;
+        ar += horiz[si];
+        ag += horiz[si + 1];
+        ab += horiz[si + 2];
+      }
+      const di = (y * bufW + x) * 3;
+      out[di] = ar / denom;
+      out[di + 1] = ag / denom;
+      out[di + 2] = ab / denom;
+    }
+  }
+  return out;
+}
+
+function pwPixelateFloatRgb(srcRgb, bufW, bufH, pixelSize) {
+  if (pixelSize <= 1) return srcRgb;
+  const block = Math.max(2, Math.min(12, Math.round(pixelSize / 2.2)));
+  const out = new Float32Array(srcRgb.length);
+  for (let by = 0; by < bufH; by += block) {
+    for (let bx = 0; bx < bufW; bx += block) {
+      const yEnd = Math.min(bufH, by + block);
+      const xEnd = Math.min(bufW, bx + block);
+      let ar = 0;
+      let ag = 0;
+      let ab = 0;
+      let cnt = 0;
+      for (let y = by; y < yEnd; y += 1) {
+        for (let x = bx; x < xEnd; x += 1) {
+          const si = (y * bufW + x) * 3;
+          ar += srcRgb[si];
+          ag += srcRgb[si + 1];
+          ab += srcRgb[si + 2];
+          cnt += 1;
+        }
+      }
+      const mr = ar / cnt;
+      const mg = ag / cnt;
+      const mb = ab / cnt;
+      for (let y = by; y < yEnd; y += 1) {
+        for (let x = bx; x < xEnd; x += 1) {
+          const di = (y * bufW + x) * 3;
+          out[di] = mr;
+          out[di + 1] = mg;
+          out[di + 2] = mb;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export function drawPowerWindowViewportCanvas(canvas, rawConfig, evalResult = null) {
+  if (!canvas) return;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 252);
+  if (!ctx) return;
+
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  const geom =
+    (evalResult && evalResult.interpolated_geometry) ||
+    interpolatePowerWindowAtTimeClient(cfg, cfg.playhead_norm);
+
+  ctx.fillStyle = "#080b10";
+  ctx.fillRect(0, 0, w, h);
+
+  const aspect = 16 / 9;
+  let frameW = w - 16;
+  let frameH = frameW / aspect;
+  if (frameH > h - 16) {
+    frameH = h - 16;
+    frameW = frameH * aspect;
+  }
+  const fx = Math.round((w - frameW) * 0.5);
+  const fy = Math.round((h - frameH) * 0.5);
+
+  const bufW = 240;
+  const bufH = 135;
+  const scene = getPwBaseSceneBuffer(bufW, bufH);
+  const baseRgb = scene.rgb;
+
+  let inRgb = cfg.inside_blur_px >= 0.5 ? pwBoxBlurFloatRgb(baseRgb, bufW, bufH, cfg.inside_blur_px) : baseRgb;
+  if (cfg.inside_pixelate_size > 1) {
+    inRgb = pwPixelateFloatRgb(inRgb, bufW, bufH, cfg.inside_pixelate_size);
+  }
+  const outRgb = cfg.outside_blur_px >= 0.5 ? pwBoxBlurFloatRgb(baseRgb, bufW, bufH, cfg.outside_blur_px) : baseRgb;
+
+  const inGain = Math.pow(2, cfg.inside_exposure_ev * 0.65);
+  const outGain = Math.pow(2, cfg.outside_exposure_ev * 0.65);
+
+  const offCanvas = document.createElement("canvas");
+  offCanvas.width = bufW;
+  offCanvas.height = bufH;
+  const offCtx = offCanvas.getContext("2d");
+  if (offCtx) {
+    const imgData = offCtx.createImageData(bufW, bufH);
+    const data = imgData.data;
+
+    for (let y = 0; y < bufH; y += 1) {
+      const v = y / Math.max(1, bufH - 1);
+      for (let x = 0; x < bufW; x += 1) {
+        const u = x / Math.max(1, bufW - 1);
+        const si = (y * bufW + x) * 3;
+        const m = evaluatePowerWindowMaskAtUvClient(geom, u, v, cfg.width, cfg.height);
+
+        let r = baseRgb[si];
+        let g = baseRgb[si + 1];
+        let b = baseRgb[si + 2];
+
+        if (cfg.enabled) {
+          const ir = clamp01(inRgb[si] * inGain);
+          const ig = clamp01(inRgb[si + 1] * inGain);
+          const ib = clamp01(inRgb[si + 2] * inGain);
+
+          const radDist = Math.hypot((u - 0.5) * 1.4, (v - 0.5) * 1.4);
+          const smoothVig = Math.min(1, Math.max(0, (radDist - 0.35) / 0.70));
+          const vigFactor = 1 - cfg.vignette_opacity * (smoothVig * smoothVig * (3 - 2 * smoothVig));
+          const or = clamp01(outRgb[si] * outGain * vigFactor);
+          const og = clamp01(outRgb[si + 1] * outGain * vigFactor);
+          const ob = clamp01(outRgb[si + 2] * outGain * vigFactor);
+
+          const cr = or + (ir - or) * m;
+          const cg = og + (ig - og) * m;
+          const cb = ob + (ib - ob) * m;
+
+          if (cfg.view_mode === "matte_bw") {
+            r = m;
+            g = m;
+            b = m;
+          } else if (cfg.view_mode === "red_overlay") {
+            const inv = 1 - m;
+            r = clamp01(cr * (1 - 0.55 * inv) + 0.92 * 0.55 * inv);
+            g = clamp01(cg * (1 - 0.55 * inv) + 0.14 * 0.55 * inv);
+            b = clamp01(cb * (1 - 0.55 * inv) + 0.18 * 0.55 * inv);
+          } else {
+            r = cr;
+            g = cg;
+            b = cb;
+          }
+        }
+
+        const di = (y * bufW + x) * 4;
+        data[di] = Math.round(clamp01(r) * 255);
+        data[di + 1] = Math.round(clamp01(g) * 255);
+        data[di + 2] = Math.round(clamp01(b) * 255);
+        data[di + 3] = 255;
+      }
+    }
+    offCtx.putImageData(imgData, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(offCanvas, fx, fy, frameW, frameH);
+  }
+
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.28)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(fx, fy, frameW, frameH);
+
+  // Compute interactive DaVinci Resolve On-Screen Control handles
+  const cxPx = fx + geom.cx * frameW;
+  const cyPx = fy + geom.cy * frameH;
+  const rxPx = Math.max(8, geom.rx * frameW);
+  const ryPx = Math.max(8, geom.ry * frameH);
+  const rad = (geom.rotation_deg * Math.PI) / 180;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+  const toScreen = (lx, ly) => ({
+    x: cxPx + lx * cosR - ly * sinR,
+    y: cyPx + lx * sinR + ly * cosR
+  });
+
+  const softPad = Math.max(4, (geom.softness_px / Math.max(64, Math.min(cfg.width, cfg.height))) * Math.min(frameW, frameH) * 0.5);
+  const showOsc = cfg.view_mode !== "matte_bw" || cfg.view_mode === "wireframe_handles";
+  const strokeMain = cfg.view_mode === "wireframe_handles" ? "#fde047" : "#38bdf8";
+  const strokeFeather = cfg.view_mode === "wireframe_handles" ? "rgba(245, 158, 11, 0.9)" : "rgba(245, 158, 11, 0.72)";
+
+  // Keyframe trajectory breadcrumb curve if multiple keyframes exist
+  const kfs = cfg.track_keyframes || [];
+  if (kfs.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.55)";
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    kfs.forEach((kf, idx) => {
+      const kx = fx + kf.cx * frameW;
+      const ky = fy + kf.cy * frameH;
+      if (idx === 0) ctx.moveTo(kx, ky);
+      else ctx.lineTo(kx, ky);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+    kfs.forEach((kf) => {
+      const kx = fx + kf.cx * frameW;
+      const ky = fy + kf.cy * frameH;
+      ctx.fillStyle = "rgba(245, 158, 11, 0.85)";
+      ctx.fillRect(kx - 2, ky - 2, 4, 4);
+    });
+    ctx.restore();
+  }
+
+  let handlesMeta = {};
+
+  if (geom.shape_type === "planar_quad") {
+    const qPts = geom.quad_corners.map(([qx, qy]) => ({
+      x: fx + qx * frameW,
+      y: fy + qy * frameH
+    }));
+    const qCx = (qPts[0].x + qPts[1].x + qPts[2].x + qPts[3].x) * 0.25;
+    const qCy = (qPts[0].y + qPts[1].y + qPts[2].y + qPts[3].y) * 0.25;
+
+    if (showOsc) {
+      ctx.save();
+      // Internal 3x3 perspective grid lines
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.28)";
+      ctx.lineWidth = 1;
+      for (const frac of [0.33, 0.67]) {
+        ctx.beginPath();
+        ctx.moveTo(qPts[0].x + (qPts[1].x - qPts[0].x) * frac, qPts[0].y + (qPts[1].y - qPts[0].y) * frac);
+        ctx.lineTo(qPts[3].x + (qPts[2].x - qPts[3].x) * frac, qPts[3].y + (qPts[2].y - qPts[3].y) * frac);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(qPts[0].x + (qPts[3].x - qPts[0].x) * frac, qPts[0].y + (qPts[3].y - qPts[0].y) * frac);
+        ctx.lineTo(qPts[1].x + (qPts[2].x - qPts[1].x) * frac, qPts[1].y + (qPts[2].y - qPts[1].y) * frac);
+        ctx.stroke();
+      }
+
+      // Main 4-corner polygon
+      ctx.strokeStyle = strokeMain;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      qPts.forEach((pt, idx) => (idx === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
+      ctx.closePath();
+      ctx.stroke();
+
+      // Center move handle
+      ctx.fillStyle = "#f59e0b";
+      ctx.strokeStyle = "#090c12";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(qCx, qCy, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 4 Planar Corner Pin handles
+      const labels = ["TL", "TR", "BR", "BL"];
+      qPts.forEach((pt, idx) => {
+        ctx.fillStyle = "#38bdf8";
+        ctx.strokeStyle = "#090c12";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "700 8.5px ui-monospace, monospace";
+        ctx.fillText(labels[idx], pt.x + 8, pt.y - 6);
+      });
+      ctx.restore();
+    }
+
+    handlesMeta = {
+      shapeType: "planar_quad",
+      move: { x: qCx, y: qCy },
+      corners: qPts
+    };
+  } else {
+    const rotHandle = toScreen(0, -(geom.shape_type === "linear_gradient" ? 42 : ryPx + 22));
+    const resizeHandle = toScreen(rxPx, geom.shape_type === "linear_gradient" ? 0 : ryPx);
+    const featherHandle = toScreen(rxPx + softPad, 0);
+
+    if (showOsc) {
+      ctx.save();
+      ctx.translate(cxPx, cyPx);
+      ctx.rotate(rad);
+
+      if (geom.shape_type === "ellipse") {
+        ctx.strokeStyle = strokeMain;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rxPx, ryPx, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = strokeFeather;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rxPx + softPad, ryPx + softPad, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (geom.shape_type === "rounded_box") {
+        const cr = clamp01(geom.corner_radius) * Math.min(rxPx, ryPx);
+        const drawRRect = (hw, hh, r) => {
+          const rr = Math.min(r, hw, hh);
+          ctx.beginPath();
+          ctx.moveTo(-hw + rr, -hh);
+          ctx.lineTo(hw - rr, -hh);
+          ctx.quadraticCurveTo(hw, -hh, hw, -hh + rr);
+          ctx.lineTo(hw, hh - rr);
+          ctx.quadraticCurveTo(hw, hh, hw - rr, hh);
+          ctx.lineTo(-hw + rr, hh);
+          ctx.quadraticCurveTo(-hw, hh, -hw, hh - rr);
+          ctx.lineTo(-hw, -hh + rr);
+          ctx.quadraticCurveTo(-hw, -hh, -hw + rr, -hh);
+          ctx.closePath();
+        };
+        ctx.strokeStyle = strokeMain;
+        ctx.lineWidth = 1.8;
+        drawRRect(rxPx, ryPx, cr);
+        ctx.stroke();
+
+        ctx.strokeStyle = strokeFeather;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([4, 3]);
+        drawRRect(rxPx + softPad, ryPx + softPad, cr + softPad * 0.4);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        // linear_gradient
+        const span = Math.max(8, softPad * 2.2);
+        ctx.strokeStyle = strokeMain;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-frameW * 0.42, 0);
+        ctx.lineTo(frameW * 0.42, 0);
+        ctx.stroke();
+
+        ctx.strokeStyle = strokeFeather;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(-frameW * 0.42, -span);
+        ctx.lineTo(frameW * 0.42, -span);
+        ctx.moveTo(-frameW * 0.42, span);
+        ctx.lineTo(frameW * 0.42, span);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Rotation stem
+      ctx.strokeStyle = strokeMain;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(0, geom.shape_type === "linear_gradient" ? 0 : -ryPx);
+      ctx.lineTo(0, geom.shape_type === "linear_gradient" ? -42 : -(ryPx + 22));
+      ctx.stroke();
+      ctx.restore();
+
+      // Draw interactive handle knobs in screen space
+      const drawKnob = (pt, fill, r = 5.5) => {
+        ctx.fillStyle = fill;
+        ctx.strokeStyle = "#090c12";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      };
+      drawKnob({ x: cxPx, y: cyPx }, "#38bdf8", 5.5);
+      drawKnob(rotHandle, "#f59e0b", 5);
+      if (geom.shape_type !== "linear_gradient") {
+        drawKnob(resizeHandle, "#38bdf8", 5.5);
+      }
+      drawKnob(featherHandle, "#fb923c", 4.5);
+    }
+
+    handlesMeta = {
+      shapeType: geom.shape_type,
+      move: { x: cxPx, y: cyPx },
+      rotate: rotHandle,
+      resize: resizeHandle,
+      feather: featherHandle
+    };
+  }
+
+  canvas._pwViewportMeta = {
+    fx,
+    fy,
+    frameW,
+    frameH,
+    cxPx,
+    cyPx,
+    geom,
+    handles: handlesMeta
+  };
+
+  // Top-left Resolve HUD telemetry pill
+  const covPct = evalResult ? Number(evalResult.inside_coverage_pct || 0).toFixed(1) : "0.0";
+  const shapeTag = geom.shape_type.toUpperCase().replace(/_/g, " ");
+  const invTag = cfg.invert_matte ? " INV" : "";
+  ctx.fillStyle = "rgba(10, 12, 16, 0.86)";
+  ctx.fillRect(fx + 6, fy + 6, Math.min(frameW - 12, 248), 18);
+  ctx.fillStyle = cfg.enabled ? "#38bdf8" : "#94a3b8";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.fillText(`${shapeTag}${invTag} | COV ${covPct}% | t=${geom.t_norm.toFixed(2)}`, fx + 12, fy + 18);
+}
+
+export function drawPowerWindowTrackTimelineCanvas(canvas, rawConfig) {
+  if (!canvas) return;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 68);
+  if (!ctx) return;
+
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  ctx.fillStyle = "#090c12";
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 28;
+  const padR = 12;
+  const padT = 16;
+  const padB = 14;
+  const plotW = Math.max(40, w - padL - padR);
+  const plotH = Math.max(20, h - padT - padB);
+
+  // Subtle horizontal lanes
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.16)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL, padT, plotW, plotH);
+  ctx.beginPath();
+  ctx.moveTo(padL, padT + plotH * 0.5);
+  ctx.lineTo(padL + plotW, padT + plotH * 0.5);
+  ctx.stroke();
+
+  const kfs = [...(cfg.track_keyframes || [])].sort((a, b) => a.t_norm - b.t_norm);
+  if (kfs.length > 1) {
+    // cx trajectory (cyan)
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    kfs.forEach((kf, idx) => {
+      const px = padL + kf.t_norm * plotW;
+      const py = padT + (1 - clamp01(kf.cx)) * plotH;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+
+    // cy trajectory (violet)
+    ctx.strokeStyle = "#c084fc";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    kfs.forEach((kf, idx) => {
+      const px = padL + kf.t_norm * plotW;
+      const py = padT + (1 - clamp01(kf.cy)) * plotH;
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  }
+
+  // Diamond keyframe markers
+  kfs.forEach((kf) => {
+    const px = padL + kf.t_norm * plotW;
+    const py = padT + plotH * 0.5;
+    ctx.fillStyle = "#f59e0b";
+    ctx.beginPath();
+    ctx.moveTo(px, py - 5);
+    ctx.lineTo(px + 5, py);
+    ctx.lineTo(px, py + 5);
+    ctx.lineTo(px - 5, py);
+    ctx.closePath();
+    ctx.fill();
+  });
+
+  // Playhead needle
+  const headX = padL + clamp01(cfg.playhead_norm) * plotW;
+  ctx.strokeStyle = "#fb7185";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(headX, 4);
+  ctx.lineTo(headX, h - 4);
+  ctx.stroke();
+
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.fillText("KF", 6, padT + plotH * 0.5 + 3);
+  ctx.fillText(`TRACK KEYS (${kfs.length})`, padL, 11);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText("CX", padL + plotW - 44, 11);
+  ctx.fillStyle = "#c084fc";
+  ctx.fillText("CY", padL + plotW - 20, 11);
 }

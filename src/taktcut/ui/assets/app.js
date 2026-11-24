@@ -24,6 +24,8 @@ import {
   drawMulticamStudioTimelineCanvas,
   drawOpticalGlowPreviewCanvas,
   drawOpticalGlowResponseCanvas,
+  drawPowerWindowTrackTimelineCanvas,
+  drawPowerWindowViewportCanvas,
   drawProgramMonitorCanvas,
   drawQualifierKeyerHistogramCanvas,
   drawQualifierKeyerHslBarCanvas,
@@ -181,6 +183,7 @@ import {
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
   applyOpticalGlowToDocumentClient,
+  applyPowerWindowToDocumentClient,
   applySplitEditJlInDocument,
   auditMediaPoolLinksClient,
   autoSwitchMulticamSpeakersClient,
@@ -204,6 +207,7 @@ import {
   compileMotionSplineFiltergraphClient,
   compileMulticamStudioFiltergraphClient,
   compileOpticalGlowFiltergraphClient,
+  compilePowerWindowFiltergraphClient,
   compileProxyPlanClient,
   compileRetimeFilterClient,
   compileRoughcutSelectFiltergraphClient,
@@ -234,6 +238,7 @@ import {
   createDefaultMulticamStudioConfigClient,
   createDefaultOpticalGlowConfigClient,
   createDefaultPowerWindow,
+  createDefaultPowerWindowConfigClient,
   createDefaultQualifier,
   createDefaultQualifierKeyerConfigClient,
   createEmptyTransformKeyframes,
@@ -252,6 +257,7 @@ import {
   evaluateCurvePchipClient,
   evaluateMotionSplineStudioClient,
   evaluatePowerWindowMask,
+  evaluatePowerWindowSamplesClient,
   evaluateRetimeSpeedAt,
   evaluateTitleMotionState,
   evaluateTrackPointClient,
@@ -260,12 +266,16 @@ import {
   exportMotionSplineJsonClient,
   exportMulticamEdlClient,
   exportOpticalGlowJsonClient,
+  exportPowerWindowJsonClient,
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
+  interpolatePowerWindowAtTimeClient,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   normalizeOpticalGlowConfigClient,
+  normalizePowerWindowConfigClient,
   resolveMulticamStudioSegmentsClient,
+  simulatePowerWindowTrackClient,
   syncMulticamStudioAnglesClient,
   filterTimelineClips,
   findAdjacentCutForClip,
@@ -723,6 +733,20 @@ const state = {
     compiled: null,
     exportedJson: null,
     draggingSplit: false,
+    syncSeq: 0
+  },
+  pwStudio: {
+    isOpen: false,
+    activeTab: "geometry",
+    config: createDefaultPowerWindowConfigClient("portrait_spotlight_oval"),
+    evalResult: null,
+    trackResult: null,
+    compiled: null,
+    exportedJson: null,
+    dragState: null,
+    playing: false,
+    rafId: null,
+    lastTs: 0,
     syncSeq: 0
   },
   autoReframeStudio: {
@@ -13247,6 +13271,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+V", descKey: "shortcuts.key.multicamStudio" },
       { kbd: "Shift+E", descKey: "shortcuts.key.motionSplineStudio" },
       { kbd: "Shift+A", descKey: "shortcuts.key.opticalGlowStudio" },
+      { kbd: "Shift+W", descKey: "shortcuts.key.powerWindowStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13341,6 +13366,22 @@ function handleTransportKeydown(ev) {
     if (ev.key === "Escape") {
       ev.preventDefault();
       closeOpticalGlowStudioDialog();
+    }
+    return;
+  }
+
+  const pwStudioDlg = byId("pw-studio-dialog");
+  if (pwStudioDlg && pwStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closePowerWindowStudioDialog();
+      return;
+    }
+    if (isEditableTarget(ev.target)) return;
+    if ((ev.code === "Space" || ev.key === " ") && !(ev.target instanceof Element && ev.target.tagName === "BUTTON")) {
+      ev.preventDefault();
+      togglePowerWindowTrackPlay();
+      return;
     }
     return;
   }
@@ -13515,6 +13556,11 @@ function handleTransportKeydown(ev) {
     if (lower === "a") {
       ev.preventDefault();
       openOpticalGlowStudioDialog();
+      return;
+    }
+    if (lower === "w") {
+      ev.preventDefault();
+      openPowerWindowStudioDialog();
       return;
     }
   }
@@ -20199,6 +20245,7 @@ function wireEvents() {
   wireMulticamStudioEvents();
   wireMotionSplineStudioEvents();
   wireOpticalGlowStudioEvents();
+  wirePowerWindowStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -27130,6 +27177,748 @@ function wireOpticalGlowStudioEvents() {
       // Clipboard may be unavailable in headless mode
     }
     setOgStudioStatus(t("ogStudio.status.copied"));
+  });
+}
+
+// =============================================================================
+// DAVINCI RESOLVE POWER WINDOWS & 4-POINT PLANAR TRACKER STUDIO (CYCLE #109)
+// =============================================================================
+
+function setPwStudioStatus(text) {
+  const el = byId("pw-status-note");
+  if (el) el.textContent = text;
+}
+
+function refreshPwStudioLocalDerived() {
+  const st = state.pwStudio;
+  st.config = normalizePowerWindowConfigClient(st.config);
+  st.evalResult = evaluatePowerWindowSamplesClient(st.config, {
+    t_norm: st.config.playhead_norm
+  });
+  st.compiled = compilePowerWindowFiltergraphClient(st.config);
+  st.exportedJson = exportPowerWindowJsonClient(st.config, {
+    title: `TAKTCUT_${st.config.preset_id}`
+  });
+}
+
+function renderPowerWindowCanvases() {
+  const st = state.pwStudio;
+  const vpCanvas = byId("pw-viewport-canvas");
+  if (vpCanvas) {
+    drawPowerWindowViewportCanvas(vpCanvas, st.config, st.evalResult);
+  }
+  const trkCanvas = byId("pw-track-canvas");
+  if (trkCanvas) {
+    drawPowerWindowTrackTimelineCanvas(trkCanvas, st.config);
+  }
+}
+
+function switchPowerWindowTab(tabId) {
+  const validTab = ["geometry", "inside", "outside"].includes(tabId) ? tabId : "geometry";
+  state.pwStudio.activeTab = validTab;
+  for (const btn of document.querySelectorAll(".pw-tab-btn[data-pw-tab]")) {
+    const active = btn.getAttribute("data-pw-tab") === validTab;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  for (const panelId of ["pw-panel-geometry", "pw-panel-inside", "pw-panel-outside"]) {
+    const p = byId(panelId);
+    if (p) p.hidden = panelId !== `pw-panel-${validTab}`;
+  }
+}
+
+function syncPowerWindowStudioUI() {
+  const st = state.pwStudio;
+  if (!st.evalResult || !st.compiled) {
+    refreshPwStudioLocalDerived();
+  }
+  const cfg = st.config;
+  const res = st.evalResult;
+  const geom = (res && res.interpolated_geometry) || interpolatePowerWindowAtTimeClient(cfg);
+
+  const presetBadge = byId("pw-active-preset-badge");
+  if (presetBadge) {
+    presetBadge.textContent = String(cfg.preset_id || "custom").toUpperCase().replace(/_/g, " ");
+  }
+  const colorBadge = byId("color-pw-badge");
+  if (colorBadge) {
+    colorBadge.textContent = cfg.enabled
+      ? String(cfg.shape_type || "PW").toUpperCase().replace(/_/g, " ")
+      : "PW OFF";
+  }
+
+  const covPct = Number(res?.inside_coverage_pct || 0).toFixed(1);
+  const kfCount = Array.isArray(cfg.track_keyframes) ? cfg.track_keyframes.length : 0;
+  const telBadge = byId("pw-telemetry-badge");
+  if (telBadge) {
+    telBadge.textContent = `COV ${covPct}% | KF ${kfCount}`;
+  }
+  const lumaBadge = byId("pw-luma-badge");
+  if (lumaBadge) {
+    lumaBadge.textContent = `IN ${Number(res?.mean_luma_inside || 0).toFixed(2)} | OUT ${Number(res?.mean_luma_outside || 0).toFixed(2)}`;
+  }
+
+  const hMat = geom.homography_3x3 || [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const confText = st.trackResult ? Number(st.trackResult.mean_confidence || 0).toFixed(2) : "--";
+  const homoBadge = byId("pw-homography-badge");
+  if (homoBadge) {
+    homoBadge.textContent = `H[0]=${Number(hMat[0][0]).toFixed(2)} | CONF ${confText}`;
+  }
+
+  for (const btn of document.querySelectorAll(".pw-preset-btn[data-pw-preset]")) {
+    const active = btn.getAttribute("data-pw-preset") === cfg.preset_id;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  for (const vBtn of document.querySelectorAll(".pw-view-btn[data-pw-view]")) {
+    const active = vBtn.getAttribute("data-pw-view") === cfg.view_mode;
+    vBtn.classList.toggle("is-active", active);
+    vBtn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const shapeSel = byId("pw-shape-type");
+  if (shapeSel && document.activeElement !== shapeSel) {
+    shapeSel.value = cfg.shape_type;
+  }
+  const invChk = byId("pw-invert-matte");
+  if (invChk) invChk.checked = Boolean(cfg.invert_matte);
+  const enChk = byId("pw-enabled");
+  if (enChk) enChk.checked = Boolean(cfg.enabled);
+
+  const timePct = Math.round(Number(cfg.playhead_norm ?? 0) * 100);
+  const timeSlider = byId("pw-time-slider");
+  if (timeSlider && document.activeElement !== timeSlider) {
+    timeSlider.value = String(timePct);
+  }
+  const timeLbl = byId("pw-time-label");
+  if (timeLbl) timeLbl.textContent = Number(cfg.playhead_norm ?? 0).toFixed(2);
+
+  const playBtn = byId("btn-pw-play-track");
+  if (playBtn) {
+    playBtn.setAttribute("aria-pressed", st.playing ? "true" : "false");
+    playBtn.textContent = st.playing ? "Pause" : t("pwStudio.btn.playTrack");
+  }
+
+  const syncPair = (rangeId, numId, val) => {
+    const rEl = byId(rangeId);
+    if (rEl && document.activeElement !== rEl) rEl.value = String(val);
+    const nEl = byId(numId);
+    if (nEl && document.activeElement !== nEl) nEl.value = String(val);
+  };
+
+  syncPair("pw-studio-cx", "pw-studio-cx-num", Number(geom.cx).toFixed(2));
+  syncPair("pw-studio-cy", "pw-studio-cy-num", Number(geom.cy).toFixed(2));
+  syncPair("pw-rx", "pw-rx-num", Number(geom.rx).toFixed(2));
+  syncPair("pw-ry", "pw-ry-num", Number(geom.ry).toFixed(2));
+  syncPair("pw-rotation", "pw-rotation-num", Number(geom.rotation_deg).toFixed(0));
+  syncPair("pw-softness", "pw-softness-num", Number(geom.softness_px).toFixed(0));
+  syncPair("pw-corner-radius", "pw-corner-radius-num", Number(cfg.corner_radius).toFixed(2));
+
+  syncPair("pw-inside-ev", "pw-inside-ev-num", Number(cfg.inside_exposure_ev).toFixed(2));
+  syncPair("pw-inside-blur", "pw-inside-blur-num", Number(cfg.inside_blur_px).toFixed(1));
+  syncPair("pw-pixelate", "pw-pixelate-num", Number(cfg.inside_pixelate_size).toFixed(0));
+
+  syncPair("pw-outside-ev", "pw-outside-ev-num", Number(cfg.outside_exposure_ev).toFixed(2));
+  syncPair("pw-outside-blur", "pw-outside-blur-num", Number(cfg.outside_blur_px).toFixed(1));
+  syncPair("pw-vignette", "pw-vignette-num", Number(cfg.vignette_opacity).toFixed(2));
+
+  const setNumIfIdle = (id, val, digits = 2) => {
+    const el = byId(id);
+    if (el && document.activeElement !== el) el.value = Number(val).toFixed(digits);
+  };
+  setNumIfIdle("pw-drift-x-num", cfg.track_drift_x, 2);
+  setNumIfIdle("pw-drift-y-num", cfg.track_drift_y, 2);
+  setNumIfIdle("pw-jitter-num", cfg.track_jitter, 3);
+
+  const fgOut = byId("pw-fg-output");
+  if (fgOut && st.compiled) {
+    fgOut.textContent = st.compiled.ffmpeg_command || st.compiled.filter_complex || "";
+  }
+  const jsonOut = byId("pw-json-preview");
+  if (jsonOut && st.exportedJson) {
+    jsonOut.textContent = st.exportedJson.json_text || "";
+  }
+
+  switchPowerWindowTab(st.activeTab);
+  renderPowerWindowCanvases();
+}
+
+async function syncPowerWindowStudioServer() {
+  const st = state.pwStudio;
+  const seq = (st.syncSeq += 1);
+  refreshPwStudioLocalDerived();
+  syncPowerWindowStudioUI();
+  try {
+    const [evRes, compRes] = await Promise.all([
+      api.evaluatePowerWindow({ config: st.config, t_norm: st.config.playhead_norm }),
+      api.compilePowerWindow({ config: st.config })
+    ]);
+    if (seq !== state.pwStudio.syncSeq) return;
+    if (evRes) state.pwStudio.evalResult = evRes;
+    if (compRes) state.pwStudio.compiled = compRes;
+    syncPowerWindowStudioUI();
+  } catch {
+    // Keep client deterministic simulation when offline
+  }
+}
+
+function stopPowerWindowTrackPlay() {
+  const st = state.pwStudio;
+  st.playing = false;
+  if (st.rafId !== null) {
+    cancelAnimationFrame(st.rafId);
+    st.rafId = null;
+  }
+  syncPowerWindowStudioUI();
+}
+
+function togglePowerWindowTrackPlay() {
+  const st = state.pwStudio;
+  if (st.playing) {
+    stopPowerWindowTrackPlay();
+    return;
+  }
+  if (!st.config.track_keyframes || st.config.track_keyframes.length < 2) {
+    const sim = simulatePowerWindowTrackClient(st.config, { num_keyframes: 9 });
+    st.trackResult = sim;
+    st.config = normalizePowerWindowConfigClient({
+      ...st.config,
+      track_keyframes: sim.keyframes
+    });
+  }
+  st.playing = true;
+  st.lastTs = performance.now();
+  const step = (ts) => {
+    if (!state.pwStudio.playing) return;
+    const dt = Math.max(0, Math.min(0.1, (ts - state.pwStudio.lastTs) / 1000));
+    state.pwStudio.lastTs = ts;
+    let nextT = Number(state.pwStudio.config.playhead_norm || 0) + dt * 0.35;
+    if (nextT > 1.0) nextT = 0.0;
+    state.pwStudio.config = normalizePowerWindowConfigClient({
+      ...state.pwStudio.config,
+      playhead_norm: Number(nextT.toFixed(4))
+    });
+    refreshPwStudioLocalDerived();
+    syncPowerWindowStudioUI();
+    state.pwStudio.rafId = requestAnimationFrame(step);
+  };
+  syncPowerWindowStudioUI();
+  st.rafId = requestAnimationFrame(step);
+}
+
+function openPowerWindowStudioDialog() {
+  const dlg = byId("pw-studio-dialog");
+  if (!dlg) return;
+  state.pwStudio.isOpen = true;
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  refreshPwStudioLocalDerived();
+  syncPowerWindowStudioUI();
+  syncPowerWindowStudioServer();
+}
+
+function closePowerWindowStudioDialog() {
+  stopPowerWindowTrackPlay();
+  const dlg = byId("pw-studio-dialog");
+  if (dlg) {
+    if (typeof dlg.close === "function" && dlg.open) dlg.close();
+    else dlg.removeAttribute("open");
+  }
+  state.pwStudio.isOpen = false;
+}
+
+async function runPowerWindowTrackAction() {
+  const st = state.pwStudio;
+  let trkRes = simulatePowerWindowTrackClient(st.config, { num_keyframes: 9 });
+  try {
+    const serverTrk = await api.trackPowerWindow({ config: st.config, num_keyframes: 9 });
+    if (serverTrk && Array.isArray(serverTrk.keyframes)) {
+      trkRes = serverTrk;
+    }
+  } catch {
+    // Keep client deterministic track result
+  }
+  st.trackResult = trkRes;
+  st.config = normalizePowerWindowConfigClient({
+    ...st.config,
+    track_keyframes: trkRes.keyframes
+  });
+  refreshPwStudioLocalDerived();
+  syncPowerWindowStudioUI();
+  setPwStudioStatus(
+    t("pwStudio.status.tracked")
+      .replace("{count}", String(trkRes.frame_count))
+      .replace("{disp}", String(Number(trkRes.total_displacement_px || 0).toFixed(1)))
+      .replace("{conf}", String(Number(trkRes.mean_confidence || 0).toFixed(2)))
+  );
+}
+
+function upsertPowerWindowKeyframeAtCurrentTime() {
+  const st = state.pwStudio;
+  const geom = interpolatePowerWindowAtTimeClient(st.config, st.config.playhead_norm);
+  const tNow = Number(geom.t_norm.toFixed(4));
+  const nextKfs = [...(st.config.track_keyframes || [])].filter(
+    (k) => Math.abs(k.t_norm - tNow) > 0.015
+  );
+  nextKfs.push({
+    t_norm: tNow,
+    cx: geom.cx,
+    cy: geom.cy,
+    rx: geom.rx,
+    ry: geom.ry,
+    rotation_deg: geom.rotation_deg,
+    softness_px: geom.softness_px,
+    quad_corners: geom.quad_corners.map((p) => [...p])
+  });
+  st.config = normalizePowerWindowConfigClient({
+    ...st.config,
+    track_keyframes: nextKfs
+  });
+  refreshPwStudioLocalDerived();
+  syncPowerWindowStudioUI();
+}
+
+async function applyPowerWindowToTimelineAction() {
+  if (!state.timelineDoc) return;
+  const st = state.pwStudio;
+  const selInfo = getSelectedClipTrack();
+  const trackIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyPowerWindow({
+      document: state.timelineDoc,
+      config: st.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      pushTimelineUndoSnapshot("Apply Power Window");
+      applyTimelineMutationResponse(res, { syncClipSelection: true });
+      setPwStudioStatus(t("pwStudio.status.applied"));
+    }
+  } catch (err) {
+    try {
+      const nextDoc = applyPowerWindowToDocumentClient(state.timelineDoc, st.config, {
+        track_index: trackIndex,
+        clip_index: clipIndex
+      });
+      pushTimelineUndoSnapshot("Apply Power Window");
+      state.timelineDoc = nextDoc;
+      renderTimelineUI();
+      setPwStudioStatus(t("pwStudio.status.applied"));
+    } catch {
+      setPwStudioStatus(`Apply failed: ${err.message || err}`);
+    }
+  }
+}
+
+async function sendPowerWindowToDeliverAction() {
+  const st = state.pwStudio;
+  let compiled = st.compiled;
+  try {
+    compiled = await api.compilePowerWindow({ config: st.config });
+    if (compiled) st.compiled = compiled;
+  } catch {
+    compiled = compilePowerWindowFiltergraphClient(st.config);
+  }
+  const outEl = byId("render-filtergraph-preview") || byId("fx-filtergraph-output");
+  if (outEl && compiled && compiled.filter_complex) {
+    outEl.textContent = compiled.filter_complex;
+  }
+  const chk = byId("render-use-studio-fx");
+  if (chk) chk.checked = true;
+  closePowerWindowStudioDialog();
+  switchTab("render");
+  setPwStudioStatus(t("pwStudio.status.deliver"));
+}
+
+async function exportPowerWindowJsonAction() {
+  const st = state.pwStudio;
+  try {
+    const res = await api.exportPowerWindowJson({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`
+    });
+    st.exportedJson = res;
+    const drawer = byId("pw-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncPowerWindowStudioUI();
+    setPwStudioStatus(
+      t("pwStudio.status.exportedJson").replace(
+        "{schema}",
+        String(res.schema_version || "taktcut.power_window.v1")
+      )
+    );
+  } catch (err) {
+    setPwStudioStatus(`JSON export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadPowerWindowJsonAction() {
+  const st = state.pwStudio;
+  const filename = `taktcut_${st.config.preset_id}_power_window.json`;
+  try {
+    const blob = await api.downloadPowerWindowBlob({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`,
+      filename
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setPwStudioStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+function wirePowerWindowStudioEvents() {
+  byId("btn-timeline-power-window-studio")?.addEventListener("click", openPowerWindowStudioDialog);
+  byId("btn-fx-power-window-studio")?.addEventListener("click", openPowerWindowStudioDialog);
+  byId("btn-color-power-window-studio")?.addEventListener("click", openPowerWindowStudioDialog);
+  byId("btn-close-pw-studio")?.addEventListener("click", closePowerWindowStudioDialog);
+
+  const dlg = byId("pw-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closePowerWindowStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closePowerWindowStudioDialog();
+    });
+    dlg.addEventListener("close", () => {
+      stopPowerWindowTrackPlay();
+      state.pwStudio.isOpen = false;
+    });
+  }
+
+  const updatePwConfig = (patch, { customPreset = false, syncServer = false } = {}) => {
+    const curKfs = state.pwStudio.config.track_keyframes || [];
+    let nextPatch = { ...patch };
+    if (curKfs.length > 0 && ("cx" in patch || "cy" in patch || "rx" in patch || "ry" in patch || "rotation_deg" in patch || "softness_px" in patch || "quad_corners" in patch)) {
+      const tNow = Number((state.pwStudio.config.playhead_norm ?? 0).toFixed(4));
+      const geom = interpolatePowerWindowAtTimeClient(state.pwStudio.config, tNow);
+      const updatedKf = {
+        t_norm: tNow,
+        cx: patch.cx ?? geom.cx,
+        cy: patch.cy ?? geom.cy,
+        rx: patch.rx ?? geom.rx,
+        ry: patch.ry ?? geom.ry,
+        rotation_deg: patch.rotation_deg ?? geom.rotation_deg,
+        softness_px: patch.softness_px ?? geom.softness_px,
+        quad_corners: patch.quad_corners ?? geom.quad_corners
+      };
+      const filtered = curKfs.filter((k) => Math.abs(k.t_norm - tNow) > 0.015);
+      filtered.push(updatedKf);
+      nextPatch.track_keyframes = filtered;
+    }
+    state.pwStudio.config = normalizePowerWindowConfigClient({
+      ...state.pwStudio.config,
+      ...(customPreset ? { preset_id: "custom" } : {}),
+      ...nextPatch
+    });
+    refreshPwStudioLocalDerived();
+    syncPowerWindowStudioUI();
+    if (syncServer) {
+      syncPowerWindowStudioServer();
+    }
+  };
+
+  for (const btn of document.querySelectorAll(".pw-preset-btn[data-pw-preset]")) {
+    btn.addEventListener("click", () => {
+      stopPowerWindowTrackPlay();
+      const pid = btn.getAttribute("data-pw-preset") || "portrait_spotlight_oval";
+      const curView = state.pwStudio.config.view_mode || "final_composite";
+      const nextCfg = createDefaultPowerWindowConfigClient(pid);
+      state.pwStudio.trackResult = null;
+      state.pwStudio.config = normalizePowerWindowConfigClient({
+        ...nextCfg,
+        view_mode: curView
+      });
+      refreshPwStudioLocalDerived();
+      syncPowerWindowStudioServer();
+      const res = state.pwStudio.evalResult;
+      setPwStudioStatus(
+        t("pwStudio.status.presetApplied")
+          .replace("{preset}", pid)
+          .replace("{cov}", String(Number(res?.inside_coverage_pct || 0).toFixed(1)))
+      );
+    });
+  }
+
+  for (const vBtn of document.querySelectorAll(".pw-view-btn[data-pw-view]")) {
+    vBtn.addEventListener("click", () => {
+      const vm = vBtn.getAttribute("data-pw-view") || "final_composite";
+      updatePwConfig({ view_mode: vm }, { customPreset: false, syncServer: true });
+    });
+  }
+
+  for (const tabBtn of document.querySelectorAll(".pw-tab-btn[data-pw-tab]")) {
+    tabBtn.addEventListener("click", () => {
+      switchPowerWindowTab(tabBtn.getAttribute("data-pw-tab") || "geometry");
+    });
+  }
+
+  byId("pw-shape-type")?.addEventListener("change", (ev) => {
+    updatePwConfig({ shape_type: ev.target.value }, { customPreset: true, syncServer: true });
+  });
+  byId("pw-invert-matte")?.addEventListener("change", (ev) => {
+    updatePwConfig({ invert_matte: Boolean(ev.target.checked) }, { customPreset: false, syncServer: true });
+  });
+  byId("pw-enabled")?.addEventListener("change", (ev) => {
+    updatePwConfig({ enabled: Boolean(ev.target.checked) }, { customPreset: false, syncServer: true });
+  });
+
+  byId("pw-time-slider")?.addEventListener("input", (ev) => {
+    stopPowerWindowTrackPlay();
+    const pct = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(pct)) {
+      updatePwConfig({ playhead_norm: Math.max(0, Math.min(1, pct / 100)) }, { customPreset: false });
+    }
+  });
+  byId("pw-time-slider")?.addEventListener("change", () => {
+    syncPowerWindowStudioServer();
+  });
+
+  byId("btn-pw-play-track")?.addEventListener("click", togglePowerWindowTrackPlay);
+  byId("btn-pw-run-track")?.addEventListener("click", runPowerWindowTrackAction);
+  byId("btn-pw-add-kf")?.addEventListener("click", upsertPowerWindowKeyframeAtCurrentTime);
+  byId("btn-pw-clear-kf")?.addEventListener("click", () => {
+    stopPowerWindowTrackPlay();
+    state.pwStudio.trackResult = null;
+    state.pwStudio.config = normalizePowerWindowConfigClient({
+      ...state.pwStudio.config,
+      track_keyframes: []
+    });
+    refreshPwStudioLocalDerived();
+    syncPowerWindowStudioServer();
+  });
+
+  const bindRangeAndNum = (rangeId, numId, key, lo, hi, isInt = false) => {
+    const parseVal = (raw) => (isInt ? Number.parseInt(raw, 10) : Number.parseFloat(raw));
+    byId(rangeId)?.addEventListener("input", (ev) => {
+      const v = parseVal(ev.target.value);
+      if (Number.isFinite(v)) {
+        updatePwConfig({ [key]: Math.max(lo, Math.min(hi, v)) }, { customPreset: true });
+      }
+    });
+    byId(rangeId)?.addEventListener("change", () => {
+      syncPowerWindowStudioServer();
+    });
+    byId(numId)?.addEventListener("input", (ev) => {
+      const v = parseVal(ev.target.value);
+      if (Number.isFinite(v) && v >= lo && v <= hi) {
+        updatePwConfig({ [key]: v }, { customPreset: true });
+      }
+    });
+    byId(numId)?.addEventListener("change", (ev) => {
+      const v = parseVal(ev.target.value);
+      const fallback = state.pwStudio.config[key];
+      updatePwConfig(
+        { [key]: Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback },
+        { customPreset: true, syncServer: true }
+      );
+    });
+  };
+
+  bindRangeAndNum("pw-studio-cx", "pw-studio-cx-num", "cx", 0, 1);
+  bindRangeAndNum("pw-studio-cy", "pw-studio-cy-num", "cy", 0, 1);
+  bindRangeAndNum("pw-rx", "pw-rx-num", "rx", 0.02, 0.95);
+  bindRangeAndNum("pw-ry", "pw-ry-num", "ry", 0.02, 0.95);
+  bindRangeAndNum("pw-rotation", "pw-rotation-num", "rotation_deg", -180, 180);
+  bindRangeAndNum("pw-softness", "pw-softness-num", "softness_px", 0, 180);
+  bindRangeAndNum("pw-corner-radius", "pw-corner-radius-num", "corner_radius", 0, 1);
+  bindRangeAndNum("pw-inside-ev", "pw-inside-ev-num", "inside_exposure_ev", -3, 3);
+  bindRangeAndNum("pw-inside-blur", "pw-inside-blur-num", "inside_blur_px", 0, 48);
+  bindRangeAndNum("pw-pixelate", "pw-pixelate-num", "inside_pixelate_size", 1, 64, true);
+  bindRangeAndNum("pw-outside-ev", "pw-outside-ev-num", "outside_exposure_ev", -3, 3);
+  bindRangeAndNum("pw-outside-blur", "pw-outside-blur-num", "outside_blur_px", 0, 48);
+  bindRangeAndNum("pw-vignette", "pw-vignette-num", "vignette_opacity", 0, 1);
+
+  const bindTrackParamNum = (numId, key, lo, hi) => {
+    byId(numId)?.addEventListener("input", (ev) => {
+      const v = Number.parseFloat(ev.target.value);
+      if (Number.isFinite(v) && v >= lo && v <= hi) {
+        updatePwConfig({ [key]: v }, { customPreset: false });
+      }
+    });
+    byId(numId)?.addEventListener("change", (ev) => {
+      const v = Number.parseFloat(ev.target.value);
+      const fallback = state.pwStudio.config[key];
+      updatePwConfig(
+        { [key]: Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback },
+        { customPreset: false, syncServer: true }
+      );
+    });
+  };
+  bindTrackParamNum("pw-drift-x-num", "track_drift_x", -0.5, 0.5);
+  bindTrackParamNum("pw-drift-y-num", "track_drift_y", -0.5, 0.5);
+  bindTrackParamNum("pw-jitter-num", "track_jitter", 0, 0.1);
+
+  // Interactive Power Window Handle & 4-Point Planar Corner-Pin pointer dragging
+  const vpCanvas = byId("pw-viewport-canvas");
+  if (vpCanvas) {
+    const toCanvasPos = (ev) => {
+      const rect = vpCanvas.getBoundingClientRect();
+      return {
+        x: ev.clientX - rect.left,
+        y: ev.clientY - rect.top
+      };
+    };
+
+    vpCanvas.addEventListener("pointerdown", (ev) => {
+      const meta = vpCanvas._pwViewportMeta;
+      if (!meta || !meta.handles) return;
+      const { x, y } = toCanvasPos(ev);
+      const h = meta.handles;
+      const geom = meta.geom;
+      let dragMode = null;
+      let cornerIdx = -1;
+
+      if (h.shapeType === "planar_quad" && Array.isArray(h.corners)) {
+        for (let i = 0; i < h.corners.length; i += 1) {
+          if (Math.hypot(x - h.corners[i].x, y - h.corners[i].y) <= 16) {
+            dragMode = "corner";
+            cornerIdx = i;
+            break;
+          }
+        }
+        if (!dragMode && h.move && Math.hypot(x - h.move.x, y - h.move.y) <= 16) {
+          dragMode = "move_quad";
+        }
+        if (!dragMode) {
+          dragMode = "move_quad";
+        }
+      } else {
+        if (h.rotate && Math.hypot(x - h.rotate.x, y - h.rotate.y) <= 15) {
+          dragMode = "rotate";
+        } else if (h.feather && Math.hypot(x - h.feather.x, y - h.feather.y) <= 15) {
+          dragMode = "feather";
+        } else if (h.resize && h.shapeType !== "linear_gradient" && Math.hypot(x - h.resize.x, y - h.resize.y) <= 15) {
+          dragMode = "resize";
+        } else {
+          dragMode = "move";
+        }
+      }
+
+      ev.preventDefault();
+      state.pwStudio.dragState = {
+        mode: dragMode,
+        cornerIdx,
+        startX: x,
+        startY: y,
+        startGeom: {
+          ...geom,
+          quad_corners: geom.quad_corners.map((p) => [...p])
+        },
+        meta
+      };
+      if (typeof vpCanvas.setPointerCapture === "function") {
+        try { vpCanvas.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
+      }
+    });
+
+    vpCanvas.addEventListener("pointermove", (ev) => {
+      const drag = state.pwStudio.dragState;
+      if (!drag) return;
+      ev.preventDefault();
+      const { x, y } = toCanvasPos(ev);
+      const { frameW, frameH, fx, fy } = drag.meta;
+      const sg = drag.startGeom;
+
+      if (drag.mode === "corner" && drag.cornerIdx >= 0) {
+        const nextQuad = sg.quad_corners.map((p) => [...p]);
+        const u = Math.max(0.01, Math.min(0.99, (x - fx) / Math.max(1, frameW)));
+        const v = Math.max(0.01, Math.min(0.99, (y - fy) / Math.max(1, frameH)));
+        nextQuad[drag.cornerIdx] = [Number(u.toFixed(4)), Number(v.toFixed(4))];
+        const qCx = nextQuad.reduce((acc, p) => acc + p[0], 0) / 4;
+        const qCy = nextQuad.reduce((acc, p) => acc + p[1], 0) / 4;
+        updatePwConfig({ quad_corners: nextQuad, cx: Number(qCx.toFixed(4)), cy: Number(qCy.toFixed(4)) }, { customPreset: false });
+      } else if (drag.mode === "move_quad") {
+        const du = (x - drag.startX) / Math.max(1, frameW);
+        const dv = (y - drag.startY) / Math.max(1, frameH);
+        const nextQuad = sg.quad_corners.map(([qx, qy]) => [
+          Number(Math.max(0, Math.min(1, qx + du)).toFixed(4)),
+          Number(Math.max(0, Math.min(1, qy + dv)).toFixed(4))
+        ]);
+        updatePwConfig(
+          {
+            quad_corners: nextQuad,
+            cx: Number(Math.max(0, Math.min(1, sg.cx + du)).toFixed(4)),
+            cy: Number(Math.max(0, Math.min(1, sg.cy + dv)).toFixed(4))
+          },
+          { customPreset: false }
+        );
+      } else if (drag.mode === "move") {
+        const du = (x - drag.startX) / Math.max(1, frameW);
+        const dv = (y - drag.startY) / Math.max(1, frameH);
+        updatePwConfig(
+          {
+            cx: Number(Math.max(0, Math.min(1, sg.cx + du)).toFixed(4)),
+            cy: Number(Math.max(0, Math.min(1, sg.cy + dv)).toFixed(4))
+          },
+          { customPreset: false }
+        );
+      } else if (drag.mode === "rotate") {
+        const angleRad = Math.atan2(x - drag.meta.cxPx, -(y - drag.meta.cyPx));
+        let deg = Math.round((angleRad * 180) / Math.PI);
+        if (deg > 180) deg -= 360;
+        if (deg < -180) deg += 360;
+        updatePwConfig({ rotation_deg: deg }, { customPreset: false });
+      } else if (drag.mode === "resize") {
+        const rad = -(sg.rotation_deg * Math.PI) / 180;
+        const dx = x - drag.meta.cxPx;
+        const dy = y - drag.meta.cyPx;
+        const lx = Math.abs(dx * Math.cos(rad) - dy * Math.sin(rad));
+        const ly = Math.abs(dx * Math.sin(rad) + dy * Math.cos(rad));
+        updatePwConfig(
+          {
+            rx: Number(Math.max(0.02, Math.min(0.95, lx / Math.max(1, frameW))).toFixed(4)),
+            ry: Number(Math.max(0.02, Math.min(0.95, ly / Math.max(1, frameH))).toFixed(4))
+          },
+          { customPreset: false }
+        );
+      } else if (drag.mode === "feather") {
+        const rad = -(sg.rotation_deg * Math.PI) / 180;
+        const dx = x - drag.meta.cxPx;
+        const dy = y - drag.meta.cyPx;
+        const lx = Math.abs(dx * Math.cos(rad) - dy * Math.sin(rad));
+        const rxPx = sg.rx * frameW;
+        const extraPx = Math.max(0, lx - rxPx);
+        const softPx = Math.round(Math.max(0, Math.min(180, (extraPx / Math.max(1, Math.min(frameW, frameH))) * 1080 * 2)));
+        updatePwConfig({ softness_px: softPx }, { customPreset: false });
+      }
+    });
+
+    const endDrag = () => {
+      if (state.pwStudio.dragState) {
+        state.pwStudio.dragState = null;
+        syncPowerWindowStudioServer();
+      }
+    };
+    vpCanvas.addEventListener("pointerup", endDrag);
+    vpCanvas.addEventListener("pointercancel", endDrag);
+  }
+
+  byId("btn-pw-apply-timeline")?.addEventListener("click", applyPowerWindowToTimelineAction);
+  byId("btn-pw-send-deliver")?.addEventListener("click", sendPowerWindowToDeliverAction);
+  byId("btn-pw-export-json")?.addEventListener("click", exportPowerWindowJsonAction);
+  byId("btn-pw-download-json")?.addEventListener("click", downloadPowerWindowJsonAction);
+  byId("btn-pw-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.pwStudio.compiled || compilePowerWindowFiltergraphClient(state.pwStudio.config);
+    try {
+      await navigator.clipboard.writeText(compiled.filter_complex || "");
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    setPwStudioStatus(t("pwStudio.status.copied"));
   });
 }
 

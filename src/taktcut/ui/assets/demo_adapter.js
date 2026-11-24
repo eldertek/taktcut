@@ -12,6 +12,9 @@ import {
   ALLOWED_OPTICAL_GLOW_BLEND_MODES,
   ALLOWED_OPTICAL_GLOW_PRESET_IDS,
   ALLOWED_OPTICAL_GLOW_VIEW_MODES,
+  ALLOWED_POWER_WINDOW_PRESET_IDS,
+  ALLOWED_POWER_WINDOW_SHAPE_TYPES,
+  ALLOWED_POWER_WINDOW_VIEW_MODES,
   ALLOWED_QUALIFIER_CUBE_MODES,
   ALLOWED_QUALIFIER_DESPILL_MODES,
   ALLOWED_QUALIFIER_HIGHLIGHT_MODES,
@@ -37,6 +40,7 @@ import {
   MULTICAM_STUDIO_PRESETS_CLIENT,
   OPTICAL_GLOW_PRESETS_CLIENT,
   PLANAR_TRACKER_PRESETS_CLIENT,
+  POWER_WINDOW_PRESETS_CLIENT,
   QUALIFIER_KEYER_PRESETS_CLIENT,
   QUALIFIER_PRESETS,
   STABILIZER_PRESETS_CLIENT,
@@ -77,6 +81,7 @@ import {
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
   applyOpticalGlowToDocumentClient,
+  applyPowerWindowToDocumentClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
@@ -107,6 +112,7 @@ import {
   compileOpticalGlowFiltergraphClient,
   compileMulticamFiltergraphClient,
   compilePlanarTrackerFilterClient,
+  compilePowerWindowFiltergraphClient,
   compileRetimeFilterClient,
   compileRetimeRampSetptsClient,
   compileSplitEditFiltergraphClient,
@@ -125,6 +131,7 @@ import {
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
   createDefaultOpticalGlowConfigClient,
+  createDefaultPowerWindowConfigClient,
   createDefaultQualifierKeyerConfigClient,
   createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
@@ -133,9 +140,11 @@ import {
   detectAudioTransientsClient,
   estimateRenderFileSize,
   evaluateMotionSplineStudioClient,
+  evaluatePowerWindowSamplesClient,
   evaluateTitleMotionState,
   exportMotionSplineJsonClient,
   exportOpticalGlowJsonClient,
+  exportPowerWindowJsonClient,
   exportMulticamEdlClient,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
@@ -148,8 +157,10 @@ import {
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   normalizeOpticalGlowConfigClient,
+  normalizePowerWindowConfigClient,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
+  simulatePowerWindowTrackClient,
   syncMulticamStudioAnglesClient,
   parseCubeLutTextClient,
   resolveRetimeRampPointsForPreset,
@@ -4387,6 +4398,99 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/optical-glow/apply", { method: "POST", body: payload });
+    },
+    async getPowerWindowPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: POWER_WINDOW_PRESETS_CLIENT,
+          preset_ids: ALLOWED_POWER_WINDOW_PRESET_IDS,
+          shape_types: ALLOWED_POWER_WINDOW_SHAPE_TYPES,
+          view_modes: ALLOWED_POWER_WINDOW_VIEW_MODES,
+          default_config: createDefaultPowerWindowConfigClient()
+        };
+      }
+      return requestJson("/api/fx/power-window/presets");
+    },
+    async evaluatePowerWindow(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizePowerWindowConfigClient(p.config ? p.config : p);
+        return evaluatePowerWindowSamplesClient(cfg, {
+          t_norm: p.t_norm !== undefined ? Number(p.t_norm) : undefined
+        });
+      }
+      return requestJson("/api/fx/power-window/evaluate", { method: "POST", body: payload });
+    },
+    async trackPowerWindow(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizePowerWindowConfigClient(p.config ? p.config : p);
+        return simulatePowerWindowTrackClient(cfg, {
+          num_keyframes: p.num_keyframes,
+          drift_x: p.drift_x,
+          drift_y: p.drift_y,
+          jitter: p.jitter,
+          rotation_drift_deg: p.rotation_drift_deg
+        });
+      }
+      return requestJson("/api/fx/power-window/track", { method: "POST", body: payload });
+    },
+    async compilePowerWindow(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizePowerWindowConfigClient(p.config ? p.config : p);
+        return compilePowerWindowFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/power-window/compile", { method: "POST", body: payload });
+    },
+    async exportPowerWindowJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizePowerWindowConfigClient(p.config ? p.config : p);
+        return exportPowerWindowJsonClient(cfg, {
+          title: p.title || "TAKTCUT_POWER_WINDOW"
+        });
+      }
+      return requestJson("/api/fx/power-window/export-json", { method: "POST", body: payload });
+    },
+    async downloadPowerWindowBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizePowerWindowConfigClient(p.config ? p.config : p);
+        const exp = exportPowerWindowJsonClient(cfg, {
+          title: p.title || "TAKTCUT_POWER_WINDOW"
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/power-window/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyPowerWindow(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyPowerWindowToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compilePowerWindowFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/power-window/apply", { method: "POST", body: payload });
     }
   };
 }

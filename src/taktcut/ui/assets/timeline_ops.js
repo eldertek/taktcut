@@ -19184,3 +19184,1006 @@ export function applyOpticalGlowToDocumentClient(doc, rawConfig, opts = {}) {
   };
   return nextDoc;
 }
+
+// =============================================================================
+// DAVINCI RESOLVE POWER WINDOWS & 4-POINT PLANAR TRACKER STUDIO (CYCLE #109)
+// =============================================================================
+
+export const ALLOWED_POWER_WINDOW_PRESET_IDS = [
+  "portrait_spotlight_oval",
+  "privacy_plate_pixelate",
+  "cinema_horizon_grad",
+  "billboard_corner_pin",
+  "custom"
+];
+
+export const ALLOWED_POWER_WINDOW_SHAPE_TYPES = [
+  "ellipse",
+  "rounded_box",
+  "linear_gradient",
+  "planar_quad"
+];
+
+export const ALLOWED_POWER_WINDOW_VIEW_MODES = [
+  "final_composite",
+  "matte_bw",
+  "red_overlay",
+  "wireframe_handles"
+];
+
+export const DEFAULT_PW_QUAD_CORNERS_CLIENT = [
+  [0.28, 0.22],
+  [0.72, 0.18],
+  [0.76, 0.68],
+  [0.24, 0.72]
+];
+
+function pwStudioClamp(val, lo, hi, fallback = lo) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function pwStudioClamp01(val) {
+  return pwStudioClamp(val, 0, 1, 0);
+}
+
+function pwStudioSmoothstep(edge0, edge1, x) {
+  if (edge1 <= edge0) return x >= edge1 ? 1 : 0;
+  const t = pwStudioClamp01((x - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+function pwStudioLerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function pwStudioRec709Luma(r, g, b) {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function pwStudioNormalizeQuad(raw, fallback = DEFAULT_PW_QUAD_CORNERS_CLIENT) {
+  if (!Array.isArray(raw) || raw.length !== 4) {
+    return fallback.map((pt) => [pt[0], pt[1]]);
+  }
+  return raw.map((pt, idx) => {
+    const fb = fallback[idx] || [0.5, 0.5];
+    if (!Array.isArray(pt) || pt.length < 2) return [fb[0], fb[1]];
+    return [pwStudioClamp(pt[0], 0, 1, fb[0]), pwStudioClamp(pt[1], 0, 1, fb[1])];
+  });
+}
+
+export const POWER_WINDOW_PRESETS_CLIENT = [
+  {
+    preset_id: "portrait_spotlight_oval",
+    label: "Portrait Spotlight Oval",
+    category: "Beauty & Key Light",
+    description:
+      "Soft elliptical subject key lift (+0.55 EV) with outside background falloff (-0.65 EV, 10px lens blur, 35% radial vignette).",
+    default_config: {
+      enabled: true,
+      preset_id: "portrait_spotlight_oval",
+      shape_type: "ellipse",
+      cx: 0.48,
+      cy: 0.43,
+      rx: 0.20,
+      ry: 0.30,
+      rotation_deg: -4.0,
+      corner_radius: 0.22,
+      softness_px: 38.0,
+      invert_matte: false,
+      quad_corners: [[0.28, 0.20], [0.68, 0.20], [0.68, 0.68], [0.28, 0.68]],
+      inside_exposure_ev: 0.55,
+      outside_exposure_ev: -0.65,
+      inside_blur_px: 0.0,
+      outside_blur_px: 10.0,
+      inside_pixelate_size: 1,
+      vignette_opacity: 0.35,
+      view_mode: "final_composite",
+      playhead_norm: 0.0,
+      track_drift_x: 0.05,
+      track_drift_y: -0.02,
+      track_jitter: 0.005,
+      track_keyframes: [],
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "privacy_plate_pixelate",
+    label: "Privacy Plate Pixelate",
+    category: "Broadcast Compliance",
+    description:
+      "Tracked rounded-box anonymizer applying an 18px mosaic + 6px pre-blur strictly inside the mask for license plates or faces.",
+    default_config: {
+      enabled: true,
+      preset_id: "privacy_plate_pixelate",
+      shape_type: "rounded_box",
+      cx: 0.34,
+      cy: 0.66,
+      rx: 0.14,
+      ry: 0.09,
+      rotation_deg: 2.0,
+      corner_radius: 0.28,
+      softness_px: 12.0,
+      invert_matte: false,
+      quad_corners: [[0.20, 0.56], [0.48, 0.56], [0.48, 0.76], [0.20, 0.76]],
+      inside_exposure_ev: -0.10,
+      outside_exposure_ev: 0.0,
+      inside_blur_px: 6.0,
+      outside_blur_px: 0.0,
+      inside_pixelate_size: 18,
+      vignette_opacity: 0.0,
+      view_mode: "final_composite",
+      playhead_norm: 0.0,
+      track_drift_x: 0.16,
+      track_drift_y: 0.03,
+      track_jitter: 0.006,
+      track_keyframes: [],
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "cinema_horizon_grad",
+    label: "Cinema Horizon Grad",
+    category: "Sky & Landscape ND",
+    description:
+      "Wide feathered linear ND gradient (-0.90 EV upper sky pull-down) with subtle cinema vignette.",
+    default_config: {
+      enabled: true,
+      preset_id: "cinema_horizon_grad",
+      shape_type: "linear_gradient",
+      cx: 0.50,
+      cy: 0.36,
+      rx: 0.45,
+      ry: 0.26,
+      rotation_deg: -3.0,
+      corner_radius: 0.10,
+      softness_px: 72.0,
+      invert_matte: false,
+      quad_corners: [[0.10, 0.08], [0.90, 0.08], [0.90, 0.42], [0.10, 0.42]],
+      inside_exposure_ev: -0.90,
+      outside_exposure_ev: 0.10,
+      inside_blur_px: 0.0,
+      outside_blur_px: 0.0,
+      inside_pixelate_size: 1,
+      vignette_opacity: 0.22,
+      view_mode: "final_composite",
+      playhead_norm: 0.0,
+      track_drift_x: 0.02,
+      track_drift_y: 0.01,
+      track_jitter: 0.002,
+      track_keyframes: [],
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "billboard_corner_pin",
+    label: "Billboard 4-Pt Planar Pin",
+    category: "Planar Tracker & Screen Insert",
+    description:
+      "4-point DLT homography planar screen-pin mask isolating an angled billboard with inside lift and outside falloff.",
+    default_config: {
+      enabled: true,
+      preset_id: "billboard_corner_pin",
+      shape_type: "planar_quad",
+      cx: 0.68,
+      cy: 0.38,
+      rx: 0.18,
+      ry: 0.18,
+      rotation_deg: 0.0,
+      corner_radius: 0.05,
+      softness_px: 14.0,
+      invert_matte: false,
+      quad_corners: [[0.53, 0.16], [0.88, 0.23], [0.84, 0.56], [0.50, 0.48]],
+      inside_exposure_ev: 0.45,
+      outside_exposure_ev: -0.45,
+      inside_blur_px: 0.0,
+      outside_blur_px: 5.0,
+      inside_pixelate_size: 1,
+      vignette_opacity: 0.18,
+      view_mode: "final_composite",
+      playhead_norm: 0.0,
+      track_drift_x: -0.09,
+      track_drift_y: 0.04,
+      track_jitter: 0.007,
+      track_keyframes: [],
+      width: 1920,
+      height: 1080
+    }
+  },
+  {
+    preset_id: "custom",
+    label: "Custom Power Window",
+    category: "User Defined",
+    description: "Clean custom elliptical Power Window ready for manual handle sculpting.",
+    default_config: {
+      enabled: true,
+      preset_id: "custom",
+      shape_type: "ellipse",
+      cx: 0.50,
+      cy: 0.50,
+      rx: 0.24,
+      ry: 0.24,
+      rotation_deg: 0.0,
+      corner_radius: 0.20,
+      softness_px: 28.0,
+      invert_matte: false,
+      quad_corners: [[0.28, 0.25], [0.72, 0.25], [0.72, 0.75], [0.28, 0.75]],
+      inside_exposure_ev: 0.25,
+      outside_exposure_ev: -0.25,
+      inside_blur_px: 0.0,
+      outside_blur_px: 4.0,
+      inside_pixelate_size: 1,
+      vignette_opacity: 0.15,
+      view_mode: "final_composite",
+      playhead_norm: 0.0,
+      track_drift_x: 0.06,
+      track_drift_y: 0.0,
+      track_jitter: 0.004,
+      track_keyframes: [],
+      width: 1920,
+      height: 1080
+    }
+  }
+];
+
+export function createDefaultPowerWindowConfigClient(presetId = "portrait_spotlight_oval") {
+  const found =
+    POWER_WINDOW_PRESETS_CLIENT.find((p) => p.preset_id === presetId) ||
+    POWER_WINDOW_PRESETS_CLIENT[0];
+  return {
+    ...found.default_config,
+    quad_corners: pwStudioNormalizeQuad(found.default_config.quad_corners),
+    track_keyframes: []
+  };
+}
+
+export function normalizePowerWindowConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const presetId = ALLOWED_POWER_WINDOW_PRESET_IDS.includes(src.preset_id)
+    ? src.preset_id
+    : "portrait_spotlight_oval";
+  const base = createDefaultPowerWindowConfigClient(presetId);
+  const shapeType = ALLOWED_POWER_WINDOW_SHAPE_TYPES.includes(src.shape_type)
+    ? src.shape_type
+    : base.shape_type;
+  const viewMode = ALLOWED_POWER_WINDOW_VIEW_MODES.includes(src.view_mode)
+    ? src.view_mode
+    : base.view_mode;
+
+  const widthRaw = Math.round(pwStudioClamp(src.width ?? base.width, 64, 7680, 1920));
+  const heightRaw = Math.round(pwStudioClamp(src.height ?? base.height, 64, 4320, 1080));
+  const width = widthRaw - (widthRaw % 2);
+  const height = heightRaw - (heightRaw % 2);
+
+  const rawKfs = Array.isArray(src.track_keyframes) ? src.track_keyframes : base.track_keyframes;
+  const kfs = rawKfs
+    .filter((k) => k && typeof k === "object")
+    .map((k) => ({
+      t_norm: Number(pwStudioClamp(k.t_norm, 0, 1, 0).toFixed(4)),
+      cx: Number(pwStudioClamp(k.cx, 0, 1, base.cx).toFixed(5)),
+      cy: Number(pwStudioClamp(k.cy, 0, 1, base.cy).toFixed(5)),
+      rx: Number(pwStudioClamp(k.rx, 0.02, 0.95, base.rx).toFixed(5)),
+      ry: Number(pwStudioClamp(k.ry, 0.02, 0.95, base.ry).toFixed(5)),
+      rotation_deg: Number(pwStudioClamp(k.rotation_deg, -180, 180, base.rotation_deg).toFixed(3)),
+      softness_px: Number(pwStudioClamp(k.softness_px, 0, 180, base.softness_px).toFixed(2)),
+      quad_corners: pwStudioNormalizeQuad(k.quad_corners, base.quad_corners)
+    }))
+    .sort((a, b) => a.t_norm - b.t_norm);
+
+  return {
+    enabled: src.enabled !== undefined ? Boolean(src.enabled) : base.enabled,
+    preset_id: presetId,
+    shape_type: shapeType,
+    cx: pwStudioClamp(src.cx ?? base.cx, 0, 1, base.cx),
+    cy: pwStudioClamp(src.cy ?? base.cy, 0, 1, base.cy),
+    rx: pwStudioClamp(src.rx ?? base.rx, 0.02, 0.95, base.rx),
+    ry: pwStudioClamp(src.ry ?? base.ry, 0.02, 0.95, base.ry),
+    rotation_deg: pwStudioClamp(src.rotation_deg ?? base.rotation_deg, -180, 180, base.rotation_deg),
+    corner_radius: pwStudioClamp(src.corner_radius ?? base.corner_radius, 0, 1, base.corner_radius),
+    softness_px: pwStudioClamp(src.softness_px ?? base.softness_px, 0, 180, base.softness_px),
+    invert_matte: src.invert_matte !== undefined ? Boolean(src.invert_matte) : base.invert_matte,
+    quad_corners: pwStudioNormalizeQuad(src.quad_corners, base.quad_corners),
+    inside_exposure_ev: pwStudioClamp(
+      src.inside_exposure_ev ?? base.inside_exposure_ev,
+      -3,
+      3,
+      base.inside_exposure_ev
+    ),
+    outside_exposure_ev: pwStudioClamp(
+      src.outside_exposure_ev ?? base.outside_exposure_ev,
+      -3,
+      3,
+      base.outside_exposure_ev
+    ),
+    inside_blur_px: pwStudioClamp(src.inside_blur_px ?? base.inside_blur_px, 0, 48, base.inside_blur_px),
+    outside_blur_px: pwStudioClamp(src.outside_blur_px ?? base.outside_blur_px, 0, 48, base.outside_blur_px),
+    inside_pixelate_size: Math.round(
+      pwStudioClamp(src.inside_pixelate_size ?? base.inside_pixelate_size, 1, 64, base.inside_pixelate_size)
+    ),
+    vignette_opacity: pwStudioClamp(
+      src.vignette_opacity ?? base.vignette_opacity,
+      0,
+      1,
+      base.vignette_opacity
+    ),
+    view_mode: viewMode,
+    playhead_norm: pwStudioClamp(src.playhead_norm ?? base.playhead_norm, 0, 1, 0),
+    track_drift_x: pwStudioClamp(src.track_drift_x ?? base.track_drift_x, -0.5, 0.5, base.track_drift_x),
+    track_drift_y: pwStudioClamp(src.track_drift_y ?? base.track_drift_y, -0.5, 0.5, base.track_drift_y),
+    track_jitter: pwStudioClamp(src.track_jitter ?? base.track_jitter, 0, 0.1, base.track_jitter),
+    track_keyframes: kfs,
+    width,
+    height
+  };
+}
+
+function pwSolveLinear8x8(matrix, rhs) {
+  const n = 8;
+  const a = matrix.map((row, idx) => [...row, rhs[idx]]);
+  for (let col = 0; col < n; col += 1) {
+    let pivotRow = col;
+    let pivotVal = Math.abs(a[col][col]);
+    for (let row = col + 1; row < n; row += 1) {
+      const cand = Math.abs(a[row][col]);
+      if (cand > pivotVal) {
+        pivotVal = cand;
+        pivotRow = row;
+      }
+    }
+    if (pivotVal < 1e-11) return null;
+    if (pivotRow !== col) {
+      const tmp = a[col];
+      a[col] = a[pivotRow];
+      a[pivotRow] = tmp;
+    }
+    const diag = a[col][col];
+    for (let j = col; j <= n; j += 1) a[col][j] /= diag;
+    for (let row = 0; row < n; row += 1) {
+      if (row === col) continue;
+      const factor = a[row][col];
+      if (Math.abs(factor) < 1e-14) continue;
+      for (let j = col; j <= n; j += 1) a[row][j] -= factor * a[col][j];
+    }
+  }
+  return a.map((row) => row[n]);
+}
+
+export function computePlanarHomographyDltClient(srcQuad, dstQuad) {
+  const rows = [];
+  const rhs = [];
+  for (let i = 0; i < 4; i += 1) {
+    const [x, y] = srcQuad[i];
+    const [u, v] = dstQuad[i];
+    rows.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
+    rhs.push(u);
+    rows.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
+    rhs.push(v);
+  }
+  const sol = pwSolveLinear8x8(rows, rhs);
+  if (!sol) {
+    return [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  }
+  return [
+    [Number(sol[0].toFixed(6)), Number(sol[1].toFixed(6)), Number(sol[2].toFixed(6))],
+    [Number(sol[3].toFixed(6)), Number(sol[4].toFixed(6)), Number(sol[5].toFixed(6))],
+    [Number(sol[6].toFixed(6)), Number(sol[7].toFixed(6)), 1]
+  ];
+}
+
+export function interpolatePowerWindowAtTimeClient(rawConfig, tNorm = null) {
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  const tVal = pwStudioClamp01(tNorm === null || tNorm === undefined ? cfg.playhead_norm : tNorm);
+  const kfs = [...cfg.track_keyframes].sort((a, b) => a.t_norm - b.t_norm);
+
+  let cx = cfg.cx;
+  let cy = cfg.cy;
+  let rx = cfg.rx;
+  let ry = cfg.ry;
+  let rot = cfg.rotation_deg;
+  let soft = cfg.softness_px;
+  let quad = cfg.quad_corners;
+
+  if (kfs.length === 1 || (kfs.length > 1 && tVal <= kfs[0].t_norm)) {
+    const k0 = kfs[0];
+    cx = k0.cx;
+    cy = k0.cy;
+    rx = k0.rx;
+    ry = k0.ry;
+    rot = k0.rotation_deg;
+    soft = k0.softness_px;
+    quad = k0.quad_corners;
+  } else if (kfs.length > 1 && tVal >= kfs[kfs.length - 1].t_norm) {
+    const kn = kfs[kfs.length - 1];
+    cx = kn.cx;
+    cy = kn.cy;
+    rx = kn.rx;
+    ry = kn.ry;
+    rot = kn.rotation_deg;
+    soft = kn.softness_px;
+    quad = kn.quad_corners;
+  } else if (kfs.length > 1) {
+    let lo = kfs[0];
+    let hi = kfs[kfs.length - 1];
+    for (let i = 0; i < kfs.length - 1; i += 1) {
+      if (kfs[i].t_norm <= tVal && tVal <= kfs[i + 1].t_norm) {
+        lo = kfs[i];
+        hi = kfs[i + 1];
+        break;
+      }
+    }
+    const span = hi.t_norm - lo.t_norm;
+    const alpha = span <= 1e-9 ? 0 : pwStudioClamp01((tVal - lo.t_norm) / span);
+    cx = pwStudioLerp(lo.cx, hi.cx, alpha);
+    cy = pwStudioLerp(lo.cy, hi.cy, alpha);
+    rx = pwStudioLerp(lo.rx, hi.rx, alpha);
+    ry = pwStudioLerp(lo.ry, hi.ry, alpha);
+    rot = pwStudioLerp(lo.rotation_deg, hi.rotation_deg, alpha);
+    soft = pwStudioLerp(lo.softness_px, hi.softness_px, alpha);
+    quad = [0, 1, 2, 3].map((idx) => [
+      Number(pwStudioClamp01(pwStudioLerp(lo.quad_corners[idx][0], hi.quad_corners[idx][0], alpha)).toFixed(5)),
+      Number(pwStudioClamp01(pwStudioLerp(lo.quad_corners[idx][1], hi.quad_corners[idx][1], alpha)).toFixed(5))
+    ]);
+  }
+
+  const hMat = computePlanarHomographyDltClient([[0, 0], [1, 0], [1, 1], [0, 1]], quad);
+  return {
+    t_norm: Number(tVal.toFixed(4)),
+    shape_type: cfg.shape_type,
+    cx: Number(cx.toFixed(5)),
+    cy: Number(cy.toFixed(5)),
+    rx: Number(rx.toFixed(5)),
+    ry: Number(ry.toFixed(5)),
+    rotation_deg: Number(rot.toFixed(3)),
+    corner_radius: cfg.corner_radius,
+    softness_px: Number(soft.toFixed(2)),
+    invert_matte: cfg.invert_matte,
+    quad_corners: quad,
+    homography_3x3: hMat
+  };
+}
+
+export function simulatePowerWindowTrackClient(rawConfig, opts = {}) {
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  const count = Math.max(2, Math.min(33, Math.round(Number(opts.num_keyframes ?? 9))));
+  const dx = opts.drift_x !== undefined ? pwStudioClamp(opts.drift_x, -0.5, 0.5, cfg.track_drift_x) : cfg.track_drift_x;
+  const dy = opts.drift_y !== undefined ? pwStudioClamp(opts.drift_y, -0.5, 0.5, cfg.track_drift_y) : cfg.track_drift_y;
+  const jit = opts.jitter !== undefined ? pwStudioClamp(opts.jitter, 0, 0.1, cfg.track_jitter) : cfg.track_jitter;
+  const rotDrift = Number(opts.rotation_drift_deg ?? 4.0);
+
+  const keyframes = [];
+  const residuals = [];
+  const confs = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const t = i / (count - 1);
+    const easeT = t * t * (3 - 2 * t);
+    const jx = i > 0 ? jit * Math.sin(t * Math.PI * 5 + 0.4) : 0;
+    const jy = i > 0 ? jit * Math.cos(t * Math.PI * 4 + 1.1) : 0;
+
+    const offX = dx * easeT + jx;
+    const offY = dy * easeT + jy;
+    const curCx = pwStudioClamp01(cfg.cx + offX);
+    const curCy = pwStudioClamp01(cfg.cy + offY);
+    const scaleMod = 1 + 0.06 * Math.sin(t * Math.PI);
+    const curRx = pwStudioClamp(cfg.rx * scaleMod, 0.02, 0.95, cfg.rx);
+    const curRy = pwStudioClamp(cfg.ry * scaleMod, 0.02, 0.95, cfg.ry);
+    const curRot = pwStudioClamp(cfg.rotation_deg + rotDrift * easeT, -180, 180, cfg.rotation_deg);
+
+    const quad = cfg.quad_corners.map(([qx, qy], qIdx) => {
+      const perspSkew = 0.014 * easeT * (qIdx === 1 || qIdx === 2 ? 1 : -0.5);
+      const nx = pwStudioClamp01(qx + offX + perspSkew);
+      const ny = pwStudioClamp01(qy + offY + 0.008 * easeT * (qIdx === 2 || qIdx === 3 ? 1 : -0.4));
+      return [Number(nx.toFixed(5)), Number(ny.toFixed(5))];
+    });
+
+    residuals.push(Math.hypot(jx * cfg.width, jy * cfg.height));
+    confs.push(pwStudioClamp(0.99 - jit * 2.2 - 0.04 * Math.abs(t - 0.5), 0.72, 0.995, 0.96));
+
+    keyframes.push({
+      t_norm: Number(t.toFixed(4)),
+      cx: Number(curCx.toFixed(5)),
+      cy: Number(curCy.toFixed(5)),
+      rx: Number(curRx.toFixed(5)),
+      ry: Number(curRy.toFixed(5)),
+      rotation_deg: Number(curRot.toFixed(3)),
+      softness_px: Number(cfg.softness_px.toFixed(2)),
+      quad_corners: quad
+    });
+  }
+
+  const totalDispPx = Math.hypot(dx * cfg.width, dy * cfg.height);
+  const meanConf = confs.reduce((a, b) => a + b, 0) / confs.length;
+  const maxRes = residuals.length ? Math.max(...residuals) : 0;
+  const geomNow = interpolatePowerWindowAtTimeClient({ ...cfg, track_keyframes: keyframes }, cfg.playhead_norm);
+
+  return {
+    preset_id: cfg.preset_id,
+    shape_type: cfg.shape_type,
+    frame_count: count,
+    total_displacement_px: Number(totalDispPx.toFixed(2)),
+    mean_confidence: Number(meanConf.toFixed(4)),
+    max_residual_px: Number(maxRes.toFixed(3)),
+    homography_3x3: geomNow.homography_3x3,
+    keyframes
+  };
+}
+
+function pwPointInPolygon(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i += 1) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi || 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function pwDistPointToSegment(px, py, ax, ay, bx, by) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const wx = px - ax;
+  const wy = py - ay;
+  const c1 = wx * vx + wy * vy;
+  if (c1 <= 0) return Math.hypot(px - ax, py - ay);
+  const c2 = vx * vx + vy * vy;
+  if (c2 <= c1) return Math.hypot(px - bx, py - by);
+  const t = c1 / c2;
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+}
+
+export function evaluatePowerWindowMaskAtUvClient(geom, u, v, width = 1920, height = 1080) {
+  const refDim = Math.max(64, Math.min(width, height));
+  const softNorm = Math.max(0.002, Number(geom.softness_px || 0) / refDim);
+  const rad = -(Number(geom.rotation_deg || 0) * Math.PI) / 180;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+  const du = u - geom.cx;
+  const dv = v - geom.cy;
+  const lx = du * cosR - dv * sinR;
+  const ly = du * sinR + dv * cosR;
+
+  let matte = 0;
+  if (geom.shape_type === "ellipse") {
+    const rx = Math.max(0.015, geom.rx);
+    const ry = Math.max(0.015, geom.ry);
+    const dist = Math.hypot(lx / rx, ly / ry);
+    const featherRel = softNorm / Math.max(0.02, Math.min(rx, ry));
+    matte = 1 - pwStudioSmoothstep(1 - featherRel * 0.5, 1 + featherRel * 0.5, dist);
+  } else if (geom.shape_type === "rounded_box") {
+    const rx = Math.max(0.015, geom.rx);
+    const ry = Math.max(0.015, geom.ry);
+    const cr = pwStudioClamp(geom.corner_radius, 0, 0.95, 0.22) * Math.min(rx, ry);
+    const qx = Math.abs(lx) - (rx - cr);
+    const qy = Math.abs(ly) - (ry - cr);
+    const sdf = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - cr;
+    matte = 1 - pwStudioSmoothstep(-softNorm * 0.5, softNorm * 0.5, sdf);
+  } else if (geom.shape_type === "linear_gradient") {
+    const halfSpan = Math.max(0.02, softNorm * 1.45);
+    matte = 1 - pwStudioSmoothstep(-halfSpan, halfSpan, ly);
+  } else {
+    const quad = geom.quad_corners || DEFAULT_PW_QUAD_CORNERS_CLIENT;
+    const inside = pwPointInPolygon(u, v, quad);
+    let minEdge = Infinity;
+    for (let i = 0; i < 4; i += 1) {
+      const a = quad[i];
+      const b = quad[(i + 1) % 4];
+      const d = pwDistPointToSegment(u, v, a[0], a[1], b[0], b[1]);
+      if (d < minEdge) minEdge = d;
+    }
+    const sdf = inside ? -minEdge : minEdge;
+    matte = 1 - pwStudioSmoothstep(-softNorm * 0.5, softNorm * 0.5, sdf);
+  }
+
+  matte = pwStudioClamp01(matte);
+  if (geom.invert_matte) matte = 1 - matte;
+  return matte;
+}
+
+function buildPwSyntheticSceneClient(w = 24, h = 16) {
+  const out = [];
+  for (let y = 0; y < h; y += 1) {
+    const ny = y / Math.max(1, h - 1);
+    for (let x = 0; x < w; x += 1) {
+      const nx = x / Math.max(1, w - 1);
+      let r = 0.14 + 0.06 * nx;
+      let g = 0.16 + 0.06 * (1 - ny);
+      let b = 0.20 + 0.05 * ny;
+      if (ny < 0.45) {
+        r = 0.24 + 0.16 * (1 - ny);
+        g = 0.34 + 0.18 * (1 - ny);
+        b = 0.58 + 0.22 * (1 - ny);
+      }
+      if (nx >= 0.52 && nx <= 0.88 && ny >= 0.18 && ny <= 0.54) {
+        r = 0.78;
+        g = 0.72;
+        b = 0.62;
+        if (nx >= 0.58 && nx <= 0.82 && ny >= 0.26 && ny <= 0.46) {
+          r = 0.22;
+          g = 0.56;
+          b = 0.88;
+        }
+      }
+      const dHead = Math.hypot((nx - 0.48) * 1.5, ny - 0.40);
+      if (dHead < 0.18) {
+        r = 0.68 - 0.18 * dHead;
+        g = 0.48 - 0.12 * dHead;
+        b = 0.38 - 0.10 * dHead;
+      }
+      if (nx >= 0.24 && nx <= 0.44 && ny >= 0.60 && ny <= 0.74) {
+        r = 0.86;
+        g = 0.88;
+        b = 0.90;
+        if (Math.abs(nx - 0.34) < 0.05 && Math.abs(ny - 0.67) < 0.03) {
+          r = 0.18;
+          g = 0.20;
+          b = 0.28;
+        }
+      }
+      out.push([pwStudioClamp01(r), pwStudioClamp01(g), pwStudioClamp01(b)]);
+    }
+  }
+  return out;
+}
+
+export function evaluatePowerWindowSamplesClient(rawConfig, opts = {}) {
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  const geom = interpolatePowerWindowAtTimeClient(cfg, opts.t_norm ?? null);
+  const rgbList = buildPwSyntheticSceneClient(24, 16);
+  const w = 24;
+  const h = 16;
+  const total = rgbList.length;
+
+  const inGain = Math.pow(2, cfg.inside_exposure_ev * 0.65);
+  const outGain = Math.pow(2, cfg.outside_exposure_ev * 0.65);
+
+  const mattes = [];
+  const histBefore = new Array(16).fill(0);
+  const histAfter = new Array(16).fill(0);
+  let lumaBeforeSum = 0;
+  let lumaAfterSum = 0;
+  let inLumaSum = 0;
+  let inWeightSum = 0;
+  let outLumaSum = 0;
+  let outWeightSum = 0;
+  let coveredCount = 0;
+  const previewRgb = [];
+
+  for (let idx = 0; idx < total; idx += 1) {
+    const [br, bg, bb] = rgbList[idx];
+    const px = idx % w;
+    const py = Math.floor(idx / w);
+    const u = px / Math.max(1, w - 1);
+    const v = py / Math.max(1, h - 1);
+
+    const lumBefore = pwStudioRec709Luma(br, bg, bb);
+    lumaBeforeSum += lumBefore;
+    histBefore[Math.min(15, Math.max(0, Math.floor(pwStudioClamp01(lumBefore) * 15.9999)))] += 1;
+
+    const m = evaluatePowerWindowMaskAtUvClient(geom, u, v, cfg.width, cfg.height);
+    mattes.push(Number(m.toFixed(4)));
+    if (m >= 0.5) coveredCount += 1;
+
+    let outR = br;
+    let outG = bg;
+    let outB = bb;
+    if (cfg.enabled) {
+      const inR = pwStudioClamp01(br * inGain);
+      const inG = pwStudioClamp01(bg * inGain);
+      const inB = pwStudioClamp01(bb * inGain);
+      const radDist = Math.hypot((u - 0.5) * 1.4, (v - 0.5) * 1.4);
+      const vigFactor = 1 - cfg.vignette_opacity * pwStudioSmoothstep(0.35, 1.05, radDist);
+      const outRBase = pwStudioClamp01(br * outGain * vigFactor);
+      const outGBase = pwStudioClamp01(bg * outGain * vigFactor);
+      const outBBase = pwStudioClamp01(bb * outGain * vigFactor);
+
+      const compR = pwStudioLerp(outRBase, inR, m);
+      const compG = pwStudioLerp(outGBase, inG, m);
+      const compB = pwStudioLerp(outBBase, inB, m);
+
+      if (cfg.view_mode === "matte_bw") {
+        outR = m;
+        outG = m;
+        outB = m;
+      } else if (cfg.view_mode === "red_overlay") {
+        const inv = 1 - m;
+        outR = pwStudioClamp01(compR * (1 - 0.55 * inv) + 0.92 * 0.55 * inv);
+        outG = pwStudioClamp01(compG * (1 - 0.55 * inv) + 0.14 * 0.55 * inv);
+        outB = pwStudioClamp01(compB * (1 - 0.55 * inv) + 0.18 * 0.55 * inv);
+      } else {
+        outR = compR;
+        outG = compG;
+        outB = compB;
+      }
+    }
+
+    const lumAfter = pwStudioRec709Luma(outR, outG, outB);
+    lumaAfterSum += lumAfter;
+    histAfter[Math.min(15, Math.max(0, Math.floor(pwStudioClamp01(lumAfter) * 15.9999)))] += 1;
+    inLumaSum += lumAfter * m;
+    inWeightSum += m;
+    outLumaSum += lumAfter * (1 - m);
+    outWeightSum += 1 - m;
+    previewRgb.push([Number(outR.toFixed(4)), Number(outG.toFixed(4)), Number(outB.toFixed(4))]);
+  }
+
+  return {
+    preset_id: cfg.preset_id,
+    shape_type: cfg.shape_type,
+    view_mode: cfg.view_mode,
+    t_norm: geom.t_norm,
+    sample_count: total,
+    width: w,
+    height: h,
+    inside_coverage_pct: Number(((100 * coveredCount) / total).toFixed(2)),
+    mean_luma_inside: Number((inWeightSum > 1e-6 ? inLumaSum / inWeightSum : 0).toFixed(4)),
+    mean_luma_outside: Number((outWeightSum > 1e-6 ? outLumaSum / outWeightSum : 0).toFixed(4)),
+    mean_luma_before: Number((lumaBeforeSum / total).toFixed(4)),
+    mean_luma_after: Number((lumaAfterSum / total).toFixed(4)),
+    luma_histogram_before: histBefore,
+    luma_histogram_after: histAfter,
+    matte_map: mattes,
+    preview_rgb_map: previewRgb,
+    interpolated_geometry: geom
+  };
+}
+
+function compilePwGeqExprClient(geom, width, height) {
+  const rad = -(geom.rotation_deg * Math.PI) / 180;
+  const cosR = Number(Math.cos(rad).toFixed(5));
+  const sinR = Number(Math.sin(rad).toFixed(5));
+  const softNorm = Number(Math.max(0.004, geom.softness_px / Math.max(64, Math.min(width, height))).toFixed(5));
+  const du = `((X/W)-${Number(geom.cx.toFixed(4))})`;
+  const dv = `((Y/H)-${Number(geom.cy.toFixed(4))})`;
+  const lx = `(${du}*${cosR}-${dv}*${sinR})`;
+  const ly = `(${du}*${sinR}+${dv}*${cosR})`;
+
+  let core = "";
+  if (geom.shape_type === "ellipse") {
+    const rx = Number(Math.max(0.015, geom.rx).toFixed(4));
+    const ry = Number(Math.max(0.015, geom.ry).toFixed(4));
+    const fRel = Number(Math.max(0.01, softNorm / Math.max(0.02, Math.min(rx, ry))).toFixed(4));
+    core = `clip(1-((hypot(${lx}/${rx},${ly}/${ry})-(1-${fRel}*0.5))/${fRel}),0,1)`;
+  } else if (geom.shape_type === "rounded_box") {
+    const rx = Number(Math.max(0.015, geom.rx).toFixed(4));
+    const ry = Number(Math.max(0.015, geom.ry).toFixed(4));
+    const cr = Number((pwStudioClamp(geom.corner_radius, 0, 0.95, 0.22) * Math.min(rx, ry)).toFixed(4));
+    const qx = `(abs(${lx})-${Number(Math.max(0.001, rx - cr).toFixed(4))})`;
+    const qy = `(abs(${ly})-${Number(Math.max(0.001, ry - cr).toFixed(4))})`;
+    const sdf = `(hypot(max(${qx},0),max(${qy},0))+min(max(${qx},${qy}),0)-${cr})`;
+    core = `clip(0.5-(${sdf}/${softNorm}),0,1)`;
+  } else if (geom.shape_type === "linear_gradient") {
+    const span = Number(Math.max(0.02, softNorm * 2.2).toFixed(4));
+    core = `clip(0.5-(${ly}/${span}),0,1)`;
+  } else {
+    const xs = geom.quad_corners.map((p) => p[0]);
+    const ys = geom.quad_corners.map((p) => p[1]);
+    const qcx = Number((xs.reduce((a, b) => a + b, 0) / 4).toFixed(4));
+    const qcy = Number((ys.reduce((a, b) => a + b, 0) / 4).toFixed(4));
+    const qrx = Number(Math.max(0.02, (Math.max(...xs) - Math.min(...xs)) * 0.5).toFixed(4));
+    const qry = Number(Math.max(0.02, (Math.max(...ys) - Math.min(...ys)) * 0.5).toFixed(4));
+    const qDist = `max(abs((X/W)-${qcx})/${qrx},abs((Y/H)-${qcy})/${qry})`;
+    core = `clip(1-((${qDist}-(1-${softNorm}))/${Math.max(0.02, softNorm)}),0,1)`;
+  }
+  return geom.invert_matte ? `(1-(${core}))` : core;
+}
+
+export function compilePowerWindowFiltergraphClient(rawConfig) {
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  const geom = interpolatePowerWindowAtTimeClient(cfg, cfg.playhead_norm);
+  const warnings = [];
+
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      preset_id: cfg.preset_id,
+      shape_type: cfg.shape_type,
+      view_mode: cfg.view_mode,
+      has_planar_pin: false,
+      has_pixelate: false,
+      vf_chain: "null",
+      filter_complex: "[0:v]null[vout]",
+      ffmpeg_command: 'ffmpeg -i input.mp4 -vf "null" output.mp4',
+      warnings: ["Power Window bypass active (enabled=false)."]
+    };
+  }
+
+  const maskExpr = compilePwGeqExprClient(geom, cfg.width, cfg.height);
+  if (cfg.view_mode === "matte_bw") {
+    const chain = `format=gray,geq=lum='255*${maskExpr}',format=yuv420p`;
+    return {
+      enabled: true,
+      preset_id: cfg.preset_id,
+      shape_type: cfg.shape_type,
+      view_mode: cfg.view_mode,
+      has_planar_pin: cfg.shape_type === "planar_quad",
+      has_pixelate: cfg.inside_pixelate_size > 1,
+      vf_chain: chain,
+      filter_complex: `[0:v]${chain}[vout]`,
+      ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "[0:v]${chain}[vout]" -map "[vout]" output.mp4`,
+      warnings
+    };
+  }
+
+  const evToEq = (ev) => {
+    const bright = Number(pwStudioClamp(ev * 0.18, -0.8, 0.8, 0).toFixed(4));
+    const contrast = Number(pwStudioClamp(1 + ev * 0.12, 0.4, 2.0, 1).toFixed(4));
+    return `eq=brightness=${bright}:contrast=${contrast}`;
+  };
+
+  const inFilters = [];
+  if (Math.abs(cfg.inside_exposure_ev) > 0.01) inFilters.push(evToEq(cfg.inside_exposure_ev));
+  if (cfg.inside_blur_px >= 0.5) {
+    inFilters.push(`gblur=sigma=${Number(Math.max(0.5, cfg.inside_blur_px * 0.55).toFixed(2))}:steps=2`);
+  }
+  const hasPixelate = cfg.inside_pixelate_size > 1;
+  if (hasPixelate) {
+    const pixW = Math.max(16, Math.floor(cfg.width / Math.max(2, cfg.inside_pixelate_size)));
+    const pixH = Math.max(16, Math.floor(cfg.height / Math.max(2, cfg.inside_pixelate_size)));
+    inFilters.push(
+      `crop=w=${cfg.width}:h=${cfg.height}:x=0:y=0,` +
+      `scale=${pixW}:${pixH}:flags=neighbor,` +
+      `scale=${cfg.width}:${cfg.height}:flags=neighbor`
+    );
+  }
+  const hasPlanarPin = cfg.shape_type === "planar_quad";
+  if (hasPlanarPin) {
+    const q = geom.quad_corners;
+    const x0 = Number((q[0][0] * cfg.width).toFixed(1));
+    const y0 = Number((q[0][1] * cfg.height).toFixed(1));
+    const x1 = Number((q[1][0] * cfg.width).toFixed(1));
+    const y1 = Number((q[1][1] * cfg.height).toFixed(1));
+    const x2 = Number((q[3][0] * cfg.width).toFixed(1));
+    const y2 = Number((q[3][1] * cfg.height).toFixed(1));
+    const x3 = Number((q[2][0] * cfg.width).toFixed(1));
+    const y3 = Number((q[2][1] * cfg.height).toFixed(1));
+    inFilters.push(
+      `perspective=x0=${x0}:y0=${y0}:x1=${x1}:y1=${y1}:x2=${x2}:y2=${y2}:x3=${x3}:y3=${y3}:interpolation=linear:sense=destination`
+    );
+  }
+  const inChain = inFilters.length ? inFilters.join(",") : "null";
+
+  const outFilters = [];
+  if (Math.abs(cfg.outside_exposure_ev) > 0.01) outFilters.push(evToEq(cfg.outside_exposure_ev));
+  if (cfg.outside_blur_px >= 0.5) {
+    const lumaR = Math.max(1, Math.min(32, Math.round(cfg.outside_blur_px * 0.45)));
+    outFilters.push(`boxblur=luma_radius=${lumaR}:luma_power=2`);
+  }
+  if (cfg.vignette_opacity > 0.01) {
+    const vigAngle = Number(pwStudioClamp(0.35 + cfg.vignette_opacity * 0.85, 0.2, 1.4, 0.5).toFixed(3));
+    outFilters.push(`vignette=angle=${vigAngle}:mode=forward`);
+  }
+  const outChain = outFilters.length ? outFilters.join(",") : "null";
+
+  const parts = [
+    "[0:v]format=yuv420p,split=3[pw_in_src][pw_out_src][pw_mask_src]",
+    `[pw_in_src]${inChain}[pw_inside]`,
+    `[pw_out_src]${outChain}[pw_outside]`,
+    `[pw_mask_src]format=gray,geq=lum='255*${maskExpr}'[pw_matte]`,
+    "[pw_outside][pw_inside][pw_matte]maskedmerge[pw_comp]"
+  ];
+  if (cfg.view_mode === "red_overlay") {
+    parts.push(
+      "[pw_comp]format=rgb24," +
+      `geq=r='clip(r(X,Y)+120*(1-${maskExpr}),0,255)':` +
+      `g='clip(g(X,Y)*(0.55+0.45*${maskExpr}),0,255)':` +
+      `b='clip(b(X,Y)*(0.55+0.45*${maskExpr}),0,255)',format=yuv420p[vout]`
+    );
+  } else {
+    parts.push("[pw_comp]format=yuv420p[vout]");
+  }
+  const filterComplex = parts.join(";");
+  return {
+    enabled: true,
+    preset_id: cfg.preset_id,
+    shape_type: cfg.shape_type,
+    view_mode: cfg.view_mode,
+    has_planar_pin: hasPlanarPin,
+    has_pixelate: hasPixelate,
+    vf_chain: filterComplex,
+    filter_complex: filterComplex,
+    ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "${filterComplex}" -map "[vout]" output.mp4`,
+    warnings
+  };
+}
+
+export function exportPowerWindowJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  const geom = interpolatePowerWindowAtTimeClient(cfg, cfg.playhead_norm);
+  const compiled = compilePowerWindowFiltergraphClient(cfg);
+  const rawTitle = String(opts.title || "TAKTCUT_POWER_WINDOW").trim();
+  const cleanTitle = rawTitle.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "TAKTCUT_POWER_WINDOW";
+  const hosts = [
+    "DaVinci Resolve Studio Color",
+    "Adobe Premiere Lumetri Mask",
+    "FFmpeg MaskedMerge / Perspective"
+  ];
+  const payload = {
+    schema_version: "taktcut.power_window.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: hosts,
+    geometry: {
+      enabled: cfg.enabled,
+      shape_type: cfg.shape_type,
+      cx: geom.cx,
+      cy: geom.cy,
+      rx: geom.rx,
+      ry: geom.ry,
+      rotation_deg: geom.rotation_deg,
+      corner_radius: cfg.corner_radius,
+      softness_px: geom.softness_px,
+      invert_matte: cfg.invert_matte,
+      quad_corners: geom.quad_corners.map((p) => [...p])
+    },
+    homography_3x3: geom.homography_3x3,
+    effects: {
+      inside_exposure_ev: cfg.inside_exposure_ev,
+      outside_exposure_ev: cfg.outside_exposure_ev,
+      inside_blur_px: cfg.inside_blur_px,
+      outside_blur_px: cfg.outside_blur_px,
+      inside_pixelate_size: cfg.inside_pixelate_size,
+      vignette_opacity: cfg.vignette_opacity
+    },
+    view_mode: cfg.view_mode,
+    track_keyframes: cfg.track_keyframes.map((k) => ({ ...k, quad_corners: k.quad_corners.map((p) => [...p]) })),
+    ffmpeg_filter_complex: compiled.filter_complex
+  };
+  return {
+    schema_version: "taktcut.power_window.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: hosts,
+    json_text: JSON.stringify(payload, null, 2),
+    filename: `${cleanTitle.toLowerCase()}_${cfg.preset_id}_power_window.json`,
+    saved_path: null
+  };
+}
+
+export function applyPowerWindowToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const cfg = normalizePowerWindowConfigClient(rawConfig);
+  const evalRes = evaluatePowerWindowSamplesClient(cfg);
+  const compiled = compilePowerWindowFiltergraphClient(cfg);
+  const geom = evalRes.interpolated_geometry;
+  const trackIndex = Number(opts.track_index || 1);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === "video" && t.index === trackIndex)
+    || (nextDoc.tracks || []).find((t) => t.kind === "video");
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error(`Video track V${trackIndex} has no clips`);
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, Number(opts.clip_index || 0)));
+  trk.clips[safeIdx] = {
+    ...trk.clips[safeIdx],
+    power_window: {
+      enabled: cfg.enabled,
+      preset_id: cfg.preset_id,
+      shape_type: cfg.shape_type,
+      cx: geom.cx,
+      cy: geom.cy,
+      rx: geom.rx,
+      ry: geom.ry,
+      rotation_deg: geom.rotation_deg,
+      corner_radius: cfg.corner_radius,
+      softness_px: geom.softness_px,
+      invert_matte: cfg.invert_matte,
+      quad_corners: geom.quad_corners.map((p) => [...p]),
+      inside_exposure_ev: cfg.inside_exposure_ev,
+      outside_exposure_ev: cfg.outside_exposure_ev,
+      inside_blur_px: cfg.inside_blur_px,
+      outside_blur_px: cfg.outside_blur_px,
+      inside_pixelate_size: cfg.inside_pixelate_size,
+      vignette_opacity: cfg.vignette_opacity,
+      view_mode: cfg.view_mode,
+      inside_coverage_pct: evalRes.inside_coverage_pct,
+      homography_3x3: geom.homography_3x3,
+      ffmpeg_vf: compiled.vf_chain.slice(0, 16384),
+      track_keyframes: cfg.track_keyframes.map((k) => ({ ...k, quad_corners: k.quad_corners.map((p) => [...p]) }))
+    }
+  };
+  return nextDoc;
+}
