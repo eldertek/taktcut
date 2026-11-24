@@ -1,10 +1,15 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
+  ALLOWED_CST_GAMUT_MAPPING_MODES,
+  ALLOWED_CST_TONE_MAPPING_MODES,
   ASPECT_RATIO_PRESETS,
   AUTO_REFRAME_ASPECT_SPECS_CLIENT,
   AUTO_REFRAME_MOTION_PRESETS_CLIENT,
   BROADCAST_STANDARDS_CLIENT,
   COLOR_CURVE_PRESETS,
+  CST_INPUT_SPACES_CLIENT,
+  CST_OUTPUT_SPACES_CLIENT,
+  CST_PRESETS_CLIENT,
   FALSE_COLOR_PALETTES_CLIENT,
   COLOR_WARPER_BOUNDS,
   COLOR_WARPER_HUE_COUNT,
@@ -41,6 +46,7 @@ import {
   analyzeAutoReframeClient,
   analyzeAvSyncClient,
   analyzeBroadcastComplianceClient,
+  analyzeCstPipelineClient,
   analyzeAudioSpectrumClient,
   analyzeClipSceneCutsClient,
   analyzeClipTranscriptClient,
@@ -53,6 +59,7 @@ import {
   autoRelinkAllInDocumentClient,
   clearAutoReframeFromDocumentClient,
   clearProxiesInDocument,
+  generateCstCubeTextClient,
   generateProxiesInDocument,
   relinkClipInDocumentClient,
   toggleClipOfflineInDocumentClient,
@@ -62,6 +69,7 @@ import {
   compileBroadcastFilterClient,
   compileColorNodeChainClient,
   compileCompoundFiltergraphClient,
+  compileCstFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
@@ -83,6 +91,7 @@ import {
   countSyncLockedTracks,
   createColorNode,
   createCompoundClipInDocument,
+  createDefaultCstConfigClient,
   createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
   deleteMulticamCutInDocument,
@@ -3939,6 +3948,71 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/timeline/auto-reframe/clear", { method: "POST", body: payload });
+    },
+    async getCstPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          input_spaces: Object.values(CST_INPUT_SPACES_CLIENT),
+          output_spaces: Object.values(CST_OUTPUT_SPACES_CLIENT),
+          presets: CST_PRESETS_CLIENT,
+          tone_mapping_modes: ALLOWED_CST_TONE_MAPPING_MODES,
+          gamut_mapping_modes: ALLOWED_CST_GAMUT_MAPPING_MODES,
+          default_config: createDefaultCstConfigClient()
+        };
+      }
+      return requestJson("/api/color/cst/presets");
+    },
+    async compileCst(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileCstFiltergraphClient(payload && payload.config ? payload.config : payload);
+      }
+      return requestJson("/api/color/cst/compile", { method: "POST", body: payload });
+    },
+    async analyzeCst(payload) {
+      if (resolvedMode === "static-demo") {
+        return analyzeCstPipelineClient(payload && payload.config ? payload.config : payload);
+      }
+      return requestJson("/api/color/cst/analyze", { method: "POST", body: payload });
+    },
+    async bakeCstCube(payload) {
+      if (resolvedMode === "static-demo") {
+        const size = Number(payload && payload.size ? payload.size : 33);
+        const title = String((payload && payload.title) || "taktcut_cst_transform").trim() || "taktcut_cst_transform";
+        const cfg = payload && payload.config ? payload.config : {};
+        const cubeText = generateCstCubeTextClient(cfg, size, title);
+        const compiled = compileCstFiltergraphClient(cfg);
+        return {
+          info: {
+            path: "memory://cst.cube",
+            title,
+            dimension: "3D",
+            size,
+            entry_count: size * size * size
+          },
+          saved_path: null,
+          cube_text: cubeText,
+          compiled
+        };
+      }
+      return requestJson("/api/color/cst/bake-cube", { method: "POST", body: payload });
+    },
+    async downloadCstCubeBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const size = Number(payload && payload.size ? payload.size : 33);
+        const title = String((payload && payload.title) || "taktcut_cst_transform").trim() || "taktcut_cst_transform";
+        const text = generateCstCubeTextClient(payload && payload.config ? payload.config : {}, size, title);
+        return new Blob([text], { type: "text/plain; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/color/cst/download-cube`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
     }
   };
 }

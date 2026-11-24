@@ -14959,3 +14959,699 @@ export function clearAutoReframeFromDocumentClient(doc, payload = {}) {
     document: nextDoc
   };
 }
+
+
+// =============================================================================
+// CAMERA LOG COLOR-SPACE TRANSFORM (CST / IDT -> ODT), BRADFORD 3x3 & FILMIC
+// =============================================================================
+
+export const ALLOWED_CST_INPUT_SPACES = [
+  "arri_logc3",
+  "arri_logc4",
+  "sony_slog3",
+  "red_log3g10",
+  "canon_clog2",
+  "panasonic_vlog",
+  "acescct",
+  "rec709_gamma24",
+  "linear_srgb"
+];
+
+export const ALLOWED_CST_OUTPUT_SPACES = [
+  "rec709_gamma24",
+  "srgb_piecewise",
+  "display_p3",
+  "rec2020_pq",
+  "rec2020_hlg",
+  "acescct_ap1"
+];
+
+export const ALLOWED_CST_TONE_MAPPING_MODES = [
+  "none",
+  "simple_reinhard",
+  "filmic_aces",
+  "luminance_bt2390"
+];
+
+export const ALLOWED_CST_GAMUT_MAPPING_MODES = [
+  "none",
+  "clip",
+  "saturation_compress",
+  "luminance_preserve"
+];
+
+const CST_BRADFORD_M = [
+  [0.8951, 0.2664, -0.1614],
+  [-0.7502, 1.7135, 0.0367],
+  [0.0389, -0.0685, 1.0296]
+];
+
+const CST_BRADFORD_M_INV = [
+  [0.9869929, -0.1470543, 0.1599627],
+  [0.4323053, 0.5183603, 0.0492912],
+  [-0.0085287, 0.0400428, 0.9684867]
+];
+
+const CST_PRIMARIES = {
+  rec709: { rx: 0.64, ry: 0.33, gx: 0.3, gy: 0.6, bx: 0.15, by: 0.06, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  display_p3: { rx: 0.68, ry: 0.32, gx: 0.265, gy: 0.69, bx: 0.15, by: 0.06, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  rec2020: { rx: 0.708, ry: 0.292, gx: 0.17, gy: 0.797, bx: 0.131, by: 0.046, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  awg3: { rx: 0.684, ry: 0.313, gx: 0.221, gy: 0.848, bx: 0.0861, by: -0.102, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  awg4: { rx: 0.7347, ry: 0.2653, gx: 0.1424, gy: 0.8576, bx: 0.0991, by: -0.0308, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  sgamut3_cine: { rx: 0.766, ry: 0.275, gx: 0.225, gy: 0.8, bx: 0.089, by: -0.087, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  red_rwg: { rx: 0.780308, ry: 0.304253, gx: 0.121595, gy: 1.493994, bx: 0.095612, by: -0.084589, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  canon_cinema: { rx: 0.74, ry: 0.27, gx: 0.17, gy: 1.14, bx: 0.08, by: -0.1, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  panasonic_vgamut: { rx: 0.73, ry: 0.28, gx: 0.165, gy: 0.84, bx: 0.1, by: -0.03, wx: 0.3127, wy: 0.329, white_name: "D65" },
+  aces_ap1: { rx: 0.713, ry: 0.293, gx: 0.165, gy: 0.83, bx: 0.128, by: 0.044, wx: 0.32168, wy: 0.33767, white_name: "D60" }
+};
+
+export const CST_INPUT_SPACES_CLIENT = {
+  arri_logc4: { space_id: "arri_logc4", label: "ARRI LogC4 (AWG4)", vendor: "ARRI", transfer_label: "LogC4 (REVEAL)", gamut_label: "ARRI Wide Gamut 4", white_point: "D65", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.awg4, dynamic_range_stops: 17.0, middle_grey_signal: 0.2784 },
+  arri_logc3: { space_id: "arri_logc3", label: "ARRI LogC3 EI 800 (AWG3)", vendor: "ARRI", transfer_label: "LogC3 EI 800", gamut_label: "ARRI Wide Gamut 3", white_point: "D65", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.awg3, dynamic_range_stops: 14.5, middle_grey_signal: 0.391 },
+  sony_slog3: { space_id: "sony_slog3", label: "Sony S-Log3 (S-Gamut3.Cine)", vendor: "Sony", transfer_label: "S-Log3", gamut_label: "S-Gamut3.Cine", white_point: "D65", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.sgamut3_cine, dynamic_range_stops: 15.0, middle_grey_signal: 0.4106 },
+  red_log3g10: { space_id: "red_log3g10", label: "RED Log3G10 (REDWideGamutRGB)", vendor: "RED", transfer_label: "Log3G10", gamut_label: "REDWideGamutRGB", white_point: "D65", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.red_rwg, dynamic_range_stops: 16.5, middle_grey_signal: 0.3333 },
+  canon_clog2: { space_id: "canon_clog2", label: "Canon C-Log2 (Cinema Gamut)", vendor: "Canon", transfer_label: "Canon Log 2", gamut_label: "Cinema Gamut", white_point: "D65", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.canon_cinema, dynamic_range_stops: 15.0, middle_grey_signal: 0.3982 },
+  panasonic_vlog: { space_id: "panasonic_vlog", label: "Panasonic V-Log (V-Gamut)", vendor: "Panasonic", transfer_label: "V-Log", gamut_label: "V-Gamut", white_point: "D65", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.panasonic_vgamut, dynamic_range_stops: 14.5, middle_grey_signal: 0.4233 },
+  acescct: { space_id: "acescct", label: "ACEScct (AP1 D60)", vendor: "ACES", transfer_label: "ACEScct", gamut_label: "ACES AP1", white_point: "D60", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.aces_ap1, dynamic_range_stops: 16.5, middle_grey_signal: 0.4135 },
+  rec709_gamma24: { space_id: "rec709_gamma24", label: "Rec.709 / Gamma 2.4", vendor: "ITU-R", transfer_label: "BT.1886 Gamma 2.4", gamut_label: "Rec.709", white_point: "D65", is_log: false, is_hdr: false, primaries: CST_PRIMARIES.rec709, dynamic_range_stops: 9.5, middle_grey_signal: 0.489 },
+  linear_srgb: { space_id: "linear_srgb", label: "Linear Scene-Referred (Rec.709)", vendor: "Generic", transfer_label: "Linear 1.0", gamut_label: "Rec.709 / sRGB", white_point: "D65", is_log: false, is_hdr: false, primaries: CST_PRIMARIES.rec709, dynamic_range_stops: 14.0, middle_grey_signal: 0.18 }
+};
+
+export const CST_OUTPUT_SPACES_CLIENT = {
+  rec709_gamma24: { space_id: "rec709_gamma24", label: "Rec.709 (Gamma 2.4 / BT.1886)", vendor: "ITU-R", transfer_label: "Gamma 2.4", gamut_label: "Rec.709", white_point: "D65", is_log: false, is_hdr: false, primaries: CST_PRIMARIES.rec709, dynamic_range_stops: 9.5, middle_grey_signal: 0.489 },
+  srgb_piecewise: { space_id: "srgb_piecewise", label: "sRGB (IEC 61966-2-1 Web)", vendor: "IEC", transfer_label: "sRGB Piecewise", gamut_label: "sRGB / Rec.709", white_point: "D65", is_log: false, is_hdr: false, primaries: CST_PRIMARIES.rec709, dynamic_range_stops: 9.0, middle_grey_signal: 0.4614 },
+  display_p3: { space_id: "display_p3", label: "Display P3 (Cinema / Apple D65)", vendor: "DCI / Apple", transfer_label: "sRGB / Gamma 2.2", gamut_label: "Display P3", white_point: "D65", is_log: false, is_hdr: false, primaries: CST_PRIMARIES.display_p3, dynamic_range_stops: 10.5, middle_grey_signal: 0.4614 },
+  rec2020_pq: { space_id: "rec2020_pq", label: "Rec.2020 PQ (ST 2084 HDR 1000 nits)", vendor: "SMPTE", transfer_label: "ST 2084 PQ", gamut_label: "Rec.2020", white_point: "D65", is_log: false, is_hdr: true, primaries: CST_PRIMARIES.rec2020, dynamic_range_stops: 14.0, middle_grey_signal: 0.382 },
+  rec2020_hlg: { space_id: "rec2020_hlg", label: "Rec.2020 HLG (ARIB STD-B67 HDR)", vendor: "ARIB / BBC", transfer_label: "Hybrid Log-Gamma", gamut_label: "Rec.2020", white_point: "D65", is_log: false, is_hdr: true, primaries: CST_PRIMARIES.rec2020, dynamic_range_stops: 12.5, middle_grey_signal: 0.45 },
+  acescct_ap1: { space_id: "acescct_ap1", label: "ACEScct (AP1 D60 Working Space)", vendor: "ACES", transfer_label: "ACEScct", gamut_label: "ACES AP1", white_point: "D60", is_log: true, is_hdr: false, primaries: CST_PRIMARIES.aces_ap1, dynamic_range_stops: 16.5, middle_grey_signal: 0.4135 }
+};
+
+export const CST_PRESETS_CLIENT = [
+  {
+    preset_id: "arri_logc4_to_rec709",
+    label: "ARRI LogC4 -> Rec.709",
+    description: "ARRI Alexa 35 LogC4 / AWG4 to Rec.709 BT.1886 with REVEAL-inspired filmic shoulder.",
+    category: "cinema_log_sdr",
+    config: { enabled: true, preset_id: "arri_logc4_to_rec709", input_space: "arri_logc4", output_space: "rec709_gamma24", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "saturation_compress", gamut_compression: 0.35, tone_mapping_mode: "filmic_aces", exposure_ev: 0, contrast: 1.02, shoulder_strength: 0.6, toe_strength: 0.35, white_point_nits: 100, black_point_offset: 0, saturation: 1.02 }
+  },
+  {
+    preset_id: "arri_logc3_to_rec709",
+    label: "ARRI LogC3 -> Rec.709",
+    description: "ARRI Alexa Mini LogC3 EI 800 / AWG3 to Rec.709 Gamma 2.4 broadcast curve.",
+    category: "cinema_log_sdr",
+    config: { enabled: true, preset_id: "arri_logc3_to_rec709", input_space: "arri_logc3", output_space: "rec709_gamma24", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "saturation_compress", gamut_compression: 0.3, tone_mapping_mode: "filmic_aces", exposure_ev: 0, contrast: 1.0, shoulder_strength: 0.55, toe_strength: 0.3, white_point_nits: 100, black_point_offset: 0, saturation: 1.0 }
+  },
+  {
+    preset_id: "sony_slog3_to_rec709",
+    label: "Sony S-Log3 -> Rec.709",
+    description: "Sony Venice / FX6 S-Log3 S-Gamut3.Cine to Rec.709 with clean highlight roll-off.",
+    category: "cinema_log_sdr",
+    config: { enabled: true, preset_id: "sony_slog3_to_rec709", input_space: "sony_slog3", output_space: "rec709_gamma24", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "saturation_compress", gamut_compression: 0.38, tone_mapping_mode: "filmic_aces", exposure_ev: 0.1, contrast: 1.04, shoulder_strength: 0.58, toe_strength: 0.38, white_point_nits: 100, black_point_offset: 0, saturation: 1.03 }
+  },
+  {
+    preset_id: "red_rwg_to_rec709",
+    label: "RED Log3G10 -> Rec.709",
+    description: "RED V-Raptor Log3G10 / REDWideGamutRGB with aggressive cyan-magenta gamut compression.",
+    category: "cinema_log_sdr",
+    config: { enabled: true, preset_id: "red_rwg_to_rec709", input_space: "red_log3g10", output_space: "rec709_gamma24", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "saturation_compress", gamut_compression: 0.5, tone_mapping_mode: "filmic_aces", exposure_ev: 0, contrast: 1.05, shoulder_strength: 0.62, toe_strength: 0.32, white_point_nits: 100, black_point_offset: 0, saturation: 1.0 }
+  },
+  {
+    preset_id: "canon_clog2_to_rec709",
+    label: "Canon C-Log2 -> Rec.709",
+    description: "Canon C70 / C300 Mk III C-Log2 Cinema Gamut to natural Rec.709 skin tones.",
+    category: "cinema_log_sdr",
+    config: { enabled: true, preset_id: "canon_clog2_to_rec709", input_space: "canon_clog2", output_space: "rec709_gamma24", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "saturation_compress", gamut_compression: 0.4, tone_mapping_mode: "filmic_aces", exposure_ev: 0, contrast: 1.0, shoulder_strength: 0.52, toe_strength: 0.36, white_point_nits: 100, black_point_offset: 0, saturation: 1.02 }
+  },
+  {
+    preset_id: "panasonic_vlog_to_p3",
+    label: "Panasonic V-Log -> Display P3",
+    description: "Panasonic V-Log / V-Gamut mastered to wide-gamut Display P3 for cinema/Apple OLED.",
+    category: "cinema_log_sdr",
+    config: { enabled: true, preset_id: "panasonic_vlog_to_p3", input_space: "panasonic_vlog", output_space: "display_p3", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "saturation_compress", gamut_compression: 0.28, tone_mapping_mode: "filmic_aces", exposure_ev: 0, contrast: 1.02, shoulder_strength: 0.5, toe_strength: 0.3, white_point_nits: 100, black_point_offset: 0, saturation: 1.04 }
+  },
+  {
+    preset_id: "acescct_to_rec2020_pq",
+    label: "ACEScct D60 -> Rec.2020 PQ",
+    description: "ACEScct AP1 (D60) to Rec.2020 ST.2084 PQ 1000-nit HDR with Bradford D60->D65.",
+    category: "aces_pipeline",
+    config: { enabled: true, preset_id: "acescct_to_rec2020_pq", input_space: "acescct", output_space: "rec2020_pq", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "luminance_preserve", gamut_compression: 0.22, tone_mapping_mode: "luminance_bt2390", exposure_ev: 0, contrast: 1.0, shoulder_strength: 0.45, toe_strength: 0.2, white_point_nits: 1000, black_point_offset: 0, saturation: 1.0 }
+  },
+  {
+    preset_id: "slog3_to_hlg_hdr",
+    label: "Sony S-Log3 -> Rec.2020 HLG",
+    description: "Sony S-Log3 broadcast HDR delivery to Rec.2020 Hybrid Log-Gamma (ARIB STD-B67).",
+    category: "cinema_log_hdr",
+    config: { enabled: true, preset_id: "slog3_to_hlg_hdr", input_space: "sony_slog3", output_space: "rec2020_hlg", bradford_adaptation: true, white_point_shift_k: 0, gamut_mapping_mode: "saturation_compress", gamut_compression: 0.25, tone_mapping_mode: "luminance_bt2390", exposure_ev: 0, contrast: 1.0, shoulder_strength: 0.4, toe_strength: 0.22, white_point_nits: 1000, black_point_offset: 0, saturation: 1.0 }
+  }
+];
+
+export function createDefaultCstConfigClient() {
+  return {
+    enabled: false,
+    preset_id: "arri_logc4_to_rec709",
+    input_space: "arri_logc4",
+    output_space: "rec709_gamma24",
+    bradford_adaptation: true,
+    white_point_shift_k: 0.0,
+    gamut_mapping_mode: "saturation_compress",
+    gamut_compression: 0.35,
+    tone_mapping_mode: "filmic_aces",
+    exposure_ev: 0.0,
+    contrast: 1.0,
+    shoulder_strength: 0.55,
+    toe_strength: 0.35,
+    white_point_nits: 100.0,
+    black_point_offset: 0.0,
+    saturation: 1.0
+  };
+}
+
+export function normalizeCstConfigClient(raw) {
+  const def = createDefaultCstConfigClient();
+  const src = raw && typeof raw === "object" ? raw : {};
+  const inputSpace = ALLOWED_CST_INPUT_SPACES.includes(src.input_space) ? src.input_space : def.input_space;
+  const outputSpace = ALLOWED_CST_OUTPUT_SPACES.includes(src.output_space) ? src.output_space : def.output_space;
+  const toneMode = ALLOWED_CST_TONE_MAPPING_MODES.includes(src.tone_mapping_mode) ? src.tone_mapping_mode : def.tone_mapping_mode;
+  const gamutMode = ALLOWED_CST_GAMUT_MAPPING_MODES.includes(src.gamut_mapping_mode) ? src.gamut_mapping_mode : def.gamut_mapping_mode;
+  const num = (v, fb, lo, hi) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? clampNum(n, lo, hi) : fb;
+  };
+  return {
+    enabled: typeof src.enabled === "boolean" ? src.enabled : def.enabled,
+    preset_id: typeof src.preset_id === "string" && src.preset_id.trim() ? src.preset_id.trim().slice(0, 64) : def.preset_id,
+    input_space: inputSpace,
+    output_space: outputSpace,
+    bradford_adaptation: typeof src.bradford_adaptation === "boolean" ? src.bradford_adaptation : def.bradford_adaptation,
+    white_point_shift_k: num(src.white_point_shift_k, def.white_point_shift_k, -2500, 2500),
+    gamut_mapping_mode: gamutMode,
+    gamut_compression: num(src.gamut_compression, def.gamut_compression, 0, 1),
+    tone_mapping_mode: toneMode,
+    exposure_ev: num(src.exposure_ev, def.exposure_ev, -6, 6),
+    contrast: num(src.contrast, def.contrast, 0.5, 2.0),
+    shoulder_strength: num(src.shoulder_strength, def.shoulder_strength, 0, 1),
+    toe_strength: num(src.toe_strength, def.toe_strength, 0, 1),
+    white_point_nits: num(src.white_point_nits, def.white_point_nits, 100, 4000),
+    black_point_offset: num(src.black_point_offset, def.black_point_offset, -0.05, 0.05),
+    saturation: num(src.saturation, def.saturation, 0, 2.0)
+  };
+}
+
+function cstMatmul3x3(a, b) {
+  const out = [];
+  for (let i = 0; i < 3; i += 1) {
+    out.push([
+      a[i][0] * b[0][0] + a[i][1] * b[1][0] + a[i][2] * b[2][0],
+      a[i][0] * b[0][1] + a[i][1] * b[1][1] + a[i][2] * b[2][1],
+      a[i][0] * b[0][2] + a[i][1] * b[1][2] + a[i][2] * b[2][2]
+    ]);
+  }
+  return out;
+}
+
+function cstMatvec3x3(m, v) {
+  return [
+    m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+    m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+    m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
+  ];
+}
+
+function cstInvert3x3(m) {
+  const [a, b, c] = m[0];
+  const [d, e, f] = m[1];
+  const [g, h, i] = m[2];
+  const c00 = e * i - f * h;
+  const c01 = -(d * i - f * g);
+  const c02 = d * h - e * g;
+  const c10 = -(b * i - c * h);
+  const c11 = a * i - c * g;
+  const c12 = -(a * h - b * g);
+  const c20 = b * f - c * e;
+  const c21 = -(a * f - c * d);
+  const c22 = a * e - b * d;
+  const det = a * c00 + b * c01 + c * c02;
+  const invDet = Math.abs(det) < 1e-12 ? 1.0 : 1.0 / det;
+  return [
+    [c00 * invDet, c10 * invDet, c20 * invDet],
+    [c01 * invDet, c11 * invDet, c21 * invDet],
+    [c02 * invDet, c12 * invDet, c22 * invDet]
+  ];
+}
+
+function cstXyToXyz(x, y) {
+  const safeY = Math.max(1e-6, y);
+  return [x / safeY, 1.0, (1.0 - x - y) / safeY];
+}
+
+function cstKelvinToCieXy(kelvin) {
+  const t = clampNum(kelvin, 2500, 15000);
+  const x =
+    t <= 7000
+      ? -4.607e9 / (t * t * t) + 2.9678e6 / (t * t) + 0.09911e3 / t + 0.244063
+      : -2.0064e9 / (t * t * t) + 1.9018e6 / (t * t) + 0.24748e3 / t + 0.23704;
+  const y = -3.0 * x * x + 2.87 * x - 0.275;
+  return [x, Math.max(0.15, y)];
+}
+
+export function computeRgbToXyz3x3Client(primaries) {
+  const xr = primaries.rx;
+  const yr = primaries.ry;
+  const xg = primaries.gx;
+  const yg = primaries.gy;
+  const xb = primaries.bx;
+  const yb = Math.abs(primaries.by) > 1e-6 ? primaries.by : 1e-6;
+  const xrXyz = xr / yr;
+  const zrXyz = (1 - xr - yr) / yr;
+  const xgXyz = xg / yg;
+  const zgXyz = (1 - xg - yg) / yg;
+  const xbXyz = xb / yb;
+  const zbXyz = (1 - xb - primaries.by) / yb;
+  const mPrim = [
+    [xrXyz, xgXyz, xbXyz],
+    [1.0, 1.0, 1.0],
+    [zrXyz, zgXyz, zbXyz]
+  ];
+  const mPrimInv = cstInvert3x3(mPrim);
+  const [sr, sg, sb] = cstMatvec3x3(mPrimInv, cstXyToXyz(primaries.wx, primaries.wy));
+  return [
+    [sr * xrXyz, sg * xgXyz, sb * xbXyz],
+    [sr, sg, sb],
+    [sr * zrXyz, sg * zgXyz, sb * zbXyz]
+  ];
+}
+
+export function computeBradfordAdaptation3x3Client(srcWhiteXy, dstWhiteXy) {
+  if (Math.abs(srcWhiteXy[0] - dstWhiteXy[0]) < 1e-6 && Math.abs(srcWhiteXy[1] - dstWhiteXy[1]) < 1e-6) {
+    return [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1]
+    ];
+  }
+  const srcCone = cstMatvec3x3(CST_BRADFORD_M, cstXyToXyz(srcWhiteXy[0], srcWhiteXy[1]));
+  const dstCone = cstMatvec3x3(CST_BRADFORD_M, cstXyToXyz(dstWhiteXy[0], dstWhiteXy[1]));
+  const diag = [
+    [dstCone[0] / Math.max(1e-6, srcCone[0]), 0, 0],
+    [0, dstCone[1] / Math.max(1e-6, srcCone[1]), 0],
+    [0, 0, dstCone[2] / Math.max(1e-6, srcCone[2])]
+  ];
+  return cstMatmul3x3(CST_BRADFORD_M_INV, cstMatmul3x3(diag, CST_BRADFORD_M));
+}
+
+export function computeCstGamutMatrixClient(rawConfig) {
+  const cfg = normalizeCstConfigClient(rawConfig);
+  const srcSpec = CST_INPUT_SPACES_CLIENT[cfg.input_space];
+  const dstSpec = CST_OUTPUT_SPACES_CLIENT[cfg.output_space];
+  const srcP = srcSpec.primaries;
+  const dstP = dstSpec.primaries;
+  const mSrc = computeRgbToXyz3x3Client(srcP);
+  const mDstInv = cstInvert3x3(computeRgbToXyz3x3Client(dstP));
+  let srcWhite = [srcP.wx, srcP.wy];
+  const dstWhite = [dstP.wx, dstP.wy];
+  if (Math.abs(cfg.white_point_shift_k) >= 1.0) {
+    const baseK = srcP.white_name === "D60" ? 6000.0 : 6504.0;
+    srcWhite = cstKelvinToCieXy(baseK - cfg.white_point_shift_k);
+  }
+  const whiteDiff = Math.abs(srcWhite[0] - dstWhite[0]) > 1e-5 || Math.abs(srcWhite[1] - dstWhite[1]) > 1e-5;
+  const bradfordActive = Boolean(cfg.bradford_adaptation && whiteDiff);
+  const mAdapt = bradfordActive
+    ? computeBradfordAdaptation3x3Client(srcWhite, dstWhite)
+    : [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+      ];
+  const mCombined = cstMatmul3x3(mDstInv, cstMatmul3x3(mAdapt, mSrc));
+  return { mCombined, mAdapt, srcP, dstP, bradfordActive };
+}
+
+export function eotfDecodeCstChannelClient(v, space) {
+  if (space === "arri_logc3") {
+    const cut = 0.010591;
+    const a = 5.555556;
+    const b = 0.052272;
+    const c = 0.24719;
+    const d = 0.385537;
+    const e = 5.367655;
+    const f = 0.092809;
+    return v > e * cut + f ? (Math.pow(10, (v - d) / c) - b) / a : (v - f) / e;
+  }
+  if (space === "arri_logc4") {
+    const a = (262144.0 - 16.0) / 117.45;
+    const b = (1023.0 - 95.0) / 1023.0;
+    const c = 95.0 / 1023.0;
+    const s = (7.0 * Math.LN2 * Math.pow(2.0, 7.0 - (14.0 * c) / b)) / (a * b);
+    const t = (Math.pow(2.0, 14.0 * (-c / b) + 6.0) - 64.0) / a;
+    return v >= 0.0 ? (Math.pow(2.0, 14.0 * ((v - c) / b) + 6.0) - 64.0) / a : v * s + t;
+  }
+  if (space === "sony_slog3") {
+    const cut = 171.2102946929 / 1023.0;
+    return v >= cut
+      ? Math.pow(10.0, (v * 1023.0 - 420.0) / 261.5) * 0.19 - 0.01
+      : ((v * 1023.0 - 95.0) * 0.01125) / (171.2102946929 - 95.0);
+  }
+  if (space === "red_log3g10") {
+    const a = 0.224282;
+    const b = 155.975327;
+    const c = 0.01;
+    const g = 15.1927;
+    return v < 0.0 ? v / g - c : (Math.pow(10.0, v / a) - 1.0) / b - c;
+  }
+  if (space === "canon_clog2") {
+    const c0 = 0.092864125;
+    return v >= c0
+      ? (Math.pow(10.0, (v - c0) / 0.24136077) - 1.0) / 87.099375
+      : -(Math.pow(10.0, (c0 - v) / 0.24136077) - 1.0) / 87.099375;
+  }
+  if (space === "panasonic_vlog") {
+    return v < 0.181 ? (v - 0.125) / 5.6 : Math.pow(10.0, (v - 0.598206) / 0.241514) - 0.00873;
+  }
+  if (space === "acescct") {
+    return v <= 0.155251141552511
+      ? (v - 0.0729055341958355) / 10.5402377416545
+      : Math.pow(2.0, v * 17.52 - 9.72);
+  }
+  if (space === "rec709_gamma24") {
+    return Math.pow(Math.max(0.0, v), 2.4);
+  }
+  return v;
+}
+
+export function encodeInputLogChannelClient(xLinear, space) {
+  if (space === "arri_logc3") {
+    const cut = 0.010591;
+    return clampNum(
+      xLinear > cut ? 0.24719 * Math.log10(Math.max(1e-9, 5.555556 * xLinear + 0.052272)) + 0.385537 : 5.367655 * xLinear + 0.092809,
+      0,
+      1
+    );
+  }
+  if (space === "arri_logc4") {
+    const a = (262144.0 - 16.0) / 117.45;
+    const b = (1023.0 - 95.0) / 1023.0;
+    const c = 95.0 / 1023.0;
+    const s = (7.0 * Math.LN2 * Math.pow(2.0, 7.0 - (14.0 * c) / b)) / (a * b);
+    const t = (Math.pow(2.0, 14.0 * (-c / b) + 6.0) - 64.0) / a;
+    return clampNum(xLinear >= t ? ((Math.log2(Math.max(1e-9, a * xLinear + 64.0)) - 6.0) / 14.0) * b + c : (xLinear - t) / s, 0, 1);
+  }
+  if (space === "sony_slog3") {
+    return clampNum(
+      xLinear >= 0.01125
+        ? (420.0 + Math.log10((xLinear + 0.01) / 0.19) * 261.5) / 1023.0
+        : ((xLinear * (171.2102946929 - 95.0)) / 0.01125 + 95.0) / 1023.0,
+      0,
+      1
+    );
+  }
+  if (space === "red_log3g10") {
+    const xc = xLinear + 0.01;
+    return clampNum(xc < 0 ? xc * 15.1927 : 0.224282 * Math.log10(xc * 155.975327 + 1.0), 0, 1);
+  }
+  if (space === "canon_clog2") {
+    const c0 = 0.092864125;
+    return clampNum(
+      xLinear >= 0
+        ? 0.24136077 * Math.log10(87.099375 * xLinear + 1.0) + c0
+        : -0.24136077 * Math.log10(-87.099375 * xLinear + 1.0) + c0,
+      0,
+      1
+    );
+  }
+  if (space === "panasonic_vlog") {
+    return clampNum(xLinear < 0.01 ? 5.6 * xLinear + 0.125 : 0.241514 * Math.log10(Math.max(1e-9, xLinear + 0.00873)) + 0.598206, 0, 1);
+  }
+  if (space === "acescct") {
+    const x = Math.max(0, xLinear);
+    return clampNum(x <= 0.0078125 ? 10.5402377416545 * x + 0.0729055341958355 : (Math.log2(Math.max(1e-9, x)) + 9.72) / 17.52, 0, 1);
+  }
+  if (space === "rec709_gamma24") {
+    return Math.pow(clampNum(xLinear, 0, 1), 1.0 / 2.4);
+  }
+  return clampNum(xLinear, 0, 1);
+}
+
+export function oetfEncodeCstChannelClient(x, space, whitePointNits = 100.0) {
+  if (space === "rec709_gamma24") {
+    return Math.pow(clampNum(x, 0, 1), 1.0 / 2.4);
+  }
+  if (space === "srgb_piecewise" || space === "display_p3") {
+    const xc = clampNum(x, 0, 1);
+    return xc <= 0.0031308 ? 12.92 * xc : 1.055 * Math.pow(xc, 1.0 / 2.4) - 0.055;
+  }
+  if (space === "rec2020_pq") {
+    const m1 = 2610.0 / 16384.0;
+    const m2 = (2523.0 / 4096.0) * 128.0;
+    const c1 = 3424.0 / 4096.0;
+    const c2 = (2413.0 / 4096.0) * 32.0;
+    const c3 = (2392.0 / 4096.0) * 32.0;
+    const y = clampNum((Math.max(0, x) * Math.max(100, whitePointNits)) / 10000.0, 0, 1);
+    const ym1 = Math.pow(y, m1);
+    return clampNum(Math.pow((c1 + c2 * ym1) / (1.0 + c3 * ym1), m2), 0, 1);
+  }
+  if (space === "rec2020_hlg") {
+    const a = 0.17883277;
+    const b = 1.0 - 4.0 * a;
+    const c = 0.5 - a * Math.log(4.0 * a);
+    const e = clampNum(x, 0, 1);
+    return e <= 1.0 / 12.0 ? Math.sqrt(3.0 * e) : clampNum(a * Math.log(12.0 * e - b) + c, 0, 1);
+  }
+  const xc = Math.max(0, x);
+  return clampNum(xc <= 0.0078125 ? 10.5402377416545 * xc + 0.0729055341958355 : (Math.log2(Math.max(1e-9, xc)) + 9.72) / 17.52, 0, 1);
+}
+
+function applyCstToneMapScalarClient(x, cfg) {
+  const evGain = Math.pow(2.0, cfg.exposure_ev);
+  let v = Math.max(0.0, x * evGain + cfg.black_point_offset);
+  if (Math.abs(cfg.contrast - 1.0) > 1e-4 && v > 0.0) {
+    v = 0.18 * Math.pow(v / 0.18, cfg.contrast);
+  }
+  if (cfg.toe_strength > 1e-4 && v < 0.18) {
+    v = 0.18 * Math.pow(v / 0.18, 1.0 + cfg.toe_strength * 0.85);
+  }
+  if (cfg.tone_mapping_mode === "none") return Math.max(0, v);
+  if (cfg.tone_mapping_mode === "simple_reinhard") {
+    const wp = Math.max(1.0, cfg.white_point_nits / 100.0);
+    return Math.max(0, (v * (1.0 + v / (wp * wp))) / (1.0 + v));
+  }
+  if (cfg.tone_mapping_mode === "luminance_bt2390") {
+    const wpScale = Math.max(1.0, cfg.white_point_nits / 100.0);
+    const knee = 0.45 + 0.35 * (1.0 - cfg.shoulder_strength);
+    if (v <= knee) return v;
+    const excess = v - knee;
+    const span = Math.max(0.15, (1.0 + 0.8 * cfg.shoulder_strength) * wpScale);
+    const rolled = knee + (span - knee) * (excess / (excess + span - knee));
+    return Math.max(0, rolled / Math.max(1.0, wpScale * 0.45));
+  }
+  const shoulder = 0.8 + 1.8 * cfg.shoulder_strength;
+  const a = 2.51 * (0.95 - 0.25 * cfg.shoulder_strength);
+  const b = 0.03 + 0.03 * cfg.toe_strength;
+  const c = 2.43 * (0.75 + 0.55 * cfg.shoulder_strength);
+  const d = 0.59;
+  const e = 0.14 + 0.08 * shoulder;
+  return clampNum((v * (a * v + b)) / Math.max(1e-6, v * (c * v + d) + e), 0, 1);
+}
+
+export function evaluateCstRgbClient(r, g, b, rawConfig, precomputedMatrix = null) {
+  const cfg = normalizeCstConfigClient(rawConfig);
+  if (!cfg.enabled) {
+    return [clampNum(r, 0, 1), clampNum(g, 0, 1), clampNum(b, 0, 1), false];
+  }
+  const lr = eotfDecodeCstChannelClient(r, cfg.input_space);
+  const lg = eotfDecodeCstChannelClient(g, cfg.input_space);
+  const lb = eotfDecodeCstChannelClient(b, cfg.input_space);
+  const m = precomputedMatrix || computeCstGamutMatrixClient(cfg).mCombined;
+  let [dr, dg, db] = cstMatvec3x3(m, [lr, lg, lb]);
+  const outOfGamut = Math.min(dr, dg, db) < -1e-4 || Math.max(dr, dg, db) > 1.0001;
+  if (cfg.gamut_mapping_mode === "clip") {
+    dr = clampNum(dr, 0, 1);
+    dg = clampNum(dg, 0, 1);
+    db = clampNum(db, 0, 1);
+  } else if (cfg.gamut_mapping_mode === "saturation_compress") {
+    const luma = 0.2126 * dr + 0.7152 * dg + 0.0722 * db;
+    const minC = Math.min(dr, dg, db);
+    if (minC < 0 && luma > 1e-6) {
+      const pull = clampNum(-minC / Math.max(1e-6, luma - minC), 0, 1) * (0.35 + 0.65 * cfg.gamut_compression);
+      dr += (luma - dr) * pull;
+      dg += (luma - dg) * pull;
+      db += (luma - db) * pull;
+    }
+    if (cfg.gamut_compression > 0) {
+      const cMax = Math.max(Math.abs(dr - luma), Math.abs(dg - luma), Math.abs(db - luma));
+      if (cMax > 0.35) {
+        const soft = 1.0 - cfg.gamut_compression * 0.32 * clampNum((cMax - 0.35) / 1.2, 0, 1);
+        dr = luma + (dr - luma) * soft;
+        dg = luma + (dg - luma) * soft;
+        db = luma + (db - luma) * soft;
+      }
+    }
+    dr = Math.max(0, dr);
+    dg = Math.max(0, dg);
+    db = Math.max(0, db);
+  } else if (cfg.gamut_mapping_mode === "luminance_preserve") {
+    const luma = 0.2126 * dr + 0.7152 * dg + 0.0722 * db;
+    const minC = Math.min(dr, dg, db);
+    if (minC < 0 && luma > 1e-6) {
+      const t = clampNum(luma / (luma - minC), 0, 1);
+      const blend = 1.0 - (1.0 - t) * (0.5 + 0.5 * cfg.gamut_compression);
+      dr = luma + (dr - luma) * blend;
+      dg = luma + (dg - luma) * blend;
+      db = luma + (db - luma) * blend;
+    }
+    dr = Math.max(0, dr);
+    dg = Math.max(0, dg);
+    db = Math.max(0, db);
+  }
+  let tr = applyCstToneMapScalarClient(dr, cfg);
+  let tg = applyCstToneMapScalarClient(dg, cfg);
+  let tb = applyCstToneMapScalarClient(db, cfg);
+  if (Math.abs(cfg.saturation - 1.0) > 1e-4) {
+    const luma = 0.2126 * tr + 0.7152 * tg + 0.0722 * tb;
+    tr = Math.max(0, luma + (tr - luma) * cfg.saturation);
+    tg = Math.max(0, luma + (tg - luma) * cfg.saturation);
+    tb = Math.max(0, luma + (tb - luma) * cfg.saturation);
+  }
+  return [
+    clampNum(oetfEncodeCstChannelClient(tr, cfg.output_space, cfg.white_point_nits), 0, 1),
+    clampNum(oetfEncodeCstChannelClient(tg, cfg.output_space, cfg.white_point_nits), 0, 1),
+    clampNum(oetfEncodeCstChannelClient(tb, cfg.output_space, cfg.white_point_nits), 0, 1),
+    outOfGamut
+  ];
+}
+
+export function compileCstFiltergraphClient(rawConfig) {
+  const cfg = normalizeCstConfigClient(rawConfig);
+  const { mCombined, mAdapt, srcP, dstP, bradfordActive } = computeCstGamutMatrixClient(cfg);
+  const samples = [];
+  const nPts = 33;
+  for (let i = 0; i < nPts; i += 1) {
+    const inNorm = i / (nPts - 1);
+    const lin = eotfDecodeCstChannelClient(inNorm, cfg.input_space);
+    const evStop = Math.log2(Math.max(1e-5, lin) / 0.18);
+    const outNorm = cfg.enabled
+      ? oetfEncodeCstChannelClient(applyCstToneMapScalarClient(Math.max(0, lin), cfg), cfg.output_space, cfg.white_point_nits)
+      : inNorm;
+    samples.push({
+      input_norm: Number(inNorm.toFixed(5)),
+      ev_stop: Number(clampNum(evStop, -8, 8).toFixed(3)),
+      output_norm: Number(clampNum(outNorm, 0, 1).toFixed(5)),
+      identity_norm: Number(inNorm.toFixed(5))
+    });
+  }
+  const mgOut = cfg.enabled
+    ? oetfEncodeCstChannelClient(applyCstToneMapScalarClient(0.18, cfg), cfg.output_space, cfg.white_point_nits)
+    : CST_INPUT_SPACES_CLIENT[cfg.input_space].middle_grey_signal;
+  const hiIn = 0.18 * 16.0;
+  const hiOut = applyCstToneMapScalarClient(hiIn, cfg);
+  const highlightRolloffDb = Number((20.0 * Math.log10(Math.max(1e-4, hiOut) / hiIn)).toFixed(2));
+  let oog = 0;
+  let total = 0;
+  for (let ir = 0; ir < 5; ir += 1) {
+    for (let ig = 0; ig < 5; ig += 1) {
+      for (let ib = 0; ib < 5; ib += 1) {
+        const res = evaluateCstRgbClient(ir / 4, ig / 4, ib / 4, cfg, mCombined);
+        if (res[3]) oog += 1;
+        total += 1;
+      }
+    }
+  }
+  const triArea = (p) => 0.5 * Math.abs(p.rx * (p.gy - p.by) + p.gx * (p.by - p.ry) + p.bx * (p.ry - p.gy));
+  const srcArea = Math.max(1e-6, triArea(srcP));
+  const dstArea = Math.max(1e-6, triArea(dstP));
+  let ffmpegFilterExpr = "null";
+  let ffmpegHint = "colorspace=all=bt709:trc=bt709:range=tv";
+  if (cfg.enabled) {
+    const mx = (v) => clampNum(v, -2, 2).toFixed(4);
+    const mixer =
+      `colorchannelmixer=rr=${mx(mCombined[0][0])}:rg=${mx(mCombined[0][1])}:rb=${mx(mCombined[0][2])}:ra=0:` +
+      `gr=${mx(mCombined[1][0])}:gg=${mx(mCombined[1][1])}:gb=${mx(mCombined[1][2])}:ga=0:` +
+      `br=${mx(mCombined[2][0])}:bg=${mx(mCombined[2][1])}:bb=${mx(mCombined[2][2])}:ba=0`;
+    const pts = [];
+    let prevX = -1;
+    for (const idx of [0, 4, 8, 12, 16, 20, 24, 28, 32]) {
+      if (idx < samples.length) {
+        let xv = clampNum(samples[idx].input_norm, 0, 1);
+        if (xv <= prevX) xv = Math.min(1, prevX + 0.01);
+        prevX = xv;
+        pts.push(`${xv.toFixed(3)}/${clampNum(samples[idx].output_norm, 0, 1).toFixed(3)}`);
+      }
+    }
+    const satSeg = Math.abs(cfg.saturation - 1.0) > 1e-3 ? `,eq=saturation=${cfg.saturation.toFixed(3)}` : "";
+    let tag = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709";
+    if (cfg.output_space === "rec2020_pq") {
+      tag = "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc";
+      ffmpegHint = "zscale=primaries=bt2020:transfer=smpte2084:matrix=bt2020nc";
+    } else if (cfg.output_space === "rec2020_hlg") {
+      tag = "setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc";
+      ffmpegHint = "zscale=primaries=bt2020:transfer=arib-std-b67:matrix=bt2020nc";
+    } else if (cfg.output_space === "display_p3") {
+      tag = "setparams=color_primaries=smpte432:color_trc=iec61966-2-1:colorspace=bt709";
+      ffmpegHint = "colorspace=all=bt709:primaries=smpte432:trc=srgb";
+    } else if (cfg.output_space === "srgb_piecewise") {
+      tag = "setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709";
+      ffmpegHint = "colorspace=all=bt709:trc=srgb";
+    }
+    ffmpegFilterExpr = `${mixer},curves=master='${pts.join(" ")}'${satSeg},${tag}`;
+  }
+  return {
+    config: cfg,
+    bradford_matrix_3x3: mCombined.map((r) => r.map((v) => Number(v.toFixed(5)))),
+    adaptation_matrix_3x3: mAdapt.map((r) => r.map((v) => Number(v.toFixed(5)))),
+    src_primaries: srcP,
+    dst_primaries: dstP,
+    ffmpeg_filter_expr: ffmpegFilterExpr,
+    ffmpeg_colorspace_hint: ffmpegHint,
+    tone_curve_samples: samples,
+    middle_grey_out: Number(clampNum(mgOut, 0, 1).toFixed(4)),
+    highlight_rolloff_db: highlightRolloffDb,
+    out_of_gamut_pct: Number(((oog / Math.max(1, total)) * 100.0).toFixed(1)),
+    gamut_coverage_pct: Number(clampNum((dstArea / srcArea) * 100.0, 5, 100).toFixed(1)),
+    bradford_active: bradfordActive
+  };
+}
+
+export function analyzeCstPipelineClient(rawConfig) {
+  const compiled = compileCstFiltergraphClient(rawConfig);
+  const cfg = compiled.config;
+  const srcSpec = CST_INPUT_SPACES_CLIENT[cfg.input_space];
+  const dstSpec = CST_OUTPUT_SPACES_CLIENT[cfg.output_space];
+  const preserved = Number(
+    Math.min(srcSpec.dynamic_range_stops, dstSpec.dynamic_range_stops + 3.5 * cfg.shoulder_strength).toFixed(1)
+  );
+  return {
+    compiled,
+    patches: [],
+    dynamic_range_preserved_stops: preserved,
+    mean_luma_in: 0.34,
+    mean_luma_out: Number(compiled.middle_grey_out.toFixed(4)),
+    summary: `${srcSpec.label} -> ${dstSpec.label} | Bradford=${compiled.bradford_active ? "ON" : "UNITY"} | Tone=${cfg.tone_mapping_mode} | DR=${preserved} stops`
+  };
+}
+
+export function generateCstCubeTextClient(rawConfig, size = 33, title = "taktcut_cst_transform") {
+  const gridSize = [17, 33, 65].includes(Number(size)) ? Number(size) : 33;
+  const cfg = normalizeCstConfigClient(rawConfig);
+  const { mCombined } = computeCstGamutMatrixClient(cfg);
+  const cleanTitle = String(title || "taktcut_cst_transform").replace(/[^a-zA-Z0-9_\- ]+/g, "_").trim() || "taktcut_cst_transform";
+  const lines = [
+    `TITLE "${cleanTitle}"`,
+    "# Generated by TaktCut Camera Log CST Studio",
+    `LUT_3D_SIZE ${gridSize}`,
+    "DOMAIN_MIN 0.000000 0.000000 0.000000",
+    "DOMAIN_MAX 1.000000 1.000000 1.000000",
+    ""
+  ];
+  const denom = gridSize - 1;
+  for (let bIdx = 0; bIdx < gridSize; bIdx += 1) {
+    const bIn = bIdx / denom;
+    for (let gIdx = 0; gIdx < gridSize; gIdx += 1) {
+      const gIn = gIdx / denom;
+      for (let rIdx = 0; rIdx < gridSize; rIdx += 1) {
+        const rIn = rIdx / denom;
+        const [rOut, gOut, bOut] = evaluateCstRgbClient(rIn, gIn, bIn, cfg, mCombined);
+        lines.push(`${rOut.toFixed(6)} ${gOut.toFixed(6)} ${bOut.toFixed(6)}`);
+      }
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}

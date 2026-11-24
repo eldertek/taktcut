@@ -12769,3 +12769,251 @@ assert.equal(cleared.document.tracks[0].clips[0].auto_reframe, null);
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_ui_cst_endpoints_and_security(ui_server: tuple[str, Path]) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/color/cst/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["input_spaces"]) == 9
+    assert len(meta["output_spaces"]) == 6
+    assert len(meta["presets"]) >= 8
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/color/cst/compile",
+        method="POST",
+        payload={
+            "config": {
+                "enabled": True,
+                "input_space": "acescct",
+                "output_space": "rec709_gamma24",
+                "bradford_adaptation": True,
+                "tone_mapping_mode": "filmic_aces",
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["bradford_active"] is True
+    assert len(compiled["bradford_matrix_3x3"]) == 3
+    assert "colorchannelmixer=" in compiled["ffmpeg_filter_expr"]
+
+    a_status, _, a_raw = _http_call(
+        f"{base_url}/api/color/cst/analyze",
+        method="POST",
+        payload={
+            "config": {
+                "enabled": True,
+                "input_space": "arri_logc4",
+                "output_space": "rec709_gamma24",
+            }
+        },
+    )
+    assert a_status == 200
+    analysis = json.loads(a_raw.decode("utf-8"))
+    assert len(analysis["patches"]) == 24
+    assert analysis["dynamic_range_preserved_stops"] >= 10.0
+
+    b_status, _, b_raw = _http_call(
+        f"{base_url}/api/color/cst/bake-cube",
+        method="POST",
+        payload={
+            "config": {
+                "enabled": True,
+                "input_space": "sony_slog3",
+                "output_space": "rec709_gamma24",
+            },
+            "size": 17,
+            "title": "Test_CST_LUT",
+            "out_path": "luts/test_cst.cube",
+        },
+    )
+    assert b_status == 200
+    baked = json.loads(b_raw.decode("utf-8"))
+    assert baked["saved_path"] == "luts/test_cst.cube"
+    assert (workspace / "luts" / "test_cst.cube").is_file()
+    assert "LUT_3D_SIZE 17" in baked["cube_text"]
+
+    # Path traversal blocked
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/color/cst/bake-cube",
+        method="POST",
+        payload={"config": {"enabled": True}, "size": 17, "out_path": "../escape.cube"},
+    )
+    assert trav_status == 403
+
+    d_status, d_headers, d_raw = _http_call(
+        f"{base_url}/api/color/cst/download-cube",
+        method="POST",
+        payload={"config": {"enabled": True}, "size": 17, "title": "dl_cst"},
+    )
+    assert d_status == 200
+    assert "attachment;" in d_headers.get("content-disposition", "")
+    assert "LUT_3D_SIZE 17" in d_raw.decode("utf-8")
+
+    # demo_adapter.js static-demo parity check
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getCstPresets();
+assert.equal(pre.input_spaces.length, 9);
+assert.equal(pre.output_spaces.length, 6);
+assert.ok(pre.presets.length >= 8);
+const comp = await api.compileCst({{
+  config: {{
+    enabled: true,
+    input_space: "acescct",
+    output_space: "rec709_gamma24",
+    bradford_adaptation: true
+  }}
+}});
+assert.equal(comp.bradford_active, true);
+assert.equal(comp.bradford_matrix_3x3.length, 3);
+assert.ok(comp.ffmpeg_filter_expr.includes("colorchannelmixer="));
+const baked = await api.bakeCstCube({{
+  config: {{ enabled: true, input_space: "sony_slog3", output_space: "rec709_gamma24" }},
+  size: 17,
+  title: "Demo_CST"
+}});
+assert.ok(baked.cube_text.includes("LUT_3D_SIZE 17"));
+const blob = await api.downloadCstCubeBlob({{
+  config: {{ enabled: true, input_space: "arri_logc4", output_space: "rec709_gamma24" }},
+  size: 17,
+  title: "Demo_DL"
+}});
+assert.ok((await blob.text()).includes("LUT_3D_SIZE 17"));
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_cst_studio_desktop_and_mobile(ui_server: tuple[str, Path]) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#tab-color")
+
+            # Switch to Color page and capture un-transformed viewer snapshot
+            page.click("#tab-color")
+            page.wait_for_selector("#color-preview-canvas")
+            viewer_before = page.evaluate(
+                "() => document.getElementById('color-preview-canvas').toDataURL()"
+            )
+
+            # Open Camera Log CST Studio via Shift+L shortcut
+            page.keyboard.press("Shift+L")
+            page.wait_for_selector("#cst-studio-dialog[open]")
+
+            # Apply Sony S-Log3 -> Rec.709 preset
+            page.click(".cst-preset-btn[data-cst-preset='sony_slog3_to_rec709']")
+            page.wait_for_function(
+                "() => document.getElementById('color-cst-badge')?.classList.contains('is-active')"
+            )
+            assert page.locator("#cst-matrix-grid .cst-matrix-cell").count() == 9
+            assert "colorchannelmixer=" in (page.locator("#cst-fg-output").text_content() or "")
+
+            # Verify Color viewer updated live with CST Log -> ODT split wipe
+            viewer_after = page.evaluate(
+                "() => document.getElementById('color-preview-canvas').toDataURL()"
+            )
+            assert viewer_after != viewer_before
+
+            # Drag Shoulder handle on Tone Curve canvas & verify shoulder value updates
+            sh_before = float(page.locator("#cst-shoulder-num").input_value())
+            curve_box = page.locator("#cst-tone-curve-canvas").bounding_box()
+            assert curve_box is not None
+            hx = curve_box["x"] + 36 + 0.78 * (curve_box["width"] - 50)
+            hy = curve_box["y"] + 22 + (1.0 - (0.64 + (1.0 - sh_before) * 0.28)) * (
+                curve_box["height"] - 46
+            )
+            page.mouse.move(hx, hy)
+            page.mouse.down()
+            page.mouse.move(hx, hy + 28, steps=4)
+            page.mouse.up()
+            sh_after = float(page.locator("#cst-shoulder-num").input_value())
+            assert sh_after != sh_before
+
+            # Bake .cube LUT inside CST Studio
+            page.click("#btn-cst-bake-cube")
+            page.wait_for_function(
+                "() => (document.getElementById('cst-cube-preview')?.textContent || '')"
+                ".includes('LUT_3D_SIZE')"
+            )
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#btn-close-cst-studio")
+            page.click("#lang-fr")
+            assert (page.locator("#btn-open-cst-studio").text_content() or "").strip() == "Log CST"
+            page.click("#btn-open-cst-studio")
+            page.wait_for_selector("#cst-studio-dialog[open]")
+            fr_txt = page.locator("#cst-studio-dialog").text_content() or ""
+            assert "Transformation Colorimétrique Caméra Log" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-cst-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 layout & touch targets check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-open-cst-studio")
+            page.wait_for_selector("#cst-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('cst-studio-dialog').getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-color-cst-toggle",
+                "btn-open-cst-studio",
+                "btn-cst-bake-cube",
+                "btn-cst-download-cube",
+                "btn-close-cst-studio",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-cst-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

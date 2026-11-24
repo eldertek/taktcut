@@ -2513,6 +2513,10 @@
                 <button type="button" id="btn-color-broadcast-safe" class="btn btn-chip bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.legalSafe" title="EBU R103 / Rec.709 Legal Limiter 16-235 (Shift+B)">Legal Safe</button>
                 <button type="button" id="btn-open-broadcast-studio" class="btn btn-chip bm-studio-btn" data-i18n="broadcast.btn.studio" title="Open False Color, Zebra &amp; Broadcast Safe Studio (Shift+G)">IRE / Safe</button>
                 <span id="color-broadcast-badge" class="nle-tag mono" aria-live="polite">EBU 16-235</span>
+                <span class="broadcast-quick-sep" aria-hidden="true"></span>
+                <button type="button" id="btn-color-cst-toggle" class="btn btn-chip cst-toggle-btn" aria-pressed="false" data-i18n="cst.btn.toggle" title="Toggle Camera Log Color-Space Transform (CST)">CST</button>
+                <button type="button" id="btn-open-cst-studio" class="btn btn-chip cst-studio-btn" data-i18n="cst.btn.studio" title="Open Camera Log Color-Space Transform Studio (Shift+L)">Log CST</button>
+                <span id="color-cst-badge" class="nle-tag mono" aria-live="polite">CST OFF</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
@@ -4378,6 +4382,179 @@
         <label for="ar-fg-preview" data-i18n="autoReframe.ffmpegPreview">Compiled FFmpeg Dynamic Crop &amp; Scale Filtergraph</label>
         <pre id="ar-fg-preview" class="code-box mono"></pre>
       </div>
+    </div>
+  </dialog>
+
+  <dialog id="cst-studio-dialog" class="nle-dialog cst-studio-dialog" aria-labelledby="cst-studio-title" aria-describedby="cst-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="cst-studio-title" data-i18n="cst.dialog.title">Camera Log Color-Space Transform (CST) Studio</h2>
+        <p id="cst-studio-subtitle" class="nle-dialog-subtitle" data-i18n="cst.dialog.subtitle">IDT Log Decoding, Bradford 3x3 Chromatic Adaptation, Gamut Compression &amp; Filmic Tone-Mapping</p>
+      </div>
+      <div class="cst-header-actions">
+        <span id="cst-active-preset-badge" class="nle-tag mono">ARRI LogC4 -> Rec.709</span>
+        <button type="button" id="btn-close-cst-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+    <div class="nle-dialog-body cst-dialog-body">
+      <div class="cst-top-toggle-bar">
+        <label class="inline-check cst-enable-check" for="cst-enabled-toggle">
+          <input type="checkbox" id="cst-enabled-toggle">
+          <span data-i18n="cst.enableLabel">Enable Live CST on Color Viewer</span>
+        </label>
+        <label class="inline-check cst-bradford-check" for="cst-bradford-toggle">
+          <input type="checkbox" id="cst-bradford-toggle" checked>
+          <span data-i18n="cst.bradfordLabel">Bradford 3x3 Adaptation (D60/D65)</span>
+        </label>
+      </div>
+
+      <div class="cst-preset-strip" id="cst-preset-strip" role="group" aria-label="Camera Log to ODT presets">
+        <span class="pill-label" data-i18n="cst.presetsLabel">CAMERA LOG -&gt; ODT PRESETS</span>
+      </div>
+
+      <div class="cst-workstation-grid">
+        <div class="cst-controls-col">
+          <div class="cst-select-grid">
+            <div class="form-row">
+              <label for="cst-input-space" data-i18n="cst.inputSpace">Input Color Space (IDT)</label>
+              <select id="cst-input-space" class="input-control mono">
+                <option value="arri_logc4" selected>ARRI LogC4 (AWG4)</option>
+                <option value="arri_logc3">ARRI LogC3 EI 800 (AWG3)</option>
+                <option value="sony_slog3">Sony S-Log3 (S-Gamut3.Cine)</option>
+                <option value="red_log3g10">RED Log3G10 (REDWideGamutRGB)</option>
+                <option value="canon_clog2">Canon C-Log2 (Cinema Gamut)</option>
+                <option value="panasonic_vlog">Panasonic V-Log (V-Gamut)</option>
+                <option value="acescct">ACEScct (AP1 D60)</option>
+                <option value="rec709_gamma24">Rec.709 / Gamma 2.4</option>
+                <option value="linear_srgb">Linear Scene-Referred</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="cst-output-space" data-i18n="cst.outputSpace">Output Color Space (ODT)</label>
+              <select id="cst-output-space" class="input-control mono">
+                <option value="rec709_gamma24" selected>Rec.709 (Gamma 2.4 / BT.1886)</option>
+                <option value="srgb_piecewise">sRGB (IEC 61966-2-1 Web)</option>
+                <option value="display_p3">Display P3 (Cinema / Apple D65)</option>
+                <option value="rec2020_pq">Rec.2020 PQ (ST 2084 HDR)</option>
+                <option value="rec2020_hlg">Rec.2020 HLG (ARIB STD-B67)</option>
+                <option value="acescct_ap1">ACEScct (AP1 D60)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="cst-tone-mode" data-i18n="cst.toneMapping">Tone Mapping Method</label>
+              <select id="cst-tone-mode" class="input-control mono">
+                <option value="filmic_aces" selected data-i18n="cst.tone.filmic_aces">Filmic ACES / RRT</option>
+                <option value="luminance_bt2390" data-i18n="cst.tone.luminance_bt2390">Luminance Mapping (BT.2390)</option>
+                <option value="simple_reinhard" data-i18n="cst.tone.simple_reinhard">Simple (Reinhard)</option>
+                <option value="none" data-i18n="cst.tone.none">None (Scene Linear)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="cst-gamut-mode" data-i18n="cst.gamutMapping">Gamut Mapping Method</label>
+              <select id="cst-gamut-mode" class="input-control mono">
+                <option value="saturation_compress" selected data-i18n="cst.gamut.saturation_compress">Saturation Compression</option>
+                <option value="luminance_preserve" data-i18n="cst.gamut.luminance_preserve">Luminance-Preserving Map</option>
+                <option value="clip" data-i18n="cst.gamut.clip">Hard Clip [0..1]</option>
+                <option value="none" data-i18n="cst.gamut.none">None (Unclamped)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="cst-sliders-grid mono">
+            <div class="cst-param-row">
+              <label for="cst-exposure-range" data-i18n="cst.exposureEv">Exposure (EV)</label>
+              <input type="range" id="cst-exposure-range" min="-6.0" max="6.0" step="0.05" value="0.0">
+              <input type="number" id="cst-exposure-num" class="input-num" min="-6.0" max="6.0" step="0.05" value="0.00" aria-label="CST Exposure EV">
+            </div>
+            <div class="cst-param-row">
+              <label for="cst-contrast-range" data-i18n="cst.contrast">Pivot Contrast (18%)</label>
+              <input type="range" id="cst-contrast-range" min="0.50" max="2.00" step="0.01" value="1.00">
+              <input type="number" id="cst-contrast-num" class="input-num" min="0.50" max="2.00" step="0.01" value="1.00" aria-label="CST Pivot Contrast">
+            </div>
+            <div class="cst-param-row">
+              <label for="cst-shoulder-range" data-i18n="cst.shoulder">Highlight Shoulder</label>
+              <input type="range" id="cst-shoulder-range" min="0.0" max="1.0" step="0.01" value="0.55">
+              <input type="number" id="cst-shoulder-num" class="input-num" min="0.0" max="1.0" step="0.01" value="0.55" aria-label="CST Highlight Shoulder">
+            </div>
+            <div class="cst-param-row">
+              <label for="cst-toe-range" data-i18n="cst.toe">Shadow Toe Density</label>
+              <input type="range" id="cst-toe-range" min="0.0" max="1.0" step="0.01" value="0.35">
+              <input type="number" id="cst-toe-num" class="input-num" min="0.0" max="1.0" step="0.01" value="0.35" aria-label="CST Shadow Toe Density">
+            </div>
+            <div class="cst-param-row">
+              <label for="cst-gamut-comp-range" data-i18n="cst.gamutCompression">Gamut Compression</label>
+              <input type="range" id="cst-gamut-comp-range" min="0.0" max="1.0" step="0.01" value="0.35">
+              <input type="number" id="cst-gamut-comp-num" class="input-num" min="0.0" max="1.0" step="0.01" value="0.35" aria-label="CST Gamut Compression">
+            </div>
+            <div class="cst-param-row">
+              <label for="cst-white-shift-range" data-i18n="cst.whiteShift">White Point Trim (K)</label>
+              <input type="range" id="cst-white-shift-range" min="-2500" max="2500" step="25" value="0">
+              <input type="number" id="cst-white-shift-num" class="input-num" min="-2500" max="2500" step="25" value="0" aria-label="CST White Point Kelvin Trim">
+            </div>
+            <div class="cst-param-row">
+              <label for="cst-white-nits-range" data-i18n="cst.whiteNits">Peak White (nits)</label>
+              <input type="range" id="cst-white-nits-range" min="100" max="4000" step="50" value="100">
+              <input type="number" id="cst-white-nits-num" class="input-num" min="100" max="4000" step="50" value="100" aria-label="CST Peak White nits">
+            </div>
+            <div class="cst-param-row">
+              <label for="cst-saturation-range" data-i18n="cst.saturation">Post-ODT Saturation</label>
+              <input type="range" id="cst-saturation-range" min="0.0" max="2.0" step="0.01" value="1.00">
+              <input type="number" id="cst-saturation-num" class="input-num" min="0.0" max="2.0" step="0.01" value="1.00" aria-label="CST Post-ODT Saturation">
+            </div>
+          </div>
+        </div>
+
+        <div class="cst-scopes-col">
+          <div class="cst-canvas-card">
+            <div class="pane-subheader">
+              <span data-i18n="cst.curveTitle">Filmic Tone-Mapping &amp; OETF Curve (Drag Toe / Shoulder)</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="cst-tone-curve-canvas" class="studio-canvas cst-canvas" tabindex="0" aria-label="Interactive Filmic Tone-Mapping Shoulder and Toe Curve"></canvas>
+            </div>
+          </div>
+
+          <div class="cst-canvas-pair">
+            <div class="cst-canvas-card">
+              <div class="pane-subheader">
+                <span data-i18n="cst.gamutTitle">CIE 1931 xy Chromaticity &amp; Bradford 3x3 Matrix</span>
+              </div>
+              <div class="viewer-well">
+                <canvas id="cst-gamut-canvas" class="studio-canvas cst-canvas" aria-label="CIE 1931 xy Chromaticity Gamut Diagram"></canvas>
+              </div>
+            </div>
+
+            <div class="cst-matrix-card">
+              <div class="pane-subheader">
+                <span data-i18n="cst.matrixTitle">Combined 3x3 Bradford-Adapted Matrix (IDT -&gt; ODT)</span>
+              </div>
+              <div id="cst-matrix-grid" class="cst-matrix-grid mono" aria-live="polite"></div>
+              <div id="cst-telemetry-grid" class="broadcast-compliance-grid cst-telemetry-grid" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="cst-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="cst.status.idle">CST bypass active. Enable CST or pick a Camera Log preset.</div>
+
+      <div class="btn-row cst-actions">
+        <button type="button" id="btn-cst-bake-cube" class="btn btn-primary" data-i18n="cst.action.bakeCube">Bake CST .cube</button>
+        <button type="button" id="btn-cst-download-cube" class="btn btn-secondary" data-i18n="cst.action.downloadCube">Download .cube</button>
+        <button type="button" id="btn-cst-send-deliver" class="btn btn-secondary" data-i18n="cst.action.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-cst-copy-fg" class="btn btn-secondary" data-i18n="cst.action.copyFg">Copy FFmpeg CST</button>
+        <button type="button" id="btn-cst-reset" class="btn btn-mini" data-i18n="cst.action.reset">Reset CST</button>
+      </div>
+
+      <details id="cst-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="cst.drawerTitle">FFmpeg CST Filtergraph (colorchannelmixer + curves + setparams)</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="cst-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="cst-cube-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
     </div>
   </dialog>
 

@@ -11,6 +11,8 @@ import {
   drawColorScopeCanvas,
   drawColorWarperCanvas,
   drawCompoundMiniMapCanvas,
+  drawCstGamutDiagramCanvas,
+  drawCstToneCurveCanvas,
   drawFramesCanvas,
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
@@ -29,6 +31,7 @@ import {
   findActiveSubtitleCue,
   framesToSmpte,
   hitTestColorWarperPoint,
+  hitTestCstToneCurveHandle,
   hitTestFairlightFftBand,
   renderFairlightDynamicsCanvas,
   renderFairlightEqCurveCanvas,
@@ -73,6 +76,9 @@ import {
   COLOR_WARPER_PRESETS_CLIENT,
   COLOR_WARPER_SAT_RINGS,
   COMPOUND_COLOR_TAGS,
+  CST_INPUT_SPACES_CLIENT,
+  CST_OUTPUT_SPACES_CLIENT,
+  CST_PRESETS_CLIENT,
   CURVE_CHANNELS,
   DELIVERY_PRESETS,
   DYNAMIC_ZOOM_DEFAULT,
@@ -169,6 +175,7 @@ import {
   compileAutoDuckFilterClient,
   compileAutoReframeFiltergraphClient,
   compileCompoundFiltergraphClient,
+  compileCstFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
@@ -197,6 +204,7 @@ import {
   createDefaultColorNodeTree,
   createDefaultBroadcastMonitorConfig,
   createDefaultColorWarper,
+  createDefaultCstConfigClient,
   createDefaultHslCurves,
   createDefaultPowerWindow,
   createDefaultQualifier,
@@ -271,6 +279,7 @@ import {
   normalizeAutoDuckParams,
   normalizeAutoReframeConfigClient,
   normalizeBroadcastConfigClient,
+  normalizeCstConfigClient,
   panToAutoReframeSubjectClient,
   normalizeClipAudio,
   normalizeClipLabelColor,
@@ -617,6 +626,15 @@ const state = {
   broadcastComplianceReport: null,
   broadcastCompileResult: null,
   broadcastAnalyzeSeq: 0,
+  cstConfig: createDefaultCstConfigClient(),
+  cstStudio: {
+    isOpen: false,
+    compiled: null,
+    lastCubeText: "",
+    dragHandle: null,
+    hoverHandle: null,
+    compileSeq: 0
+  },
   autoReframeStudio: {
     isOpen: false,
     previewOnProgram: true,
@@ -1023,6 +1041,7 @@ function setLanguage(lang) {
   renderUpdateButton();
   syncBroadcastMonitorUI();
   if (typeof syncAutoReframeUI === "function") syncAutoReframeUI();
+  if (typeof syncCstStudioUI === "function") syncCstStudioUI();
   renderTimelineUI();
   renderMediaPool();
   const teSearch = byId("text-edit-search");
@@ -1560,7 +1579,8 @@ function redrawActiveCanvases() {
         window: activeNode ? activeNode.power_window : null,
         showOverlay: Boolean(state.powerWindowOverlay)
       },
-      broadcastMonitor: state.broadcastMonitor
+      broadcastMonitor: state.broadcastMonitor,
+      cstConfig: state.cstConfig
     });
     drawColorScopeCanvas(
       byId("color-scope-canvas"),
@@ -1599,6 +1619,9 @@ function redrawActiveCanvases() {
     drawColorWheel(byId("wheel-lift"), "lift", state.colorGrade.lift);
     drawColorWheel(byId("wheel-gamma"), "gamma", state.colorGrade.gamma);
     drawColorWheel(byId("wheel-gain"), "gain", state.colorGrade.gain);
+    if (state.cstStudio && state.cstStudio.isOpen && typeof renderCstStudioCanvases === "function") {
+      renderCstStudioCanvases();
+    }
   } else if (state.activeTab === "qa" && state.lastQaReport) {
     drawLoudnessCanvas(byId("qa-loudness-canvas"), state.lastQaReport.loudness);
     drawFramesCanvas(byId("qa-frames-canvas"), state.lastQaReport.frame_samples);
@@ -13112,6 +13135,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+Z", descKey: "shortcuts.key.zebra" },
       { kbd: "Shift+B", descKey: "shortcuts.key.broadcastSafe" },
       { kbd: "Shift+G", descKey: "shortcuts.key.broadcastStudio" },
+      { kbd: "Shift+L", descKey: "shortcuts.key.cstStudio" },
       { kbd: "Shift+R", descKey: "shortcuts.key.autoReframe" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
@@ -13307,6 +13331,11 @@ function handleTransportKeydown(ev) {
     if (lower === "g") {
       ev.preventDefault();
       openBroadcastMonitorDialog();
+      return;
+    }
+    if (lower === "l") {
+      ev.preventDefault();
+      openCstStudioDialog();
       return;
     }
   }
@@ -19986,6 +20015,7 @@ function wireEvents() {
   wireTextEditEvents();
   wireBroadcastMonitorEvents();
   wireAutoReframeEvents();
+  wireCstStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -20449,6 +20479,7 @@ async function bootstrap() {
   syncColorInputsFromState();
   syncBroadcastMonitorUI();
   syncAutoReframeUI();
+  syncCstStudioUI();
   syncSplitWipeControls("color");
   syncSplitWipeControls("fx");
   renderStillsGallery();
@@ -23850,6 +23881,461 @@ function wireAutoReframeEvents() {
     };
     curveCanvas.addEventListener("pointerup", endCurveDrag);
     curveCanvas.addEventListener("pointercancel", endCurveDrag);
+  }
+}
+
+// =============================================================================
+// CAMERA LOG COLOR-SPACE TRANSFORM (CST) & BRADFORD 3x3 STUDIO
+// =============================================================================
+
+const CST_SLIDER_PAIRS = [
+  { key: "exposure_ev", rangeId: "cst-exposure-range", numId: "cst-exposure-num", decimals: 2 },
+  { key: "contrast", rangeId: "cst-contrast-range", numId: "cst-contrast-num", decimals: 2 },
+  { key: "shoulder_strength", rangeId: "cst-shoulder-range", numId: "cst-shoulder-num", decimals: 2 },
+  { key: "toe_strength", rangeId: "cst-toe-range", numId: "cst-toe-num", decimals: 2 },
+  { key: "gamut_compression", rangeId: "cst-gamut-comp-range", numId: "cst-gamut-comp-num", decimals: 2 },
+  { key: "white_point_shift_k", rangeId: "cst-white-shift-range", numId: "cst-white-shift-num", decimals: 0 },
+  { key: "white_point_nits", rangeId: "cst-white-nits-range", numId: "cst-white-nits-num", decimals: 0 },
+  { key: "saturation", rangeId: "cst-saturation-range", numId: "cst-saturation-num", decimals: 2 }
+];
+
+function buildCstPresetButtons() {
+  const strip = byId("cst-preset-strip");
+  if (!strip) return;
+  const labelEl = strip.querySelector(".pill-label");
+  const buttons = [];
+  if (labelEl) buttons.push(labelEl);
+  for (const preset of CST_PRESETS_CLIENT) {
+    const btn = dom("button", "btn btn-chip cst-preset-btn", preset.label);
+    btn.type = "button";
+    btn.dataset.cstPreset = preset.preset_id;
+    btn.title = preset.description;
+    btn.setAttribute("aria-pressed", state.cstConfig.preset_id === preset.preset_id && state.cstConfig.enabled ? "true" : "false");
+    if (state.cstConfig.preset_id === preset.preset_id && state.cstConfig.enabled) {
+      btn.classList.add("is-active");
+    }
+    btn.addEventListener("click", () => {
+      applyCstPresetSelection(preset.preset_id);
+    });
+    buttons.push(btn);
+  }
+  strip.replaceChildren(...buttons);
+}
+
+function renderCstMatrixAndTelemetry(compiled) {
+  const matrixEl = byId("cst-matrix-grid");
+  const telemetryEl = byId("cst-telemetry-grid");
+  const fgEl = byId("cst-fg-output");
+  if (matrixEl && compiled && Array.isArray(compiled.bradford_matrix_3x3)) {
+    const cells = [];
+    for (let r = 0; r < 3; r += 1) {
+      for (let c = 0; c < 3; c += 1) {
+        const val = Number(compiled.bradford_matrix_3x3[r][c] ?? 0);
+        const cell = dom("div", "cst-matrix-cell", val.toFixed(4));
+        if (r === c) cell.classList.add("is-diag");
+        cells.push(cell);
+      }
+    }
+    matrixEl.replaceChildren(...cells);
+  }
+  if (telemetryEl && compiled) {
+    const srcSpec = CST_INPUT_SPACES_CLIENT[compiled.config.input_space] || CST_INPUT_SPACES_CLIENT.arri_logc4;
+    const dstSpec = CST_OUTPUT_SPACES_CLIENT[compiled.config.output_space] || CST_OUTPUT_SPACES_CLIENT.rec709_gamma24;
+    const drPreserved = Math.min(
+      srcSpec.dynamic_range_stops,
+      dstSpec.dynamic_range_stops + 3.5 * compiled.config.shoulder_strength
+    ).toFixed(1);
+    const items = [
+      { k: t("cst.kv.coverage"), v: `${Number(compiled.gamut_coverage_pct || 0).toFixed(1)}%` },
+      { k: t("cst.kv.oog"), v: `${Number(compiled.out_of_gamut_pct || 0).toFixed(1)}%` },
+      { k: t("cst.kv.dr"), v: `${drPreserved} stops` },
+      { k: t("cst.kv.midGrey"), v: `${(Number(compiled.middle_grey_out || 0) * 100).toFixed(1)}%` },
+      { k: t("cst.kv.rolloff"), v: `${Number(compiled.highlight_rolloff_db || 0).toFixed(2)} dB` },
+      { k: t("cst.kv.bradford"), v: compiled.bradford_active ? "D60/D65 ON" : "UNITY" }
+    ];
+    telemetryEl.replaceChildren(
+      ...items.map((item) => {
+        const row = dom("div", "bm-kv-row");
+        row.appendChild(dom("span", "bm-kv-k", item.k));
+        row.appendChild(dom("span", "bm-kv-v mono", item.v));
+        return row;
+      })
+    );
+  }
+  if (fgEl && compiled) {
+    fgEl.textContent = `${compiled.ffmpeg_filter_expr}\n# Hint: ${compiled.ffmpeg_colorspace_hint}`;
+  }
+}
+
+function renderCstStudioCanvases() {
+  const compiled = state.cstStudio.compiled || compileCstFiltergraphClient(state.cstConfig);
+  const curveCanvas = byId("cst-tone-curve-canvas");
+  if (curveCanvas) {
+    drawCstToneCurveCanvas(curveCanvas, state.cstConfig, compiled, state.cstStudio.hoverHandle);
+  }
+  const gamutCanvas = byId("cst-gamut-canvas");
+  if (gamutCanvas) {
+    drawCstGamutDiagramCanvas(gamutCanvas, compiled);
+  }
+}
+
+function syncCstStudioUI() {
+  const cfg = normalizeCstConfigClient(state.cstConfig);
+  state.cstConfig = cfg;
+  const compiled = compileCstFiltergraphClient(cfg);
+  state.cstStudio.compiled = compiled;
+
+  const toggleBtn = byId("btn-color-cst-toggle");
+  if (toggleBtn) {
+    toggleBtn.setAttribute("aria-pressed", cfg.enabled ? "true" : "false");
+    toggleBtn.classList.toggle("is-active", cfg.enabled);
+  }
+  const badge = byId("color-cst-badge");
+  const srcSpec = CST_INPUT_SPACES_CLIENT[cfg.input_space];
+  const dstSpec = CST_OUTPUT_SPACES_CLIENT[cfg.output_space];
+  if (badge) {
+    if (cfg.enabled && srcSpec && dstSpec) {
+      badge.textContent = `${srcSpec.transfer_label.split(" ")[0]} -> ${dstSpec.gamut_label.split(" ")[0]}`;
+      badge.classList.add("is-active");
+    } else {
+      badge.textContent = "CST OFF";
+      badge.classList.remove("is-active");
+    }
+  }
+  const presetBadge = byId("cst-active-preset-badge");
+  if (presetBadge && srcSpec && dstSpec) {
+    presetBadge.textContent = cfg.enabled
+      ? `${srcSpec.transfer_label} -> ${dstSpec.gamut_label}`
+      : "BYPASS";
+  }
+
+  const enabledCb = byId("cst-enabled-toggle");
+  if (enabledCb) enabledCb.checked = Boolean(cfg.enabled);
+  const bradfordCb = byId("cst-bradford-toggle");
+  if (bradfordCb) bradfordCb.checked = Boolean(cfg.bradford_adaptation);
+
+  const inSel = byId("cst-input-space");
+  if (inSel && inSel.value !== cfg.input_space) inSel.value = cfg.input_space;
+  const outSel = byId("cst-output-space");
+  if (outSel && outSel.value !== cfg.output_space) outSel.value = cfg.output_space;
+  const toneSel = byId("cst-tone-mode");
+  if (toneSel && toneSel.value !== cfg.tone_mapping_mode) toneSel.value = cfg.tone_mapping_mode;
+  const gamutSel = byId("cst-gamut-mode");
+  if (gamutSel && gamutSel.value !== cfg.gamut_mapping_mode) gamutSel.value = cfg.gamut_mapping_mode;
+
+  const activeEl = document.activeElement;
+  for (const pair of CST_SLIDER_PAIRS) {
+    const rEl = byId(pair.rangeId);
+    const nEl = byId(pair.numId);
+    const val = Number(cfg[pair.key] ?? 0);
+    if (rEl) rEl.value = String(val);
+    if (nEl && activeEl !== nEl) {
+      nEl.value = val.toFixed(pair.decimals);
+    }
+  }
+
+  buildCstPresetButtons();
+  renderCstMatrixAndTelemetry(compiled);
+  const statusEl = byId("cst-status-note");
+  if (statusEl) {
+    statusEl.textContent = cfg.enabled
+      ? `${srcSpec?.label || cfg.input_space} -> ${dstSpec?.label || cfg.output_space} | Tone: ${cfg.tone_mapping_mode} | Bradford: ${compiled.bradford_active ? "ON" : "UNITY"}`
+      : t("cst.status.idle");
+  }
+  if (state.cstStudio.isOpen) {
+    renderCstStudioCanvases();
+  }
+}
+
+async function compileCstServerAsync() {
+  const seq = (state.cstStudio.compileSeq += 1);
+  try {
+    const compiled = await api.compileCst({ config: state.cstConfig });
+    if (seq !== state.cstStudio.compileSeq) return;
+    state.cstStudio.compiled = compiled;
+    renderCstMatrixAndTelemetry(compiled);
+    if (state.cstStudio.isOpen) {
+      renderCstStudioCanvases();
+    }
+  } catch {
+    // Client-side math keeps UI deterministic even offline
+  }
+}
+
+function updateCstConfig(updater, { syncServer = true } = {}) {
+  const nextRaw = typeof updater === "function" ? updater(state.cstConfig) : { ...state.cstConfig, ...updater };
+  state.cstConfig = normalizeCstConfigClient(nextRaw);
+  syncCstStudioUI();
+  redrawActiveCanvases();
+  if (syncServer) {
+    compileCstServerAsync();
+  }
+}
+
+function applyCstPresetSelection(presetId) {
+  const preset = CST_PRESETS_CLIENT.find((p) => p.preset_id === presetId);
+  if (!preset) return;
+  updateCstConfig({ ...preset.config, enabled: true, preset_id: preset.preset_id });
+}
+
+function openCstStudioDialog() {
+  const dlg = byId("cst-studio-dialog");
+  if (!dlg) return;
+  state.cstStudio.isOpen = true;
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  syncCstStudioUI();
+  requestAnimationFrame(() => {
+    renderCstStudioCanvases();
+  });
+  compileCstServerAsync();
+}
+
+function closeCstStudioDialog() {
+  const dlg = byId("cst-studio-dialog");
+  state.cstStudio.isOpen = false;
+  if (!dlg || !dlg.open) return;
+  if (typeof dlg.close === "function") dlg.close();
+  else dlg.removeAttribute("open");
+}
+
+async function bakeCstCubeAction() {
+  const sizeEl = byId("cube-size-select");
+  const size = sizeEl ? Number(sizeEl.value || 33) : 33;
+  const title = `cst_${state.cstConfig.input_space}_to_${state.cstConfig.output_space}`;
+  try {
+    const res = await api.bakeCstCube({
+      config: state.cstConfig,
+      size,
+      title
+    });
+    state.cstStudio.lastCubeText = res.cube_text || "";
+    const previewEl = byId("cst-cube-preview");
+    if (previewEl) {
+      const lines = (res.cube_text || "").split(/\r?\n/).slice(0, 26).join("\n");
+      previewEl.textContent = lines;
+    }
+    const drawer = byId("cst-fg-drawer");
+    if (drawer) drawer.open = true;
+    const statusEl = byId("cst-status-note");
+    if (statusEl) {
+      statusEl.textContent = t("cst.status.baked").replace(/\{size\}/g, String(size));
+    }
+  } catch (err) {
+    const statusEl = byId("cst-status-note");
+    if (statusEl) statusEl.textContent = `CST .cube bake failed: ${err.message || err}`;
+  }
+}
+
+async function downloadCstCubeAction() {
+  const sizeEl = byId("cube-size-select");
+  const size = sizeEl ? Number(sizeEl.value || 33) : 33;
+  const title = `cst_${state.cstConfig.input_space}_to_${state.cstConfig.output_space}`;
+  try {
+    const blob = await api.downloadCstCubeBlob({
+      config: state.cstConfig,
+      size,
+      title,
+      filename: `${title}.cube`
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title}.cube`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    const statusEl = byId("cst-status-note");
+    if (statusEl) statusEl.textContent = `CST .cube download failed: ${err.message || err}`;
+  }
+}
+
+function sendCstToDeliverAction() {
+  const compiled = state.cstStudio.compiled || compileCstFiltergraphClient(state.cstConfig);
+  const deliverCdlInput = byId("render-lut-path") || byId("cube-out-path");
+  if (deliverCdlInput) {
+    deliverCdlInput.value = `luts/cst_${state.cstConfig.input_space}_to_${state.cstConfig.output_space}.cube`;
+  }
+  const fgOut = byId("color-filtergraph-output");
+  if (fgOut && compiled) {
+    fgOut.textContent = compiled.ffmpeg_filter_expr;
+  }
+  closeCstStudioDialog();
+  switchTab("render");
+  const statusEl = byId("cst-status-note");
+  if (statusEl) {
+    statusEl.textContent = `CST pipeline (${state.cstConfig.input_space} -> ${state.cstConfig.output_space}) staged for Deliver.`;
+  }
+}
+
+function wireCstStudioEvents() {
+  byId("btn-color-cst-toggle")?.addEventListener("click", () => {
+    updateCstConfig((cur) => ({ ...cur, enabled: !cur.enabled }));
+  });
+  byId("btn-open-cst-studio")?.addEventListener("click", openCstStudioDialog);
+  byId("btn-close-cst-studio")?.addEventListener("click", closeCstStudioDialog);
+  const dlg = byId("cst-studio-dialog");
+  dlg?.addEventListener("close", () => {
+    state.cstStudio.isOpen = false;
+  });
+
+  byId("cst-enabled-toggle")?.addEventListener("change", (ev) => {
+    updateCstConfig((cur) => ({ ...cur, enabled: Boolean(ev.target.checked) }));
+  });
+  byId("cst-bradford-toggle")?.addEventListener("change", (ev) => {
+    updateCstConfig((cur) => ({ ...cur, bradford_adaptation: Boolean(ev.target.checked), preset_id: "custom" }));
+  });
+
+  byId("cst-input-space")?.addEventListener("change", (ev) => {
+    updateCstConfig((cur) => ({ ...cur, input_space: ev.target.value, enabled: true, preset_id: "custom" }));
+  });
+  byId("cst-output-space")?.addEventListener("change", (ev) => {
+    const outSpace = ev.target.value;
+    const isHdr = outSpace === "rec2020_pq" || outSpace === "rec2020_hlg";
+    updateCstConfig((cur) => ({
+      ...cur,
+      output_space: outSpace,
+      white_point_nits: isHdr && cur.white_point_nits < 400 ? 1000 : !isHdr && cur.white_point_nits > 400 ? 100 : cur.white_point_nits,
+      enabled: true,
+      preset_id: "custom"
+    }));
+  });
+  byId("cst-tone-mode")?.addEventListener("change", (ev) => {
+    updateCstConfig((cur) => ({ ...cur, tone_mapping_mode: ev.target.value, enabled: true, preset_id: "custom" }));
+  });
+  byId("cst-gamut-mode")?.addEventListener("change", (ev) => {
+    updateCstConfig((cur) => ({ ...cur, gamut_mapping_mode: ev.target.value, enabled: true, preset_id: "custom" }));
+  });
+
+  for (const pair of CST_SLIDER_PAIRS) {
+    const rEl = byId(pair.rangeId);
+    const nEl = byId(pair.numId);
+    rEl?.addEventListener("input", (ev) => {
+      const val = Number.parseFloat(ev.target.value);
+      if (Number.isFinite(val)) {
+        updateCstConfig((cur) => ({ ...cur, [pair.key]: val, enabled: true, preset_id: "custom" }), { syncServer: false });
+      }
+    });
+    rEl?.addEventListener("change", () => compileCstServerAsync());
+
+    // Never clamp controlled numeric inputs mid-keystroke
+    nEl?.addEventListener("input", (ev) => {
+      const raw = String(ev.target.value || "").trim();
+      if (raw === "" || raw === "-" || raw === "." || raw === "-.") return;
+      const val = Number.parseFloat(raw);
+      if (Number.isFinite(val)) {
+        const minV = Number.parseFloat(nEl.min);
+        const maxV = Number.parseFloat(nEl.max);
+        if (val >= minV && val <= maxV) {
+          updateCstConfig((cur) => ({ ...cur, [pair.key]: val, enabled: true, preset_id: "custom" }), { syncServer: false });
+        }
+      }
+    });
+    nEl?.addEventListener("blur", () => {
+      syncCstStudioUI();
+      compileCstServerAsync();
+    });
+    nEl?.addEventListener("change", () => {
+      const val = Number.parseFloat(nEl.value);
+      if (Number.isFinite(val)) {
+        updateCstConfig((cur) => ({ ...cur, [pair.key]: val, enabled: true, preset_id: "custom" }));
+      } else {
+        syncCstStudioUI();
+      }
+    });
+  }
+
+  byId("btn-cst-bake-cube")?.addEventListener("click", bakeCstCubeAction);
+  byId("btn-cst-download-cube")?.addEventListener("click", downloadCstCubeAction);
+  byId("btn-cst-send-deliver")?.addEventListener("click", sendCstToDeliverAction);
+  byId("btn-cst-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.cstStudio.compiled || compileCstFiltergraphClient(state.cstConfig);
+    try {
+      await navigator.clipboard.writeText(compiled.ffmpeg_filter_expr);
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    const statusEl = byId("cst-status-note");
+    if (statusEl) statusEl.textContent = t("cst.action.copied");
+  });
+  byId("btn-cst-reset")?.addEventListener("click", () => {
+    updateCstConfig(createDefaultCstConfigClient());
+  });
+
+  // Interactive Toe & Shoulder dragging on Filmic Tone Curve Canvas
+  const curveCanvas = byId("cst-tone-curve-canvas");
+  if (curveCanvas) {
+    curveCanvas.addEventListener("pointerdown", (ev) => {
+      const hit = hitTestCstToneCurveHandle(curveCanvas, ev.clientX, ev.clientY, state.cstConfig);
+      if (!hit) return;
+      state.cstStudio.dragHandle = hit;
+      state.cstStudio.hoverHandle = hit;
+      try {
+        curveCanvas.setPointerCapture(ev.pointerId);
+      } catch {
+        // Ignore pointer capture errors
+      }
+      renderCstStudioCanvases();
+    });
+    curveCanvas.addEventListener("pointermove", (ev) => {
+      if (!state.cstStudio.dragHandle) {
+        const hover = hitTestCstToneCurveHandle(curveCanvas, ev.clientX, ev.clientY, state.cstConfig);
+        if (hover !== state.cstStudio.hoverHandle) {
+          state.cstStudio.hoverHandle = hover;
+          renderCstStudioCanvases();
+        }
+        return;
+      }
+      const rect = curveCanvas.getBoundingClientRect();
+      const padT = 22;
+      const padB = 24;
+      const plotH = Math.max(60, rect.height - padT - padB);
+      const yNorm = Math.max(0, Math.min(1, 1 - (ev.clientY - rect.top - padT) / plotH));
+      if (state.cstStudio.dragHandle === "toe") {
+        const nextToe = Number(Math.max(0, Math.min(1, 1 - (yNorm - 0.08) / 0.22)).toFixed(2));
+        updateCstConfig((cur) => ({ ...cur, toe_strength: nextToe, enabled: true, preset_id: "custom" }), { syncServer: false });
+      } else if (state.cstStudio.dragHandle === "shoulder") {
+        const nextSh = Number(Math.max(0, Math.min(1, 1 - (yNorm - 0.64) / 0.28)).toFixed(2));
+        updateCstConfig((cur) => ({ ...cur, shoulder_strength: nextSh, enabled: true, preset_id: "custom" }), { syncServer: false });
+      }
+    });
+    const endCurveDrag = (ev) => {
+      if (!state.cstStudio.dragHandle) return;
+      state.cstStudio.dragHandle = null;
+      try {
+        if (ev && ev.pointerId !== undefined) curveCanvas.releasePointerCapture(ev.pointerId);
+      } catch {
+        // Ignore
+      }
+      compileCstServerAsync();
+    };
+    curveCanvas.addEventListener("pointerup", endCurveDrag);
+    curveCanvas.addEventListener("pointercancel", endCurveDrag);
+    curveCanvas.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowUp" || ev.key === "ArrowDown") {
+        ev.preventDefault();
+        const delta = ev.key === "ArrowUp" ? 0.04 : -0.04;
+        updateCstConfig((cur) => ({
+          ...cur,
+          shoulder_strength: Math.max(0, Math.min(1, Number((cur.shoulder_strength + delta).toFixed(2)))),
+          enabled: true,
+          preset_id: "custom"
+        }));
+      } else if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+        ev.preventDefault();
+        const delta = ev.key === "ArrowRight" ? 0.04 : -0.04;
+        updateCstConfig((cur) => ({
+          ...cur,
+          toe_strength: Math.max(0, Math.min(1, Number((cur.toe_strength + delta).toFixed(2)))),
+          enabled: true,
+          preset_id: "custom"
+        }));
+      }
+    });
   }
 }
 

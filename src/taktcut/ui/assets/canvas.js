@@ -6,6 +6,8 @@ import {
   COLOR_WARPER_HUE_LABELS,
   COLOR_WARPER_RING_RADII,
   COLOR_WARPER_SAT_RINGS,
+  CST_INPUT_SPACES_CLIENT,
+  CST_OUTPUT_SPACES_CLIENT,
   CURVE_CHANNELS,
   FAIRLIGHT_EQ_BAND_SPECS,
   FALSE_COLOR_PALETTES_CLIENT,
@@ -27,16 +29,20 @@ import {
   clampSplitWipePercent,
   computeAvSplitEditInfo,
   computeBpmBeatFrames,
+  computeCstGamutMatrixClient,
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
   computeTimelineZoomViewport,
   computeTitleOverlayAnchorBox,
+  compileCstFiltergraphClient,
+  encodeInputLogChannelClient,
   estimateFairlightCompressorGrClient,
   evaluateActiveNodeMaskAtClient,
   evaluateAutoReframeAtTimeClient,
   evaluateClipFadeEnvelope,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
+  evaluateCstRgbClient,
   evaluateFairlightDynamicsTransferDb,
   evaluateFairlightEqBandDb,
   evaluateFairlightEqCurveDb,
@@ -7110,6 +7116,8 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   };
 
   const bmConfig = splitOpts && splitOpts.broadcastMonitor ? splitOpts.broadcastMonitor : null;
+  const cstConfig = splitOpts && splitOpts.cstConfig && splitOpts.cstConfig.enabled ? splitOpts.cstConfig : null;
+  const dprScale = width > 0 ? canvas.width / width : 1;
   if (wipeEnabled) {
     const geom = computeSplitWipeGeometry(0, 0, width, height, wipePct);
     if (isRefMatchMode && splitOpts && splitOpts.refGrade) {
@@ -7118,6 +7126,15 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     } else {
       drawHalf(0, geom.dividerX, false);
       drawHalf(geom.dividerX, width, true);
+    }
+    if (cstConfig) {
+      const divPx = Math.max(0, Math.round(geom.dividerX * dprScale));
+      if (!isRefMatchMode && divPx > 0) {
+        applyCstLogBeforePass(ctx, 0, 0, divPx, canvas.height, cstConfig);
+      }
+      if (canvas.width - divPx > 0) {
+        applyCstPixelPass(ctx, divPx, 0, canvas.width - divPx, canvas.height, cstConfig);
+      }
     }
     if (bmConfig) {
       const rx = Math.max(0, Math.round(geom.dividerX));
@@ -7131,7 +7148,13 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
           beforeLabel: (splitOpts && splitOpts.refLabel) || "REF TARGET",
           afterLabel: (splitOpts && splitOpts.matchLabel) || "MATCHED"
         }
-      : splitOpts || {};
+      : cstConfig
+        ? {
+            ...(splitOpts || {}),
+            beforeLabel: (CST_INPUT_SPACES_CLIENT[cstConfig.input_space]?.transfer_label || "LOG").toUpperCase(),
+            afterLabel: (CST_OUTPUT_SPACES_CLIENT[cstConfig.output_space]?.gamut_label || "ODT").toUpperCase()
+          }
+        : splitOpts || {};
     drawSplitWipeOverlay(ctx, 0, 0, width, height, geom, overlayOpts);
     canvas._splitWipeGeom = {
       ...geom,
@@ -7140,6 +7163,9 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     };
   } else {
     drawHalf(0, width, true);
+    if (cstConfig) {
+      applyCstPixelPass(ctx, 0, 0, canvas.width, canvas.height, cstConfig);
+    }
     if (bmConfig) {
       applyBroadcastMonitorPixelPass(ctx, 0, 0, width, height, bmConfig, {
         drawLegend: true
@@ -10639,4 +10665,448 @@ export function drawAutoReframeCurveCanvas(canvas, analysis, opts = {}) {
     durationS,
     hitNodes
   };
+}
+
+
+// =============================================================================
+// CAMERA LOG CST PIXEL PASS + TONE-MAPPING CURVE & CIE 1931 GAMUT CANVASES
+// =============================================================================
+
+let _cst17LutKey = "";
+let _cst17LutData = null;
+
+function _getCst17Lut(cstConfig) {
+  const key = JSON.stringify(cstConfig || {});
+  if (key === _cst17LutKey && _cst17LutData) return _cst17LutData;
+  const N = 17;
+  const data = new Float32Array(N * N * N * 3);
+  const { mCombined } = computeCstGamutMatrixClient(cstConfig);
+  const denom = N - 1;
+  let ptr = 0;
+  for (let b = 0; b < N; b += 1) {
+    const bf = b / denom;
+    for (let g = 0; g < N; g += 1) {
+      const gf = g / denom;
+      for (let r = 0; r < N; r += 1) {
+        const rf = r / denom;
+        const [ro, go, bo] = evaluateCstRgbClient(rf, gf, bf, cstConfig, mCombined);
+        data[ptr] = ro * 255.0;
+        data[ptr + 1] = go * 255.0;
+        data[ptr + 2] = bo * 255.0;
+        ptr += 3;
+      }
+    }
+  }
+  _cst17LutKey = key;
+  _cst17LutData = { N, data };
+  return _cst17LutData;
+}
+
+function applyCstLogBeforePass(ctx, x0, y0, width, height, cstConfig) {
+  const rx = Math.max(0, Math.floor(x0));
+  const ry = Math.max(0, Math.floor(y0));
+  const rw = Math.max(0, Math.floor(width));
+  const rh = Math.max(0, Math.floor(height));
+  if (rw <= 0 || rh <= 0) return;
+
+  // Precompute 256-entry sRGB -> Linear -> Flat Camera Log 1D LUT
+  const logLut = new Uint8ClampedArray(256);
+  for (let i = 0; i < 256; i += 1) {
+    const lin = Math.pow(i / 255.0, 2.2) * 0.85;
+    const logVal = encodeInputLogChannelClient(lin, cstConfig.input_space);
+    logLut[i] = Math.max(0, Math.min(255, Math.round(logVal * 255.0)));
+  }
+
+  const img = ctx.getImageData(rx, ry, rw, rh);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const lr = logLut[d[i]];
+    const lg = logLut[d[i + 1]];
+    const lb = logLut[d[i + 2]];
+    // Subtle wide-gamut desaturation simulation for flat camera Log
+    const avg = (lr + lg + lb) / 3.0;
+    d[i] = Math.round(avg + (lr - avg) * 0.62);
+    d[i + 1] = Math.round(avg + (lg - avg) * 0.62);
+    d[i + 2] = Math.round(avg + (lb - avg) * 0.62);
+  }
+  ctx.putImageData(img, rx, ry);
+}
+
+function applyCstPixelPass(ctx, x0, y0, width, height, cstConfig) {
+  const rx = Math.max(0, Math.floor(x0));
+  const ry = Math.max(0, Math.floor(y0));
+  const rw = Math.max(0, Math.floor(width));
+  const rh = Math.max(0, Math.floor(height));
+  if (rw <= 0 || rh <= 0) return;
+
+  // First simulate the flat Log input encoding, then apply the 17^3 trilinear CST LUT
+  const logLut = new Float32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    const lin = Math.pow(i / 255.0, 2.2) * 0.85;
+    logLut[i] = encodeInputLogChannelClient(lin, cstConfig.input_space);
+  }
+
+  const { N, data } = _getCst17Lut(cstConfig);
+  const scale = N - 1;
+  const img = ctx.getImageData(rx, ry, rw, rh);
+  const d = img.data;
+
+  for (let i = 0; i < d.length; i += 4) {
+    const lr = logLut[d[i]];
+    const lg = logLut[d[i + 1]];
+    const lb = logLut[d[i + 2]];
+    const avg = (lr + lg + lb) / 3.0;
+    const sr = Math.max(0, Math.min(1, avg + (lr - avg) * 0.62));
+    const sg = Math.max(0, Math.min(1, avg + (lg - avg) * 0.62));
+    const sb = Math.max(0, Math.min(1, avg + (lb - avg) * 0.62));
+
+    const rScaled = sr * scale;
+    const gScaled = sg * scale;
+    const bScaled = sb * scale;
+    const r0 = Math.min(scale - 1, Math.floor(rScaled));
+    const g0 = Math.min(scale - 1, Math.floor(gScaled));
+    const b0 = Math.min(scale - 1, Math.floor(bScaled));
+    const fr = rScaled - r0;
+    const fg = gScaled - g0;
+    const fb = bScaled - b0;
+
+    const idx000 = ((b0 * N + g0) * N + r0) * 3;
+    const idx100 = idx000 + 3;
+    const idx010 = idx000 + N * 3;
+    const idx110 = idx010 + 3;
+    const idx001 = idx000 + N * N * 3;
+    const idx101 = idx001 + 3;
+    const idx011 = idx001 + N * 3;
+    const idx111 = idx011 + 3;
+
+    for (let c = 0; c < 3; c += 1) {
+      const c00 = data[idx000 + c] + (data[idx100 + c] - data[idx000 + c]) * fr;
+      const c10 = data[idx010 + c] + (data[idx110 + c] - data[idx010 + c]) * fr;
+      const c01 = data[idx001 + c] + (data[idx101 + c] - data[idx001 + c]) * fr;
+      const c11 = data[idx011 + c] + (data[idx111 + c] - data[idx011 + c]) * fr;
+      const c0 = c00 + (c10 - c00) * fg;
+      const c1 = c01 + (c11 - c01) * fg;
+      d[i + c] = Math.max(0, Math.min(255, Math.round(c0 + (c1 - c0) * fb)));
+    }
+  }
+  ctx.putImageData(img, rx, ry);
+}
+
+function _cstToneHandleCoords(cstConfig, padL, padT, plotW, plotH) {
+  const toeX = padL + 0.22 * plotW;
+  const toeY = padT + (1.0 - (0.08 + (1.0 - cstConfig.toe_strength) * 0.22)) * plotH;
+  const shX = padL + 0.78 * plotW;
+  const shY = padT + (1.0 - (0.64 + (1.0 - cstConfig.shoulder_strength) * 0.28)) * plotH;
+  return {
+    toe: { id: "toe", x: toeX, y: toeY, label: "TOE" },
+    shoulder: { id: "shoulder", x: shX, y: shY, label: "SHOULDER" }
+  };
+}
+
+export function drawCstToneCurveCanvas(canvas, cstConfig, compiled = null, hoverHandle = null) {
+  const { ctx, width, height } = setupCanvas(canvas, 210);
+  const comp = compiled || compileCstFiltergraphClient(cstConfig);
+  const cfg = comp.config;
+  const samples = comp.tone_curve_samples || [];
+
+  ctx.fillStyle = "#0a0c10";
+  ctx.fillRect(0, 0, width, height);
+
+  const padL = 36;
+  const padR = 14;
+  const padT = 22;
+  const padB = 24;
+  const plotW = Math.max(80, width - padL - padR);
+  const plotH = Math.max(60, height - padT - padB);
+
+  const xOf = (u) => padL + Math.max(0, Math.min(1, u)) * plotW;
+  const yOf = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
+
+  // Grid & EV reference
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.14)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const gx = Math.round(padL + (i / 4) * plotW) + 0.5;
+    const gy = Math.round(padT + (i / 4) * plotH) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+  }
+
+  // Identity diagonal
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.36)";
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(0));
+  ctx.lineTo(xOf(1), yOf(1));
+  ctx.stroke();
+  ctx.restore();
+
+  // Middle grey 18% crosshair
+  const srcSpec = CST_INPUT_SPACES_CLIENT[cfg.input_space] || CST_INPUT_SPACES_CLIENT.arri_logc4;
+  const mgIn = srcSpec.middle_grey_signal || 0.35;
+  const mgOut = comp.middle_grey_out ?? 0.45;
+  ctx.save();
+  ctx.setLineDash([2, 3]);
+  ctx.strokeStyle = "rgba(230, 132, 66, 0.45)";
+  ctx.beginPath();
+  ctx.moveTo(xOf(mgIn), padT + plotH);
+  ctx.lineTo(xOf(mgIn), yOf(mgOut));
+  ctx.lineTo(padL, yOf(mgOut));
+  ctx.stroke();
+  ctx.restore();
+
+  // Area under Filmic ODT curve
+  if (samples.length > 1) {
+    ctx.save();
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+    grad.addColorStop(0, "rgba(56, 189, 248, 0.28)");
+    grad.addColorStop(1, "rgba(56, 189, 248, 0.02)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(xOf(samples[0].input_norm), padT + plotH);
+    for (const s of samples) {
+      ctx.lineTo(xOf(s.input_norm), yOf(s.output_norm));
+    }
+    ctx.lineTo(xOf(samples[samples.length - 1].input_norm), padT + plotH);
+    ctx.closePath();
+    ctx.fill();
+
+    // Main transfer curve
+    ctx.strokeStyle = cfg.enabled ? "#38bdf8" : "#64748b";
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    for (let i = 0; i < samples.length; i += 1) {
+      const s = samples[i];
+      if (i === 0) ctx.moveTo(xOf(s.input_norm), yOf(s.output_norm));
+      else ctx.lineTo(xOf(s.input_norm), yOf(s.output_norm));
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Middle grey 18% anchor dot
+  ctx.fillStyle = "#e68442";
+  ctx.strokeStyle = "#0a0c10";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(xOf(mgIn), yOf(mgOut), 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Interactive Toe and Shoulder control handles
+  const handles = _cstToneHandleCoords(cfg, padL, padT, plotW, plotH);
+  for (const h of [handles.toe, handles.shoulder]) {
+    const active = hoverHandle === h.id;
+    ctx.fillStyle = active ? "#facc15" : "#ffffff";
+    ctx.strokeStyle = h.id === "toe" ? "#f59e0b" : "#38bdf8";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, active ? 7 : 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.fillStyle = "#cbd5e1";
+    ctx.textAlign = h.id === "toe" ? "left" : "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(h.label, h.x + (h.id === "toe" ? 9 : -9), h.y - 6);
+  }
+
+  // Labels & telemetry
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`TONE CURVE (${cfg.tone_mapping_mode.toUpperCase()})`, padL, 6);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText(`18% GREY -> ${(mgOut * 100).toFixed(1)}%`, padL + plotW, 6);
+
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("0.0 LOG", padL, height - 4);
+  ctx.textAlign = "center";
+  ctx.fillText("18% GREY", xOf(mgIn), height - 4);
+  ctx.textAlign = "right";
+  ctx.fillText("1.0 LOG", padL + plotW, height - 4);
+
+  return { padL, padT, plotW, plotH, handles };
+}
+
+export function hitTestCstToneCurveHandle(canvas, clientX, clientY, cstConfig) {
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const padL = 36;
+  const padR = 14;
+  const padT = 22;
+  const padB = 24;
+  const plotW = Math.max(80, rect.width - padL - padR);
+  const plotH = Math.max(60, rect.height - padT - padB);
+  const handles = _cstToneHandleCoords(cstConfig, padL, padT, plotW, plotH);
+  const distToe = Math.hypot(x - handles.toe.x, y - handles.toe.y);
+  const distSh = Math.hypot(x - handles.shoulder.x, y - handles.shoulder.y);
+  if (distToe <= 16 && distToe <= distSh) return "toe";
+  if (distSh <= 16) return "shoulder";
+  return null;
+}
+
+const CIE_1931_LOCUS_XY = [
+  [0.1741, 0.005],
+  [0.1733, 0.0048],
+  [0.1703, 0.0058],
+  [0.1611, 0.0138],
+  [0.144, 0.0297],
+  [0.1096, 0.0868],
+  [0.0454, 0.295],
+  [0.0082, 0.5384],
+  [0.0139, 0.7502],
+  [0.0743, 0.8338],
+  [0.1547, 0.8059],
+  [0.2296, 0.7543],
+  [0.3016, 0.6923],
+  [0.3731, 0.6245],
+  [0.4441, 0.5547],
+  [0.5125, 0.4866],
+  [0.5752, 0.4242],
+  [0.627, 0.3725],
+  [0.6658, 0.334],
+  [0.6915, 0.3083],
+  [0.714, 0.2859],
+  [0.7347, 0.2653]
+];
+
+export function drawCstGamutDiagramCanvas(canvas, compiled) {
+  const { ctx, width, height } = setupCanvas(canvas, 210);
+  const comp = compiled || compileCstFiltergraphClient({});
+  const srcP = comp.src_primaries;
+  const dstP = comp.dst_primaries;
+
+  ctx.fillStyle = "#0a0c10";
+  ctx.fillRect(0, 0, width, height);
+
+  const padL = 32;
+  const padR = 14;
+  const padT = 22;
+  const padB = 22;
+  const size = Math.min(width - padL - padR, height - padT - padB);
+  const ox = padL + Math.max(0, (width - padL - padR - size) * 0.5);
+  const oy = padT;
+
+  const toX = (cx) => ox + ((cx + 0.05) / 0.9) * size;
+  const toY = (cy) => oy + (1.0 - (cy + 0.14) / 1.7) * size;
+
+  // Background grid
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.12)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const gx = ox + (i / 4) * size;
+    const gy = oy + (i / 4) * size;
+    ctx.beginPath();
+    ctx.moveTo(gx, oy);
+    ctx.lineTo(gx, oy + size);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ox, gy);
+    ctx.lineTo(ox + size, gy);
+    ctx.stroke();
+  }
+
+  // CIE 1931 horseshoe
+  ctx.save();
+  const grad = ctx.createLinearGradient(ox, oy + size, ox + size, oy);
+  grad.addColorStop(0, "rgba(59, 130, 246, 0.18)");
+  grad.addColorStop(0.5, "rgba(34, 197, 94, 0.16)");
+  grad.addColorStop(1, "rgba(239, 68, 68, 0.18)");
+  ctx.fillStyle = grad;
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.45)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let i = 0; i < CIE_1931_LOCUS_XY.length; i += 1) {
+    const [lx, ly] = CIE_1931_LOCUS_XY[i];
+    if (i === 0) ctx.moveTo(toX(lx), toY(ly));
+    else ctx.lineTo(toX(lx), toY(ly));
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  // Source IDT gamut triangle (amber dashed)
+  if (srcP) {
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = "#f59e0b";
+    ctx.fillStyle = "rgba(245, 158, 11, 0.08)";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(toX(srcP.rx), toY(srcP.ry));
+    ctx.lineTo(toX(srcP.gx), toY(srcP.gy));
+    ctx.lineTo(toX(srcP.bx), toY(srcP.by));
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Destination ODT gamut triangle (cyan solid)
+  if (dstP) {
+    ctx.save();
+    ctx.strokeStyle = "#38bdf8";
+    ctx.fillStyle = "rgba(56, 189, 248, 0.14)";
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(toX(dstP.rx), toY(dstP.ry));
+    ctx.lineTo(toX(dstP.gx), toY(dstP.gy));
+    ctx.lineTo(toX(dstP.bx), toY(dstP.by));
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // White point vector (Bradford adaptation)
+  if (srcP && dstP) {
+    const sx = toX(srcP.wx);
+    const sy = toY(srcP.wy);
+    const dx = toX(dstP.wx);
+    const dy = toY(dstP.wy);
+    if (Math.hypot(dx - sx, dy - sy) > 1.5) {
+      ctx.strokeStyle = "#f43f5e";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(dx, dy);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#f59e0b";
+    ctx.beginPath();
+    ctx.arc(sx, sy, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(dx, dy, 3.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Legend
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillText("IDT", 10, 6);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText("ODT", 40, 6);
+  ctx.textAlign = "right";
+  ctx.fillStyle = comp.bradford_active ? "#facc15" : "#94a3b8";
+  ctx.fillText(comp.bradford_active ? "BRADFORD ACTIVE" : "D65 MATCHED", width - 10, 6);
 }

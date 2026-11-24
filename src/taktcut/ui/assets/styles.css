@@ -9644,3 +9644,238 @@ input[type="range"] {
     min-height: 45px;
   }
 }
+
+
+/* CAMERA LOG COLOR-SPACE TRANSFORM (CST) STUDIO */
+.cst-toggle-btn.is-active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: #38bdf8;
+  color: #bae6fd;
+}
+
+.cst-studio-btn {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #bae6fd;
+}
+
+.cst-studio-dialog {
+  max-width: min(1040px, calc(100vw - 16px));
+  width: min(1040px, calc(100vw - 16px));
+}
+
+.cst-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cst-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(84vh, 780px);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.cst-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.cst-dialog-body .code-box,
+.cst-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.cst-top-toggle-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  padding: 6px 10px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.cst-preset-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cst-preset-btn.is-active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+
+.cst-workstation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.2fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.cst-controls-col,
+.cst-scopes-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cst-select-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.cst-sliders-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.cst-param-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.5fr) 68px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  min-width: 0;
+}
+
+.cst-param-row label {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cst-param-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: #38bdf8;
+}
+
+.cst-canvas-card,
+.cst-matrix-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.cst-canvas-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.cst-canvas {
+  display: block;
+  width: 100%;
+  height: 210px;
+}
+
+#cst-tone-curve-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+#cst-tone-curve-canvas:active {
+  cursor: grabbing;
+}
+
+.cst-matrix-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.cst-matrix-cell {
+  padding: 5px 6px;
+  background: #14161b;
+  border: 1px solid #262933;
+  border-radius: 2px;
+  font-size: 11px;
+  text-align: right;
+  color: #e2e8f0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cst-matrix-cell.is-diag {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+}
+
+.cst-telemetry-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.cst-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+#cst-studio-dialog .btn:focus-visible,
+#cst-studio-dialog .input-control:focus-visible,
+#cst-studio-dialog input[type="range"]:focus-visible,
+#cst-tone-curve-canvas:focus-visible,
+.cst-toggle-btn:focus-visible,
+.cst-studio-btn:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+@media (max-width: 860px) {
+  .cst-workstation-grid,
+  .cst-canvas-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .cst-select-grid,
+  .cst-telemetry-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cst-param-row {
+    grid-template-columns: minmax(0, 1fr) 72px;
+  }
+  .cst-param-row label {
+    grid-column: 1 / -1;
+  }
+  .cst-toggle-btn,
+  .cst-studio-btn,
+  .cst-preset-btn,
+  .cst-actions .btn,
+  #cst-studio-dialog .input-control,
+  #btn-close-cst-studio {
+    min-height: 45px;
+  }
+}

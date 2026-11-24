@@ -85,6 +85,19 @@ from taktcut.color import (
     parse_cube_lut_text,
     solve_shot_match,
 )
+from taktcut.color_cst import (
+    ALLOWED_CST_GAMUT_MAPPING_MODES,
+    ALLOWED_CST_TONE_MAPPING_MODES,
+    CstConfig,
+    analyze_cst_pipeline,
+    bake_cst_to_cube,
+    compile_cst_filtergraph,
+    generate_cst_cube_text,
+    list_cst_input_spaces,
+    list_cst_output_spaces,
+    list_cst_presets,
+    normalize_cst_config,
+)
 from taktcut.compound import (
     ALLOWED_COMPOUND_OPS,
     CompoundClipRef,
@@ -160,6 +173,7 @@ from taktcut.models import (
     ClipTransformParams,
     CompoundColorTag,
     CompoundSubSequence,
+    CubeLutInfo,
     DialogueEqPresetId,
     ExportFpsOption,
     HardwareCapabilities,
@@ -1919,6 +1933,20 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/color/cst/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "input_spaces": [s.model_dump(mode="json") for s in list_cst_input_spaces()],
+                    "output_spaces": [s.model_dump(mode="json") for s in list_cst_output_spaces()],
+                    "presets": [p.model_dump(mode="json") for p in list_cst_presets()],
+                    "tone_mapping_modes": list(ALLOWED_CST_TONE_MAPPING_MODES),
+                    "gamut_mapping_modes": list(ALLOWED_CST_GAMUT_MAPPING_MODES),
+                    "default_config": CstConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
         if route == "/api/timeline/auto-reframe/presets":
             self._send_json(
                 HTTPStatus.OK,
@@ -3602,6 +3630,81 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 execute_ffmpeg=exec_ffmpeg,
             )
             self._send_json(HTTPStatus.OK, bm_report.model_dump(mode="json"))
+            return
+
+        if route == "/api/color/cst/compile":
+            cst_cfg = normalize_cst_config(payload.get("config"))
+            cst_compiled = compile_cst_filtergraph(cst_cfg)
+            self._send_json(HTTPStatus.OK, cst_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/color/cst/analyze":
+            cst_cfg = normalize_cst_config(payload.get("config"))
+            cst_analysis = analyze_cst_pipeline(cst_cfg)
+            self._send_json(HTTPStatus.OK, cst_analysis.model_dump(mode="json"))
+            return
+
+        if route == "/api/color/cst/bake-cube":
+            cst_cfg = normalize_cst_config(payload.get("config"))
+            size = int(payload.get("size", 33))
+            title = (
+                str(payload.get("title", "taktcut_cst_transform")).strip()
+                or "taktcut_cst_transform"
+            )
+            raw_out = payload.get("out_path")
+            if raw_out is not None and str(raw_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_out),
+                    must_exist=False,
+                    allowed_suffixes=LUT_SUFFIXES,
+                )
+                info = bake_cst_to_cube(cst_cfg, out_file, size=size, title=title)
+                cube_text = out_file.read_text(encoding="utf-8")
+                cst_saved_rel: str | None = out_file.relative_to(
+                    self.app_state.workspace_root
+                ).as_posix()
+            else:
+                cube_text = generate_cst_cube_text(cst_cfg, size=size, title=title)
+                info = CubeLutInfo(
+                    path="memory://cst.cube",
+                    title=title,
+                    dimension="3D",
+                    size=size,
+                    entry_count=size**3,
+                )
+                cst_saved_rel = None
+            cst_compiled = compile_cst_filtergraph(cst_cfg)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "info": info.model_dump(mode="json"),
+                    "saved_path": cst_saved_rel,
+                    "cube_text": cube_text,
+                    "compiled": cst_compiled.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/color/cst/download-cube":
+            cst_cfg = normalize_cst_config(payload.get("config"))
+            size = int(payload.get("size", 33))
+            title = (
+                str(payload.get("title", "taktcut_cst_transform")).strip()
+                or "taktcut_cst_transform"
+            )
+            filename = sanitize_download_filename(
+                str(payload.get("filename") or title),
+                "taktcut_cst_transform",
+                ".cube",
+            )
+            cube_text = generate_cst_cube_text(cst_cfg, size=size, title=title)
+            self._send_bytes(
+                HTTPStatus.OK,
+                "text/plain; charset=utf-8",
+                cube_text.encode("utf-8"),
+                extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
             return
 
         if route == "/api/timeline/auto-reframe/analyze":
