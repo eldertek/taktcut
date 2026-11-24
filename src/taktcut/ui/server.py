@@ -134,6 +134,7 @@ from taktcut.models import (
     RenderPlan,
     RenderProfile,
     TimecodeBurnInPosition,
+    TimelineClip,
     TimelineDocument,
     list_dve_layout_presets,
 )
@@ -247,10 +248,14 @@ from taktcut.subtitles import (
     parse_vtt,
 )
 from taktcut.timeline_edit import (
+    ALLOWED_THREE_POINT_MODES,
     ALLOWED_TIMELINE_EDIT_OPS,
+    ThreePointEditMode,
     apply_timeline_edit,
     compile_split_edit_ffmpeg,
     compute_av_split_info,
+    resolve_three_point_range,
+    three_point_edit,
 )
 from taktcut.titles import (
     TITLE_FONT_SIZE_MAX,
@@ -2084,6 +2089,114 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 {
                     "split_info": split_info.model_dump(mode="json"),
                     "compile": split_compile.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/three-point-edit":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            raw_mode = payload.get("mode")
+            mode_clean = raw_mode.strip().lower() if isinstance(raw_mode, str) else ""
+            if mode_clean not in ALLOWED_THREE_POINT_MODES:
+                allowed_modes = ", ".join(ALLOWED_THREE_POINT_MODES)
+                raise ValueError(
+                    f"Unsupported 3-point edit mode {raw_mode!r}; expected one of: {allowed_modes}"
+                )
+            mode_val: ThreePointEditMode = (
+                "insert"
+                if mode_clean == "insert"
+                else "overwrite"
+                if mode_clean == "overwrite"
+                else "replace"
+            )
+            raw_kind = str(payload.get("target_track_kind", "video")).strip().lower()
+            if raw_kind not in ("video", "audio"):
+                raise ValueError("target_track_kind must be 'video' or 'audio'")
+            tp_kind: Literal["video", "audio"] = "video" if raw_kind == "video" else "audio"
+
+            raw_tidx = payload.get("target_track_index", 1)
+            if isinstance(raw_tidx, bool) or not isinstance(raw_tidx, int) or raw_tidx < 1:
+                raise ValueError("target_track_index must be a positive integer")
+
+            def _opt_int(key: str, min_val: int = 0) -> int | None:
+                val = payload.get(key)
+                if val is None:
+                    return None
+                if isinstance(val, bool) or not isinstance(val, int) or val < min_val:
+                    raise ValueError(f"{key} must be an integer >= {min_val}")
+                return val
+
+            src_total = _opt_int("source_total_frames", 1)
+            src_ph = _opt_int("source_playhead", 0)
+            src_in = _opt_int("source_in", 0)
+            src_out = _opt_int("source_out", 1)
+            tl_ph = _opt_int("tl_playhead", 0)
+            tl_in = _opt_int("tl_in", 0)
+            tl_out = _opt_int("tl_out", 1)
+
+            raw_src_clip = payload.get("source_clip")
+            if not isinstance(raw_src_clip, dict):
+                raise ValueError("source_clip object is required")
+            src_clip = TimelineClip.model_validate(raw_src_clip)
+
+            dry_run = payload.get("dry_run", False)
+            if not isinstance(dry_run, bool):
+                raise ValueError("dry_run must be a boolean")
+
+            if dry_run:
+                res_only = resolve_three_point_range(
+                    source_total_frames=src_total
+                    if src_total is not None
+                    else max(1, src_clip.duration_frames or 75),
+                    source_base_in=max(0, src_clip.source_in_frame),
+                    source_playhead=src_ph if src_ph is not None else 0,
+                    source_in=src_in,
+                    source_out=src_out,
+                    tl_playhead=tl_ph if tl_ph is not None else doc.start_frame,
+                    tl_in=tl_in,
+                    tl_out=tl_out,
+                    doc_start=doc.start_frame,
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "dry_run": True,
+                        "mode": mode_val,
+                        "resolution": res_only.model_dump(mode="json"),
+                    },
+                )
+                return
+
+            tp_res = three_point_edit(
+                doc,
+                mode=mode_val,
+                source_clip=src_clip,
+                target_track_kind=tp_kind,
+                target_track_index=raw_tidx,
+                source_total_frames=src_total,
+                source_playhead=src_ph if src_ph is not None else 0,
+                source_in=src_in,
+                source_out=src_out,
+                tl_playhead=tl_ph if tl_ph is not None else doc.start_frame,
+                tl_in=tl_in,
+                tl_out=tl_out,
+            )
+            val = validate_timeline(tp_res.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": tp_res.changed,
+                    "op": tp_res.op,
+                    "resolution": tp_res.resolution.model_dump(mode="json"),
+                    "inserted_clip": tp_res.inserted_clip.model_dump(mode="json")
+                    if tp_res.inserted_clip is not None
+                    else None,
+                    "shifted_count": tp_res.shifted_count,
+                    "overwritten_count": tp_res.overwritten_count,
+                    "sync_locked_tracks": tp_res.sync_locked_tracks,
+                    "detail": tp_res.detail,
+                    "document": tp_res.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
                 },
             )
             return

@@ -110,6 +110,13 @@
                   <div class="media-pool-cut-btns">
                     <button
                       type="button"
+                      id="btn-pool-load-source"
+                      class="btn btn-mini media-pool-cut-btn"
+                      title="Load selected clip into Source Monitor (Q)"
+                      data-i18n="timeline.mediapool.loadSource"
+                    >Source</button>
+                    <button
+                      type="button"
                       id="btn-pool-smart-insert"
                       class="btn btn-mini media-pool-cut-btn"
                       title="Smart Insert at nearest cut point on target track"
@@ -252,10 +259,22 @@
             </div>
           </aside>
 
-          <!-- CENTER DOCK: PURE PROGRAM MONITOR & TRANSPORT -->
+          <!-- CENTER DOCK: DUAL SOURCE / PROGRAM MONITOR & TRANSPORT -->
           <section class="nle-pane nle-viewer-dock">
             <div class="pane-header">
-              <h2 data-i18n="timeline.monitor.title">Program Monitor</h2>
+              <div class="viewer-header-left">
+                <h2 data-i18n="timeline.monitor.title">Program Monitor</h2>
+                <button
+                  type="button"
+                  id="btn-dual-monitor-toggle"
+                  class="btn btn-mini"
+                  aria-pressed="false"
+                  title="Toggle Dual Source / Program Monitor (Q)"
+                >
+                  <span data-i18n="timeline.sourceMonitor.dualBtn">Dual</span>
+                  <span class="kbd-chip mono">Q</span>
+                </button>
+              </div>
               <div class="tc-group mono">
                 <span id="program-tc" class="tc-readout">00:00:00:00</span>
                 <span id="program-frame-counter" class="nle-tag">0f / 500f</span>
@@ -288,8 +307,39 @@
                   <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="socialHud" aria-pressed="true" data-i18n="timeline.framing.socialHud">Reels HUD</button>
                 </div>
               </div>
-              <div class="viewer-well">
-                <canvas id="timeline-program-canvas" class="studio-canvas"></canvas>
+              <div id="timeline-viewer-well" class="viewer-well">
+                <div id="source-monitor-pane" class="source-monitor-pane is-hidden" role="region" aria-label="Source Monitor">
+                  <div class="source-monitor-bar mono">
+                    <span id="source-clip-name" class="source-clip-name" data-i18n="timeline.sourceMonitor.empty">No Source</span>
+                    <div class="source-monitor-meta">
+                      <span id="source-tc" class="nle-tag">00:00:00:00</span>
+                      <span id="source-io-pill" class="nle-tag">SRC: --</span>
+                    </div>
+                  </div>
+                  <div class="source-canvas-wrap">
+                    <canvas id="timeline-source-canvas" class="studio-canvas" aria-label="Source monitor clip preview"></canvas>
+                  </div>
+                  <div class="source-transport-row">
+                    <input
+                      type="range"
+                      id="source-playhead-slider"
+                      class="scrub-slider source-scrub-slider"
+                      min="0"
+                      max="74"
+                      step="1"
+                      value="0"
+                      aria-label="Source monitor playhead"
+                    >
+                    <div class="source-io-btns" role="group" aria-label="Source monitor In and Out">
+                      <button type="button" id="btn-src-mark-in" class="btn btn-mini" data-i18n="timeline.sourceMonitor.markIn" title="Mark Source In">Src In</button>
+                      <button type="button" id="btn-src-mark-out" class="btn btn-mini" data-i18n="timeline.sourceMonitor.markOut" title="Mark Source Out">Src Out</button>
+                      <button type="button" id="btn-src-clear-io" class="btn btn-mini" data-i18n="timeline.sourceMonitor.clearIo" title="Clear Source In/Out" disabled>Clr</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="program-monitor-pane" class="program-monitor-pane">
+                  <canvas id="timeline-program-canvas" class="studio-canvas"></canvas>
+                </div>
               </div>
               <div class="transport-bar transport-bar-stacked">
                 <div class="transport-main-row">
@@ -323,6 +373,30 @@
                   </div>
                   <span id="timeline-io-range-pill" class="nle-tag mono io-range-pill" aria-live="polite" data-i18n="timeline.io.none">I/O: --</span>
                 </div>
+              </div>
+
+              <div id="three-point-edit-bar" class="three-point-edit-bar" role="group" aria-label="Three-Point Edit and Track Patching">
+                <div class="three-point-patch-group">
+                  <label class="inline-label mono" for="three-pt-target-track" data-i18n="timeline.threePoint.patch">Patch</label>
+                  <select id="three-pt-target-track" class="input-control input-compact mono" aria-label="Target timeline track patch">
+                    <option value="video:1">V1</option>
+                  </select>
+                </div>
+                <div class="three-point-action-group">
+                  <button type="button" id="btn-three-pt-insert" class="btn btn-mini" title="Three-Point Ripple Insert (F9)">
+                    <span data-i18n="timeline.threePoint.insert">Insert</span>
+                    <span class="kbd-chip mono">F9</span>
+                  </button>
+                  <button type="button" id="btn-three-pt-overwrite" class="btn btn-mini btn-primary" title="Three-Point Overwrite (F10)">
+                    <span data-i18n="timeline.threePoint.overwrite">Overwrite</span>
+                    <span class="kbd-chip mono">F10</span>
+                  </button>
+                  <button type="button" id="btn-three-pt-replace" class="btn btn-mini" title="Replace Clip at Playhead (F11)">
+                    <span data-i18n="timeline.threePoint.replace">Replace</span>
+                    <span class="kbd-chip mono">F11</span>
+                  </button>
+                </div>
+                <span id="three-point-status-pill" class="nle-tag mono three-point-status-pill" aria-live="polite">3-PT: --</span>
               </div>
 
               <div class="nle-telemetry-bar">
@@ -1311,13 +1385,17 @@
                 <span data-i18n="timeline.tool.avLink">Linked A/V</span>
               </button>
 
-              <button type="button" id="btn-timeline-add-marker" class="btn btn-mini tl-marker-btn" title="Drop Marker at Playhead (M)">
-                <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                  <path d="M3 2h10v6.5L8 14 3 8.5V2z" fill="currentColor"/>
-                </svg>
-                <span data-i18n="timeline.tool.addMarker">+ Marker</span>
-                <span class="kbd-chip mono">M</span>
-              </button>
+              <div class="tl-marker-nav-group" role="group" aria-label="Timeline markers">
+                <button type="button" id="btn-timeline-prev-marker" class="btn btn-mini tl-marker-nav-btn" title="Jump to Previous Marker (Shift+Up)" data-i18n="timeline.tool.prevMarker">&lt; Mkr</button>
+                <button type="button" id="btn-timeline-add-marker" class="btn btn-mini tl-marker-btn" title="Drop Marker at Playhead (M)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M3 2h10v6.5L8 14 3 8.5V2z" fill="currentColor"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.addMarker">+ Marker</span>
+                  <span class="kbd-chip mono">M</span>
+                </button>
+                <button type="button" id="btn-timeline-next-marker" class="btn btn-mini tl-marker-nav-btn" title="Jump to Next Marker (Shift+Down)" data-i18n="timeline.tool.nextMarker">Mkr &gt;</button>
+              </div>
 
               <div class="tl-bpm-group" role="group" aria-label="BPM Beat Grid">
                 <button type="button" id="btn-bpm-grid" class="btn btn-mini tl-bpm-btn" aria-pressed="false" title="Toggle BPM Beat Grid Overlay">

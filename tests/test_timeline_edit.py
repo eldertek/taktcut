@@ -10,12 +10,14 @@ from taktcut.timeline_edit import (
     compile_split_edit_ffmpeg,
     compute_av_split_info,
     link_av_clips,
+    resolve_three_point_range,
     ripple_delete_clip,
     ripple_trim_clip,
     roll_edit_cut,
     set_all_tracks_sync_lock,
     slide_clip,
     slip_clip,
+    three_point_edit,
     toggle_track_sync_lock,
     unlink_av_clips,
 )
@@ -279,3 +281,119 @@ def test_av_link_unlink_jl_cut_split_edit_and_ffmpeg_compile() -> None:
     assert unlinked.changed is True
     assert unlinked.document.tracks[0].clips[2].link_group_id == ""
     assert unlinked.document.tracks[1].clips[1].link_group_id == ""
+
+
+def test_three_point_range_resolution_and_insert_overwrite_replace() -> None:
+    doc = _make_two_track_doc(sync_a1=True)
+    fps25 = RationalFrameRate(num=25, den=1)
+    src_clip = TimelineClip(
+        name="B009_Drone_Pass",
+        track_index=1,
+        media_type="video",
+        start_frame=0,
+        duration_frames=120,
+        source_in_frame=10,
+        source_path="media/B009_Drone_Pass.mov",
+        source_fps=fps25,
+    )
+
+    # 1. Backtiming rules
+    bt_src_out = resolve_three_point_range(
+        source_total_frames=120,
+        source_base_in=10,
+        source_out=80,
+        tl_in=50,
+        tl_out=90,
+    )
+    assert bt_src_out.rule == "backtime_src_out_tl_io"
+    assert bt_src_out.duration_frames == 40
+    assert bt_src_out.tl_start == 50
+    assert bt_src_out.effective_source_in == 50
+
+    bt_tl_out = resolve_three_point_range(
+        source_total_frames=120,
+        source_base_in=10,
+        source_in=20,
+        source_out=60,
+        tl_out=150,
+    )
+    assert bt_tl_out.rule == "backtime_src_io_tl_out"
+    assert bt_tl_out.duration_frames == 40
+    assert bt_tl_out.tl_start == 110
+    assert bt_tl_out.effective_source_in == 30
+
+    # 2. 3-Point Insert (F9): splits V1[0] and sync-locked A1[0] at 50f, shifts +30f
+    ins = three_point_edit(
+        doc,
+        mode="insert",
+        source_clip=src_clip,
+        target_track_kind="video",
+        target_track_index=1,
+        source_total_frames=120,
+        source_in=15,
+        source_out=45,
+        tl_playhead=50,
+    )
+    assert ins.changed is True
+    assert ins.resolution.duration_frames == 30
+    assert ins.resolution.effective_source_in == 25
+    v1_clips = ins.document.tracks[0].clips
+    assert len(v1_clips) == 5
+    assert [(c.name, c.start_frame, c.duration_frames) for c in v1_clips] == [
+        ("Shot_A", 0, 50),
+        ("B009_Drone_Pass", 50, 30),
+        ("Shot_A", 80, 50),
+        ("Shot_B", 130, 100),
+        ("Shot_C", 230, 100),
+    ]
+    # Sync-locked A1 split & shifted downstream +30f
+    a1_clips = ins.document.tracks[1].clips
+    assert len(a1_clips) == 3
+    assert [(c.name, c.start_frame, c.duration_frames) for c in a1_clips] == [
+        ("VO_1", 0, 50),
+        ("VO_1", 80, 50),
+        ("VO_2", 230, 100),
+    ]
+
+    # 3. 3-Point Overwrite (F10): overwrites [20..60) on V1 without shifting Shot_B at 100f
+    ovr = three_point_edit(
+        doc,
+        mode="overwrite",
+        source_clip=src_clip,
+        target_track_kind="video",
+        target_track_index=1,
+        source_total_frames=120,
+        source_in=5,
+        source_out=45,
+        tl_in=20,
+    )
+    assert ovr.changed is True
+    assert ovr.shifted_count == 0
+    v1_ovr = ovr.document.tracks[0].clips
+    assert [(c.name, c.start_frame, c.duration_frames, c.source_in_frame) for c in v1_ovr] == [
+        ("Shot_A", 0, 20, 20),
+        ("B009_Drone_Pass", 20, 40, 15),
+        ("Shot_A", 60, 40, 80),
+        ("Shot_B", 100, 100, 30),
+        ("Shot_C", 200, 100, 40),
+    ]
+
+    # 4. Replace Edit (F11): replaces Shot_B [100..200) preserving start=100, dur=100
+    rep = three_point_edit(
+        doc,
+        mode="replace",
+        source_clip=src_clip,
+        target_track_kind="video",
+        target_track_index=1,
+        source_total_frames=120,
+        source_playhead=60,
+        tl_playhead=130,
+    )
+    assert rep.changed is True
+    v1_rep = rep.document.tracks[0].clips
+    assert len(v1_rep) == 3
+    assert v1_rep[1].name == "B009_Drone_Pass"
+    assert v1_rep[1].start_frame == 100
+    assert v1_rep[1].duration_frames == 100
+    assert v1_rep[1].source_in_frame == 40  # base 10 + src_ph 60 - offset 30
+

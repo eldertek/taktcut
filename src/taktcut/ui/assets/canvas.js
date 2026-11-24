@@ -8830,3 +8830,180 @@ export function drawCompoundMiniMapCanvas(canvas, clip, opts = {}) {
 
   return { width, height };
 }
+
+export function drawSourceMonitorCanvas(
+  canvas,
+  sourceClip,
+  sourceState = {},
+  doc = null,
+  opts = {}
+) {
+  if (!canvas) return null;
+  let targetCssH = 244;
+  if (typeof canvas.closest === "function" && canvas.closest(".nle-viewer-dock")) {
+    const parentH = canvas.parentElement ? canvas.parentElement.getBoundingClientRect().height : 0;
+    if (parentH > 260) {
+      targetCssH = Math.min(440, Math.floor(parentH) - 2);
+    }
+  }
+  const { ctx, width, height } = setupCanvas(canvas, targetCssH);
+  ctx.fillStyle = "#141416";
+  ctx.fillRect(0, 0, width, height);
+
+  if (!sourceClip) {
+    ctx.fillStyle = "#7a7b88";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      opts.emptyLabel || "Load a clip from Master Bin into Source Monitor",
+      width * 0.5,
+      height * 0.5
+    );
+    return { width, height };
+  }
+
+  const totalFrames = Math.max(1, Math.round(Number(sourceState.totalFrames ?? sourceClip.duration_frames) || 75));
+  const playhead = Math.max(0, Math.min(totalFrames - 1, Math.round(Number(sourceState.playheadFrame) || 0)));
+  const srcIn = sourceState.inFrame != null && Number.isFinite(Number(sourceState.inFrame))
+    ? Math.max(0, Math.min(totalFrames - 1, Math.round(Number(sourceState.inFrame))))
+    : null;
+  const srcOut = sourceState.outFrame != null && Number.isFinite(Number(sourceState.outFrame))
+    ? Math.max(1, Math.min(totalFrames, Math.round(Number(sourceState.outFrame))))
+    : null;
+
+  const srcAspect = doc && doc.width > 0 && doc.height > 0 ? doc.width / doc.height : 16 / 9;
+  const scrubBandH = 22;
+  const availH = Math.max(60, height - scrubBandH - 12);
+  let frameW = width - 16;
+  let frameH = frameW / srcAspect;
+  if (frameH > availH) {
+    frameH = availH;
+    frameW = frameH * srcAspect;
+  }
+  const fx = Math.floor((width - frameW) / 2);
+  const fy = Math.floor((availH - frameH) / 2) + 6;
+  const bw = Math.max(1, Math.round(frameW));
+  const bh = Math.max(1, Math.round(frameH));
+  const isAudio = sourceClip.media_type === "audio" || sourceClip.trackKind === "audio";
+
+  if (isAudio) {
+    ctx.fillStyle = "#0e1417";
+    ctx.fillRect(fx, fy, bw, bh);
+    ctx.strokeStyle = "#26363d";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(fx + 0.5, fy + 0.5, bw - 1, bh - 1);
+
+    const midY = fy + bh * 0.5;
+    ctx.strokeStyle = "rgba(94, 234, 212, 0.22)";
+    ctx.beginPath();
+    ctx.moveTo(fx, midY);
+    ctx.lineTo(fx + bw, midY);
+    ctx.stroke();
+
+    const bars = Math.max(24, Math.min(96, Math.floor(bw / 4)));
+    const barW = Math.max(2, bw / bars - 1);
+    const seedBase = String(sourceClip.name || "audio")
+      .split("")
+      .reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) & 0xffff, 17);
+    for (let i = 0; i < bars; i++) {
+      const n = Math.sin(i * 0.43 + seedBase * 0.17) * 0.5 + Math.cos(i * 0.19 + seedBase) * 0.35;
+      const amp = Math.max(0.08, Math.min(0.88, Math.abs(n)));
+      const hBar = amp * (bh * 0.72);
+      const bx = fx + (i / bars) * bw;
+      const u = i / bars;
+      const inRange =
+        (srcIn === null || u >= srcIn / totalFrames) &&
+        (srcOut === null || u <= srcOut / totalFrames);
+      ctx.fillStyle = inRange ? "#2dd4bf" : "rgba(45, 212, 191, 0.28)";
+      ctx.fillRect(bx, midY - hBar * 0.5, barW, hBar);
+    }
+
+    ctx.fillStyle = "#5eead4";
+    ctx.font = "700 10.5px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`AUDIO SRC: ${sourceClip.name || "Audio"}`, fx + 8, fy + 8);
+  } else {
+    const buf = getFxScratchCanvas(bw, bh);
+    const bctx = buf.getContext("2d");
+    const tempClip = {
+      ...sourceClip,
+      start_frame: 0,
+      duration_frames: totalFrames,
+      source_in_frame: sourceClip.source_in_frame || 0
+    };
+    drawFramedBaseScene(
+      bctx,
+      bw,
+      bh,
+      doc,
+      playhead,
+      null,
+      [{ track: opts.trackLabel || "SRC", clip: tempClip }],
+      "fill",
+      srcAspect,
+      srcAspect
+    );
+    ctx.drawImage(buf, fx, fy, bw, bh);
+    ctx.strokeStyle = "#2b2b33";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(fx + 0.5, fy + 0.5, bw - 1, bh - 1);
+  }
+
+  // Top badge overlay
+  ctx.fillStyle = "rgba(14, 14, 18, 0.82)";
+  ctx.fillRect(fx + 6, fy + 6, 70, 17);
+  ctx.strokeStyle = "#39c5cf";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(fx + 6.5, fy + 6.5, 69, 16);
+  ctx.fillStyle = "#39c5cf";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(opts.badgeLabel || "SOURCE", fx + 41, fy + 15);
+
+  // Source I/O Scrub Strip
+  const barX = fx;
+  const barY = height - scrubBandH - 3;
+  const barW = bw;
+  const barH = scrubBandH - 4;
+  ctx.fillStyle = "#18181d";
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.strokeStyle = "#2b2b33";
+  ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+
+  const rangeStart = srcIn !== null ? srcIn : 0;
+  const rangeEnd = srcOut !== null ? srcOut : totalFrames;
+  const rx0 = barX + (rangeStart / totalFrames) * barW;
+  const rx1 = barX + (rangeEnd / totalFrames) * barW;
+  if (srcIn !== null || srcOut !== null) {
+    ctx.fillStyle = "rgba(57, 197, 207, 0.22)";
+    ctx.fillRect(rx0, barY + 1, Math.max(2, rx1 - rx0), barH - 2);
+    ctx.fillStyle = "#39c5cf";
+    if (srcIn !== null) ctx.fillRect(rx0 - 1, barY, 3, barH);
+    if (srcOut !== null) ctx.fillRect(rx1 - 2, barY, 3, barH);
+  }
+
+  const phRatio = totalFrames > 1 ? playhead / (totalFrames - 1) : 0;
+  const phX = barX + Math.max(1, Math.min(barW - 1, phRatio * barW));
+  ctx.strokeStyle = "#ff5a36";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(phX, barY - 2);
+  ctx.lineTo(phX, barY + barH + 2);
+  ctx.stroke();
+
+  ctx.fillStyle = "#d4d4dc";
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  const durSpan = rangeEnd - rangeStart;
+  ctx.fillText(
+    `${playhead}f / ${totalFrames}f (${durSpan}f)`,
+    barX + barW - 6,
+    barY + barH * 0.5
+  );
+
+  return { width, height, barRect: { x: barX, y: barY, w: barW, h: barH }, totalFrames };
+}

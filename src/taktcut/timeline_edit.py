@@ -42,6 +42,38 @@ ALLOWED_TIMELINE_EDIT_OPS: tuple[TimelineEditOp, ...] = (
     "align_av_split",
 )
 
+ThreePointEditMode = Literal["insert", "overwrite", "replace"]
+ALLOWED_THREE_POINT_MODES: tuple[ThreePointEditMode, ...] = (
+    "insert",
+    "overwrite",
+    "replace",
+)
+
+
+class ThreePointRangeResolution(BaseModel):
+    """Resolved 3-point edit frame geometry from Source I/O and Program I/O."""
+
+    tl_start: int = Field(ge=0)
+    tl_end: int = Field(ge=1)
+    duration_frames: int = Field(ge=1)
+    effective_source_in: int = Field(ge=0)
+    rule: str
+    detail: str = ""
+
+
+class ThreePointEditResult(BaseModel):
+    """Structured immutable result of a 3-point Insert, Overwrite, or Replace edit."""
+
+    changed: bool
+    op: ThreePointEditMode
+    resolution: ThreePointRangeResolution
+    inserted_clip: TimelineClip | None = None
+    shifted_count: int = 0
+    overwritten_count: int = 0
+    sync_locked_tracks: int = Field(default=0, ge=0)
+    detail: str = ""
+    document: TimelineDocument
+
 SplitEditCutType = Literal["unlinked", "aligned", "j_cut", "l_cut", "jl_cut"]
 
 
@@ -1226,3 +1258,365 @@ def apply_timeline_edit(
     if op == "align_av_split":
         return align_av_split(doc, track_kind, track_index, clip_index)
     raise ValueError(f"Unsupported timeline edit op: {op!r}")
+
+
+def resolve_three_point_range(
+    *,
+    source_total_frames: int,
+    source_base_in: int = 0,
+    source_playhead: int = 0,
+    source_in: int | None = None,
+    source_out: int | None = None,
+    tl_playhead: int = 0,
+    tl_in: int | None = None,
+    tl_out: int | None = None,
+    doc_start: int = 0,
+) -> ThreePointRangeResolution:
+    """Resolve deterministic 3-point edit frame geometry from Source and Program marks."""
+    total = max(1, int(source_total_frames))
+    base_in = max(0, int(source_base_in))
+    src_ph = max(0, min(total - 1, int(source_playhead)))
+    tl_ph = max(int(doc_start), int(tl_playhead))
+
+    s_in = max(0, min(total - 1, int(source_in))) if source_in is not None else None
+    s_out = max(1, min(total, int(source_out))) if source_out is not None else None
+    if s_in is not None and s_out is not None and s_out <= s_in:
+        raise ValueError(f"source_out ({s_out}) must be greater than source_in ({s_in})")
+
+    p_in = max(int(doc_start), int(tl_in)) if tl_in is not None else None
+    p_out = max(int(doc_start) + 1, int(tl_out)) if tl_out is not None else None
+    if p_in is not None and p_out is not None and p_out <= p_in:
+        raise ValueError(f"tl_out ({p_out}) must be greater than tl_in ({p_in})")
+
+    has_src_io = s_in is not None and s_out is not None
+    has_tl_io = p_in is not None and p_out is not None
+
+    if has_src_io and has_tl_io:
+        assert s_in is not None and s_out is not None and p_in is not None
+        dur = max(1, s_out - s_in)
+        eff_src_in = base_in + s_in
+        tl_start = p_in
+        rule = "all_four_src_io"
+        detail = f"4-PT (Src I/O {dur}f -> TL In {tl_start}f)"
+    elif has_src_io and p_out is not None and p_in is None:
+        assert s_in is not None and s_out is not None
+        dur = max(1, s_out - s_in)
+        tl_start = max(int(doc_start), p_out - dur)
+        eff_src_in = base_in + s_in
+        rule = "backtime_src_io_tl_out"
+        detail = f"3-PT Backtime (Src I/O {dur}f -> TL Out {p_out}f)"
+    elif has_src_io:
+        assert s_in is not None and s_out is not None
+        dur = max(1, s_out - s_in)
+        tl_start = p_in if p_in is not None else tl_ph
+        eff_src_in = base_in + s_in
+        rule = "src_io_tl_in"
+        detail = f"3-PT (Src I/O {dur}f -> TL {tl_start}f)"
+    elif has_tl_io and s_out is not None and s_in is None:
+        assert p_in is not None and p_out is not None
+        tl_dur = max(1, p_out - p_in)
+        dur = min(tl_dur, max(1, s_out))
+        tl_start = p_in
+        eff_src_in = max(0, base_in + s_out - dur)
+        rule = "backtime_src_out_tl_io"
+        detail = f"3-PT Backtime (Src Out {s_out}f -> TL I/O {dur}f)"
+    elif has_tl_io:
+        assert p_in is not None and p_out is not None
+        anchor_in = s_in if s_in is not None else src_ph
+        available = max(1, total - anchor_in)
+        dur = min(max(1, p_out - p_in), available)
+        tl_start = p_in
+        eff_src_in = base_in + anchor_in
+        rule = "src_in_tl_io"
+        detail = f"3-PT (Src In {anchor_in}f -> TL I/O {dur}f)"
+    else:
+        anchor_in = s_in if s_in is not None else 0
+        anchor_out = s_out if s_out is not None else total
+        dur = max(1, anchor_out - anchor_in)
+        tl_start = p_in if p_in is not None else tl_ph
+        eff_src_in = base_in + anchor_in
+        rule = "playhead_default"
+        detail = f"Playhead ({dur}f @ TL {tl_start}f)"
+
+    return ThreePointRangeResolution(
+        tl_start=tl_start,
+        tl_end=tl_start + dur,
+        duration_frames=dur,
+        effective_source_in=eff_src_in,
+        rule=rule,
+        detail=detail,
+    )
+
+
+def _split_clip_at_frame(
+    doc: TimelineDocument,
+    clip: TimelineClip,
+    split_frame: int,
+) -> tuple[TimelineClip, TimelineClip]:
+    """Split a clip at split_frame into (left_clip, right_clip) with conformed source_in."""
+    left_dur = max(1, split_frame - clip.start_frame)
+    right_dur = max(1, clip.start_frame + clip.duration_frames - split_frame)
+    src_delta = _compute_source_frame_delta(left_dur, clip.source_fps, doc.fps)
+    left_clip = clip.model_copy(
+        deep=True,
+        update={"duration_frames": left_dur, "transition_out": None, "link_group_id": ""},
+    )
+    right_clip = clip.model_copy(
+        deep=True,
+        update={
+            "start_frame": split_frame,
+            "duration_frames": right_dur,
+            "source_in_frame": max(0, clip.source_in_frame + src_delta),
+            "link_group_id": "",
+        },
+    )
+    return left_clip, right_clip
+
+
+def three_point_edit(
+    doc: TimelineDocument,
+    *,
+    mode: ThreePointEditMode,
+    source_clip: TimelineClip,
+    target_track_kind: Literal["video", "audio"] = "video",
+    target_track_index: int = 1,
+    source_total_frames: int | None = None,
+    source_playhead: int = 0,
+    source_in: int | None = None,
+    source_out: int | None = None,
+    tl_playhead: int = 0,
+    tl_in: int | None = None,
+    tl_out: int | None = None,
+) -> ThreePointEditResult:
+    """Execute a 3-point Insert (F9), Overwrite (F10), or Replace (F11) edit."""
+    if mode not in ALLOWED_THREE_POINT_MODES:
+        allowed = ", ".join(ALLOWED_THREE_POINT_MODES)
+        raise ValueError(f"Unsupported three-point edit mode {mode!r}; expected one of: {allowed}")
+
+    total_src = max(
+        1,
+        int(source_total_frames)
+        if source_total_frames is not None
+        else int(source_clip.duration_frames or 75),
+    )
+    resolution = resolve_three_point_range(
+        source_total_frames=total_src,
+        source_base_in=max(0, int(source_clip.source_in_frame)),
+        source_playhead=source_playhead,
+        source_in=source_in,
+        source_out=source_out,
+        tl_playhead=tl_playhead,
+        tl_in=tl_in,
+        tl_out=tl_out,
+        doc_start=doc.start_frame,
+    )
+
+    next_doc = doc.model_copy(deep=True)
+    target_trk = next(
+        (
+            t
+            for t in next_doc.tracks
+            if t.kind == target_track_kind and t.index == target_track_index
+        ),
+        None,
+    )
+    if target_trk is None:
+        return ThreePointEditResult(
+            changed=False,
+            op=mode,
+            resolution=resolution,
+            sync_locked_tracks=_count_sync_locked(next_doc),
+            detail=f"Target track {target_track_kind.upper()}{target_track_index} not found",
+            document=doc,
+        )
+
+    if mode == "replace":
+        ref_ph = max(doc.start_frame, int(tl_playhead))
+        target_idx = next(
+            (
+                idx
+                for idx, c in enumerate(target_trk.clips)
+                if c.start_frame <= ref_ph < c.start_frame + c.duration_frames
+            ),
+            None,
+        )
+        if target_idx is None and tl_in is not None:
+            ref_in = max(doc.start_frame, int(tl_in))
+            target_idx = next(
+                (
+                    idx
+                    for idx, c in enumerate(target_trk.clips)
+                    if c.start_frame <= ref_in < c.start_frame + c.duration_frames
+                ),
+                None,
+            )
+            ref_ph = ref_in
+        if target_idx is None:
+            return ThreePointEditResult(
+                changed=False,
+                op="replace",
+                resolution=resolution,
+                sync_locked_tracks=_count_sync_locked(next_doc),
+                detail=(
+                    f"No clip under playhead on "
+                    f"{target_track_kind.upper()}{target_track_index} to replace"
+                ),
+                document=doc,
+            )
+
+        orig = target_trk.clips[target_idx]
+        playhead_offset = max(0, ref_ph - orig.start_frame)
+        base_src = max(0, int(source_clip.source_in_frame))
+        if source_in is not None:
+            new_src_in = max(0, base_src + int(source_in))
+        else:
+            src_ph_clamped = max(0, min(total_src - 1, int(source_playhead)))
+            new_src_in = max(0, base_src + src_ph_clamped - playhead_offset)
+
+        replaced = source_clip.model_copy(
+            deep=True,
+            update={
+                "track_index": target_track_index,
+                "media_type": target_track_kind,
+                "start_frame": orig.start_frame,
+                "duration_frames": orig.duration_frames,
+                "source_in_frame": new_src_in,
+                "transition_out": orig.transition_out,
+                "link_group_id": orig.link_group_id,
+            },
+        )
+        target_trk.clips[target_idx] = replaced
+        rep_res = resolution.model_copy(
+            update={
+                "tl_start": orig.start_frame,
+                "tl_end": orig.start_frame + orig.duration_frames,
+                "duration_frames": orig.duration_frames,
+                "effective_source_in": new_src_in,
+                "rule": "replace_sync",
+                "detail": f"Replace {orig.name} ({orig.duration_frames}f @ {orig.start_frame}f)",
+            }
+        )
+        return ThreePointEditResult(
+            changed=True,
+            op="replace",
+            resolution=rep_res,
+            inserted_clip=replaced,
+            overwritten_count=1,
+            sync_locked_tracks=_count_sync_locked(next_doc),
+            detail=(
+                f"Replaced {orig.name} with {replaced.name} "
+                f"({replaced.duration_frames}f @ {replaced.start_frame}f)"
+            ),
+            document=next_doc,
+        )
+
+    new_clip = source_clip.model_copy(
+        deep=True,
+        update={
+            "track_index": target_track_index,
+            "media_type": target_track_kind,
+            "start_frame": resolution.tl_start,
+            "duration_frames": resolution.duration_frames,
+            "source_in_frame": resolution.effective_source_in,
+            "enabled": source_clip.enabled,
+            "transition_out": None,
+            "link_group_id": "",
+        },
+    )
+
+    if mode == "insert":
+        tl_start = resolution.tl_start
+        dur = resolution.duration_frames
+        updated_clips: list[TimelineClip] = []
+        split_rights: list[TimelineClip] = []
+        for c in target_trk.clips:
+            c_end = c.start_frame + c.duration_frames
+            if c.start_frame < tl_start < c_end:
+                left_c, right_c = _split_clip_at_frame(next_doc, c, tl_start)
+                right_c.start_frame = tl_start + dur
+                split_rights.append(right_c)
+                updated_clips.extend([left_c, right_c])
+            else:
+                updated_clips.append(c)
+        target_trk.clips = updated_clips
+
+        shifted = len(split_rights)
+        exclude_tuple = tuple(split_rights)
+        for trk in next_doc.tracks:
+            if trk is not target_trk and not (target_trk.sync_locked and trk.sync_locked):
+                continue
+            if trk is not target_trk and trk.sync_locked:
+                split_other: list[TimelineClip] = []
+                for c in trk.clips:
+                    c_end = c.start_frame + c.duration_frames
+                    if c.start_frame < tl_start < c_end:
+                        l_c, r_c = _split_clip_at_frame(next_doc, c, tl_start)
+                        split_other.extend([l_c, r_c])
+                    else:
+                        split_other.append(c)
+                trk.clips = split_other
+            for c in trk.clips:
+                if any(c is ex for ex in exclude_tuple):
+                    continue
+                if c.start_frame >= tl_start:
+                    c.start_frame += dur
+                    shifted += 1
+            trk.clips.sort(key=lambda c: (c.start_frame, c.duration_frames))
+
+        target_trk.clips.append(new_clip)
+        target_trk.clips.sort(key=lambda c: (c.start_frame, c.duration_frames))
+        return ThreePointEditResult(
+            changed=True,
+            op="insert",
+            resolution=resolution,
+            inserted_clip=new_clip,
+            shifted_count=shifted,
+            sync_locked_tracks=_count_sync_locked(next_doc),
+            detail=(
+                f"Inserted {new_clip.name} ({dur}f) on "
+                f"{target_track_kind.upper()}{target_track_index} @ {tl_start}f "
+                f"(shifted {shifted} clip(s))"
+            ),
+            document=next_doc,
+        )
+
+    # mode == "overwrite"
+    tl_start = resolution.tl_start
+    tl_end = resolution.tl_end
+    kept_clips: list[TimelineClip] = []
+    overwritten = 0
+    for c in target_trk.clips:
+        c_start = c.start_frame
+        c_end = c_start + c.duration_frames
+        if c_end <= tl_start or c_start >= tl_end:
+            kept_clips.append(c)
+            continue
+        overwritten += 1
+        if c_start < tl_start and c_end > tl_end:
+            left_c, _ = _split_clip_at_frame(next_doc, c, tl_start)
+            _, right_c = _split_clip_at_frame(next_doc, c, tl_end)
+            kept_clips.extend([left_c, right_c])
+        elif c_start < tl_start < c_end:
+            left_c, _ = _split_clip_at_frame(next_doc, c, tl_start)
+            kept_clips.append(left_c)
+        elif c_start < tl_end < c_end:
+            _, right_c = _split_clip_at_frame(next_doc, c, tl_end)
+            kept_clips.append(right_c)
+        # else fully covered [tl_start, tl_end] -> dropped
+
+    kept_clips.append(new_clip)
+    kept_clips.sort(key=lambda c: (c.start_frame, c.duration_frames))
+    target_trk.clips = kept_clips
+    return ThreePointEditResult(
+        changed=True,
+        op="overwrite",
+        resolution=resolution,
+        inserted_clip=new_clip,
+        overwritten_count=overwritten,
+        sync_locked_tracks=_count_sync_locked(next_doc),
+        detail=(
+            f"Overwrote {target_track_kind.upper()}{target_track_index} "
+            f"[{tl_start}f..{tl_end}f) with {new_clip.name} ({overwritten} clip(s) affected)"
+        ),
+        document=next_doc,
+    )

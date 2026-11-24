@@ -73,12 +73,14 @@ import {
   resolveRetimeRampPointsForPreset,
   rippleDeleteClipInDocument,
   rippleTrimClipInDocument,
+  resolveThreePointRange,
   rollEditCutInDocument,
   setAllTracksSyncLockInDocument,
   slideClipInDocument,
   slipClipInDocument,
   switchMulticamAngleInDocument,
   syncMulticamClipInDocument,
+  threePointEditInDocument,
   toggleTrackSyncLockInDocument,
   unlinkAvClipsInDocument,
   updateCompoundSubsequenceInDocument,
@@ -3365,6 +3367,58 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/timeline/multicam", { method: "POST", body: payload });
+    },
+    async threePointEdit(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const mode = String((payload && payload.mode) || "insert").trim().toLowerCase();
+        const srcClip = payload && payload.source_clip ? payload.source_clip : null;
+        if (!srcClip) throw new Error("source_clip object is required");
+        if (payload && payload.dry_run) {
+          const resOnly = resolveThreePointRange({
+            sourceTotalFrames: payload.source_total_frames ?? srcClip.duration_frames ?? 75,
+            sourceBaseIn: srcClip.source_in_frame ?? 0,
+            sourcePlayhead: payload.source_playhead ?? 0,
+            sourceIn: payload.source_in,
+            sourceOut: payload.source_out,
+            tlPlayhead: payload.tl_playhead ?? doc.start_frame ?? 0,
+            tlIn: payload.tl_in,
+            tlOut: payload.tl_out,
+            docStart: doc.start_frame ?? 0
+          });
+          return { dry_run: true, mode, resolution: resOnly };
+        }
+        const res = threePointEditInDocument(doc, {
+          mode,
+          sourceClip: srcClip,
+          targetTrackKind: payload && payload.target_track_kind === "audio" ? "audio" : "video",
+          targetTrackIndex: Number.isInteger(payload && payload.target_track_index)
+            ? payload.target_track_index
+            : 1,
+          sourceTotalFrames: payload && payload.source_total_frames,
+          sourcePlayhead: payload && payload.source_playhead,
+          sourceIn: payload && payload.source_in,
+          sourceOut: payload && payload.source_out,
+          tlPlayhead: payload && payload.tl_playhead,
+          tlIn: payload && payload.tl_in,
+          tlOut: payload && payload.tl_out
+        });
+        const nextDoc = res.doc || doc;
+        return {
+          changed: Boolean(res.changed),
+          op: res.op,
+          resolution: res.resolution,
+          inserted_clip: res.insertedClip || null,
+          shifted_count: res.shiftedCount || 0,
+          overwritten_count: res.overwrittenCount || 0,
+          sync_locked_tracks: countSyncLockedTracks(nextDoc),
+          detail: res.detail || "",
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc)
+        };
+      }
+      return requestJson("/api/timeline/three-point-edit", { method: "POST", body: payload });
     }
   };
 }

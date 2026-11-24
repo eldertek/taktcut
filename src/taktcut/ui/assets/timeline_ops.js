@@ -10964,3 +10964,399 @@ export function buildFourUpTrimMonitorState(doc, mode, target, deltaFrames = 0) 
     tiles
   };
 }
+
+export const ALLOWED_THREE_POINT_MODES = ["insert", "overwrite", "replace"];
+
+export function resolveThreePointRange(opts = {}) {
+  const total = Math.max(1, Math.round(Number(opts.sourceTotalFrames ?? opts.source_total_frames) || 75));
+  const baseIn = Math.max(0, Math.round(Number(opts.sourceBaseIn ?? opts.source_base_in) || 0));
+  const docStart = Number.isFinite(Number(opts.docStart ?? opts.doc_start))
+    ? Math.round(Number(opts.docStart ?? opts.doc_start))
+    : 0;
+  const srcPh = Math.max(
+    0,
+    Math.min(total - 1, Math.round(Number(opts.sourcePlayhead ?? opts.source_playhead) || 0))
+  );
+  const tlPh = Math.max(docStart, Math.round(Number(opts.tlPlayhead ?? opts.tl_playhead) || docStart));
+
+  const rawSIn = opts.sourceIn ?? opts.source_in;
+  const rawSOut = opts.sourceOut ?? opts.source_out;
+  const sIn = rawSIn != null && Number.isFinite(Number(rawSIn))
+    ? Math.max(0, Math.min(total - 1, Math.round(Number(rawSIn))))
+    : null;
+  const sOut = rawSOut != null && Number.isFinite(Number(rawSOut))
+    ? Math.max(1, Math.min(total, Math.round(Number(rawSOut))))
+    : null;
+  if (sIn !== null && sOut !== null && sOut <= sIn) {
+    throw new Error(`source_out (${sOut}) must be greater than source_in (${sIn})`);
+  }
+
+  const rawPIn = opts.tlIn ?? opts.tl_in;
+  const rawPOut = opts.tlOut ?? opts.tl_out;
+  const pIn = rawPIn != null && Number.isFinite(Number(rawPIn))
+    ? Math.max(docStart, Math.round(Number(rawPIn)))
+    : null;
+  const pOut = rawPOut != null && Number.isFinite(Number(rawPOut))
+    ? Math.max(docStart + 1, Math.round(Number(rawPOut)))
+    : null;
+  if (pIn !== null && pOut !== null && pOut <= pIn) {
+    throw new Error(`tl_out (${pOut}) must be greater than tl_in (${pIn})`);
+  }
+
+  const hasSrcIo = sIn !== null && sOut !== null;
+  const hasTlIo = pIn !== null && pOut !== null;
+
+  let tlStart;
+  let dur;
+  let effSrcIn;
+  let rule;
+  let detail;
+
+  if (hasSrcIo && hasTlIo) {
+    dur = Math.max(1, sOut - sIn);
+    effSrcIn = baseIn + sIn;
+    tlStart = pIn;
+    rule = "all_four_src_io";
+    detail = `4-PT (Src I/O ${dur}f -> TL In ${tlStart}f)`;
+  } else if (hasSrcIo && pOut !== null && pIn === null) {
+    dur = Math.max(1, sOut - sIn);
+    tlStart = Math.max(docStart, pOut - dur);
+    effSrcIn = baseIn + sIn;
+    rule = "backtime_src_io_tl_out";
+    detail = `3-PT Backtime (Src I/O ${dur}f -> TL Out ${pOut}f)`;
+  } else if (hasSrcIo) {
+    dur = Math.max(1, sOut - sIn);
+    tlStart = pIn !== null ? pIn : tlPh;
+    effSrcIn = baseIn + sIn;
+    rule = "src_io_tl_in";
+    detail = `3-PT (Src I/O ${dur}f -> TL ${tlStart}f)`;
+  } else if (hasTlIo && sOut !== null && sIn === null) {
+    const tlDur = Math.max(1, pOut - pIn);
+    dur = Math.min(tlDur, Math.max(1, sOut));
+    tlStart = pIn;
+    effSrcIn = Math.max(0, baseIn + sOut - dur);
+    rule = "backtime_src_out_tl_io";
+    detail = `3-PT Backtime (Src Out ${sOut}f -> TL I/O ${dur}f)`;
+  } else if (hasTlIo) {
+    const anchorIn = sIn !== null ? sIn : srcPh;
+    const available = Math.max(1, total - anchorIn);
+    dur = Math.min(Math.max(1, pOut - pIn), available);
+    tlStart = pIn;
+    effSrcIn = baseIn + anchorIn;
+    rule = "src_in_tl_io";
+    detail = `3-PT (Src In ${anchorIn}f -> TL I/O ${dur}f)`;
+  } else {
+    const anchorIn = sIn !== null ? sIn : 0;
+    const anchorOut = sOut !== null ? sOut : total;
+    dur = Math.max(1, anchorOut - anchorIn);
+    tlStart = pIn !== null ? pIn : tlPh;
+    effSrcIn = baseIn + anchorIn;
+    rule = "playhead_default";
+    detail = `Playhead (${dur}f @ TL ${tlStart}f)`;
+  }
+
+  return {
+    tl_start: tlStart,
+    tl_end: tlStart + dur,
+    duration_frames: dur,
+    effective_source_in: effSrcIn,
+    rule,
+    detail
+  };
+}
+
+export function threePointEditInDocument(doc, opts = {}) {
+  const mode = String(opts.mode || "insert").trim().toLowerCase();
+  if (!ALLOWED_THREE_POINT_MODES.includes(mode)) {
+    throw new Error(`Unsupported three-point edit mode: ${mode}`);
+  }
+  const sourceClipOrEntry = opts.sourceClip || opts.source_clip;
+  if (!doc || !Array.isArray(doc.tracks) || !sourceClipOrEntry) {
+    return {
+      doc,
+      changed: false,
+      op: mode,
+      resolution: resolveThreePointRange({ sourceTotalFrames: 75 }),
+      insertedClip: null,
+      shiftedCount: 0,
+      overwrittenCount: 0,
+      detail: "Missing timeline or source clip"
+    };
+  }
+  const resolvedSrc = _resolveBinSourceClip(doc, sourceClipOrEntry);
+  if (!resolvedSrc) {
+    return {
+      doc,
+      changed: false,
+      op: mode,
+      resolution: resolveThreePointRange({ sourceTotalFrames: 75 }),
+      insertedClip: null,
+      shiftedCount: 0,
+      overwrittenCount: 0,
+      detail: "Invalid source clip"
+    };
+  }
+
+  const targetKind =
+    opts.targetTrackKind === "audio" || opts.target_track_kind === "audio" ? "audio" : "video";
+  const targetIndex = Math.max(
+    1,
+    Math.round(Number(opts.targetTrackIndex ?? opts.target_track_index) || 1)
+  );
+  const docStart = Number.isFinite(Number(doc.start_frame)) ? Math.round(Number(doc.start_frame)) : 0;
+  const totalSrc = Math.max(
+    1,
+    Math.round(
+      Number(opts.sourceTotalFrames ?? opts.source_total_frames ?? resolvedSrc.clip.duration_frames) || 75
+    )
+  );
+  const srcPlayhead = Math.max(
+    0,
+    Math.min(totalSrc - 1, Math.round(Number(opts.sourcePlayhead ?? opts.source_playhead) || 0))
+  );
+  const tlPlayhead = Math.max(
+    docStart,
+    Math.round(Number(opts.tlPlayhead ?? opts.tl_playhead) || docStart)
+  );
+  const rawSIn = opts.sourceIn ?? opts.source_in;
+  const rawSOut = opts.sourceOut ?? opts.source_out;
+  const rawPIn = opts.tlIn ?? opts.tl_in;
+  const rawPOut = opts.tlOut ?? opts.tl_out;
+
+  const resolution = resolveThreePointRange({
+    sourceTotalFrames: totalSrc,
+    sourceBaseIn: Math.max(0, Number(resolvedSrc.clip.source_in_frame) || 0),
+    sourcePlayhead: srcPlayhead,
+    sourceIn: rawSIn,
+    sourceOut: rawSOut,
+    tlPlayhead,
+    tlIn: rawPIn,
+    tlOut: rawPOut,
+    docStart
+  });
+
+  const nextDoc = cloneTimelineDoc(doc);
+  const targetTrk = nextDoc.tracks.find(
+    (t) => t && t.kind === targetKind && Number(t.index) === targetIndex
+  );
+  if (!targetTrk) {
+    return {
+      doc,
+      changed: false,
+      op: mode,
+      resolution,
+      insertedClip: null,
+      shiftedCount: 0,
+      overwrittenCount: 0,
+      detail: `Target track ${targetKind.toUpperCase()}${targetIndex} not found`
+    };
+  }
+  if (!Array.isArray(targetTrk.clips)) targetTrk.clips = [];
+  const fpsRate = nextDoc.fps ? Math.max(1, nextDoc.fps.num / Math.max(1, nextDoc.fps.den)) : 25;
+
+  if (mode === "replace") {
+    let refPh = tlPlayhead;
+    let targetIdx = targetTrk.clips.findIndex(
+      (c) => c && refPh >= c.start_frame && refPh < c.start_frame + c.duration_frames
+    );
+    if (targetIdx < 0 && rawPIn != null && Number.isFinite(Number(rawPIn))) {
+      refPh = Math.max(docStart, Math.round(Number(rawPIn)));
+      targetIdx = targetTrk.clips.findIndex(
+        (c) => c && refPh >= c.start_frame && refPh < c.start_frame + c.duration_frames
+      );
+    }
+    if (targetIdx < 0) {
+      return {
+        doc,
+        changed: false,
+        op: "replace",
+        resolution,
+        insertedClip: null,
+        shiftedCount: 0,
+        overwrittenCount: 0,
+        detail: `No clip under playhead on ${targetKind.toUpperCase()}${targetIndex} to replace`
+      };
+    }
+
+    const orig = targetTrk.clips[targetIdx];
+    const playheadOffset = Math.max(0, refPh - orig.start_frame);
+    const baseSrc = Math.max(0, Math.round(Number(resolvedSrc.clip.source_in_frame) || 0));
+    const newSrcIn =
+      rawSIn != null && Number.isFinite(Number(rawSIn))
+        ? Math.max(0, baseSrc + Math.round(Number(rawSIn)))
+        : Math.max(0, baseSrc + srcPlayhead - playheadOffset);
+
+    const replaced = _buildInsertedClipClone(
+      nextDoc,
+      resolvedSrc.clip,
+      targetKind,
+      targetIndex,
+      orig.start_frame
+    );
+    replaced.id = orig.id || replaced.id;
+    replaced.duration_frames = orig.duration_frames;
+    replaced.source_in_frame = newSrcIn;
+    replaced.transition_out = orig.transition_out || null;
+    replaced.link_group_id = orig.link_group_id || "";
+    targetTrk.clips[targetIdx] = replaced;
+
+    const repRes = {
+      ...resolution,
+      tl_start: orig.start_frame,
+      tl_end: orig.start_frame + orig.duration_frames,
+      duration_frames: orig.duration_frames,
+      effective_source_in: newSrcIn,
+      rule: "replace_sync",
+      detail: `Replace ${orig.name} (${orig.duration_frames}f @ ${orig.start_frame}f)`
+    };
+    return {
+      doc: nextDoc,
+      changed: true,
+      op: "replace",
+      resolution: repRes,
+      insertedClip: replaced,
+      shiftedCount: 0,
+      overwrittenCount: 1,
+      detail: `Replaced ${orig.name} with ${replaced.name} (${replaced.duration_frames}f @ ${replaced.start_frame}f)`
+    };
+  }
+
+  const newClip = _buildInsertedClipClone(
+    nextDoc,
+    resolvedSrc.clip,
+    targetKind,
+    targetIndex,
+    resolution.tl_start
+  );
+  newClip.duration_frames = resolution.duration_frames;
+  newClip.source_in_frame = resolution.effective_source_in;
+  newClip.link_group_id = "";
+
+  if (mode === "insert") {
+    const tlStart = resolution.tl_start;
+    const dur = resolution.duration_frames;
+    const updatedClips = [];
+    const splitRights = new Set();
+    for (const c of targetTrk.clips) {
+      if (!c) continue;
+      const cStart = Math.round(Number(c.start_frame) || 0);
+      const cEnd = cStart + Math.max(0, Math.round(Number(c.duration_frames) || 0));
+      if (tlStart > cStart && tlStart < cEnd) {
+        const { leftClip, rightClip } = _buildSplitClipPair(c, tlStart, nextDoc.fps, fpsRate);
+        leftClip.link_group_id = "";
+        rightClip.link_group_id = "";
+        rightClip.start_frame = tlStart + dur;
+        splitRights.add(rightClip);
+        updatedClips.push(leftClip, rightClip);
+      } else {
+        updatedClips.push(c);
+      }
+    }
+    targetTrk.clips = updatedClips;
+
+    let shifted = splitRights.size;
+    for (const trk of nextDoc.tracks) {
+      if (!trk) continue;
+      if (trk !== targetTrk && !(targetTrk.sync_locked && trk.sync_locked)) continue;
+      if (trk !== targetTrk && trk.sync_locked) {
+        const splitOther = [];
+        for (const c of trk.clips || []) {
+          if (!c) continue;
+          const cStart = Math.round(Number(c.start_frame) || 0);
+          const cEnd = cStart + Math.max(0, Math.round(Number(c.duration_frames) || 0));
+          if (tlStart > cStart && tlStart < cEnd) {
+            const { leftClip, rightClip } = _buildSplitClipPair(c, tlStart, nextDoc.fps, fpsRate);
+            leftClip.link_group_id = "";
+            rightClip.link_group_id = "";
+            splitOther.push(leftClip, rightClip);
+          } else {
+            splitOther.push(c);
+          }
+        }
+        trk.clips = splitOther;
+      }
+      for (const c of trk.clips || []) {
+        if (!c || splitRights.has(c)) continue;
+        if (c.start_frame >= tlStart) {
+          c.start_frame += dur;
+          shifted += 1;
+        }
+      }
+      trk.clips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+    }
+
+    targetTrk.clips.push(newClip);
+    targetTrk.clips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+    return {
+      doc: nextDoc,
+      changed: true,
+      op: "insert",
+      resolution,
+      insertedClip: newClip,
+      shiftedCount: shifted,
+      overwrittenCount: 0,
+      detail: `Inserted ${newClip.name} (${dur}f) on ${targetKind.toUpperCase()}${targetIndex} @ ${tlStart}f (shifted ${shifted} clip(s))`
+    };
+  }
+
+  // mode === "overwrite"
+  const tlStart = resolution.tl_start;
+  const tlEnd = resolution.tl_end;
+  const keptClips = [];
+  let overwritten = 0;
+  for (const c of targetTrk.clips) {
+    if (!c) continue;
+    const cStart = Math.round(Number(c.start_frame) || 0);
+    const cEnd = cStart + Math.max(0, Math.round(Number(c.duration_frames) || 0));
+    if (cEnd <= tlStart || cStart >= tlEnd) {
+      keptClips.push(c);
+      continue;
+    }
+    overwritten += 1;
+    if (cStart < tlStart && cEnd > tlEnd) {
+      const { leftClip } = _buildSplitClipPair(c, tlStart, nextDoc.fps, fpsRate);
+      const { rightClip } = _buildSplitClipPair(c, tlEnd, nextDoc.fps, fpsRate);
+      leftClip.link_group_id = "";
+      rightClip.link_group_id = "";
+      keptClips.push(leftClip, rightClip);
+    } else if (cStart < tlStart && cEnd > tlStart) {
+      const { leftClip } = _buildSplitClipPair(c, tlStart, nextDoc.fps, fpsRate);
+      leftClip.link_group_id = "";
+      keptClips.push(leftClip);
+    } else if (cStart < tlEnd && cEnd > tlEnd) {
+      const { rightClip } = _buildSplitClipPair(c, tlEnd, nextDoc.fps, fpsRate);
+      rightClip.link_group_id = "";
+      keptClips.push(rightClip);
+    }
+  }
+  keptClips.push(newClip);
+  keptClips.sort((a, b) => a.start_frame - b.start_frame || a.duration_frames - b.duration_frames);
+  targetTrk.clips = keptClips;
+  return {
+    doc: nextDoc,
+    changed: true,
+    op: "overwrite",
+    resolution,
+    insertedClip: newClip,
+    shiftedCount: 0,
+    overwrittenCount: overwritten,
+    detail: `Overwrote ${targetKind.toUpperCase()}${targetIndex} [${tlStart}f..${tlEnd}f) with ${newClip.name} (${overwritten} clip(s) affected)`
+  };
+}
+
+export function findAdjacentMarkerIndex(doc, playheadFrame, direction = 1) {
+  const markers = doc && Array.isArray(doc.markers) ? doc.markers : [];
+  if (markers.length === 0) return -1;
+  const ph = Math.round(Number(playheadFrame) || 0);
+  const indexed = markers
+    .map((m, idx) => ({ idx, frame: Math.round(Number(m && m.frame) || 0) }))
+    .sort((a, b) => a.frame - b.frame || a.idx - b.idx);
+  if (direction >= 0) {
+    const next = indexed.find((m) => m.frame > ph);
+    return next ? next.idx : indexed[0].idx;
+  }
+  for (let i = indexed.length - 1; i >= 0; i--) {
+    if (indexed[i].frame < ph) return indexed[i].idx;
+  }
+  return indexed[indexed.length - 1].idx;
+}

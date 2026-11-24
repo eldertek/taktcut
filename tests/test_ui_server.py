@@ -10728,6 +10728,301 @@ def test_ui_dynamic_trim_jl_cut_av_unlink_4up_monitor_e2e(tmp_path: Path) -> Non
         thread.join(timeout=5)
 
 
+def test_timeline_dual_monitor_three_point_edit_parity_and_playwright(tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    from taktcut.ui.samples import build_sample_timeline
+    from taktcut.ui.server import ASSETS_DIR
+
+    sample_doc = build_sample_timeline("clean").model_dump(mode="json")
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+
+        src_clip_payload = {
+            "name": "C012_Hero_Insert",
+            "track_index": 1,
+            "media_type": "video",
+            "start_frame": 0,
+            "duration_frames": 100,
+            "source_in_frame": 12,
+            "source_path": "media/C012_Hero_Insert.mov",
+            "source_fps": {"num": 25, "den": 1},
+            "enabled": True,
+        }
+
+        # 1. Server API dry_run + insert (F9) + overwrite (F10) + replace (F11) + 400 validation
+        dry_status, _, dry_raw = _http_call(
+            f"{base_url}/api/timeline/three-point-edit",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "mode": "insert",
+                "source_clip": src_clip_payload,
+                "target_track_kind": "video",
+                "target_track_index": 1,
+                "source_total_frames": 100,
+                "source_in": 10,
+                "source_out": 40,
+                "tl_playhead": 50,
+                "dry_run": True,
+            },
+        )
+        assert dry_status == 200
+        dry_res = json.loads(dry_raw.decode("utf-8"))
+        assert dry_res["dry_run"] is True
+        assert dry_res["resolution"]["duration_frames"] == 30
+        assert dry_res["resolution"]["effective_source_in"] == 22
+
+        ins_status, _, ins_raw = _http_call(
+            f"{base_url}/api/timeline/three-point-edit",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "mode": "insert",
+                "source_clip": src_clip_payload,
+                "target_track_kind": "video",
+                "target_track_index": 1,
+                "source_total_frames": 100,
+                "source_in": 10,
+                "source_out": 40,
+                "tl_playhead": 50,
+            },
+        )
+        assert ins_status == 200
+        ins_res = json.loads(ins_raw.decode("utf-8"))
+        assert ins_res["changed"] is True
+        assert ins_res["op"] == "insert"
+        assert ins_res["inserted_clip"]["duration_frames"] == 30
+        assert ins_res["inserted_clip"]["start_frame"] == 50
+
+        ovr_status, _, ovr_raw = _http_call(
+            f"{base_url}/api/timeline/three-point-edit",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "mode": "overwrite",
+                "source_clip": src_clip_payload,
+                "target_track_kind": "video",
+                "target_track_index": 2,
+                "source_total_frames": 100,
+                "source_in": 0,
+                "source_out": 50,
+                "tl_in": 200,
+            },
+        )
+        assert ovr_status == 200
+        ovr_res = json.loads(ovr_raw.decode("utf-8"))
+        assert ovr_res["changed"] is True
+        assert ovr_res["shifted_count"] == 0
+
+        rep_status, _, rep_raw = _http_call(
+            f"{base_url}/api/timeline/three-point-edit",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "mode": "replace",
+                "source_clip": src_clip_payload,
+                "target_track_kind": "video",
+                "target_track_index": 1,
+                "source_total_frames": 100,
+                "source_playhead": 35,
+                "tl_playhead": 150,
+            },
+        )
+        assert rep_status == 200
+        rep_res = json.loads(rep_raw.decode("utf-8"))
+        assert rep_res["changed"] is True
+        assert rep_res["op"] == "replace"
+        assert rep_res["inserted_clip"]["name"] == "C012_Hero_Insert"
+        assert rep_res["inserted_clip"]["start_frame"] == 125
+        assert rep_res["inserted_clip"]["duration_frames"] == 100
+
+        bad_status, _, _ = _http_call(
+            f"{base_url}/api/timeline/three-point-edit",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "mode": "invalid_op",
+                "source_clip": src_clip_payload,
+            },
+        )
+        assert bad_status == 400
+
+        # 2. Node.js parity: timeline_ops.js + demo_adapter.js offline mode
+        if shutil.which("node"):
+            ops_url = (ASSETS_DIR / "timeline_ops.js").as_uri()
+            demo_url = (ASSETS_DIR / "demo_adapter.js").as_uri()
+            node_script = (
+                "import assert from 'node:assert/strict';\n"
+                f"import {{ createApiClient }} from '{demo_url}';\n"
+                "import {\n"
+                "  findAdjacentMarkerIndex,\n"
+                "  resolveThreePointRange,\n"
+                "  threePointEditInDocument\n"
+                f"}} from '{ops_url}';\n"
+                f"const doc = {json.dumps(sample_doc)};\n"
+                f"const src = {json.dumps(src_clip_payload)};\n"
+                "const r = resolveThreePointRange({\n"
+                "  sourceTotalFrames: 100, sourceBaseIn: 12,\n"
+                "  sourceIn: 10, sourceOut: 40, tlPlayhead: 50\n"
+                "});\n"
+                "assert.equal(r.duration_frames, 30);\n"
+                "assert.equal(r.effective_source_in, 22);\n"
+                "const ins = threePointEditInDocument(doc, {\n"
+                "  mode: 'insert', sourceClip: src,\n"
+                "  targetTrackKind: 'video', targetTrackIndex: 1,\n"
+                "  sourceTotalFrames: 100, sourceIn: 10, sourceOut: 40, tlPlayhead: 50\n"
+                "});\n"
+                "assert.equal(ins.changed, true);\n"
+                "assert.equal(ins.insertedClip.start_frame, 50);\n"
+                "assert.equal(ins.insertedClip.duration_frames, 30);\n"
+                "const nextMkr = findAdjacentMarkerIndex(doc, 0, 1);\n"
+                "assert.ok(nextMkr >= 0);\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const offlineApi = createApiClient();\n"
+                "const ovr = await offlineApi.threePointEdit({\n"
+                "  document: doc, mode: 'overwrite', source_clip: src,\n"
+                "  target_track_kind: 'video', target_track_index: 1,\n"
+                "  source_total_frames: 100, source_in: 5, source_out: 35, tl_in: 20\n"
+                "});\n"
+                "assert.equal(ovr.changed, true);\n"
+                "assert.equal(ovr.inserted_clip.duration_frames, 30);\n"
+                "assert.equal(ovr.shifted_count, 0);\n"
+            )
+            proc = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed:\n{proc.stderr}\n{proc.stdout}"
+
+        # 3. Playwright E2E at 1440x900 and 375x812 + EN/FR
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                console_errors: list[str] = []
+                page.on(
+                    "console",
+                    lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+                )
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#media-pool-list .media-pool-card")
+
+                # Click a clip in Master Bin & open Dual Monitor via Load Src
+                page.locator(
+                    "#media-pool-list .media-pool-card", has_text="A002_Studio_Detail"
+                ).click()
+                page.click("#btn-pool-load-source")
+                page.wait_for_function(
+                    "() => !document.getElementById('source-monitor-pane')"
+                    "?.classList.contains('is-hidden')"
+                )
+                src_box = page.locator("#timeline-source-canvas").bounding_box()
+                assert src_box is not None and src_box["width"] > 100 and src_box["height"] > 80
+
+                # Scrub Source Monitor & mark Source In (20f) and Source Out (50f) -> 30f span
+                page.fill("#source-playhead-slider", "20")
+                page.dispatch_event("#source-playhead-slider", "input")
+                page.click("#btn-src-mark-in")
+                page.fill("#source-playhead-slider", "49")
+                page.dispatch_event("#source-playhead-slider", "input")
+                page.click("#btn-src-mark-out")
+                page.wait_for_function(
+                    "() => (document.getElementById('source-io-pill')?.textContent || '')"
+                    ".includes('20..50f (30f)')"
+                )
+
+                # Patch to V2, park Program playhead at 250f, and execute 3-Point Overwrite (F10)
+                page.select_option("#three-pt-target-track", "video:2")
+                page.fill("#playhead-slider", "250")
+                page.dispatch_event("#playhead-slider", "input")
+                page.locator("#playhead-slider").evaluate("el => el.blur()")
+                page.keyboard.press("F10")
+                page.wait_for_function(
+                    "() => (document.getElementById('status-banner-text')?.textContent || '')"
+                    ".includes('3-Pt Overwrite')"
+                )
+
+                # Execute 3-Point Insert (F9) at 300f and Replace (F11) on V1 at 50f
+                page.fill("#playhead-slider", "300")
+                page.dispatch_event("#playhead-slider", "input")
+                page.click("#btn-three-pt-insert")
+                page.wait_for_function(
+                    "() => (document.getElementById('status-banner-text')?.textContent || '')"
+                    ".includes('3-Pt Insert')"
+                )
+
+                page.select_option("#three-pt-target-track", "video:1")
+                page.fill("#playhead-slider", "50")
+                page.dispatch_event("#playhead-slider", "input")
+                page.click("#btn-three-pt-replace")
+                page.wait_for_function(
+                    "() => (document.getElementById('status-banner-text')?.textContent || '')"
+                    ".includes('Replace Edit')"
+                )
+
+                # Marker Prev/Next navigation
+                page.click("#btn-timeline-next-marker")
+                page.click("#btn-timeline-prev-marker")
+
+                # FR i18n parity without U+2013 / U+2014
+                page.click("#lang-fr")
+                fr_bar = page.locator("#three-point-edit-bar").text_content() or ""
+                assert "Écraser" in fr_bar and "Remplacer" in fr_bar
+                assert "\u2013" not in fr_bar and "\u2014" not in fr_bar
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check with Dual Monitor OPEN
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in (
+                    "btn-dual-monitor-toggle",
+                    "btn-pool-load-source",
+                    "btn-src-mark-in",
+                    "btn-src-mark-out",
+                    "btn-src-clear-io",
+                    "three-pt-target-track",
+                    "btn-three-pt-insert",
+                    "btn-three-pt-overwrite",
+                    "btn-three-pt-replace",
+                    "btn-timeline-prev-marker",
+                    "btn-timeline-next-marker",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 
 
 

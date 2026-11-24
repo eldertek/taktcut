@@ -15,6 +15,7 @@ import {
   drawProgramMonitorCanvas,
   drawQualifierSpectrumCanvas,
   drawRetimeRampEditorCanvas,
+  drawSourceMonitorCanvas,
   drawStereoVuMeterCanvas,
   drawTimelineCanvas,
   drawTimelineOverviewCanvas,
@@ -207,6 +208,7 @@ import {
   flattenMulticamClipInDocument,
   formatCmx3600Edl,
   formatFcpxmlTimeline,
+  findAdjacentMarkerIndex,
   formatFfmetadataFromMarkers,
   formatRetimeBadgeText,
   formatRetimeSpeedValue,
@@ -278,6 +280,7 @@ import {
   resetAllTracksMixerInDocument,
   resolveRetimeRampPointsForPreset,
   resolveSourceTapeFrame,
+  resolveThreePointRange,
   resolveTransformKeyframeBezier,
   rgbToHslClient,
   rippleDeleteClipInDocument,
@@ -305,6 +308,7 @@ import {
   toggleTrackSoloInDocument,
   switchMulticamAngleInDocument,
   syncMulticamClipInDocument,
+  threePointEditInDocument,
   toggleTrackSyncLockInDocument,
   updateCompoundSubsequenceInDocument,
   updateMulticamAngleInDocument,
@@ -778,7 +782,18 @@ const state = {
   sourceTapeState: null,
   timelineAvLinkEnabled: true,
   trimMonitorEnabled: false,
-  timelineSplitNudgeEdge: "left"
+  timelineSplitNudgeEdge: "left",
+  dualMonitorEnabled: false,
+  sourceMonitor: {
+    entryId: null,
+    clip: null,
+    trackKind: "video",
+    totalFrames: 75,
+    playheadFrame: 0,
+    inFrame: null,
+    outFrame: null,
+    patchTrack: "video:1"
+  }
 };
 
 function byId(id) {
@@ -1170,12 +1185,39 @@ function updatePlayheadReadout() {
   if (state.activeTab === "timeline" && state.timelineDoc) {
     renderTimelineTransformInspector();
     renderTimelineRetimeRampCanvas();
+    updateThreePointStatusPill();
+  }
+}
+
+function syncDualMonitorWellLayout() {
+  const well = byId("timeline-viewer-well");
+  const srcPane = byId("source-monitor-pane");
+  const dualBtn = byId("btn-dual-monitor-toggle");
+  const enabled = Boolean(state.dualMonitorEnabled);
+  if (well) well.classList.toggle("is-dual", enabled);
+  if (srcPane) srcPane.classList.toggle("is-hidden", !enabled);
+  if (dualBtn) {
+    dualBtn.classList.toggle("is-active", enabled);
+    dualBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
   }
 }
 
 function redrawActiveCanvases() {
   const activeColorChain = getActiveColorChainState();
   if (state.activeTab === "timeline") {
+    syncDualMonitorWellLayout();
+    if (state.dualMonitorEnabled) {
+      drawSourceMonitorCanvas(
+        byId("timeline-source-canvas"),
+        state.sourceMonitor.clip,
+        state.sourceMonitor,
+        state.timelineDoc,
+        {
+          badgeLabel: "SOURCE",
+          trackLabel: state.sourceMonitor.trackKind === "audio" ? "A1" : "V1"
+        }
+      );
+    }
     const selVideoCtx = getSelectedClipLocalContext();
     const mcCtx = getActiveMulticamClipContext();
     let trimMonitorState = null;
@@ -1518,6 +1560,10 @@ function renderTimelineUI() {
   renderTimelineIssues();
   renderMediaPool();
   renderTimelineIndex();
+  syncThreePointPatchOptions();
+  ensureSourceMonitorClip();
+  updateSourceMonitorUI();
+  updateThreePointStatusPill();
   renderPrecompBreadcrumbBar();
   renderDeliverChaptersPreview();
   updateDeliverSizeEstimate();
@@ -3865,12 +3911,14 @@ function updateMasterBinCutToolbar(clipEntries) {
   const smartBtn = byId("btn-pool-smart-insert");
   const phBtn = byId("btn-pool-insert-playhead");
   const appendBtn = byId("btn-pool-append");
+  const loadSrcBtn = byId("btn-pool-load-source");
   const active = state.mediaPoolType === "stills" ? null : getActiveMediaPoolEntry(clipEntries);
   const disabled = !state.timelineDoc || !active;
   if (targetEl) {
     targetEl.textContent = active ? `${active.label} -> ${active.trackId}` : "--";
     targetEl.title = active ? `${active.label} (${active.trackId})` : "";
   }
+  if (loadSrcBtn) loadSrcBtn.disabled = disabled;
   if (smartBtn) smartBtn.disabled = disabled;
   if (phBtn) phBtn.disabled = disabled;
   if (appendBtn) appendBtn.disabled = disabled;
@@ -3922,6 +3970,340 @@ function applyMasterBinEdit(mode) {
   }
   void fps;
   return true;
+}
+
+function getParsedPatchTarget() {
+  const raw = String(state.sourceMonitor.patchTrack || "video:1");
+  const [kRaw, idxRaw] = raw.split(":");
+  const kind = kRaw === "audio" ? "audio" : "video";
+  const idx = Math.max(1, Number.parseInt(idxRaw || "1", 10) || 1);
+  return { kind, index: idx, label: `${kind === "audio" ? "A" : "V"}${idx}` };
+}
+
+function syncThreePointPatchOptions() {
+  const sel = byId("three-pt-target-track");
+  if (!sel) return;
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks) || doc.tracks.length === 0) {
+    sel.replaceChildren(dom("option", "", "V1"));
+    sel.options[0].value = "video:1";
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const opts = [];
+  const validValues = new Set();
+  for (const trk of doc.tracks) {
+    if (!trk) continue;
+    const kind = trk.kind === "audio" ? "audio" : "video";
+    const idx = Math.max(1, Number(trk.index) || 1);
+    const val = `${kind}:${idx}`;
+    if (validValues.has(val)) continue;
+    validValues.add(val);
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = `${kind === "audio" ? "A" : "V"}${idx}`;
+    opts.push(opt);
+  }
+  sel.replaceChildren(...opts);
+  if (!validValues.has(state.sourceMonitor.patchTrack)) {
+    const firstVideo = doc.tracks.find((t) => t && t.kind === "video");
+    const fallback = firstVideo
+      ? `video:${Math.max(1, Number(firstVideo.index) || 1)}`
+      : Array.from(validValues)[0] || "video:1";
+    state.sourceMonitor.patchTrack = fallback;
+  }
+  sel.value = state.sourceMonitor.patchTrack;
+}
+
+function loadSourceMonitorFromEntry(entry, openDual = false) {
+  const doc = state.timelineDoc;
+  if (!doc || !entry) return false;
+  const found = findTrackAndClip(doc, entry.trackKind, entry.trackIndex, entry.clipIndex);
+  const clip = found
+    ? cloneTimelineDoc(found.clip)
+    : {
+        name: entry.label || "Clip",
+        track_index: entry.trackIndex || 1,
+        media_type: entry.trackKind === "audio" ? "audio" : "video",
+        start_frame: entry.startFrames || 0,
+        duration_frames: Math.max(1, Number(entry.durationFrames) || 75),
+        source_in_frame: 0,
+        source_path: entry.sourcePath || "",
+        source_fps: doc.fps || { num: 25, den: 1 },
+        label_color: entry.labelColor || "default"
+      };
+  const totalFrames = Math.max(1, Math.round(Number(clip.duration_frames) || 75));
+  const kind = entry.trackKind === "audio" ? "audio" : "video";
+  state.sourceMonitor.entryId = entry.id || null;
+  state.sourceMonitor.clip = clip;
+  state.sourceMonitor.trackKind = kind;
+  state.sourceMonitor.totalFrames = totalFrames;
+  state.sourceMonitor.playheadFrame = 0;
+  state.sourceMonitor.inFrame = null;
+  state.sourceMonitor.outFrame = null;
+
+  const matchingTrack = (doc.tracks || []).find(
+    (t) => t && t.kind === kind && Number(t.index) === Number(entry.trackIndex || 1)
+  ) || (doc.tracks || []).find((t) => t && t.kind === kind);
+  if (matchingTrack) {
+    state.sourceMonitor.patchTrack = `${kind}:${Math.max(1, Number(matchingTrack.index) || 1)}`;
+    syncThreePointPatchOptions();
+  }
+
+  if (openDual && !state.dualMonitorEnabled) {
+    state.dualMonitorEnabled = true;
+  }
+  updateSourceMonitorUI();
+  updateThreePointStatusPill();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+  return true;
+}
+
+function ensureSourceMonitorClip() {
+  const doc = state.timelineDoc;
+  if (!doc) {
+    state.sourceMonitor.clip = null;
+    state.sourceMonitor.entryId = null;
+    return;
+  }
+  const pool = filterMediaPoolEntries(doc, { mediaType: "all", stills: state.stillsGallery }).clipItems;
+  if (pool.length === 0) {
+    state.sourceMonitor.clip = null;
+    state.sourceMonitor.entryId = null;
+    return;
+  }
+  if (state.sourceMonitor.clip && state.sourceMonitor.entryId) {
+    const stillExists = pool.some((e) => e.id === state.sourceMonitor.entryId);
+    if (stillExists) return;
+  }
+  const active = getActiveMediaPoolEntry(pool) || pool[0];
+  if (active) loadSourceMonitorFromEntry(active, false);
+}
+
+function updateSourceMonitorUI() {
+  const sm = state.sourceMonitor;
+  const doc = state.timelineDoc;
+  const fpsNum = doc && doc.fps ? doc.fps.num : 25;
+  const fpsDen = doc && doc.fps ? doc.fps.den : 1;
+  const nameEl = byId("source-clip-name");
+  const tcEl = byId("source-tc");
+  const ioPill = byId("source-io-pill");
+  const slider = byId("source-playhead-slider");
+  const inBtn = byId("btn-src-mark-in");
+  const outBtn = byId("btn-src-mark-out");
+  const clrBtn = byId("btn-src-clear-io");
+
+  const hasSrc = Boolean(sm.clip);
+  const total = Math.max(1, sm.totalFrames || 75);
+  const ph = Math.max(0, Math.min(total - 1, Math.round(sm.playheadFrame || 0)));
+  sm.playheadFrame = ph;
+
+  if (nameEl) {
+    nameEl.textContent = hasSrc ? sm.clip.name : t("timeline.sourceMonitor.empty");
+  }
+  if (tcEl) {
+    const absSrcFrame = (hasSrc ? sm.clip.source_in_frame || 0 : 0) + ph;
+    tcEl.textContent = framesToSmpte(absSrcFrame, fpsNum, fpsDen);
+  }
+  if (slider) {
+    slider.max = String(Math.max(1, total - 1));
+    slider.value = String(ph);
+    slider.disabled = !hasSrc;
+  }
+  const hasIn = sm.inFrame !== null;
+  const hasOut = sm.outFrame !== null;
+  if (inBtn) {
+    inBtn.disabled = !hasSrc;
+    inBtn.classList.toggle("is-active", hasIn);
+  }
+  if (outBtn) {
+    outBtn.disabled = !hasSrc;
+    outBtn.classList.toggle("is-active", hasOut);
+  }
+  if (clrBtn) {
+    clrBtn.disabled = !hasSrc || (!hasIn && !hasOut);
+  }
+  if (ioPill) {
+    if (!hasSrc || (!hasIn && !hasOut)) {
+      ioPill.textContent = `SRC: 0..${total}f`;
+    } else {
+      const s0 = hasIn ? sm.inFrame : 0;
+      const s1 = hasOut ? sm.outFrame : total;
+      ioPill.textContent = `SRC: ${s0}..${s1}f (${Math.max(1, s1 - s0)}f)`;
+    }
+  }
+}
+
+function setSourcePlayhead(frame) {
+  const total = Math.max(1, state.sourceMonitor.totalFrames || 75);
+  state.sourceMonitor.playheadFrame = Math.max(0, Math.min(total - 1, Math.round(Number(frame) || 0)));
+  updateSourceMonitorUI();
+  updateThreePointStatusPill();
+  if (state.activeTab === "timeline" && state.dualMonitorEnabled) {
+    drawSourceMonitorCanvas(
+      byId("timeline-source-canvas"),
+      state.sourceMonitor.clip,
+      state.sourceMonitor,
+      state.timelineDoc,
+      {
+        badgeLabel: "SOURCE",
+        trackLabel: state.sourceMonitor.trackKind === "audio" ? "A1" : "V1"
+      }
+    );
+  }
+}
+
+function markSourceInAction() {
+  const sm = state.sourceMonitor;
+  if (!sm.clip) return false;
+  const ph = Math.max(0, Math.min(sm.totalFrames - 1, Math.round(sm.playheadFrame || 0)));
+  sm.inFrame = ph;
+  if (sm.outFrame !== null && sm.outFrame <= ph) {
+    sm.outFrame = null;
+  }
+  updateSourceMonitorUI();
+  updateThreePointStatusPill();
+  if (state.activeTab === "timeline" && state.dualMonitorEnabled) redrawActiveCanvases();
+  return true;
+}
+
+function markSourceOutAction() {
+  const sm = state.sourceMonitor;
+  if (!sm.clip) return false;
+  const outF = Math.max(1, Math.min(sm.totalFrames, Math.round(sm.playheadFrame || 0) + 1));
+  sm.outFrame = outF;
+  if (sm.inFrame !== null && sm.inFrame >= outF) {
+    sm.inFrame = null;
+  }
+  updateSourceMonitorUI();
+  updateThreePointStatusPill();
+  if (state.activeTab === "timeline" && state.dualMonitorEnabled) redrawActiveCanvases();
+  return true;
+}
+
+function clearSourceIoAction() {
+  state.sourceMonitor.inFrame = null;
+  state.sourceMonitor.outFrame = null;
+  updateSourceMonitorUI();
+  updateThreePointStatusPill();
+  if (state.activeTab === "timeline" && state.dualMonitorEnabled) redrawActiveCanvases();
+  return true;
+}
+
+function toggleDualMonitorAction() {
+  state.dualMonitorEnabled = !state.dualMonitorEnabled;
+  if (state.dualMonitorEnabled) {
+    ensureSourceMonitorClip();
+    updateSourceMonitorUI();
+  }
+  syncDualMonitorWellLayout();
+  if (state.activeTab === "timeline") redrawActiveCanvases();
+  return state.dualMonitorEnabled;
+}
+
+function updateThreePointStatusPill() {
+  const pill = byId("three-point-status-pill");
+  const insBtn = byId("btn-three-pt-insert");
+  const ovrBtn = byId("btn-three-pt-overwrite");
+  const repBtn = byId("btn-three-pt-replace");
+  const doc = state.timelineDoc;
+  const sm = state.sourceMonitor;
+  const hasReady = Boolean(doc && sm.clip);
+  if (insBtn) insBtn.disabled = !hasReady;
+  if (ovrBtn) ovrBtn.disabled = !hasReady;
+  if (repBtn) repBtn.disabled = !hasReady;
+  if (!pill) return;
+  if (!hasReady) {
+    pill.textContent = "3-PT: --";
+    return;
+  }
+  try {
+    const docStart = doc.start_frame || 0;
+    const minF = docStart;
+    const maxF = Math.max(minF + 1, state.timelineMaxFrame || 500);
+    const ioNorm = normalizeInOutRange(state.ioRange, minF, maxF);
+    const res = resolveThreePointRange({
+      sourceTotalFrames: sm.totalFrames,
+      sourceBaseIn: sm.clip.source_in_frame || 0,
+      sourcePlayhead: sm.playheadFrame,
+      sourceIn: sm.inFrame,
+      sourceOut: sm.outFrame,
+      tlPlayhead: state.playheadFrame,
+      tlIn: ioNorm.in_frame,
+      tlOut: ioNorm.out_frame,
+      docStart
+    });
+    const patch = getParsedPatchTarget();
+    pill.textContent = `${patch.label} | ${res.detail}`;
+  } catch (err) {
+    pill.textContent = `3-PT: ${err.message || "--"}`;
+  }
+}
+
+function executeThreePointEditAction(mode) {
+  const doc = state.timelineDoc;
+  const sm = state.sourceMonitor;
+  if (!doc || !sm.clip) {
+    showBanner(t("timeline.threePoint.noSource"), "error");
+    return false;
+  }
+  const patch = getParsedPatchTarget();
+  const docStart = doc.start_frame || 0;
+  const maxF = Math.max(docStart + 1, state.timelineMaxFrame || 500);
+  const ioNorm = normalizeInOutRange(state.ioRange, docStart, maxF);
+
+  const res = threePointEditInDocument(doc, {
+    mode,
+    sourceClip: sm.clip,
+    targetTrackKind: patch.kind,
+    targetTrackIndex: patch.index,
+    sourceTotalFrames: sm.totalFrames,
+    sourcePlayhead: sm.playheadFrame,
+    sourceIn: sm.inFrame,
+    sourceOut: sm.outFrame,
+    tlPlayhead: state.playheadFrame,
+    tlIn: ioNorm.in_frame,
+    tlOut: ioNorm.out_frame
+  });
+
+  if (!res || !res.changed || !res.insertedClip) {
+    const msg =
+      mode === "replace"
+        ? t("timeline.threePoint.noReplaceTarget").replace("{track}", patch.label)
+        : (res && res.detail) || "3-point edit could not be applied.";
+    showBanner(msg, "error");
+    return false;
+  }
+
+  commitTimelineMutation(res.doc, { kind: "clip", data: res.insertedClip });
+  const fpsNum = doc.fps ? doc.fps.num : 25;
+  const fpsDen = doc.fps ? doc.fps.den : 1;
+  const tc = framesToSmpte(res.insertedClip.start_frame, fpsNum, fpsDen);
+  const key =
+    mode === "overwrite"
+      ? "timeline.threePoint.bannerOverwrite"
+      : mode === "replace"
+        ? "timeline.threePoint.bannerReplace"
+        : "timeline.threePoint.bannerInsert";
+  showBanner(
+    t(key)
+      .replace("{name}", res.insertedClip.name)
+      .replace("{dur}", String(res.insertedClip.duration_frames))
+      .replace("{track}", patch.label)
+      .replace("{tc}", tc),
+    "success"
+  );
+  updateThreePointStatusPill();
+  return true;
+}
+
+function jumpAdjacentMarkerAction(direction) {
+  const doc = state.timelineDoc;
+  if (!doc) return false;
+  const idx = findAdjacentMarkerIndex(doc, state.playheadFrame, direction);
+  if (idx < 0) return false;
+  return jumpToMarkerAction(idx);
 }
 
 function syncSourceTapeScrubToPlayhead() {
@@ -4169,6 +4551,7 @@ function renderMediaPool() {
     card.replaceChildren(thumb, nameEl, metaEl);
     card.addEventListener("click", () => {
       state.mediaPoolActiveClipId = entry.id;
+      loadSourceMonitorFromEntry(entry, false);
       selectClipFromTimelineIndex(entry);
       updateMasterBinCutToolbar(entries);
     });
@@ -11903,6 +12286,9 @@ function updateIoRangeUI() {
     }
   }
   updateDeliverSizeEstimate();
+  if (state.activeTab === "timeline") {
+    updateThreePointStatusPill();
+  }
 }
 
 function setInPointAction() {
@@ -12021,6 +12407,11 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+M", descKey: "shortcuts.key.multicamQuad" },
       { kbd: "1 - 4", descKey: "shortcuts.key.multicamCut" },
       { kbd: "Alt+L", descKey: "shortcuts.key.avLink" },
+      { kbd: "Q", descKey: "shortcuts.key.dualMonitor" },
+      { kbd: "F9", descKey: "shortcuts.key.threePtInsert" },
+      { kbd: "F10", descKey: "shortcuts.key.threePtOverwrite" },
+      { kbd: "F11", descKey: "shortcuts.key.threePtReplace" },
+      { kbd: "Shift+Up / Down", descKey: "shortcuts.key.prevNextMarker" },
       { kbd: "Shift+T", descKey: "shortcuts.key.trimMonitor" },
       { kbd: "Shift+S", descKey: "shortcuts.key.grabStill" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
@@ -12259,6 +12650,36 @@ function handleTransportKeydown(ev) {
   }
 
   if (state.activeTab === "timeline") {
+    if (ev.key === "F9" && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+      ev.preventDefault();
+      executeThreePointEditAction("insert");
+      return;
+    }
+    if (ev.key === "F10" && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+      ev.preventDefault();
+      executeThreePointEditAction("overwrite");
+      return;
+    }
+    if (ev.key === "F11" && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+      ev.preventDefault();
+      executeThreePointEditAction("replace");
+      return;
+    }
+    if (lower === "q" && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+      ev.preventDefault();
+      toggleDualMonitorAction();
+      return;
+    }
+    if (ev.key === "ArrowUp" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      jumpAdjacentMarkerAction(-1);
+      return;
+    }
+    if (ev.key === "ArrowDown" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      jumpAdjacentMarkerAction(1);
+      return;
+    }
     if (lower === "m" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       toggleMulticamQuadViewAction();
@@ -15940,6 +16361,14 @@ function wireEvents() {
   }
   byId("btn-timeline-snap").addEventListener("click", toggleTimelineSnap);
   byId("btn-timeline-add-marker").addEventListener("click", addMarkerAtPlayheadAction);
+  const prevMkrBtn = byId("btn-timeline-prev-marker");
+  if (prevMkrBtn) {
+    prevMkrBtn.addEventListener("click", () => jumpAdjacentMarkerAction(-1));
+  }
+  const nextMkrBtn = byId("btn-timeline-next-marker");
+  if (nextMkrBtn) {
+    nextMkrBtn.addEventListener("click", () => jumpAdjacentMarkerAction(1));
+  }
   byId("btn-inspector-add-marker").addEventListener("click", addMarkerAtPlayheadAction);
   byId("btn-timeline-undo").addEventListener("click", undoTimeline);
   byId("btn-timeline-redo").addEventListener("click", redoTimeline);
@@ -16044,6 +16473,115 @@ function wireEvents() {
       sourceTapeScrub.blur();
     });
   }
+  const loadSrcBtn = byId("btn-pool-load-source");
+  if (loadSrcBtn) {
+    loadSrcBtn.addEventListener("click", () => {
+      const entry = getActiveMediaPoolEntry();
+      if (entry) {
+        loadSourceMonitorFromEntry(entry, true);
+        showBanner(
+          t("timeline.sourceMonitor.loaded")
+            .replace("{name}", entry.label)
+            .replace("{dur}", String(entry.durationFrames)),
+          "info"
+        );
+      }
+      loadSrcBtn.blur();
+    });
+  }
+  const dualMonitorBtn = byId("btn-dual-monitor-toggle");
+  if (dualMonitorBtn) {
+    dualMonitorBtn.addEventListener("click", () => {
+      toggleDualMonitorAction();
+      dualMonitorBtn.blur();
+    });
+  }
+  const srcSlider = byId("source-playhead-slider");
+  if (srcSlider) {
+    srcSlider.addEventListener("input", () => {
+      setSourcePlayhead(Number.parseInt(srcSlider.value, 10));
+    });
+  }
+  const srcCanvas = byId("timeline-source-canvas");
+  if (srcCanvas) {
+    let scrubbingSrc = false;
+    const scrubSrcFromPointer = (ev) => {
+      const rect = srcCanvas.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      const ratio = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      const total = Math.max(1, state.sourceMonitor.totalFrames || 75);
+      setSourcePlayhead(Math.round(ratio * (total - 1)));
+    };
+    srcCanvas.addEventListener("pointerdown", (ev) => {
+      if (!state.sourceMonitor.clip) return;
+      scrubbingSrc = true;
+      if (typeof srcCanvas.setPointerCapture === "function") {
+        srcCanvas.setPointerCapture(ev.pointerId);
+      }
+      scrubSrcFromPointer(ev);
+    });
+    srcCanvas.addEventListener("pointermove", (ev) => {
+      if (!scrubbingSrc) return;
+      scrubSrcFromPointer(ev);
+    });
+    srcCanvas.addEventListener("pointerup", () => {
+      scrubbingSrc = false;
+    });
+    srcCanvas.addEventListener("pointercancel", () => {
+      scrubbingSrc = false;
+    });
+  }
+  const srcMarkInBtn = byId("btn-src-mark-in");
+  if (srcMarkInBtn) {
+    srcMarkInBtn.addEventListener("click", () => {
+      markSourceInAction();
+      srcMarkInBtn.blur();
+    });
+  }
+  const srcMarkOutBtn = byId("btn-src-mark-out");
+  if (srcMarkOutBtn) {
+    srcMarkOutBtn.addEventListener("click", () => {
+      markSourceOutAction();
+      srcMarkOutBtn.blur();
+    });
+  }
+  const srcClearIoBtn = byId("btn-src-clear-io");
+  if (srcClearIoBtn) {
+    srcClearIoBtn.addEventListener("click", () => {
+      clearSourceIoAction();
+      srcClearIoBtn.blur();
+    });
+  }
+  const patchSelect = byId("three-pt-target-track");
+  if (patchSelect) {
+    patchSelect.addEventListener("change", () => {
+      state.sourceMonitor.patchTrack = patchSelect.value || "video:1";
+      updateThreePointStatusPill();
+      patchSelect.blur();
+    });
+  }
+  const tpInsertBtn = byId("btn-three-pt-insert");
+  if (tpInsertBtn) {
+    tpInsertBtn.addEventListener("click", () => {
+      executeThreePointEditAction("insert");
+      tpInsertBtn.blur();
+    });
+  }
+  const tpOverwriteBtn = byId("btn-three-pt-overwrite");
+  if (tpOverwriteBtn) {
+    tpOverwriteBtn.addEventListener("click", () => {
+      executeThreePointEditAction("overwrite");
+      tpOverwriteBtn.blur();
+    });
+  }
+  const tpReplaceBtn = byId("btn-three-pt-replace");
+  if (tpReplaceBtn) {
+    tpReplaceBtn.addEventListener("click", () => {
+      executeThreePointEditAction("replace");
+      tpReplaceBtn.blur();
+    });
+  }
+
   const smartInsertBtn = byId("btn-pool-smart-insert");
   if (smartInsertBtn) {
     smartInsertBtn.addEventListener("click", () => {
