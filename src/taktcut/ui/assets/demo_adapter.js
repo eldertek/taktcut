@@ -1936,7 +1936,14 @@ export {
 export function createApiClient() {
   const cfg = typeof window !== "undefined" && window.__TAKTCUT_CONFIG__ ? window.__TAKTCUT_CONFIG__ : {};
   const apiBase = typeof cfg.apiBase === "string" ? cfg.apiBase.replace(/\/+$/, "") : "";
-  const configuredMode = cfg.mode || "auto";
+  const metaEl =
+    typeof document !== "undefined" && typeof document.querySelector === "function"
+      ? document.querySelector('meta[name="taktcut-mode"]')
+      : null;
+  const metaMode = metaEl && typeof metaEl.getAttribute === "function"
+    ? (metaEl.getAttribute("content") || "").trim()
+    : "";
+  const configuredMode = cfg.mode || metaMode || "auto";
   const customAdapter = cfg.adapter || null;
   let resolvedMode = configuredMode === "static-demo" ? "static-demo" : "server";
 

@@ -9,13 +9,44 @@
 </head>
 <body>
   <div class="nle-shell">
-    <!-- TOP COMPACT NLE MENU / TOOLBAR -->
+    <!-- ROW 1: NATIVE DAVINCI RESOLVE 14-ITEM MENU BAR (UiMainMenuBar) -->
+    <div id="nle-native-menubar" class="nle-native-menubar" role="menubar" aria-label="Application Menu Bar">
+      <div class="nle-topmenu-left">
+        <img class="brand-icon" src="./favicon.svg" alt="taktcut icon" width="16" height="16">
+        <div id="nle-topmenu-items" class="nle-topmenu-items"></div>
+      </div>
+      <div class="nle-topmenu-right">
+        <button type="button" id="btn-menu-search" class="nle-topmenu-pill mono" title="Search Menu Actions (Ctrl+K)">
+          <span>Menu Search</span>
+          <span class="kbd-chip mono">Ctrl+K</span>
+        </button>
+        <span id="nle-bg-tasks-badge" class="nle-topmenu-status mono" title="Background Tasks Queue">BG: IDLE</span>
+        <span id="ffmpeg-status-pill" class="nle-tag mono">FFmpeg: ...</span>
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button type="button" id="lang-en" class="lang-btn is-active" data-lang="en">EN</button>
+          <button type="button" id="lang-fr" class="lang-btn" data-lang="fr">FR</button>
+        </div>
+        <button type="button" id="btn-shortcuts-help" class="btn btn-mini btn-shortcuts-help mono" title="Keyboard Shortcuts (?)" aria-label="Keyboard Shortcuts (?)" aria-haspopup="dialog" aria-controls="nle-shortcuts-dialog">?</button>
+      </div>
+    </div>
+    <div id="nle-menu-flyout" class="nle-menu-flyout is-hidden" role="menu" aria-label="Menu Actions"></div>
+
+    <!-- ROW 2: DAVINCI RESOLVE CONTEXT SUB-HEADER BAR -->
     <header class="nle-menubar">
       <div class="menubar-left">
-        <img class="brand-icon" src="./favicon.svg" alt="taktcut icon" width="20" height="20">
-        <span class="brand-name">taktcut</span>
-        <span class="menubar-sep">|</span>
-        <span id="topbar-project-name" class="menubar-proj mono">Eclipse_Showreel_Master_25p</span>
+        <div class="nle-panel-toggles" role="group" aria-label="Workspace Panel Visibility">
+          <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="media-pool-section" title="Toggle Media Pool">Media Pool</button>
+          <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="timeline-index-panel" title="Toggle Edit Index">Edit Index</button>
+          <button type="button" role="tab" id="tab-titles" class="nle-panel-toggle page-tab" data-tab="titles" aria-selected="false" aria-controls="panel-titles" title="Titles &amp; Subtitles Workspace">
+            <span data-i18n="tabs.titles">Titles</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="menubar-center">
+        <h1 class="brand-name">taktcut</h1>
+        <span class="menubar-sep">/</span>
+        <button type="button" id="topbar-project-name" class="menubar-proj mono" title="Open Project Manager (Shift+1)">Eclipse_Showreel_Master_25p</button>
         <span id="topbar-seq-meta" class="nle-tag mono">25/1 | 1920x1080</span>
       </div>
 
@@ -30,17 +61,14 @@
           </button>
           <input type="file" id="project-file-input" class="is-hidden" accept=".taktcut.json,.json,application/json">
         </div>
+        <button type="button" role="tab" id="tab-qa" class="btn btn-mini page-tab" data-tab="qa" aria-selected="false" aria-controls="panel-qa" title="Broadcast QA Compliance Gate">
+          <span data-i18n="tabs.qa">Broadcast QA</span>
+        </button>
         <button type="button" id="update-banner-btn" class="btn-update mono is-hidden" aria-live="polite"></button>
         <div class="workspace-pill" id="workspace-pill" title="">
           <span class="pill-label" data-i18n="topbar.workspace">WS</span>
           <span class="pill-value mono" id="workspace-path-label">.</span>
         </div>
-        <span id="ffmpeg-status-pill" class="nle-tag mono">FFmpeg: ...</span>
-        <div class="lang-switch" role="group" aria-label="Language">
-          <button type="button" id="lang-en" class="lang-btn is-active" data-lang="en">EN</button>
-          <button type="button" id="lang-fr" class="lang-btn" data-lang="fr">FR</button>
-        </div>
-        <button type="button" id="btn-shortcuts-help" class="btn btn-mini btn-shortcuts-help mono" title="Keyboard Shortcuts (?)" aria-label="Keyboard Shortcuts (?)" aria-haspopup="dialog" aria-controls="nle-shortcuts-dialog">?</button>
       </div>
     </header>
 
@@ -50,8 +78,215 @@
     </div>
 
     <!-- MAIN DOCKED WORKBENCH -->
-    <main class="nle-workbench">
-      <!-- PAGE 1: TIMELINE (CUT / EDIT) -->
+    <main id="contenu" class="nle-workbench">
+      <!-- PAGE 01: MEDIA PAGE (MediaStorage, Clone Checksum, Viewer, Audio FFT, Metadata Slate & Smart Bins) -->
+      <section id="panel-media" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-media">
+        <div class="resolve-media-top">
+          <aside class="nle-pane">
+            <div class="pane-header">
+              <h2>Media Storage &amp; Clone Tool</h2>
+              <span class="nle-tag mono">CHECKSUM</span>
+            </div>
+            <div class="pane-body">
+              <div class="media-volumes-list mono" role="list" aria-label="Mounted Media Volumes">
+                <div class="media-vol-item is-active" role="listitem">[LOCAL] Workspace Root (.)</div>
+                <div class="media-vol-item" role="listitem">[CACHE] .taktcut-proxies</div>
+                <div class="media-vol-item" role="listitem">[SAMPLES] .taktcut-samples</div>
+                <div class="media-vol-item" role="listitem">[EXPORT] renders / deliverables</div>
+              </div>
+              <div class="pane-divider"></div>
+              <div class="pane-subheader">
+                <span>Camera Card Clone (XXH64 / SHA-256)</span>
+              </div>
+              <div class="form-row">
+                <label for="media-clone-src">Source Volume / Card</label>
+                <input type="text" id="media-clone-src" class="input-control mono" value="/Volumes/CAM_A001_FX3">
+              </div>
+              <div class="form-row">
+                <label for="media-clone-dst">Destination Backup Folder</label>
+                <input type="text" id="media-clone-dst" class="input-control mono" value="backups/CAM_A001_FX3">
+              </div>
+              <div class="btn-row">
+                <button type="button" id="btn-media-clone-verify" class="btn btn-primary btn-mini">Clone &amp; Verify Checksum</button>
+                <button type="button" id="btn-media-import-tl" class="btn btn-secondary btn-mini">Import File</button>
+              </div>
+              <div id="media-clone-status" class="telemetry-note mono" aria-live="polite">Ready for bit-exact camera offload verification.</div>
+            </div>
+          </aside>
+
+          <section class="nle-pane">
+            <div class="pane-header">
+              <h2>Media Source Viewer</h2>
+              <div class="viewer-controls">
+                <span id="media-page-tc" class="tc-readout mono">00:00:00:00</span>
+                <button type="button" id="btn-media-play" class="btn btn-mini mono">Play / Stop</button>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div class="viewer-well">
+                <canvas id="media-page-viewer-canvas" class="studio-canvas" aria-label="Media Pool Viewer"></canvas>
+              </div>
+              <div class="pane-subheader">
+                <span>Embedded Audio Spectrum &amp; Waveform</span>
+              </div>
+              <div class="viewer-well media-fft-well">
+                <canvas id="media-page-fft-canvas" class="studio-canvas" aria-label="Media Audio Spectrum"></canvas>
+              </div>
+            </div>
+          </section>
+
+          <aside class="nle-pane">
+            <div class="pane-header">
+              <h2>Metadata &amp; Slate</h2>
+              <span id="media-meta-clip-name" class="nle-tag mono">--</span>
+            </div>
+            <div class="pane-body">
+              <div class="form-row-two">
+                <div class="form-row">
+                  <label for="media-slate-reel">Reel</label>
+                  <input type="text" id="media-slate-reel" class="input-control mono" value="A001">
+                </div>
+                <div class="form-row">
+                  <label for="media-slate-camera">Camera</label>
+                  <input type="text" id="media-slate-camera" class="input-control mono" value="A">
+                </div>
+              </div>
+              <div class="form-row-three">
+                <div class="form-row">
+                  <label for="media-slate-scene">Scene</label>
+                  <input type="text" id="media-slate-scene" class="input-control mono" value="SC_01">
+                </div>
+                <div class="form-row">
+                  <label for="media-slate-shot">Shot</label>
+                  <input type="text" id="media-slate-shot" class="input-control mono" value="SH_01">
+                </div>
+                <div class="form-row">
+                  <label for="media-slate-take">Take</label>
+                  <input type="text" id="media-slate-take" class="input-control mono" value="1">
+                </div>
+              </div>
+              <div class="form-row">
+                <label for="media-slate-keywords">Keywords / Tags</label>
+                <input type="text" id="media-slate-keywords" class="input-control mono" value="rec709,master">
+              </div>
+              <div class="checkbox-row">
+                <label class="check-label">
+                  <input type="checkbox" id="media-slate-good" checked>
+                  <span>Good Take (Circled)</span>
+                </label>
+              </div>
+              <div class="btn-row">
+                <button type="button" id="btn-media-save-slate" class="btn btn-primary btn-mini">Save Slate Metadata</button>
+                <button type="button" id="btn-media-open-proxy" class="btn btn-secondary btn-mini">Proxy Generator</button>
+                <button type="button" id="btn-media-open-relink" class="btn btn-secondary btn-mini">Relink</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <section class="nle-pane resolve-media-bottom">
+          <div class="pane-header">
+            <div class="viewer-controls">
+              <h2>Media Pool &amp; Smart Bins</h2>
+              <span id="media-page-clip-count" class="nle-tag mono">0 CLIPS</span>
+            </div>
+            <div class="viewer-controls">
+              <input type="search" id="media-ai-search-input" class="input-control input-compact mono" placeholder="AI Search: clip, scene, tag..." aria-label="Search Media Pool">
+              <button type="button" class="btn btn-mini is-active" data-media-view="grid">Thumbnails</button>
+              <button type="button" class="btn btn-mini" data-media-view="table">Metadata Table</button>
+            </div>
+          </div>
+          <div class="resolve-media-pool-split">
+            <aside class="media-bins-sidebar">
+              <div class="bins-group-label mono">BINS</div>
+              <button type="button" class="media-bin-item is-active" data-media-bin="all">Master</button>
+              <button type="button" class="media-bin-item" data-media-bin="video">Video Clips</button>
+              <button type="button" class="media-bin-item" data-media-bin="audio">Audio Stems</button>
+              <div class="bins-group-label mono">SMART BINS</div>
+              <button type="button" class="media-bin-item" data-media-bin="proxy">Proxies Active</button>
+              <button type="button" class="media-bin-item" data-media-bin="offline">Offline Media</button>
+            </aside>
+            <div id="media-page-pool-browser" class="media-pool-browser-area" role="list"></div>
+          </div>
+        </section>
+      </section>
+
+      <!-- PAGE 02: CUT PAGE (FirstCut: Source Tape + Quick Tools + Dual Stacked Timeline) -->
+      <section id="panel-cut" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-cut">
+        <div class="resolve-cut-top">
+          <aside class="nle-pane">
+            <div class="pane-header">
+              <div class="cut-bin-tabs" role="tablist" aria-label="Cut Page Bins">
+                <button type="button" class="btn btn-mini is-active" data-cut-tab="pool">Media Pool</button>
+                <button type="button" class="btn btn-mini" data-cut-tab="sync">Sync Bin</button>
+                <button type="button" class="btn btn-mini" data-cut-tab="transitions">Transitions</button>
+                <button type="button" class="btn btn-mini" data-cut-tab="titles">Titles</button>
+                <button type="button" class="btn btn-mini" data-cut-tab="effects">Effects</button>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div id="cut-bin-content" class="cut-bin-grid"></div>
+            </div>
+          </aside>
+
+          <section class="nle-pane">
+            <div class="pane-header">
+              <div class="viewer-controls">
+                <button type="button" class="btn btn-mini" data-cut-vmode="source">Source Clip</button>
+                <button type="button" class="btn btn-mini" data-cut-vmode="tape">Source Tape</button>
+                <button type="button" class="btn btn-mini is-active" data-cut-vmode="timeline">Timeline</button>
+              </div>
+              <div class="viewer-controls">
+                <span id="cut-page-tc" class="tc-readout mono">00:00:00:00</span>
+                <button type="button" id="btn-cut-play" class="btn btn-mini mono">Play / Pause</button>
+                <button type="button" id="btn-cut-split" class="btn btn-mini mono">Split</button>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div class="viewer-well">
+                <canvas id="cut-viewer-canvas" class="studio-canvas" aria-label="Cut Page Multifunction Viewer"></canvas>
+              </div>
+              <div class="cut-quick-tools-bar" role="toolbar" aria-label="Cut Viewer Tools">
+                <button type="button" id="btn-cut-tool-crop" class="btn btn-mini">Transform / Crop</button>
+                <button type="button" id="btn-cut-tool-dzoom" class="btn btn-mini">Dynamic Zoom</button>
+                <button type="button" id="btn-cut-tool-stab" class="btn btn-mini">Stabilize</button>
+                <button type="button" id="btn-cut-tool-speed" class="btn btn-mini">Speed Ramp</button>
+                <button type="button" id="btn-cut-tool-audio" class="btn btn-mini">Audio Mix</button>
+              </div>
+              <div class="cut-assembly-bar" role="group" aria-label="Cut Assembly Edit Actions">
+                <button type="button" id="btn-cut-smart-insert" class="btn btn-primary btn-mini">Smart Insert</button>
+                <button type="button" id="btn-cut-append" class="btn btn-secondary btn-mini">Append</button>
+                <button type="button" id="btn-cut-ripple-ow" class="btn btn-secondary btn-mini">Ripple Overwrite</button>
+                <button type="button" id="btn-cut-closeup" class="btn btn-secondary btn-mini">Close Up</button>
+                <button type="button" id="btn-cut-place-top" class="btn btn-secondary btn-mini">Place on Top</button>
+                <button type="button" id="btn-cut-src-ow" class="btn btn-secondary btn-mini">Source Overwrite</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <section class="nle-pane resolve-cut-dual-timeline">
+          <div class="pane-header">
+            <h2>Dual Timeline (Full Sequence Bar + Detailed Playhead Zoom)</h2>
+            <span class="nle-tag mono">SMART INDICATOR</span>
+          </div>
+          <div class="cut-dual-tl-body">
+            <div class="cut-tl-stack">
+              <div class="cut-upper-ruler-wrap">
+                <canvas id="cut-overview-canvas" class="timeline-overview-canvas" aria-label="Cut Full Timeline Ruler"></canvas>
+              </div>
+              <div class="cut-lower-detail-wrap">
+                <canvas id="cut-detail-canvas" class="studio-canvas cut-detail-canvas" aria-label="Cut Detailed Zoomed Timeline"></canvas>
+              </div>
+            </div>
+            <div class="cut-meter-well">
+              <canvas id="cut-vu-canvas" class="studio-canvas cut-vu-canvas" aria-label="Cut Stereo Audio Meter"></canvas>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- PAGE 03: EDIT (TIMELINE) -->
       <section id="panel-timeline" class="workspace-panel" role="tabpanel" aria-labelledby="tab-timeline">
         <div class="nle-edit-top">
           <!-- LEFT DOCK: MEDIA POOL, EDIT INDEX & PROJECT I/O -->
@@ -1608,7 +1843,7 @@
         </section>
       </section>
 
-      <!-- PAGE 2: FX (SAPPHIRE-INSPIRED EFFECTS LIBRARY + EFFECT CONTROLS + PROGRAM MONITOR) -->
+      <!-- PAGE 04: FUSION (NODE FLOW GRAPH + EFFECTS LIBRARY + PROGRAM MONITOR) -->
       <section id="panel-fx" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-fx">
         <div class="nle-fx-top">
           <!-- LEFT DOCK: 1-CLICK PRESETS & SAPPHIRE NODE LIBRARY -->
@@ -1841,6 +2076,27 @@
             </div>
           </section>
         </div>
+
+        <section id="fusion-flow-pane" class="nle-pane fusion-flow-pane" aria-label="Fusion Node Flow Editor">
+          <div class="pane-header">
+            <div class="viewer-controls">
+              <h2>Fusion Node Flow (2D / OFX Pipeline)</h2>
+              <span class="nle-tag mono">MediaIn1 -&gt; MediaOut1</span>
+            </div>
+            <div class="fusion-tool-shelf" role="toolbar" aria-label="Fusion Node Shelf">
+              <button type="button" class="btn btn-mini" data-fusion-tool="keyer">DeltaKeyer</button>
+              <button type="button" class="btn btn-mini" data-fusion-tool="tracker">PlanarTracker</button>
+              <button type="button" class="btn btn-mini" data-fusion-tool="spline">Spline / Blur</button>
+              <button type="button" class="btn btn-mini" data-fusion-tool="glow">OpticalGlow</button>
+              <button type="button" class="btn btn-mini" data-fusion-tool="flare">LensFlare</button>
+              <button type="button" class="btn btn-mini" data-fusion-tool="shake">CameraShake</button>
+              <button type="button" class="btn btn-mini" data-fusion-tool="bypass">Bypass Selected</button>
+            </div>
+          </div>
+          <div class="fusion-flow-body">
+            <canvas id="fusion-flow-canvas" class="studio-canvas fusion-flow-canvas" aria-label="Interactive Fusion Node Graph"></canvas>
+          </div>
+        </section>
 
         <div class="nle-fx-bottom">
           <div class="nle-fx-left-col">
@@ -2679,6 +2935,14 @@
           </section>
         </div>
 
+        <section id="color-clips-strip-pane" class="nle-pane color-clips-strip-pane" aria-label="Color Timeline Clips Filmstrip">
+          <div class="pane-header">
+            <h2>Clips Filmstrip</h2>
+            <span id="color-filmstrip-count" class="nle-tag mono">0 SHOTS</span>
+          </div>
+          <div id="color-clips-filmstrip" class="color-clips-filmstrip" role="list"></div>
+        </section>
+
         <div class="nle-color-bottom">
           <!-- DAVINCI COLOR WHEELS + LUMETRI TONE CONTROLS -->
           <section class="nle-pane">
@@ -3193,13 +3457,109 @@
         </div>
       </section>
 
-      <!-- PAGE 5: DELIVER / RENDER -->
+      <!-- PAGE 06: FAIRLIGHT DAW (SAMPLE TIMELINE + 6-BAND EQ / DYNAMICS + CONSOLE MIXER) -->
+      <section id="panel-fairlight" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-fairlight">
+        <section class="nle-pane fairlight-topbar-pane">
+          <div class="pane-header">
+            <div class="viewer-controls">
+              <h2>Fairlight Audio Post &amp; Loudness Control Room</h2>
+              <span id="fairlight-page-tc" class="tc-readout mono">00:00:00:00</span>
+              <button type="button" id="btn-fl-play" class="btn btn-mini mono">Play / Stop</button>
+              <button type="button" id="btn-fl-detect-transients" class="btn btn-mini">Detect Transients</button>
+            </div>
+            <div class="viewer-controls">
+              <label class="inline-label mono" for="fl-loudness-std-select">Standard</label>
+              <select id="fl-loudness-std-select" class="input-control input-compact mono">
+                <option value="ebu_r128">EBU R128 (-23 LUFS)</option>
+                <option value="streaming" selected>Streaming (-14 LUFS)</option>
+                <option value="atsc">ATSC A/85 (-24 LKFS)</option>
+              </select>
+              <span id="fl-meter-integrated" class="nle-tag mono">-14.0 LUFS</span>
+              <button type="button" id="btn-fl-dim" class="btn btn-mini" aria-pressed="false">DIM</button>
+              <button type="button" id="btn-fl-mute" class="btn btn-mini" aria-pressed="false">MUTE</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="fairlight-main-grid">
+          <div class="fairlight-left-center">
+            <section class="nle-pane">
+              <div class="pane-header">
+                <h2>Audio Tracks &amp; Automation Timeline</h2>
+                <span class="nle-tag mono">48 kHz / 24-bit</span>
+              </div>
+              <div class="pane-body">
+                <div class="viewer-well fairlight-tl-well">
+                  <canvas id="fairlight-waveform-canvas" class="studio-canvas" aria-label="Fairlight Multi-Track Waveform Timeline"></canvas>
+                </div>
+              </div>
+            </section>
+
+            <div class="fairlight-dsp-grid">
+              <section class="nle-pane">
+                <div class="pane-header">
+                  <h2>6-Band Parametric EQ</h2>
+                  <span class="nle-tag mono">EQ ON</span>
+                </div>
+                <div class="pane-body">
+                  <div class="viewer-well fairlight-dsp-well">
+                    <canvas id="fairlight-page-eq-canvas" class="studio-canvas" aria-label="Fairlight 6-Band Parametric EQ"></canvas>
+                  </div>
+                </div>
+              </section>
+
+              <section class="nle-pane">
+                <div class="pane-header">
+                  <h2>Dynamics (Compressor / Limiter)</h2>
+                  <span class="nle-tag mono">DYN ON</span>
+                </div>
+                <div class="pane-body">
+                  <div class="viewer-well fairlight-dsp-well">
+                    <canvas id="fairlight-page-dyn-canvas" class="studio-canvas" aria-label="Fairlight Dynamics Curve"></canvas>
+                  </div>
+                </div>
+              </section>
+
+              <section class="nle-pane">
+                <div class="pane-header">
+                  <h2>Real-Time FFT Analyzer</h2>
+                  <span class="nle-tag mono">RTA</span>
+                </div>
+                <div class="pane-body">
+                  <div class="viewer-well fairlight-dsp-well">
+                    <canvas id="fairlight-page-fft-canvas" class="studio-canvas" aria-label="Fairlight FFT Spectrum"></canvas>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <aside class="nle-pane fairlight-mixer-dock" aria-label="Fairlight Console Mixer">
+            <div class="pane-header">
+              <h2>Mixer</h2>
+              <span class="nle-tag mono">BUS 1</span>
+            </div>
+            <div class="fairlight-mixer-body">
+              <div id="fairlight-console-strips" class="fairlight-console-strips"></div>
+              <div class="fairlight-master-meter-col">
+                <span class="mono fl-meter-title">MAIN</span>
+                <canvas id="fairlight-vu-canvas" class="studio-canvas fairlight-vu-canvas" aria-label="Main Bus Loudness Meter"></canvas>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- PAGE 07: DELIVER / RENDER -->
       <section id="panel-render" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-render">
         <div class="deliver-top-ribbon">
           <section class="nle-pane deliver-presets-pane">
             <div class="pane-header">
               <h2 data-i18n="render.presets.title">Quick-Export Presets (DaVinci Deliver)</h2>
-              <span id="render-active-preset-badge" class="nle-tag mono" data-i18n="render.presets.custom">Custom</span>
+              <div class="viewer-controls">
+                <span id="render-active-preset-badge" class="nle-tag mono" data-i18n="render.presets.custom">Custom</span>
+                <button type="button" id="btn-deliver-open-qa" class="btn btn-mini btn-secondary">Broadcast QA Gate</button>
+              </div>
             </div>
             <div class="pane-body">
               <div id="render-preset-strip" class="deliver-preset-strip" role="group" aria-label="Quick-Export Delivery Presets"></div>
@@ -3951,32 +4311,49 @@
       </section>
     </main>
 
-    <!-- BOTTOM DAVINCI PAGE SWITCHER DOCK -->
+    <!-- BOTTOM DAVINCI 7-PAGE SWITCHER DOCK (UiPageSwitcher) -->
     <nav class="nle-pagedock" role="tablist" aria-label="Studio Pages">
-      <button type="button" role="tab" id="tab-timeline" class="page-tab is-active" data-tab="timeline" aria-selected="true" aria-controls="panel-timeline">
-        <span class="page-idx mono">01</span>
-        <span data-i18n="tabs.timeline">Timeline</span>
-      </button>
-      <button type="button" role="tab" id="tab-fx" class="page-tab" data-tab="fx" aria-selected="false" aria-controls="panel-fx">
-        <span class="page-idx mono">02</span>
-        <span data-i18n="tabs.fx">FX</span>
-      </button>
-      <button type="button" role="tab" id="tab-titles" class="page-tab" data-tab="titles" aria-selected="false" aria-controls="panel-titles">
-        <span class="page-idx mono">03</span>
-        <span data-i18n="tabs.titles">Titles</span>
-      </button>
-      <button type="button" role="tab" id="tab-color" class="page-tab" data-tab="color" aria-selected="false" aria-controls="panel-color">
-        <span class="page-idx mono">04</span>
-        <span data-i18n="tabs.color">Color</span>
-      </button>
-      <button type="button" role="tab" id="tab-render" class="page-tab" data-tab="render" aria-selected="false" aria-controls="panel-render">
-        <span class="page-idx mono">05</span>
-        <span data-i18n="tabs.render">Deliver</span>
-      </button>
-      <button type="button" role="tab" id="tab-qa" class="page-tab" data-tab="qa" aria-selected="false" aria-controls="panel-qa">
-        <span class="page-idx mono">06</span>
-        <span data-i18n="tabs.qa">Broadcast QA</span>
-      </button>
+      <div class="pagedock-side pagedock-left mono">
+        <span class="pagedock-ws-hint">Shift+2..8</span>
+      </div>
+      <div class="pagedock-center">
+        <button type="button" role="tab" id="tab-media" class="page-tab" data-tab="media" aria-selected="false" aria-controls="panel-media" title="Media Page (Shift+2)">
+          <svg class="page-tab-svg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M2.5 5.5h5l1.8 2h8.2v7.5h-15z"/></svg>
+          <span data-i18n="tabs.media">Media</span>
+        </button>
+        <button type="button" role="tab" id="tab-cut" class="page-tab" data-tab="cut" aria-selected="false" aria-controls="panel-cut" title="Cut Page (Shift+3)">
+          <svg class="page-tab-svg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="5.5" cy="14" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="14.5" cy="14" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path fill="none" stroke="currentColor" stroke-width="1.5" d="M7.2 12.5L15 4.5M12.8 12.5L5 4.5"/></svg>
+          <span data-i18n="tabs.cut">Cut</span>
+        </button>
+        <button type="button" role="tab" id="tab-timeline" class="page-tab is-active" data-tab="timeline" aria-selected="true" aria-controls="panel-timeline" title="Edit Page (Shift+4)">
+          <svg class="page-tab-svg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><rect x="2.5" y="4" width="15" height="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2.5" y="11.5" width="9.5" height="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path fill="none" stroke="currentColor" stroke-width="1.5" d="M14.5 10.5v7"/></svg>
+          <span data-i18n="tabs.timeline">Edit</span>
+        </button>
+        <button type="button" role="tab" id="tab-fx" class="page-tab" data-tab="fx" aria-selected="false" aria-controls="panel-fx" title="Fusion Page (Shift+5)">
+          <svg class="page-tab-svg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="5" cy="10" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="15" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="15" cy="14" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path fill="none" stroke="currentColor" stroke-width="1.5" d="M7.2 9.2l5.6-2.4M7.2 10.8l5.6 2.4"/></svg>
+          <span data-i18n="tabs.fx">Fusion</span>
+        </button>
+        <button type="button" role="tab" id="tab-color" class="page-tab" data-tab="color" aria-selected="false" aria-controls="panel-color" title="Color Page (Shift+6)">
+          <svg class="page-tab-svg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="10" cy="7.2" r="3.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7.2" cy="12.5" r="3.8" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12.8" cy="12.5" r="3.8" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          <span data-i18n="tabs.color">Color</span>
+        </button>
+        <button type="button" role="tab" id="tab-fairlight" class="page-tab" data-tab="fairlight" aria-selected="false" aria-controls="panel-fairlight" title="Fairlight Page (Shift+7)">
+          <svg class="page-tab-svg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M3.5 10h2l1.8-5 2.7 10 2.7-7.5 1.8 2.5h2"/></svg>
+          <span data-i18n="tabs.fairlight">Fairlight</span>
+        </button>
+        <button type="button" role="tab" id="tab-render" class="page-tab" data-tab="render" aria-selected="false" aria-controls="panel-render" title="Deliver Page (Shift+8)">
+          <svg class="page-tab-svg" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M10 3l4.5 5.5h-3v6h-3v-6h-3zM4 16.5h12"/></svg>
+          <span data-i18n="tabs.render">Deliver</span>
+        </button>
+      </div>
+      <div class="pagedock-side pagedock-right">
+        <button type="button" id="btn-dock-project-manager" class="pagedock-util-btn" title="Project Manager (Shift+1)" aria-label="Project Manager">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M3 9.5L10 3.5l7 6V16.5h-4.5v-4.5h-5v4.5H3z"/></svg>
+        </button>
+        <button type="button" id="btn-dock-project-settings" class="pagedock-util-btn" title="Project Settings (Shift+9)" aria-label="Project Settings">
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><circle cx="10" cy="10" r="2.8" fill="none" stroke="currentColor" stroke-width="1.5"/><path fill="none" stroke="currentColor" stroke-width="1.5" d="M10 2.5v2.2M10 15.3v2.2M2.5 10h2.2M15.3 10h2.2M4.7 4.7l1.6 1.6M13.7 13.7l1.6 1.6M15.3 4.7l-1.6 1.6M6.3 13.7l-1.6 1.6"/></svg>
+        </button>
+      </div>
     </nav>
 
     <!-- STATUS BAR -->
@@ -6664,6 +7041,130 @@
           <pre id="cs-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
+    </div>
+  </dialog>
+
+  <!-- MENU ACTION SEARCH DIALOG (UiMainMenuSearchAction) -->
+  <dialog id="menu-search-dialog" class="nle-dialog menu-search-dialog" aria-labelledby="menu-search-title">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="menu-search-title">Search Menu Actions</h2>
+        <p class="nle-dialog-subtitle">Execute any File, Edit, Trim, Timeline, Clip, Fusion, Color, Fairlight or Workspace command</p>
+      </div>
+      <button type="button" id="btn-close-menu-search" class="btn btn-mini">Close</button>
+    </div>
+    <div class="nle-dialog-body">
+      <input type="search" id="menu-search-input" class="input-control mono" placeholder="Type command name or shortcut (e.g. Node, Split, Proxy, LUFS)..." autocomplete="off">
+      <div id="menu-search-results" class="menu-search-results"></div>
+    </div>
+  </dialog>
+
+  <!-- PROJECT MANAGER DIALOG (UiProjectManagerDialogImp) -->
+  <dialog id="project-manager-dialog" class="nle-dialog project-manager-dialog" aria-labelledby="project-manager-title">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="project-manager-title">Project Manager</h2>
+        <p class="nle-dialog-subtitle">Local Database, Project Server &amp; Cloud Project Libraries</p>
+      </div>
+      <div class="viewer-controls">
+        <button type="button" class="btn btn-mini is-active" data-pm-lib="local">Local</button>
+        <button type="button" class="btn btn-mini" data-pm-lib="network">Network</button>
+        <button type="button" class="btn btn-mini" data-pm-lib="cloud">Cloud</button>
+        <button type="button" id="btn-close-project-manager" class="btn btn-mini">Close</button>
+      </div>
+    </div>
+    <div class="nle-dialog-body">
+      <div id="pm-projects-grid" class="pm-projects-grid"></div>
+      <div class="btn-row">
+        <button type="button" id="btn-pm-new-project" class="btn btn-primary">New Clean Project (25p)</button>
+        <button type="button" id="btn-pm-open-json" class="btn btn-secondary">Open Project File (.taktcut.json)</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- PROJECT SETTINGS & PREFERENCES DIALOG -->
+  <dialog id="project-settings-dialog" class="nle-dialog project-settings-dialog" aria-labelledby="project-settings-title">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="project-settings-title">Project Settings &amp; Preferences</h2>
+        <p class="nle-dialog-subtitle">Timeline Format, Color Science, Fairlight Loudness &amp; Hardware Configuration</p>
+      </div>
+      <button type="button" id="btn-close-project-settings" class="btn btn-mini">Close</button>
+    </div>
+    <div class="pool-pro-tabs" role="tablist" aria-label="Project Settings Sections">
+      <button type="button" role="tab" class="btn btn-mini is-active" data-ps-tab="master" aria-selected="true">Master Settings</button>
+      <button type="button" role="tab" class="btn btn-mini" data-ps-tab="color" aria-selected="false">Color Management</button>
+      <button type="button" role="tab" class="btn btn-mini" data-ps-tab="fairlight" aria-selected="false">Fairlight</button>
+      <button type="button" role="tab" class="btn btn-mini" data-ps-tab="prefs" aria-selected="false">System Preferences</button>
+    </div>
+    <div class="nle-dialog-body">
+      <section data-ps-pane="master">
+        <div class="form-row-two">
+          <div class="form-row">
+            <label for="ps-timeline-res">Timeline Resolution</label>
+            <select id="ps-timeline-res" class="input-control mono">
+              <option value="1920x1080" selected>1920 x 1080 HD</option>
+              <option value="3840x2160">3840 x 2160 Ultra HD</option>
+              <option value="1080x1920">1080 x 1920 Vertical</option>
+              <option value="1080x1080">1080 x 1080 Square</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="ps-timeline-fps">Playback Frame Rate</label>
+            <select id="ps-timeline-fps" class="input-control mono">
+              <option value="24">24 fps</option>
+              <option value="25" selected>25 fps (PAL / Broadcast)</option>
+              <option value="30">30 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </div>
+        </div>
+      </section>
+      <section data-ps-pane="color" class="is-hidden">
+        <div class="form-row-two">
+          <div class="form-row">
+            <label for="ps-color-science">Color Science</label>
+            <select id="ps-color-science" class="input-control mono">
+              <option value="yrgb" selected>DaVinci YRGB</option>
+              <option value="yrgb_managed">DaVinci YRGB Color Managed</option>
+              <option value="acescct">ACEScct 1.3</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="ps-timeline-cs">Timeline Color Space</label>
+            <select id="ps-timeline-cs" class="input-control mono">
+              <option value="rec709_24" selected>Rec.709 Gamma 2.4</option>
+              <option value="dwg">DaVinci Wide Gamut / Intermediate</option>
+              <option value="rec2020_pq">Rec.2020 ST2084 PQ (HDR)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+      <section data-ps-pane="fairlight" class="is-hidden">
+        <div class="form-row-two">
+          <div class="form-row">
+            <label for="ps-audio-sr">Audio Sample Rate</label>
+            <select id="ps-audio-sr" class="input-control mono">
+              <option value="48000" selected>48 000 Hz (24-bit PCM)</option>
+              <option value="96000">96 000 Hz (24-bit PCM)</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="ps-target-lufs">Target Loudness Level</label>
+            <select id="ps-target-lufs" class="input-control mono">
+              <option value="-23">-23 LUFS (EBU R128 Broadcast)</option>
+              <option value="-14" selected>-14 LUFS (Online Streaming)</option>
+              <option value="-24">-24 LKFS (ATSC A/85)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+      <section data-ps-pane="prefs" class="is-hidden">
+        <div class="telemetry-note mono">GPU Acceleration: Auto (NVENC / CUDA / FFmpeg Filtergraph) | Proxy Cache: .taktcut-proxies | Security: Loopback Sandbox</div>
+      </section>
+      <div class="btn-row">
+        <button type="button" id="btn-save-project-settings" class="btn btn-primary">Save</button>
+      </div>
     </div>
   </dialog>
 

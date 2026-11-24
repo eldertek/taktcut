@@ -67,6 +67,7 @@ import {
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
 import { createApiClient } from "./demo_adapter.js";
 import { TRANSLATIONS } from "./i18n.js";
+import { createWorkstationController } from "./workstation.js";
 import {
   AUDIO_FADE_S_MAX,
   AUDIO_FADE_S_MIN,
@@ -1216,6 +1217,9 @@ function setLanguage(lang) {
     const key = node.getAttribute("data-i18n");
     if (key) node.textContent = t(key);
   }
+  if (workstationCtrl) {
+    workstationCtrl.renderNativeMenuBar();
+  }
   const helpBtn = byId("btn-shortcuts-help");
   if (helpBtn) {
     const tip = t("shortcuts.helpTooltip");
@@ -1332,7 +1336,8 @@ async function applyStudioUpdate() {
 }
 
 function switchTab(tabName) {
-  if (tabName !== "timeline" && tabName !== "fx" && tabName !== "titles" && state.playbackSpeed !== 0) {
+  const playableTabs = new Set(["media", "cut", "timeline", "fx", "titles", "fairlight"]);
+  if (!playableTabs.has(tabName) && state.playbackSpeed !== 0) {
     stopPlayback();
   }
   state.activeTab = tabName;
@@ -1847,6 +1852,9 @@ function redrawActiveCanvases() {
   } else if (state.activeTab === "qa" && state.lastQaReport) {
     drawLoudnessCanvas(byId("qa-loudness-canvas"), state.lastQaReport.loudness);
     drawFramesCanvas(byId("qa-frames-canvas"), state.lastQaReport.frame_samples);
+  }
+  if (workstationCtrl) {
+    workstationCtrl.redrawWorkstationCanvases();
   }
 }
 
@@ -20442,6 +20450,63 @@ function wireEvents() {
   wireFilmLookStudioEvents();
   wireOpticalFlareStudioEvents();
   wireCameraShakeStudioEvents();
+  initResolveWorkstationBridge();
+}
+
+let workstationCtrl = null;
+
+function initResolveWorkstationBridge() {
+  workstationCtrl = createWorkstationController({
+    state,
+    byId,
+    t,
+    switchTab,
+    redrawActiveCanvases,
+    showBanner,
+    loadSampleTimeline,
+    setTimelineTool,
+    setLanguage,
+    toggleDualMonitorAction,
+    undoTimeline,
+    redoTimeline,
+    splitAtPlayheadAction,
+    addMarkerAtPlayheadAction,
+    addColorNodeAction,
+    grabActiveMonitorStill,
+    openShortcutsDialog,
+    openMediaPoolProDialog,
+    openSceneCutDialog,
+    openTextEditDialog,
+    openBroadcastMonitorDialog,
+    openAutoReframeDialog,
+    openCstStudioDialog,
+    openQualifierKeyerDialog,
+    openMulticamStudioDialog,
+    openMotionSplineStudioDialog,
+    openOpticalGlowStudioDialog,
+    openPowerWindowStudioDialog,
+    openRetimeStudioDialog,
+    openStabilizationStudioDialog,
+    openFilmLookStudioDialog,
+    openOpticalFlareStudioDialog,
+    openCameraShakeStudioDialog,
+    drawProgramMonitorCanvas,
+    drawSourceMonitorCanvas,
+    drawTimelineOverviewCanvas,
+    drawTimelineCanvas,
+    drawStereoVuMeterCanvas,
+    renderFairlightEqCurveCanvas,
+    renderFairlightDynamicsCanvas,
+    renderFairlightFftCanvas,
+    computeCurrentFairlightSpectrum,
+    framesToSmpte,
+    getActiveColorChainState,
+    getEffectiveFxState,
+    getEffectiveTitleState,
+    getEffectiveFramingState,
+    getEffectiveSubtitleState
+  });
+  workstationCtrl.init();
 }
 
 function wireFairlightAudioRackEvents() {

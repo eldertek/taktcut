@@ -74,6 +74,7 @@ def test_ui_static_assets_and_csp_headers(ui_server: tuple[str, Path]) -> None:
         ("/color_wheels.js", "application/javascript"),
         ("/timeline_ops.js", "application/javascript"),
         ("/demo_adapter.js", "application/javascript"),
+        ("/workstation.js", "application/javascript"),
         ("/favicon.svg", "image/svg+xml"),
     ):
         status, headers, body = _http_call(f"{base_url}{path}")
@@ -1087,7 +1088,13 @@ def test_ui_accessibility_css_and_french_hygiene(ui_server: tuple[str, Path]) ->
     assert '"+ Nœud Série"' in i18n_text
     assert '"Importer .cube"' in i18n_text
     assert "innerHTML" not in i18n_text
-    for asset_path in ("/app.js", "/canvas.js", "/timeline_ops.js", "/demo_adapter.js"):
+    for asset_path in (
+        "/app.js",
+        "/canvas.js",
+        "/timeline_ops.js",
+        "/demo_adapter.js",
+        "/workstation.js",
+    ):
         asset_text = _http_call(f"{base_url}{asset_path}")[2].decode("utf-8")
         assert "\u2013" not in asset_text
         assert "\u2014" not in asset_text
@@ -16135,6 +16142,137 @@ def test_camera_shake_studio_playwright_e2e_responsive(
             page.wait_for_function(
                 "() => !document.getElementById('camera-shake-studio-dialog').open"
             )
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()
+
+
+
+def test_resolve_workstation_seven_pages_and_menus_playwright(
+    ui_server: tuple[str, Path],
+) -> None:
+    sync_api = pytest.importorskip("playwright.sync_api")
+    base_url, _ = ui_server
+
+    with sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#nle-topmenu-items .nle-topmenu-trigger")
+
+            # Verify all 14 native menus exist (taktcut + 13 Resolve menus)
+            menu_labels = page.locator("#nle-topmenu-items .nle-topmenu-trigger").all_inner_texts()
+            expected_menus = [
+                "taktcut",
+                "File",
+                "Edit",
+                "Trim",
+                "Timeline",
+                "Clip",
+                "Mark",
+                "View",
+                "Playback",
+                "Fusion",
+                "Color",
+                "Fairlight",
+                "Workspace",
+                "Help",
+            ]
+            assert menu_labels == expected_menus, f"Unexpected menus: {menu_labels}"
+
+            # Open File menu flyout and verify items
+            page.click('#nle-topmenu-items .nle-topmenu-trigger[data-menu-id="file"]')
+            page.wait_for_selector("#nle-menu-flyout:not(.is-hidden) .nle-menu-item")
+            flyout_text = page.locator("#nle-menu-flyout").inner_text()
+            assert "Project Manager..." in flyout_text
+            assert "Save Project" in flyout_text
+            page.keyboard.press("Escape")
+            page.wait_for_selector("#nle-menu-flyout.is-hidden", state="attached")
+
+            # Verify bottom dock has exact 7 DaVinci Resolve pages
+            dock_labels = [
+                t.strip()
+                for t in page.locator(".nle-pagedock .page-tab").all_inner_texts()
+            ]
+            assert dock_labels == [
+                "Media",
+                "Cut",
+                "Edit",
+                "Fusion",
+                "Color",
+                "Fairlight",
+                "Deliver",
+            ]
+
+            # Cycle through all 7 pages and check canvases + zero overflow
+            page_checks = [
+                ("#tab-media", "#panel-media", "#media-page-viewer-canvas"),
+                ("#tab-cut", "#panel-cut", "#cut-detail-canvas"),
+                ("#tab-timeline", "#panel-timeline", "#timeline-program-canvas"),
+                ("#tab-fx", "#panel-fx", "#fusion-flow-canvas"),
+                ("#tab-color", "#panel-color", "#color-preview-canvas"),
+                ("#tab-fairlight", "#panel-fairlight", "#fairlight-waveform-canvas"),
+                ("#tab-render", "#panel-render", None),
+            ]
+            for tab_sel, panel_sel, canvas_sel in page_checks:
+                page.click(tab_sel)
+                page.wait_for_selector(f"{panel_sel}:not(.is-hidden)")
+                assert "NaN" not in page.locator("body").inner_text(), f"NaN found on {panel_sel}"
+                overflow = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow <= 0, f"Desktop overflow on {panel_sel}: {overflow}px"
+                if canvas_sel:
+                    w = page.evaluate(
+                        f"() => document.querySelector('{canvas_sel}')?.width || 0"
+                    )
+                    assert w > 0, f"Canvas {canvas_sel} not rendered on {panel_sel}"
+
+            # Verify Fairlight DSP canvases (EQ, Dynamics, FFT) all paint non-blank curves
+            page.click("#tab-fairlight")
+            page.wait_for_selector("#panel-fairlight:not(.is-hidden)")
+            for dsp_id in (
+                "fairlight-page-eq-canvas",
+                "fairlight-page-dyn-canvas",
+                "fairlight-page-fft-canvas",
+            ):
+                data_len = page.evaluate(
+                    f"() => document.getElementById('{dsp_id}')?.toDataURL().length || 0"
+                )
+                assert data_len > 1500, f"Blank Fairlight DSP canvas: {dsp_id} ({data_len})"
+
+            # Test Project Manager, Project Settings & Menu Search dialogs
+            page.click("#btn-dock-project-manager")
+            page.wait_for_function("() => document.getElementById('project-manager-dialog').open")
+            page.click("#btn-close-project-manager")
+
+            page.click("#btn-dock-project-settings")
+            page.wait_for_function("() => document.getElementById('project-settings-dialog').open")
+            page.click("#btn-close-project-settings")
+
+            page.click("#btn-menu-search")
+            page.wait_for_function("() => document.getElementById('menu-search-dialog').open")
+            page.fill("#menu-search-input", "Serial Node")
+            assert "Add Serial Node" in page.locator("#menu-search-results").inner_text()
+            page.click("#btn-close-menu-search")
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mob = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mob <= 0, f"Mobile overflow: {overflow_mob}px"
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
