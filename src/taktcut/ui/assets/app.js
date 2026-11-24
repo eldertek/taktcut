@@ -17,6 +17,8 @@ import {
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
   drawLoudnessCanvas,
+  drawMotionSplineGraphCanvas,
+  drawMotionSplinePreviewCanvas,
   drawMulticamStudioProgramCanvas,
   drawMulticamStudioQuadCanvas,
   drawMulticamStudioTimelineCanvas,
@@ -102,6 +104,7 @@ import {
   MAX_COLOR_NODES,
   MAX_COMPOUND_NESTING_DEPTH,
   MAX_CURVE_POINTS,
+  MOTION_SPLINE_CHANNEL_SPECS_CLIENT,
   MULTICAM_CUT_MODES,
   MULTICAM_STUDIO_PRESETS_CLIENT,
   MULTICAM_SYNC_MODES,
@@ -172,6 +175,7 @@ import {
   appendClipToTrackInDocument,
   appendStillBounded,
   applyFairlightRackPresetClient,
+  applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
   applySplitEditJlInDocument,
   auditMediaPoolLinksClient,
@@ -193,6 +197,7 @@ import {
   compileFairlightAudioRackClient,
   compileFairlightMixerClient,
   compileMulticamFiltergraphClient,
+  compileMotionSplineFiltergraphClient,
   compileMulticamStudioFiltergraphClient,
   compileProxyPlanClient,
   compileRetimeFilterClient,
@@ -220,6 +225,7 @@ import {
   createDefaultColorWarper,
   createDefaultCstConfigClient,
   createDefaultHslCurves,
+  createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
   createDefaultPowerWindow,
   createDefaultQualifier,
@@ -238,15 +244,18 @@ import {
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
   evaluateCurvePchipClient,
+  evaluateMotionSplineStudioClient,
   evaluatePowerWindowMask,
   evaluateRetimeSpeedAt,
   evaluateTitleMotionState,
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
+  exportMotionSplineJsonClient,
   exportMulticamEdlClient,
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
+  normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   resolveMulticamStudioSegmentsClient,
   syncMulticamStudioAnglesClient,
@@ -678,6 +687,21 @@ const state = {
     activeTimeS: 0,
     selectedCutTimeS: null,
     hoveredAngleIndex: 0,
+    playing: false,
+    rafId: null,
+    lastTs: 0,
+    syncSeq: 0
+  },
+  msStudio: {
+    isOpen: false,
+    config: createDefaultMotionSplineConfigClient("whip_zoom_punch"),
+    evalResult: null,
+    compiled: null,
+    exportedJson: null,
+    activeTimeS: 0.45,
+    selectedKfIdx: 0,
+    hoveredHandle: null,
+    dragState: null,
     playing: false,
     rafId: null,
     lastTs: 0,
@@ -13203,6 +13227,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+Q", descKey: "shortcuts.key.qualifierKeyerStudio" },
       { kbd: "Shift+R", descKey: "shortcuts.key.autoReframe" },
       { kbd: "Shift+V", descKey: "shortcuts.key.multicamStudio" },
+      { kbd: "Shift+E", descKey: "shortcuts.key.motionSplineStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13288,6 +13313,22 @@ function handleTransportKeydown(ev) {
     } else if (ev.key === "Escape") {
       ev.preventDefault();
       closeShortcutsDialog();
+    }
+    return;
+  }
+
+  const msStudioDlg = byId("ms-studio-dialog");
+  if (msStudioDlg && msStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeMotionSplineStudioDialog();
+      return;
+    }
+    if (isEditableTarget(ev.target)) return;
+    if ((ev.code === "Space" || ev.key === " ") && !(ev.target instanceof Element && ev.target.tagName === "BUTTON")) {
+      ev.preventDefault();
+      toggleMotionSplinePlay();
+      return;
     }
     return;
   }
@@ -13436,6 +13477,11 @@ function handleTransportKeydown(ev) {
     if (lower === "v") {
       ev.preventDefault();
       openMulticamStudioDialog();
+      return;
+    }
+    if (lower === "e") {
+      ev.preventDefault();
+      openMotionSplineStudioDialog();
       return;
     }
   }
@@ -20118,6 +20164,7 @@ function wireEvents() {
   wireCstStudioEvents();
   wireQualifierKeyerStudioEvents();
   wireMulticamStudioEvents();
+  wireMotionSplineStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -25750,6 +25797,795 @@ function wireMulticamStudioEvents() {
       // Clipboard may be unavailable in headless mode
     }
     setMcStudioStatus(t("mcStudio.status.copied"));
+  });
+}
+
+// =============================================================================
+// AFTER EFFECTS / FUSION KEYFRAME SPLINE, SPEED GRAPH & MOTION BLUR (CYCLE #107)
+// =============================================================================
+
+function setMsStudioStatus(text) {
+  const el = byId("ms-status-note");
+  if (el) el.textContent = text;
+}
+
+function getMsChannelSpec(chId) {
+  return (
+    MOTION_SPLINE_CHANNEL_SPECS_CLIENT.find((s) => s.channel === chId) ||
+    MOTION_SPLINE_CHANNEL_SPECS_CLIENT[0]
+  );
+}
+
+function refreshMsStudioLocalDerived() {
+  const st = state.msStudio;
+  st.config = normalizeMotionSplineConfigClient(st.config);
+  st.activeTimeS = Math.max(0, Math.min(st.config.duration_s, Number(st.activeTimeS || 0)));
+  st.evalResult = evaluateMotionSplineStudioClient(st.config, st.activeTimeS);
+  st.compiled = compileMotionSplineFiltergraphClient(st.config);
+  st.exportedJson = exportMotionSplineJsonClient(st.config, {
+    title: `TAKTCUT_${st.config.preset_id}`
+  });
+  const activeKfs = st.config.channels[st.config.active_channel]?.keyframes || [];
+  if (st.selectedKfIdx >= activeKfs.length) {
+    st.selectedKfIdx = Math.max(0, activeKfs.length - 1);
+  }
+}
+
+function renderMotionSplineCanvases() {
+  const st = state.msStudio;
+  const graphCanvas = byId("ms-graph-canvas");
+  const previewCanvas = byId("ms-preview-canvas");
+  if (graphCanvas) {
+    drawMotionSplineGraphCanvas(
+      graphCanvas,
+      st.config,
+      st.evalResult,
+      st.activeTimeS,
+      st.selectedKfIdx,
+      st.hoveredHandle
+    );
+  }
+  if (previewCanvas) {
+    drawMotionSplinePreviewCanvas(
+      previewCanvas,
+      st.config,
+      st.evalResult,
+      st.activeTimeS
+    );
+  }
+}
+
+function renderMotionSplineKeyframeList() {
+  const listEl = byId("ms-keyframe-list");
+  if (!listEl) return;
+  const st = state.msStudio;
+  const chId = st.config.active_channel || "scale_pct";
+  const spec = getMsChannelSpec(chId);
+  const kfs = st.config.channels[chId]?.keyframes || [];
+
+  const countBadge = byId("ms-kf-count-badge");
+  if (countBadge) {
+    countBadge.textContent = `${kfs.length} keys`;
+  }
+
+  // Preserve focus when editing inside keyframe list
+  if (document.activeElement && listEl.contains(document.activeElement)) {
+    const rows = listEl.querySelectorAll(".ms-kf-row");
+    rows.forEach((row, idx) => {
+      row.classList.toggle("is-selected", idx === st.selectedKfIdx);
+    });
+    return;
+  }
+
+  const rows = kfs.map((kf, idx) => {
+    const row = dom("div", idx === st.selectedKfIdx ? "ms-kf-row is-selected" : "ms-kf-row");
+    const idxBtn = dom("button", "btn btn-mini ms-kf-idx-btn mono", `#${idx + 1}`);
+    idxBtn.type = "button";
+    idxBtn.setAttribute("aria-label", `Select keyframe ${idx + 1}`);
+    idxBtn.addEventListener("click", () => {
+      st.selectedKfIdx = idx;
+      st.activeTimeS = kf.time_s;
+      refreshMsStudioLocalDerived();
+      syncMotionSplineStudioUI();
+    });
+    row.appendChild(idxBtn);
+
+    const makeNumField = (labelKey, val, min, max, step, fieldKey) => {
+      const wrap = dom("div", "ms-kf-field");
+      const lbl = dom("label", "", t(labelKey));
+      const inp = document.createElement("input");
+      inp.type = "number";
+      inp.className = "input-control input-num mono";
+      inp.min = String(min);
+      inp.max = String(max);
+      inp.step = String(step);
+      inp.value = String(val);
+      inp.addEventListener("focus", () => {
+        st.selectedKfIdx = idx;
+      });
+      inp.addEventListener("change", () => {
+        const parsed = Number.parseFloat(inp.value);
+        if (!Number.isFinite(parsed)) {
+          inp.value = String(kf[fieldKey]);
+          return;
+        }
+        const clamped = Math.max(min, Math.min(max, parsed));
+        updateMotionSplineKeyframeAt(chId, idx, { [fieldKey]: clamped });
+      });
+      wrap.appendChild(lbl);
+      wrap.appendChild(inp);
+      return wrap;
+    };
+
+    row.appendChild(makeNumField("msStudio.kf.time", kf.time_s, 0, st.config.duration_s, 0.05, "time_s"));
+    row.appendChild(makeNumField("msStudio.kf.value", kf.value, spec.min_value, spec.max_value, 1, "value"));
+
+    const modeWrap = dom("div", "ms-kf-field");
+    modeWrap.appendChild(dom("label", "", t("msStudio.kf.mode")));
+    const modeSel = document.createElement("select");
+    modeSel.className = "input-control mono";
+    for (const m of ["linear", "easy_ease", "bezier", "overshoot", "hold"]) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      modeSel.appendChild(opt);
+    }
+    modeSel.value = kf.mode;
+    modeSel.addEventListener("change", () => {
+      applyEasingPresetToKeyframe(idx, modeSel.value);
+    });
+    modeWrap.appendChild(modeSel);
+    row.appendChild(modeWrap);
+
+    row.appendChild(makeNumField("msStudio.kf.outX", kf.out_handle_x, 0.01, 0.99, 0.02, "out_handle_x"));
+    row.appendChild(makeNumField("msStudio.kf.outY", kf.out_handle_y, -1.5, 2.5, 0.05, "out_handle_y"));
+    row.appendChild(makeNumField("msStudio.kf.inX", kf.in_handle_x, 0.01, 0.99, 0.02, "in_handle_x"));
+    row.appendChild(makeNumField("msStudio.kf.inY", kf.in_handle_y, -1.5, 2.5, 0.05, "in_handle_y"));
+    return row;
+  });
+
+  listEl.replaceChildren(...rows);
+}
+
+function updateMotionSplineKeyframeAt(chId, idx, patch) {
+  const st = state.msStudio;
+  const currentKfs = [...(st.config.channels[chId]?.keyframes || [])];
+  if (idx < 0 || idx >= currentKfs.length) return;
+  currentKfs[idx] = { ...currentKfs[idx], ...patch };
+  st.config = normalizeMotionSplineConfigClient({
+    ...st.config,
+    preset_id: "custom",
+    channels: {
+      ...st.config.channels,
+      [chId]: {
+        ...st.config.channels[chId],
+        keyframes: currentKfs
+      }
+    }
+  });
+  refreshMsStudioLocalDerived();
+  syncMotionSplineStudioUI();
+}
+
+function applyEasingPresetToKeyframe(idx, mode) {
+  const st = state.msStudio;
+  const chId = st.config.active_channel || "scale_pct";
+  const presets = {
+    linear: { mode: "linear", out_handle_x: 0.33, out_handle_y: 0.33, in_handle_x: 0.67, in_handle_y: 0.67 },
+    easy_ease: { mode: "easy_ease", out_handle_x: 0.33, out_handle_y: 0.0, in_handle_x: 0.67, in_handle_y: 1.0 },
+    overshoot: { mode: "overshoot", out_handle_x: 0.22, out_handle_y: 0.0, in_handle_x: 0.58, in_handle_y: 1.32 },
+    hold: { mode: "hold", out_handle_x: 0.33, out_handle_y: 0.0, in_handle_x: 0.67, in_handle_y: 1.0 },
+    bezier: { mode: "bezier" }
+  };
+  const patch = presets[mode] || presets.easy_ease;
+  updateMotionSplineKeyframeAt(chId, idx, patch);
+}
+
+function syncMotionSplineStudioUI() {
+  const st = state.msStudio;
+  if (!st.evalResult || !st.compiled) {
+    refreshMsStudioLocalDerived();
+  }
+  const cfg = st.config;
+  const ev = st.evalResult;
+  const chId = cfg.active_channel || "scale_pct";
+  const spec = getMsChannelSpec(chId);
+
+  const presetBadge = byId("ms-active-preset-badge");
+  if (presetBadge) {
+    presetBadge.textContent = String(cfg.preset_id || "custom").toUpperCase().replace(/_/g, " ");
+  }
+  const peakBadge = byId("ms-peak-badge");
+  if (peakBadge && ev) {
+    peakBadge.textContent = `PEAK ${Number(ev.peak_velocity_unit_s || 0).toFixed(1)} u/s | ${Number(ev.peak_blur_streak_px || 0).toFixed(1)}px`;
+  }
+
+  for (const btn of document.querySelectorAll(".ms-preset-btn[data-ms-preset]")) {
+    const active = btn.getAttribute("data-ms-preset") === cfg.preset_id;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  for (const tab of document.querySelectorAll(".ms-ch-tab[data-ms-channel]")) {
+    const active = tab.getAttribute("data-ms-channel") === chId;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+  }
+
+  for (const mBtn of document.querySelectorAll(".ms-mode-btn[data-ms-graph-mode]")) {
+    const active = mBtn.getAttribute("data-ms-graph-mode") === cfg.graph_mode;
+    mBtn.classList.toggle("is-active", active);
+    mBtn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const readoutEl = byId("ms-active-channel-readout");
+  if (readoutEl && ev) {
+    const val = Number(ev.active_values?.[chId] ?? spec.default_value);
+    const vel = Number(ev.active_velocities?.[chId] ?? 0);
+    readoutEl.textContent = `${chId.toUpperCase()}: ${val.toFixed(1)}${spec.unit} | ${vel.toFixed(1)}${spec.unit}/s`;
+  }
+
+  const slider = byId("ms-playhead-slider");
+  if (slider) {
+    slider.max = String(cfg.duration_s);
+    slider.value = String(st.activeTimeS.toFixed(2));
+  }
+  const tcEl = byId("ms-playhead-tc");
+  if (tcEl) {
+    const fps = Math.max(1, Number(cfg.fps || 25));
+    tcEl.textContent = framesToSmpte(Math.round(st.activeTimeS * fps), fps);
+  }
+
+  const blurChk = byId("ms-blur-enabled");
+  if (blurChk) blurChk.checked = Boolean(cfg.motion_blur.enabled);
+
+  const angleRange = byId("ms-shutter-angle");
+  if (angleRange && document.activeElement !== angleRange) {
+    angleRange.value = String(cfg.motion_blur.shutter_angle_deg);
+  }
+  const angleNum = byId("ms-shutter-angle-num");
+  if (angleNum && document.activeElement !== angleNum) {
+    angleNum.value = String(cfg.motion_blur.shutter_angle_deg);
+  }
+  const phaseNum = byId("ms-shutter-phase-num");
+  if (phaseNum && document.activeElement !== phaseNum) {
+    phaseNum.value = String(cfg.motion_blur.shutter_phase_deg);
+  }
+  const samplesNum = byId("ms-blur-samples");
+  if (samplesNum && document.activeElement !== samplesNum) {
+    samplesNum.value = String(cfg.motion_blur.samples);
+  }
+
+  const fgOut = byId("ms-fg-output");
+  if (fgOut && st.compiled) {
+    fgOut.textContent = st.compiled.ffmpeg_command || st.compiled.filter_complex || "";
+  }
+  const jsonOut = byId("ms-json-preview");
+  if (jsonOut && st.exportedJson) {
+    jsonOut.textContent = st.exportedJson.json_text || "";
+  }
+
+  renderMotionSplineKeyframeList();
+  renderMotionSplineCanvases();
+}
+
+async function syncMotionSplineStudioServer() {
+  const st = state.msStudio;
+  const seq = (st.syncSeq += 1);
+  refreshMsStudioLocalDerived();
+  syncMotionSplineStudioUI();
+  try {
+    const [evalRes, compRes] = await Promise.all([
+      api.evaluateMotionSpline({ config: st.config, time_s: st.activeTimeS }),
+      api.compileMotionSpline({ config: st.config })
+    ]);
+    if (seq !== state.msStudio.syncSeq) return;
+    if (evalRes) state.msStudio.evalResult = evalRes;
+    if (compRes) state.msStudio.compiled = compRes;
+    syncMotionSplineStudioUI();
+  } catch {
+    // Keep client deterministic result if offline
+  }
+}
+
+function openMotionSplineStudioDialog() {
+  const dlg = byId("ms-studio-dialog");
+  if (!dlg) return;
+  state.msStudio.isOpen = true;
+  if (!dlg.open) {
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  refreshMsStudioLocalDerived();
+  syncMotionSplineStudioUI();
+  syncMotionSplineStudioServer();
+}
+
+function closeMotionSplineStudioDialog() {
+  stopMotionSplinePlay();
+  const dlg = byId("ms-studio-dialog");
+  if (dlg) {
+    if (typeof dlg.close === "function" && dlg.open) dlg.close();
+    else dlg.removeAttribute("open");
+  }
+  state.msStudio.isOpen = false;
+}
+
+function stopMotionSplinePlay() {
+  const st = state.msStudio;
+  st.playing = false;
+  if (st.rafId) {
+    cancelAnimationFrame(st.rafId);
+    st.rafId = null;
+  }
+  const playBtn = byId("btn-ms-play");
+  if (playBtn) playBtn.setAttribute("aria-pressed", "false");
+}
+
+function toggleMotionSplinePlay() {
+  const st = state.msStudio;
+  if (st.playing) {
+    stopMotionSplinePlay();
+    return;
+  }
+  st.playing = true;
+  st.lastTs = performance.now();
+  const playBtn = byId("btn-ms-play");
+  if (playBtn) playBtn.setAttribute("aria-pressed", "true");
+  const step = (ts) => {
+    if (!state.msStudio.playing || !state.msStudio.isOpen) {
+      stopMotionSplinePlay();
+      return;
+    }
+    const dt = Math.min(0.1, Math.max(0, (ts - state.msStudio.lastTs) / 1000));
+    state.msStudio.lastTs = ts;
+    state.msStudio.activeTimeS += dt;
+    if (state.msStudio.activeTimeS >= state.msStudio.config.duration_s) {
+      state.msStudio.activeTimeS = 0;
+    }
+    refreshMsStudioLocalDerived();
+    syncMotionSplineStudioUI();
+    state.msStudio.rafId = requestAnimationFrame(step);
+  };
+  state.msStudio.rafId = requestAnimationFrame(step);
+}
+
+async function applyMotionSplineToTimelineAction() {
+  if (!state.timelineDoc) return;
+  const st = state.msStudio;
+  const selInfo = getSelectedClipTrack();
+  const trackIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyMotionSpline({
+      document: state.timelineDoc,
+      config: st.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      pushTimelineUndoSnapshot("Apply Motion Spline");
+      applyTimelineMutationResponse(res, { syncClipSelection: true });
+      setMsStudioStatus(t("msStudio.status.applied"));
+    }
+  } catch (err) {
+    try {
+      const nextDoc = applyMotionSplineToDocumentClient(state.timelineDoc, st.config, {
+        track_index: trackIndex,
+        clip_index: clipIndex
+      });
+      pushTimelineUndoSnapshot("Apply Motion Spline");
+      state.timelineDoc = nextDoc;
+      renderTimelineUI();
+      setMsStudioStatus(t("msStudio.status.applied"));
+    } catch {
+      setMsStudioStatus(`Apply failed: ${err.message || err}`);
+    }
+  }
+}
+
+async function sendMotionSplineToDeliverAction() {
+  const st = state.msStudio;
+  let compiled = st.compiled;
+  try {
+    compiled = await api.compileMotionSpline({ config: st.config });
+    if (compiled) st.compiled = compiled;
+  } catch {
+    compiled = compileMotionSplineFiltergraphClient(st.config);
+  }
+  const outEl = byId("render-filtergraph-preview") || byId("fx-filtergraph-output");
+  if (outEl && compiled && compiled.filter_complex) {
+    outEl.textContent = compiled.filter_complex;
+  }
+  const chk = byId("render-use-studio-fx");
+  if (chk) chk.checked = true;
+  closeMotionSplineStudioDialog();
+  switchTab("render");
+  setMsStudioStatus(t("msStudio.status.deliver"));
+}
+
+async function exportMotionSplineJsonAction() {
+  const st = state.msStudio;
+  try {
+    const res = await api.exportMotionSplineJson({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`
+    });
+    st.exportedJson = res;
+    const drawer = byId("ms-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncMotionSplineStudioUI();
+    setMsStudioStatus(
+      t("msStudio.status.exportedJson")
+        .replace("{count}", String(res.keyframe_count || 0))
+        .replace("{schema}", String(res.schema_version || "taktcut.motion_spline.v1"))
+    );
+  } catch (err) {
+    setMsStudioStatus(`JSON export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadMotionSplineJsonAction() {
+  const st = state.msStudio;
+  const filename = `taktcut_${st.config.preset_id}_motion_spline.json`;
+  try {
+    const blob = await api.downloadMotionSplineBlob({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`,
+      filename
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setMsStudioStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+function wireMotionSplineStudioEvents() {
+  byId("btn-timeline-motion-spline-studio")?.addEventListener("click", openMotionSplineStudioDialog);
+  byId("btn-fx-motion-spline-studio")?.addEventListener("click", openMotionSplineStudioDialog);
+  byId("btn-close-ms-studio")?.addEventListener("click", closeMotionSplineStudioDialog);
+
+  const dlg = byId("ms-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeMotionSplineStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeMotionSplineStudioDialog();
+    });
+    dlg.addEventListener("close", () => {
+      stopMotionSplinePlay();
+      state.msStudio.isOpen = false;
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".ms-preset-btn[data-ms-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-ms-preset") || "whip_zoom_punch";
+      state.msStudio.config = createDefaultMotionSplineConfigClient(pid);
+      state.msStudio.selectedKfIdx = 0;
+      state.msStudio.activeTimeS = Number((state.msStudio.config.duration_s * 0.18).toFixed(2));
+      refreshMsStudioLocalDerived();
+      syncMotionSplineStudioServer();
+      const ev = state.msStudio.evalResult;
+      setMsStudioStatus(
+        t("msStudio.status.presetApplied")
+          .replace("{preset}", pid)
+          .replace("{vel}", String(Number(ev?.peak_velocity_unit_s || 0).toFixed(1)))
+          .replace("{blur}", String(Number(ev?.peak_blur_streak_px || 0).toFixed(1)))
+      );
+    });
+  }
+
+  for (const tab of document.querySelectorAll(".ms-ch-tab[data-ms-channel]")) {
+    tab.addEventListener("click", () => {
+      const chId = tab.getAttribute("data-ms-channel") || "scale_pct";
+      state.msStudio.config = normalizeMotionSplineConfigClient({
+        ...state.msStudio.config,
+        active_channel: chId
+      });
+      state.msStudio.selectedKfIdx = 0;
+      refreshMsStudioLocalDerived();
+      syncMotionSplineStudioUI();
+    });
+  }
+
+  for (const mBtn of document.querySelectorAll(".ms-mode-btn[data-ms-graph-mode]")) {
+    mBtn.addEventListener("click", () => {
+      const gm = mBtn.getAttribute("data-ms-graph-mode") === "speed" ? "speed" : "value";
+      state.msStudio.config = normalizeMotionSplineConfigClient({
+        ...state.msStudio.config,
+        graph_mode: gm
+      });
+      refreshMsStudioLocalDerived();
+      syncMotionSplineStudioUI();
+    });
+  }
+
+  for (const eBtn of document.querySelectorAll(".ms-ease-btn[data-ms-ease]")) {
+    eBtn.addEventListener("click", () => {
+      const mode = eBtn.getAttribute("data-ms-ease") || "easy_ease";
+      applyEasingPresetToKeyframe(state.msStudio.selectedKfIdx, mode);
+    });
+  }
+
+  byId("btn-ms-add-kf")?.addEventListener("click", () => {
+    const st = state.msStudio;
+    const chId = st.config.active_channel || "scale_pct";
+    const tNow = Number(st.activeTimeS.toFixed(3));
+    const curVal = Number(st.evalResult?.active_values?.[chId] ?? getMsChannelSpec(chId).default_value);
+    const nextKfs = [...(st.config.channels[chId]?.keyframes || []), {
+      time_s: tNow,
+      value: curVal,
+      mode: "easy_ease",
+      in_handle_x: 0.67,
+      in_handle_y: 1.0,
+      out_handle_x: 0.33,
+      out_handle_y: 0.0
+    }];
+    st.config = normalizeMotionSplineConfigClient({
+      ...st.config,
+      preset_id: "custom",
+      channels: {
+        ...st.config.channels,
+        [chId]: { ...st.config.channels[chId], keyframes: nextKfs }
+      }
+    });
+    const newIdx = st.config.channels[chId].keyframes.findIndex((k) => Math.abs(k.time_s - tNow) < 1e-3);
+    st.selectedKfIdx = Math.max(0, newIdx);
+    refreshMsStudioLocalDerived();
+    syncMotionSplineStudioUI();
+    setMsStudioStatus(
+      t("msStudio.status.kfAdded")
+        .replace("{time}", tNow.toFixed(2))
+        .replace("{channel}", chId)
+    );
+  });
+
+  byId("btn-ms-del-kf")?.addEventListener("click", () => {
+    const st = state.msStudio;
+    const chId = st.config.active_channel || "scale_pct";
+    const curKfs = st.config.channels[chId]?.keyframes || [];
+    if (curKfs.length <= 1) return;
+    const rmTime = curKfs[st.selectedKfIdx]?.time_s ?? 0;
+    const filtered = curKfs.filter((_, i) => i !== st.selectedKfIdx);
+    st.config = normalizeMotionSplineConfigClient({
+      ...st.config,
+      preset_id: "custom",
+      channels: {
+        ...st.config.channels,
+        [chId]: { ...st.config.channels[chId], keyframes: filtered }
+      }
+    });
+    st.selectedKfIdx = Math.max(0, Math.min(filtered.length - 1, st.selectedKfIdx - 1));
+    refreshMsStudioLocalDerived();
+    syncMotionSplineStudioUI();
+    setMsStudioStatus(t("msStudio.status.kfDeleted").replace("{time}", rmTime.toFixed(2)));
+  });
+
+  // Interactive Canvas Spline & Bezier Handle Pointer Handler
+  const graphCanvas = byId("ms-graph-canvas");
+  if (graphCanvas) {
+    const hitGraphTarget = (ev) => {
+      const meta = graphCanvas._msGraphMeta;
+      if (!meta) return null;
+      const rect = graphCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      for (const h of meta.handleNodes || []) {
+        if (Math.hypot(x - h.x, y - h.y) <= 13) {
+          return { type: "handle", node: h, x, y, meta };
+        }
+      }
+      for (const k of meta.keyframeNodes || []) {
+        if (Math.hypot(x - k.x, y - k.y) <= 13) {
+          return { type: "keyframe", node: k, x, y, meta };
+        }
+      }
+      return { type: "scrub", x, y, meta };
+    };
+
+    const applyDragPointer = (ev) => {
+      const st = state.msStudio;
+      const ds = st.dragState;
+      const meta = graphCanvas._msGraphMeta;
+      if (!ds || !meta) return;
+      const rect = graphCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      const tAtX = Math.max(0, Math.min(meta.durationS, ((x - meta.plotX) / Math.max(1, meta.plotW)) * meta.durationS));
+      const vAtY = meta.yMax - ((y - meta.plotY) / Math.max(1, meta.plotH)) * (meta.yMax - meta.yMin);
+
+      if (ds.type === "scrub") {
+        st.activeTimeS = Number(tAtX.toFixed(3));
+        refreshMsStudioLocalDerived();
+        syncMotionSplineStudioUI();
+        return;
+      }
+
+      const chId = st.config.active_channel || "scale_pct";
+      const kfs = [...(st.config.channels[chId]?.keyframes || [])];
+      if (ds.type === "handle" && ds.node) {
+        const h = ds.node;
+        const dt = Math.max(1e-4, h.t1 - h.t0);
+        const dv = h.v1 - h.v0;
+        const normX = Math.max(0.01, Math.min(0.99, (tAtX - h.t0) / dt));
+        let normY = h.kind === "out" ? 0.0 : 1.0;
+        if (meta.graphMode === "value" && Math.abs(dv) > 1e-4) {
+          normY = Math.max(-1.5, Math.min(2.5, (vAtY - h.v0) / dv));
+        }
+        const kf = kfs[h.kfIdx];
+        if (!kf) return;
+        kfs[h.kfIdx] = h.kind === "out"
+          ? { ...kf, mode: "bezier", out_handle_x: Number(normX.toFixed(3)), out_handle_y: Number(normY.toFixed(3)) }
+          : { ...kf, mode: "bezier", in_handle_x: Number(normX.toFixed(3)), in_handle_y: Number(normY.toFixed(3)) };
+        st.config = normalizeMotionSplineConfigClient({
+          ...st.config,
+          preset_id: "custom",
+          channels: { ...st.config.channels, [chId]: { ...st.config.channels[chId], keyframes: kfs } }
+        });
+        refreshMsStudioLocalDerived();
+        syncMotionSplineStudioUI();
+        return;
+      }
+
+      if (ds.type === "keyframe" && ds.node) {
+        const idx = ds.node.kfIdx;
+        const spec = getMsChannelSpec(chId);
+        const kf = kfs[idx];
+        if (!kf) return;
+        const minT = idx > 0 ? kfs[idx - 1].time_s + 0.02 : 0;
+        const maxT = idx + 1 < kfs.length ? kfs[idx + 1].time_s - 0.02 : meta.durationS;
+        const nextT = Math.max(minT, Math.min(maxT, tAtX));
+        const nextV = meta.graphMode === "value"
+          ? Math.max(spec.min_value, Math.min(spec.max_value, vAtY))
+          : kf.value;
+        kfs[idx] = { ...kf, time_s: Number(nextT.toFixed(3)), value: Number(nextV.toFixed(2)) };
+        st.activeTimeS = kfs[idx].time_s;
+        st.config = normalizeMotionSplineConfigClient({
+          ...st.config,
+          preset_id: "custom",
+          channels: { ...st.config.channels, [chId]: { ...st.config.channels[chId], keyframes: kfs } }
+        });
+        refreshMsStudioLocalDerived();
+        syncMotionSplineStudioUI();
+      }
+    };
+
+    graphCanvas.addEventListener("pointerdown", (ev) => {
+      stopMotionSplinePlay();
+      const hit = hitGraphTarget(ev);
+      if (!hit) return;
+      if (hit.type === "keyframe") {
+        state.msStudio.selectedKfIdx = hit.node.kfIdx;
+      } else if (hit.type === "handle") {
+        state.msStudio.selectedKfIdx = hit.node.kfIdx;
+        state.msStudio.hoveredHandle = { kfIdx: hit.node.kfIdx, kind: hit.node.kind };
+      }
+      state.msStudio.dragState = hit;
+      if (typeof graphCanvas.setPointerCapture === "function") {
+        try { graphCanvas.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
+      }
+      applyDragPointer(ev);
+    });
+
+    graphCanvas.addEventListener("pointermove", (ev) => {
+      if (state.msStudio.dragState) {
+        applyDragPointer(ev);
+        return;
+      }
+      const hit = hitGraphTarget(ev);
+      const nextHov = hit && hit.type === "handle"
+        ? { kfIdx: hit.node.kfIdx, kind: hit.node.kind }
+        : null;
+      const curHov = state.msStudio.hoveredHandle;
+      const changed = Boolean(nextHov) !== Boolean(curHov)
+        || (nextHov && curHov && (nextHov.kfIdx !== curHov.kfIdx || nextHov.kind !== curHov.kind));
+      if (changed) {
+        state.msStudio.hoveredHandle = nextHov;
+        renderMotionSplineCanvases();
+      }
+    });
+
+    const endDrag = () => {
+      if (state.msStudio.dragState) {
+        state.msStudio.dragState = null;
+        syncMotionSplineStudioServer();
+      }
+    };
+    graphCanvas.addEventListener("pointerup", endDrag);
+    graphCanvas.addEventListener("pointercancel", endDrag);
+  }
+
+  const updateBlur = (patch) => {
+    state.msStudio.config = normalizeMotionSplineConfigClient({
+      ...state.msStudio.config,
+      motion_blur: { ...state.msStudio.config.motion_blur, ...patch }
+    });
+    refreshMsStudioLocalDerived();
+    syncMotionSplineStudioUI();
+  };
+
+  byId("ms-blur-enabled")?.addEventListener("change", (ev) => {
+    updateBlur({ enabled: Boolean(ev.target.checked) });
+  });
+  byId("ms-shutter-angle")?.addEventListener("input", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(v)) updateBlur({ shutter_angle_deg: Math.max(0, Math.min(360, v)) });
+  });
+  byId("ms-shutter-angle-num")?.addEventListener("input", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(v) && v >= 0 && v <= 360) updateBlur({ shutter_angle_deg: v });
+  });
+  byId("ms-shutter-angle-num")?.addEventListener("change", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    updateBlur({ shutter_angle_deg: Number.isFinite(v) ? Math.max(0, Math.min(360, v)) : 180 });
+  });
+  byId("ms-shutter-phase-num")?.addEventListener("input", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(v) && v >= -360 && v <= 360) updateBlur({ shutter_phase_deg: v });
+  });
+  byId("ms-shutter-phase-num")?.addEventListener("change", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    updateBlur({ shutter_phase_deg: Number.isFinite(v) ? Math.max(-360, Math.min(360, v)) : -90 });
+  });
+  byId("ms-blur-samples")?.addEventListener("input", (ev) => {
+    const v = Number.parseInt(ev.target.value, 10);
+    if (Number.isFinite(v) && v >= 4 && v <= 32) updateBlur({ samples: v });
+  });
+  byId("ms-blur-samples")?.addEventListener("change", (ev) => {
+    const v = Number.parseInt(ev.target.value, 10);
+    updateBlur({ samples: Number.isFinite(v) ? Math.max(4, Math.min(32, v)) : 16 });
+  });
+
+  byId("btn-ms-play")?.addEventListener("click", toggleMotionSplinePlay);
+  byId("btn-ms-step-back")?.addEventListener("click", () => {
+    stopMotionSplinePlay();
+    const stepS = 1 / Math.max(1, Number(state.msStudio.config.fps || 25));
+    state.msStudio.activeTimeS = Math.max(0, Number((state.msStudio.activeTimeS - stepS).toFixed(3)));
+    refreshMsStudioLocalDerived();
+    syncMotionSplineStudioUI();
+  });
+  byId("btn-ms-step-fwd")?.addEventListener("click", () => {
+    stopMotionSplinePlay();
+    const stepS = 1 / Math.max(1, Number(state.msStudio.config.fps || 25));
+    state.msStudio.activeTimeS = Math.min(
+      state.msStudio.config.duration_s,
+      Number((state.msStudio.activeTimeS + stepS).toFixed(3))
+    );
+    refreshMsStudioLocalDerived();
+    syncMotionSplineStudioUI();
+  });
+  byId("ms-playhead-slider")?.addEventListener("input", (ev) => {
+    stopMotionSplinePlay();
+    const v = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(v)) {
+      state.msStudio.activeTimeS = Math.max(0, Math.min(state.msStudio.config.duration_s, v));
+      refreshMsStudioLocalDerived();
+      syncMotionSplineStudioUI();
+    }
+  });
+
+  byId("btn-ms-apply-timeline")?.addEventListener("click", applyMotionSplineToTimelineAction);
+  byId("btn-ms-send-deliver")?.addEventListener("click", sendMotionSplineToDeliverAction);
+  byId("btn-ms-export-json")?.addEventListener("click", exportMotionSplineJsonAction);
+  byId("btn-ms-download-json")?.addEventListener("click", downloadMotionSplineJsonAction);
+  byId("btn-ms-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.msStudio.compiled || compileMotionSplineFiltergraphClient(state.msStudio.config);
+    try {
+      await navigator.clipboard.writeText(compiled.filter_complex || "");
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    setMsStudioStatus(t("msStudio.status.copied"));
   });
 }
 

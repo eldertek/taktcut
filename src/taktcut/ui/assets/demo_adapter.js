@@ -2,6 +2,9 @@ import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ALLOWED_CST_GAMUT_MAPPING_MODES,
   ALLOWED_CST_TONE_MAPPING_MODES,
+  ALLOWED_MOTION_SPLINE_CHANNELS,
+  ALLOWED_MOTION_SPLINE_HANDLE_MODES,
+  ALLOWED_MOTION_SPLINE_PRESET_IDS,
   ALLOWED_MULTICAM_STUDIO_COMPILE_MODES,
   ALLOWED_MULTICAM_STUDIO_CUT_MODES,
   ALLOWED_MULTICAM_STUDIO_PRESET_IDS,
@@ -26,6 +29,8 @@ import {
   DELIVERY_PRESETS,
   HSL_CURVE_PRESETS,
   LOUDNESS_PRESET_LUFS,
+  MOTION_SPLINE_CHANNEL_SPECS_CLIENT,
+  MOTION_SPLINE_PRESETS_CLIENT,
   MULTICAM_STUDIO_PRESETS_CLIENT,
   PLANAR_TRACKER_PRESETS_CLIENT,
   QUALIFIER_KEYER_PRESETS_CLIENT,
@@ -64,6 +69,7 @@ import {
   applyAutoReframeToDocumentClient,
   applyAvSyncInDocumentClient,
   applyBroadcastLegalClampClient,
+  applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
@@ -91,6 +97,7 @@ import {
   compileFairlightMixerClient,
   compileFramingFilterClient,
   compileMinterpolateFilterClient,
+  compileMotionSplineFiltergraphClient,
   compileMulticamFiltergraphClient,
   compilePlanarTrackerFilterClient,
   compileRetimeFilterClient,
@@ -108,6 +115,7 @@ import {
   createColorNode,
   createCompoundClipInDocument,
   createDefaultCstConfigClient,
+  createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
   createDefaultQualifierKeyerConfigClient,
   createMulticamClipInDocument,
@@ -116,7 +124,9 @@ import {
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
   estimateRenderFileSize,
+  evaluateMotionSplineStudioClient,
   evaluateTitleMotionState,
+  exportMotionSplineJsonClient,
   exportMulticamEdlClient,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
@@ -126,6 +136,7 @@ import {
   listStudioLutPresetsClient,
   normalizeBroadcastConfigClient,
   normalizeFairlightAudioParams,
+  normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
@@ -4204,6 +4215,85 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/edit/multicam/apply", { method: "POST", body: payload });
+    },
+    async getMotionSplinePresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: MOTION_SPLINE_PRESETS_CLIENT,
+          preset_ids: ALLOWED_MOTION_SPLINE_PRESET_IDS,
+          channels: MOTION_SPLINE_CHANNEL_SPECS_CLIENT,
+          channel_ids: ALLOWED_MOTION_SPLINE_CHANNELS,
+          handle_modes: ALLOWED_MOTION_SPLINE_HANDLE_MODES,
+          default_config: createDefaultMotionSplineConfigClient()
+        };
+      }
+      return requestJson("/api/fx/motion-spline/presets");
+    },
+    async evaluateMotionSpline(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeMotionSplineConfigClient(p.config ? p.config : p);
+        return evaluateMotionSplineStudioClient(cfg, p.time_s ?? 0);
+      }
+      return requestJson("/api/fx/motion-spline/evaluate", { method: "POST", body: payload });
+    },
+    async compileMotionSpline(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeMotionSplineConfigClient(p.config ? p.config : p);
+        return compileMotionSplineFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/motion-spline/compile", { method: "POST", body: payload });
+    },
+    async exportMotionSplineJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeMotionSplineConfigClient(p.config ? p.config : p);
+        return exportMotionSplineJsonClient(cfg, {
+          title: p.title || "TAKTCUT_SPLINE"
+        });
+      }
+      return requestJson("/api/fx/motion-spline/export-json", { method: "POST", body: payload });
+    },
+    async downloadMotionSplineBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeMotionSplineConfigClient(p.config ? p.config : p);
+        const exp = exportMotionSplineJsonClient(cfg, {
+          title: p.title || "TAKTCUT_SPLINE",
+          filename: p.filename || undefined
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/motion-spline/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyMotionSpline(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyMotionSplineToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compileMotionSplineFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/motion-spline/apply", { method: "POST", body: payload });
     }
   };
 }

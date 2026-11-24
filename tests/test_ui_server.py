@@ -13635,3 +13635,322 @@ def test_ui_playwright_multicam_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_ui_motion_spline_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/fx/motion-spline/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 5
+    assert "scale_pct" in meta["channel_ids"]
+    assert "easy_ease" in meta["handle_modes"]
+
+    ev_status, _, ev_raw = _http_call(
+        f"{base_url}/api/fx/motion-spline/evaluate",
+        method="POST",
+        payload={"config": {"preset_id": "whip_zoom_punch"}, "time_s": 0.45},
+    )
+    assert ev_status == 200
+    ev_payload = json.loads(ev_raw.decode("utf-8"))
+    assert ev_payload["peak_velocity_unit_s"] > 50.0
+    assert ev_payload["peak_blur_streak_px"] > 1.0
+    assert len(ev_payload["curves"]["scale_pct"]["samples"]) == 96
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/motion-spline/compile",
+        method="POST",
+        payload={"config": {"preset_id": "whip_zoom_punch"}},
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert "zoompan=z=" in compiled["vf_chain"]
+    assert "minterpolate=fps=" in compiled["vf_chain"]
+    assert "tmix=frames=" in compiled["vf_chain"]
+    assert "crop=w=" in compiled["vf_chain"]
+    assert "rotate=a=" in compiled["vf_chain"]
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/fx/motion-spline/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "hero_title_overshoot"},
+            "title": "Hero Title",
+            "out_path": "exports/hero_spline.json",
+        },
+    )
+    assert ex_status == 200
+    exported = json.loads(ex_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/hero_spline.json"
+    assert (workspace / "exports" / "hero_spline.json").is_file()
+    assert exported["schema_version"] == "taktcut.motion_spline.v1"
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/fx/motion-spline/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "whip_zoom_punch"},
+            "out_path": "../escape_spline.json",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    dl_status, dl_headers, dl_raw = _http_call(
+        f"{base_url}/api/fx/motion-spline/download",
+        method="POST",
+        payload={
+            "config": {"preset_id": "smooth_dolly_push"},
+            "title": "Dolly Push",
+            "filename": "../../evil_spline.json",
+        },
+    )
+    assert dl_status == 200
+    disp = dl_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "taktcut.motion_spline.v1" in dl_raw.decode("utf-8")
+
+    # Apply to Timeline document
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+    ap_status, _, ap_raw = _http_call(
+        f"{base_url}/api/fx/motion-spline/apply",
+        method="POST",
+        payload={
+            "document": doc_payload,
+            "config": {"preset_id": "whip_zoom_punch"},
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert ap_status == 200
+    ap_data = json.loads(ap_raw.decode("utf-8"))
+    assert ap_data["changed"] is True
+    assert ap_data["validation"]["valid"] is True
+    assert ap_data["document"]["tracks"][0]["clips"][0]["motion_spline"]["preset_id"] == (
+        "whip_zoom_punch"
+    )
+
+    # Node.js static-demo parity check via demo_adapter.js
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getMotionSplinePresets();
+assert.equal(pre.presets.length, 5);
+const ev = await api.evaluateMotionSpline({{
+  config: {{ preset_id: "whip_zoom_punch" }},
+  time_s: 0.45
+}});
+assert.ok(ev.peak_velocity_unit_s > 50);
+assert.ok(ev.peak_blur_streak_px > 1);
+const comp = await api.compileMotionSpline({{ config: ev.config }});
+assert.ok(comp.vf_chain.includes("zoompan=z="));
+assert.ok(comp.vf_chain.includes("tmix=frames="));
+const exp = await api.exportMotionSplineJson({{ config: ev.config, title: "Demo Spline" }});
+assert.equal(exp.schema_version, "taktcut.motion_spline.v1");
+const blob = await api.downloadMotionSplineBlob({{ config: ev.config, title: "Demo DL" }});
+assert.ok((await blob.text()).includes("taktcut.motion_spline.v1"));
+const sampleDoc = {{
+  title: "Demo",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [{{
+    index: 1,
+    kind: "video",
+    name: "V1",
+    clips: [{{
+      name: "C1",
+      track_index: 1,
+      media_type: "video",
+      start_frame: 0,
+      duration_frames: 100
+    }}]
+  }}]
+}};
+const applied = await api.applyMotionSpline({{
+  document: sampleDoc,
+  config: ev.config,
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(applied.changed, true);
+assert.equal(applied.document.tracks[0].clips[0].motion_spline.preset_id, "whip_zoom_punch");
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_motion_spline_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#tab-fx")
+            page.click("#tab-fx")
+            page.wait_for_selector("#btn-fx-motion-spline-studio")
+
+            # Open Motion Spline Studio via Shift+E shortcut
+            page.keyboard.press("Shift+E")
+            page.wait_for_selector("#ms-studio-dialog[open]")
+
+            # Switch preset to Hero Title Overshoot
+            page.click(".ms-preset-btn[data-ms-preset='hero_title_overshoot']")
+            page.wait_for_function(
+                "() => (document.getElementById('ms-active-preset-badge')?.textContent || '')"
+                ".includes('HERO TITLE OVERSHOOT')"
+            )
+
+            # Toggle Value Graph vs Speed Graph (dx/dt)
+            val_img = page.evaluate(
+                "() => document.getElementById('ms-graph-canvas').toDataURL()"
+            )
+            page.click("#btn-ms-mode-speed")
+            page.wait_for_function(
+                "() => document.getElementById('btn-ms-mode-speed')?.getAttribute('aria-pressed')"
+                " === 'true'"
+            )
+            spd_img = page.evaluate(
+                "() => document.getElementById('ms-graph-canvas').toDataURL()"
+            )
+            assert spd_img != val_img
+
+            # Switch back to Value Graph and drag a Bezier tangent handle on canvas
+            page.click("#btn-ms-mode-value")
+            page.wait_for_function(
+                "() => (document.getElementById('ms-graph-canvas')._msGraphMeta?.handleNodes"
+                " || []).length > 0"
+            )
+            handle_pos = page.evaluate(
+                """() => {
+                    const c = document.getElementById('ms-graph-canvas');
+                    const r = c.getBoundingClientRect();
+                    const h = c._msGraphMeta.handleNodes[0];
+                    return { x: r.left + h.x, y: r.top + h.y };
+                }"""
+            )
+            page.mouse.move(handle_pos["x"], handle_pos["y"])
+            page.mouse.down()
+            page.mouse.move(handle_pos["x"] + 28, handle_pos["y"] - 22, steps=6)
+            page.mouse.up()
+            page.wait_for_function(
+                "() => (document.getElementById('ms-active-preset-badge')?.textContent || '')"
+                " === 'CUSTOM'"
+            )
+
+            # Adjust shutter angle and step playhead; verify preview canvas updates
+            prev_before = page.evaluate(
+                "() => document.getElementById('ms-preview-canvas').toDataURL()"
+            )
+            page.fill("#ms-shutter-angle-num", "300")
+            page.dispatch_event("#ms-shutter-angle-num", "change")
+            page.click("#btn-ms-step-fwd")
+            prev_after = page.evaluate(
+                "() => document.getElementById('ms-preview-canvas').toDataURL()"
+            )
+            assert prev_after != prev_before
+
+            # Export AE/Fusion JSON
+            page.click("#btn-ms-export-json")
+            page.wait_for_function(
+                "() => (document.getElementById('ms-json-preview')?.textContent || '')"
+                ".includes('taktcut.motion_spline.v1')"
+            )
+
+            # Apply to Timeline & Use in Deliver
+            page.click("#btn-ms-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('ms-status-note')?.textContent || '')"
+                ".includes('Timeline')"
+            )
+            page.click("#btn-ms-send-deliver")
+            page.wait_for_function(
+                "() => !document.getElementById('ms-studio-dialog')?.open"
+            )
+            assert page.locator("#tab-render").get_attribute("aria-selected") == "true"
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#lang-fr")
+            page.click("#tab-fx")
+            page.click("#btn-fx-motion-spline-studio")
+            page.wait_for_selector("#ms-studio-dialog[open]")
+            fr_txt = page.locator("#ms-studio-dialog").text_content() or ""
+            assert "Flou de Mouvement Optique" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-ms-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-fx-motion-spline-studio")
+            page.wait_for_selector("#ms-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('ms-studio-dialog').getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-fx-motion-spline-studio",
+                "btn-ms-mode-value",
+                "btn-ms-mode-speed",
+                "btn-ms-add-kf",
+                "btn-ms-apply-timeline",
+                "btn-ms-send-deliver",
+                "btn-close-ms-studio",
+                "ms-shutter-angle-num",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-ms-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

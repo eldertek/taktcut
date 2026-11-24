@@ -17,6 +17,7 @@ import {
   HSL_HUE_BOUNDS,
   HSL_HUE_VECTORS,
   MARKER_COLOR_HEX,
+  MOTION_SPLINE_CHANNEL_SPECS_CLIENT,
   RETIME_SPEED_MAX,
   RETIME_SPEED_MIN,
   TRANSFORM_PARAM_BOUNDS,
@@ -28,6 +29,7 @@ import {
   buildCurveLut256Client,
   clampSplitWipePercent,
   computeAvSplitEditInfo,
+  evaluateSplineAtTClient,
   computeBpmBeatFrames,
   computeCstGamutMatrixClient,
   computeInOutRangeMetrics,
@@ -12061,4 +12063,463 @@ export function drawMulticamStudioTimelineCanvas(
   ctx.fill();
 
   canvas._mcTimelineGeom = { labelW, plotW, durationS, cutHitboxes };
+}
+
+export function drawMotionSplineGraphCanvas(
+  canvas,
+  config,
+  evalResult,
+  activeTimeS = 0,
+  selectedKfIdx = 0,
+  hoveredHandle = null
+) {
+  if (!canvas || !config || !evalResult) return;
+  const { ctx, width, height } = setupCanvas(canvas, 290);
+  ctx.fillStyle = "#0a0c10";
+  ctx.fillRect(0, 0, width, height);
+
+  const chId = config.active_channel || "scale_pct";
+  const graphMode = config.graph_mode === "speed" ? "speed" : "value";
+  const durationS = Math.max(0.5, Number(config.duration_s || 4.0));
+  const spec = MOTION_SPLINE_CHANNEL_SPECS_CLIENT.find((s) => s.channel === chId) || MOTION_SPLINE_CHANNEL_SPECS_CLIENT[0];
+  const chColor = spec.color_hex || "#38bdf8";
+  const curve = (evalResult.curves && evalResult.curves[chId]) || null;
+  const samples = curve ? curve.samples || [] : [];
+  const keyframes = (config.channels && config.channels[chId] && config.channels[chId].keyframes) || [];
+
+  const padL = width < 480 ? 48 : 62;
+  const padR = 16;
+  const padT = 24;
+  const padB = 26;
+  const plotW = Math.max(80, width - padL - padR);
+  const plotH = Math.max(80, height - padT - padB);
+
+  let yMin = 0;
+  let yMax = 100;
+  if (graphMode === "speed") {
+    const maxSpd = Math.max(25, ...samples.map((s) => Number(s.speed_abs_unit_s || 0)));
+    yMin = 0;
+    yMax = maxSpd * 1.18;
+  } else {
+    const vals = samples.map((s) => Number(s.value || 0));
+    keyframes.forEach((k) => vals.push(Number(k.value || 0)));
+    const rawMin = vals.length ? Math.min(...vals) : spec.default_value;
+    const rawMax = vals.length ? Math.max(...vals) : spec.default_value + 10;
+    const span = Math.max(12, rawMax - rawMin);
+    yMin = rawMin - span * 0.22;
+    yMax = rawMax + span * 0.22;
+  }
+
+  const timeToX = (t) => padL + (Math.max(0, Math.min(durationS, t)) / durationS) * plotW;
+  const valToY = (v) => padT + (1 - (v - yMin) / Math.max(1e-5, yMax - yMin)) * plotH;
+
+  // Top Ruler Bar
+  ctx.fillStyle = "#12151e";
+  ctx.fillRect(0, 0, width, padT);
+  ctx.strokeStyle = "#242936";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, padT);
+  ctx.lineTo(width, padT);
+  ctx.stroke();
+
+  // Grid & Axes
+  const ySteps = 4;
+  ctx.font = "600 9.5px ui-monospace, monospace";
+  for (let i = 0; i <= ySteps; i += 1) {
+    const frac = i / ySteps;
+    const gy = padT + frac * plotH;
+    const gVal = yMax - frac * (yMax - yMin);
+    ctx.strokeStyle = i === ySteps && graphMode === "speed" ? "#334155" : "rgba(148, 163, 184, 0.14)";
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+
+    ctx.fillStyle = "#8a95a8";
+    const lbl = graphMode === "speed" ? `${gVal.toFixed(0)}` : `${gVal.toFixed(Math.abs(gVal) >= 100 ? 0 : 1)}`;
+    ctx.fillText(lbl, 6, gy + 3);
+  }
+
+  const xSteps = durationS <= 3 ? 6 : durationS <= 6 ? 8 : 10;
+  for (let i = 0; i <= xSteps; i += 1) {
+    const t = (i / xSteps) * durationS;
+    const gx = timeToX(t);
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.12)";
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillText(`${t.toFixed(1)}s`, Math.min(width - 32, gx - 10), 15);
+  }
+
+  // Axis Unit Badge
+  ctx.fillStyle = "#1a1f2b";
+  ctx.fillRect(4, 3, padL - 10, 17);
+  ctx.fillStyle = chColor;
+  ctx.font = "800 9px ui-monospace, monospace";
+  ctx.fillText(graphMode === "speed" ? `${spec.unit}/s` : spec.unit, 8, 15);
+
+  // Subtle ghost reference curves for other channels in Value Graph mode
+  if (graphMode === "value" && evalResult.curves) {
+    for (const otherSpec of MOTION_SPLINE_CHANNEL_SPECS_CLIENT) {
+      if (otherSpec.channel === chId) continue;
+      const oc = evalResult.curves[otherSpec.channel];
+      if (!oc || !Array.isArray(oc.samples) || oc.samples.length < 2) continue;
+      const oSpan = oc.max_value - oc.min_value;
+      if (oSpan < 1e-4) continue;
+      ctx.save();
+      ctx.strokeStyle = otherSpec.color_hex || "#64748b";
+      ctx.globalAlpha = 0.2;
+      ctx.lineWidth = 1.1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      oc.samples.forEach((pt, idx) => {
+        const px = timeToX(pt.time_s);
+        const norm = (pt.value - oc.min_value) / oSpan;
+        const py = padT + (1 - (0.15 + norm * 0.7)) * plotH;
+        if (idx === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Active Curve Path + Fill
+  if (samples.length >= 2) {
+    ctx.save();
+    ctx.beginPath();
+    samples.forEach((pt, idx) => {
+      const px = timeToX(pt.time_s);
+      const yVal = graphMode === "speed" ? pt.speed_abs_unit_s : pt.value;
+      const py = valToY(yVal);
+      if (idx === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.strokeStyle = chColor;
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+
+    // Subtle under-curve gradient
+    const lastPt = samples[samples.length - 1];
+    const firstPt = samples[0];
+    ctx.lineTo(timeToX(lastPt.time_s), graphMode === "speed" ? valToY(0) : padT + plotH);
+    ctx.lineTo(timeToX(firstPt.time_s), graphMode === "speed" ? valToY(0) : padT + plotH);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+    grad.addColorStop(0, `${chColor}36`);
+    grad.addColorStop(1, `${chColor}04`);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Bezier Tangent Handles & Keyframe Nodes
+  const handleNodes = [];
+  const keyframeNodes = [];
+
+  for (let i = 0; i < keyframes.length; i += 1) {
+    const kf = keyframes[i];
+    const kx = timeToX(kf.time_s);
+    const ky = graphMode === "speed" ? valToY(0) : valToY(kf.value);
+
+    // Outgoing handle from kf -> keyframes[i+1]
+    if (i + 1 < keyframes.length && kf.mode !== "hold") {
+      const kNext = keyframes[i + 1];
+      const dt = Math.max(1e-4, kNext.time_s - kf.time_s);
+      const dv = kNext.value - kf.value;
+      const hxTime = kf.time_s + dt * Number(kf.out_handle_x ?? 0.33);
+      const hx = timeToX(hxTime);
+      const hy = graphMode === "speed"
+        ? valToY(0)
+        : valToY(kf.value + dv * Number(kf.out_handle_y ?? 0));
+
+      const isHov = hoveredHandle && hoveredHandle.kfIdx === i && hoveredHandle.kind === "out";
+      ctx.save();
+      ctx.strokeStyle = isHov ? "#fbbf24" : "rgba(226, 232, 240, 0.55)";
+      ctx.lineWidth = isHov ? 1.8 : 1.2;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.moveTo(kx, ky);
+      ctx.lineTo(hx, hy);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.arc(hx, hy, isHov ? 6.5 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = isHov ? "#f59e0b" : "#1e293b";
+      ctx.fill();
+      ctx.strokeStyle = isHov ? "#ffffff" : chColor;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      handleNodes.push({
+        kfIdx: i,
+        segOtherIdx: i + 1,
+        kind: "out",
+        x: hx,
+        y: hy,
+        t0: kf.time_s,
+        t1: kNext.time_s,
+        v0: kf.value,
+        v1: kNext.value
+      });
+    }
+
+    // Incoming handle into kf from keyframes[i-1]
+    if (i > 0 && keyframes[i - 1].mode !== "hold") {
+      const kPrev = keyframes[i - 1];
+      const dt = Math.max(1e-4, kf.time_s - kPrev.time_s);
+      const dv = kf.value - kPrev.value;
+      const hxTime = kPrev.time_s + dt * Number(kf.in_handle_x ?? 0.67);
+      const hx = timeToX(hxTime);
+      const hy = graphMode === "speed"
+        ? valToY(0)
+        : valToY(kPrev.value + dv * Number(kf.in_handle_y ?? 1));
+
+      const isHov = hoveredHandle && hoveredHandle.kfIdx === i && hoveredHandle.kind === "in";
+      ctx.save();
+      ctx.strokeStyle = isHov ? "#fbbf24" : "rgba(226, 232, 240, 0.55)";
+      ctx.lineWidth = isHov ? 1.8 : 1.2;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.moveTo(kx, ky);
+      ctx.lineTo(hx, hy);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.arc(hx, hy, isHov ? 6.5 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = isHov ? "#f59e0b" : "#1e293b";
+      ctx.fill();
+      ctx.strokeStyle = isHov ? "#ffffff" : "#e2e8f0";
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      handleNodes.push({
+        kfIdx: i,
+        segOtherIdx: i - 1,
+        kind: "in",
+        x: hx,
+        y: hy,
+        t0: kPrev.time_s,
+        t1: kf.time_s,
+        v0: kPrev.value,
+        v1: kf.value
+      });
+    }
+  }
+
+  for (let i = 0; i < keyframes.length; i += 1) {
+    const kf = keyframes[i];
+    const kx = timeToX(kf.time_s);
+    const ky = graphMode === "speed" ? valToY(0) : valToY(kf.value);
+    const isSel = i === selectedKfIdx;
+    const r = isSel ? 6.5 : 5;
+    ctx.save();
+    ctx.translate(kx, ky);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = isSel ? "#f59e0b" : chColor;
+    ctx.fillRect(-r, -r, r * 2, r * 2);
+    ctx.strokeStyle = isSel ? "#ffffff" : "#0a0c10";
+    ctx.lineWidth = 1.6;
+    ctx.strokeRect(-r, -r, r * 2, r * 2);
+    ctx.restore();
+    keyframeNodes.push({ kfIdx: i, x: kx, y: ky, time_s: kf.time_s, value: kf.value });
+  }
+
+  // Playhead Needle
+  const phX = timeToX(activeTimeS);
+  ctx.strokeStyle = "#f59e0b";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(phX, 0);
+  ctx.lineTo(phX, height - 4);
+  ctx.stroke();
+
+  ctx.fillStyle = "#f59e0b";
+  ctx.beginPath();
+  ctx.moveTo(phX - 5, 0);
+  ctx.lineTo(phX + 5, 0);
+  ctx.lineTo(phX, 8);
+  ctx.closePath();
+  ctx.fill();
+
+  const actVal = evalResult.active_values ? Number(evalResult.active_values[chId] ?? 0) : 0;
+  const actVel = evalResult.active_velocities ? Number(evalResult.active_velocities[chId] ?? 0) : 0;
+  const pillTxt = graphMode === "speed"
+    ? `${Math.abs(actVel).toFixed(1)} ${spec.unit}/s`
+    : `${actVal.toFixed(1)}${spec.unit}`;
+  ctx.font = "700 10px ui-monospace, monospace";
+  const pw = ctx.measureText(pillTxt).width + 12;
+  const pxPill = Math.min(width - pw - 6, Math.max(padL + 4, phX + 6));
+  ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+  ctx.fillRect(pxPill, padT + 4, pw, 18);
+  ctx.strokeStyle = "#f59e0b";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(pxPill, padT + 4, pw, 18);
+  ctx.fillStyle = "#fef3c7";
+  ctx.fillText(pillTxt, pxPill + 6, padT + 16);
+
+  canvas._msGraphMeta = {
+    plotX: padL,
+    plotY: padT,
+    plotW,
+    plotH,
+    durationS,
+    yMin,
+    yMax,
+    graphMode,
+    activeChannel: chId,
+    keyframeNodes,
+    handleNodes
+  };
+}
+
+export function drawMotionSplinePreviewCanvas(
+  canvas,
+  config,
+  evalResult,
+  activeTimeS = 0
+) {
+  if (!canvas || !config) return;
+  const { ctx, width, height } = setupCanvas(canvas, 220);
+  ctx.fillStyle = "#090b0f";
+  ctx.fillRect(0, 0, width, height);
+
+  const aspect = Math.max(0.5, Number(config.width || 1920) / Math.max(1, Number(config.height || 1080)));
+  let frameW = width - 20;
+  let frameH = frameW / aspect;
+  if (frameH > height - 20) {
+    frameH = height - 20;
+    frameW = frameH * aspect;
+  }
+  const fx = (width - frameW) * 0.5;
+  const fy = (height - frameH) * 0.5;
+
+  // Cinema Viewport Well + Subtle Grid
+  ctx.fillStyle = "#111520";
+  ctx.fillRect(fx, fy, frameW, frameH);
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.12)";
+  ctx.lineWidth = 1;
+  const gridCols = 8;
+  for (let c = 1; c < gridCols; c += 1) {
+    const gx = fx + (c / gridCols) * frameW;
+    ctx.beginPath();
+    ctx.moveTo(gx, fy);
+    ctx.lineTo(gx, fy + frameH);
+    ctx.stroke();
+  }
+  const gridRows = 4;
+  for (let r = 1; r < gridRows; r += 1) {
+    const gy = fy + (r / gridRows) * frameH;
+    ctx.beginPath();
+    ctx.moveTo(fx, gy);
+    ctx.lineTo(fx + frameW, gy);
+    ctx.stroke();
+  }
+
+  const drawSubjectAt = (vals, alphaMul, isGhost) => {
+    const scale = Math.max(0.1, Number(vals.scale_pct ?? 100) / 100);
+    const px = (Number(vals.position_x_px ?? 0) / Math.max(1, Number(config.width || 1920))) * frameW;
+    const py = (Number(vals.position_y_px ?? 0) / Math.max(1, Number(config.height || 1080))) * frameH;
+    const rotRad = (Number(vals.rotation_deg ?? 0) * Math.PI) / 180;
+    const op = Math.max(0, Math.min(1, Number(vals.opacity_pct ?? 100) / 100)) * alphaMul;
+    if (op <= 0.005) return;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(fx, fy, frameW, frameH);
+    ctx.clip();
+
+    ctx.translate(fx + frameW * 0.5 + px, fy + frameH * 0.5 + py);
+    ctx.rotate(rotRad);
+    ctx.scale(scale, scale);
+    ctx.globalAlpha = op;
+
+    const cardW = frameW * 0.44;
+    const cardH = frameH * 0.44;
+    const grad = ctx.createLinearGradient(-cardW * 0.5, -cardH * 0.5, cardW * 0.5, cardH * 0.5);
+    grad.addColorStop(0, isGhost ? "#38bdf8" : "#1d4ed8");
+    grad.addColorStop(0.55, isGhost ? "#f59e0b" : "#0284c7");
+    grad.addColorStop(1, "#0f172a");
+    ctx.fillStyle = grad;
+    ctx.fillRect(-cardW * 0.5, -cardH * 0.5, cardW, cardH);
+
+    ctx.strokeStyle = isGhost ? "rgba(56, 189, 248, 0.55)" : "#e2e8f0";
+    ctx.lineWidth = isGhost ? 1 : 1.5;
+    ctx.strokeRect(-cardW * 0.5, -cardH * 0.5, cardW, cardH);
+
+    if (!isGhost) {
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "800 11px ui-monospace, monospace";
+      ctx.fillText("TAKTCUT FX", -cardW * 0.36, -2);
+      ctx.fillStyle = "#fde68a";
+      ctx.font = "600 8.5px ui-monospace, monospace";
+      ctx.fillText("SPLINE + SHUTTER", -cardW * 0.36, 12);
+
+      // Anchor crosshair
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(-6, 0);
+      ctx.lineTo(6, 0);
+      ctx.moveTo(0, -6);
+      ctx.lineTo(0, 6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  // Optical Motion Blur Shutter Sub-Frames
+  const mb = config.motion_blur || {};
+  const frameDur = 1 / Math.max(1, Number(config.fps || 25));
+  const shutterFrac = mb.enabled ? Number(mb.shutter_angle_deg || 0) / 360 : 0;
+  const phaseFrac = Number(mb.shutter_phase_deg || -90) / 360;
+  const tStart = Math.max(0, activeTimeS + phaseFrac * frameDur);
+  const tEnd = Math.max(tStart, Math.min(config.duration_s, tStart + shutterFrac * frameDur));
+  const nSamples = Math.max(4, Math.min(32, Number(mb.samples || 16)));
+
+  if (mb.enabled && shutterFrac > 0 && tEnd > tStart) {
+    const ghostAlpha = Math.min(0.24, 1.35 / nSamples);
+    for (let i = 0; i < nSamples; i += 1) {
+      const ts = tStart + (i / Math.max(1, nSamples - 1)) * (tEnd - tStart);
+      const subVals = {
+        scale_pct: evaluateSplineAtTClient(config.channels.scale_pct.keyframes, ts).value,
+        position_x_px: evaluateSplineAtTClient(config.channels.position_x_px.keyframes, ts).value,
+        position_y_px: evaluateSplineAtTClient(config.channels.position_y_px.keyframes, ts).value,
+        rotation_deg: evaluateSplineAtTClient(config.channels.rotation_deg.keyframes, ts).value,
+        opacity_pct: evaluateSplineAtTClient(config.channels.opacity_pct.keyframes, ts).value
+      };
+      drawSubjectAt(subVals, ghostAlpha, true);
+    }
+  }
+
+  // Primary frame evaluation
+  const mainVals = (evalResult && evalResult.active_values) || {
+    scale_pct: evaluateSplineAtTClient(config.channels.scale_pct.keyframes, activeTimeS).value,
+    position_x_px: evaluateSplineAtTClient(config.channels.position_x_px.keyframes, activeTimeS).value,
+    position_y_px: evaluateSplineAtTClient(config.channels.position_y_px.keyframes, activeTimeS).value,
+    rotation_deg: evaluateSplineAtTClient(config.channels.rotation_deg.keyframes, activeTimeS).value,
+    opacity_pct: evaluateSplineAtTClient(config.channels.opacity_pct.keyframes, activeTimeS).value
+  };
+  drawSubjectAt(mainVals, 1.0, false);
+
+  // Safe Frame + HUD Overlay
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.25)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(fx + frameW * 0.05, fy + frameH * 0.05, frameW * 0.9, frameH * 0.9);
+  ctx.strokeStyle = "#334155";
+  ctx.strokeRect(fx, fy, frameW, frameH);
+
+  const blurPx = evalResult && evalResult.active_blur ? Number(evalResult.active_blur.blur_streak_px || 0) : 0;
+  ctx.fillStyle = "rgba(10, 12, 16, 0.86)";
+  ctx.fillRect(fx + 6, fy + 6, Math.min(frameW - 12, 224), 18);
+  ctx.fillStyle = blurPx > 2 ? "#fbbf24" : "#94a3b8";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  const shutterLabel = mb.enabled ? `${Number(mb.shutter_angle_deg || 0).toFixed(0)} deg` : "OFF";
+  ctx.fillText(`SHUTTER ${shutterLabel} | BLUR ${blurPx.toFixed(1)}px`, fx + 12, fy + 18);
 }

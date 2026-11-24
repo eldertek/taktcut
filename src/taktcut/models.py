@@ -1291,6 +1291,38 @@ class ClipAutoReframeTrack(BaseModel):
         return sorted(value, key=lambda kf: (kf.time_s, kf.frame))
 
 
+class ClipMotionSplineKeyframeRef(BaseModel):
+    """Serialized Bezier keyframe reference attached to a TimelineClip motion spline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    time_s: float = Field(ge=0.0, le=3600.0)
+    value: float = Field(ge=-10000.0, le=10000.0)
+    mode: Literal["linear", "easy_ease", "bezier", "hold", "overshoot"] = "easy_ease"
+    in_handle_x: float = Field(default=0.67, ge=0.01, le=0.99)
+    in_handle_y: float = Field(default=1.0, ge=-1.5, le=2.5)
+    out_handle_x: float = Field(default=0.33, ge=0.01, le=0.99)
+    out_handle_y: float = Field(default=0.0, ge=-1.5, le=2.5)
+
+
+class ClipMotionSplineTrack(BaseModel):
+    """Non-destructive Motion Spline & Optical Motion Blur track stored on a TimelineClip."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    preset_id: str = Field(default="whip_zoom_punch", max_length=64)
+    shutter_angle_deg: float = Field(default=180.0, ge=0.0, le=360.0)
+    shutter_phase_deg: float = Field(default=-90.0, ge=-360.0, le=360.0)
+    samples: int = Field(default=16, ge=4, le=32)
+    fps: float = Field(default=25.0, ge=1.0, le=120.0)
+    duration_s: float = Field(default=4.0, ge=0.5, le=120.0)
+    peak_velocity_unit_s: float = Field(default=0.0, ge=0.0)
+    peak_blur_streak_px: float = Field(default=0.0, ge=0.0)
+    ffmpeg_vf: str = Field(default="", max_length=8192)
+    channels: dict[str, list[ClipMotionSplineKeyframeRef]] = Field(default_factory=dict)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1318,6 +1350,7 @@ class TimelineClip(BaseModel):
     compound_subsequence: CompoundSubSequence | None = None
     multicam_bank: MulticamBank | None = None
     auto_reframe: ClipAutoReframeTrack | None = None
+    motion_spline: ClipMotionSplineTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

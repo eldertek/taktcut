@@ -17438,3 +17438,806 @@ export function applyMulticamStudioToDocumentClient(doc, rawConfig, opts = {}) {
   };
   return nextDoc;
 }
+
+// =============================================================================
+// AFTER EFFECTS / FUSION KEYFRAME SPLINE, SPEED GRAPH & MOTION BLUR (CYCLE #107)
+// =============================================================================
+
+export const ALLOWED_MOTION_SPLINE_PRESET_IDS = [
+  "whip_zoom_punch",
+  "smooth_dolly_push",
+  "hero_title_overshoot",
+  "cinematic_pan_hold",
+  "custom"
+];
+
+export const ALLOWED_MOTION_SPLINE_CHANNELS = [
+  "scale_pct",
+  "position_x_px",
+  "position_y_px",
+  "rotation_deg",
+  "opacity_pct"
+];
+
+export const ALLOWED_MOTION_SPLINE_HANDLE_MODES = [
+  "linear",
+  "easy_ease",
+  "bezier",
+  "hold",
+  "overshoot"
+];
+
+export const MOTION_SPLINE_CHANNEL_SPECS_CLIENT = [
+  { channel: "scale_pct", label: "Scale (%)", unit: "%", default_value: 100, min_value: 10, max_value: 400, color_hex: "#38bdf8" },
+  { channel: "position_x_px", label: "Position X (px)", unit: "px", default_value: 0, min_value: -1920, max_value: 1920, color_hex: "#f87171" },
+  { channel: "position_y_px", label: "Position Y (px)", unit: "px", default_value: 0, min_value: -1080, max_value: 1080, color_hex: "#4ade80" },
+  { channel: "rotation_deg", label: "Rotation (deg)", unit: "deg", default_value: 0, min_value: -360, max_value: 360, color_hex: "#f59e0b" },
+  { channel: "opacity_pct", label: "Opacity (%)", unit: "%", default_value: 100, min_value: 0, max_value: 100, color_hex: "#c084fc" }
+];
+
+const MS_SPEC_BY_ID = Object.fromEntries(
+  MOTION_SPLINE_CHANNEL_SPECS_CLIENT.map((s) => [s.channel, s])
+);
+
+function msClamp(val, lo, hi) {
+  return Math.max(lo, Math.min(hi, val));
+}
+
+function makeMsKeyframe(raw) {
+  const mode = ALLOWED_MOTION_SPLINE_HANDLE_MODES.includes(raw.mode) ? raw.mode : "easy_ease";
+  return {
+    time_s: Number(msClamp(Number(raw.time_s ?? 0), 0, 3600).toFixed(4)),
+    value: Number(msClamp(Number(raw.value ?? 0), -10000, 10000).toFixed(4)),
+    mode,
+    in_handle_x: Number(msClamp(Number(raw.in_handle_x ?? 0.67), 0.01, 0.99).toFixed(4)),
+    in_handle_y: Number(msClamp(Number(raw.in_handle_y ?? 1.0), -1.5, 2.5).toFixed(4)),
+    out_handle_x: Number(msClamp(Number(raw.out_handle_x ?? 0.33), 0.01, 0.99).toFixed(4)),
+    out_handle_y: Number(msClamp(Number(raw.out_handle_y ?? 0.0), -1.5, 2.5).toFixed(4))
+  };
+}
+
+function buildDefaultMotionSplineChannelsClient(presetId, durationS = 4.0) {
+  const d = Math.max(0.5, Number(durationS || 4.0));
+  const r3 = (x) => Number(x.toFixed(3));
+  if (presetId === "whip_zoom_punch") {
+    return {
+      scale_pct: {
+        channel: "scale_pct",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 100, mode: "bezier", out_handle_x: 0.82, out_handle_y: 0.02 }),
+          makeMsKeyframe({ time_s: r3(d * 0.22), value: 154, mode: "bezier", in_handle_x: 0.2, in_handle_y: 0.98, out_handle_x: 0.18, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d * 0.58), value: 100, mode: "easy_ease", in_handle_x: 0.82, in_handle_y: 1.0 }),
+          makeMsKeyframe({ time_s: r3(d), value: 104, mode: "easy_ease" })
+        ]
+      },
+      position_x_px: {
+        channel: "position_x_px",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "bezier", out_handle_x: 0.75, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d * 0.22), value: -48, mode: "bezier", in_handle_x: 0.25, in_handle_y: 1.0, out_handle_x: 0.25, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d * 0.58), value: 0, mode: "easy_ease", in_handle_x: 0.75, in_handle_y: 1.0 })
+        ]
+      },
+      position_y_px: {
+        channel: "position_y_px",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d * 0.22), value: 18, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d * 0.58), value: 0, mode: "easy_ease" })
+        ]
+      },
+      rotation_deg: {
+        channel: "rotation_deg",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "bezier", out_handle_x: 0.78, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d * 0.22), value: -5.5, mode: "bezier", in_handle_x: 0.22, in_handle_y: 1.0, out_handle_x: 0.22, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d * 0.58), value: 0, mode: "easy_ease", in_handle_x: 0.78, in_handle_y: 1.0 })
+        ]
+      },
+      opacity_pct: {
+        channel: "opacity_pct",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 100, mode: "linear" }),
+          makeMsKeyframe({ time_s: r3(d), value: 100, mode: "linear" })
+        ]
+      }
+    };
+  }
+  if (presetId === "smooth_dolly_push") {
+    return {
+      scale_pct: {
+        channel: "scale_pct",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 100, mode: "easy_ease", out_handle_x: 0.42, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d), value: 122, mode: "easy_ease", in_handle_x: 0.58, in_handle_y: 1.0 })
+        ]
+      },
+      position_x_px: {
+        channel: "position_x_px",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d), value: 0, mode: "easy_ease" })
+        ]
+      },
+      position_y_px: {
+        channel: "position_y_px",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 14, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d), value: -14, mode: "easy_ease" })
+        ]
+      },
+      rotation_deg: {
+        channel: "rotation_deg",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "linear" }),
+          makeMsKeyframe({ time_s: r3(d), value: 0, mode: "linear" })
+        ]
+      },
+      opacity_pct: {
+        channel: "opacity_pct",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d * 0.18), value: 100, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d), value: 100, mode: "linear" })
+        ]
+      }
+    };
+  }
+  if (presetId === "hero_title_overshoot") {
+    return {
+      scale_pct: {
+        channel: "scale_pct",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 62, mode: "overshoot", out_handle_x: 0.22, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d * 0.35), value: 100, mode: "overshoot", in_handle_x: 0.58, in_handle_y: 1.34 }),
+          makeMsKeyframe({ time_s: r3(d), value: 103, mode: "linear" })
+        ]
+      },
+      position_x_px: {
+        channel: "position_x_px",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d), value: 0, mode: "easy_ease" })
+        ]
+      },
+      position_y_px: {
+        channel: "position_y_px",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 140, mode: "overshoot", out_handle_x: 0.2, out_handle_y: 0 }),
+          makeMsKeyframe({ time_s: r3(d * 0.35), value: 0, mode: "overshoot", in_handle_x: 0.58, in_handle_y: 1.28 })
+        ]
+      },
+      rotation_deg: {
+        channel: "rotation_deg",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: -3, mode: "overshoot" }),
+          makeMsKeyframe({ time_s: r3(d * 0.35), value: 0, mode: "overshoot", in_handle_x: 0.58, in_handle_y: 1.25 })
+        ]
+      },
+      opacity_pct: {
+        channel: "opacity_pct",
+        enabled: true,
+        keyframes: [
+          makeMsKeyframe({ time_s: 0, value: 0, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d * 0.2), value: 100, mode: "easy_ease" }),
+          makeMsKeyframe({ time_s: r3(d), value: 100, mode: "linear" })
+        ]
+      }
+    };
+  }
+  return {
+    scale_pct: {
+      channel: "scale_pct",
+      enabled: true,
+      keyframes: [
+        makeMsKeyframe({ time_s: 0, value: 115, mode: "linear" }),
+        makeMsKeyframe({ time_s: r3(d), value: 115, mode: "linear" })
+      ]
+    },
+    position_x_px: {
+      channel: "position_x_px",
+      enabled: true,
+      keyframes: [
+        makeMsKeyframe({ time_s: 0, value: -240, mode: "easy_ease", out_handle_x: 0.36, out_handle_y: 0 }),
+        makeMsKeyframe({ time_s: r3(d * 0.35), value: 0, mode: "hold", in_handle_x: 0.64, in_handle_y: 1.0 }),
+        makeMsKeyframe({ time_s: r3(d * 0.65), value: 0, mode: "easy_ease", out_handle_x: 0.36, out_handle_y: 0 }),
+        makeMsKeyframe({ time_s: r3(d), value: 220, mode: "easy_ease", in_handle_x: 0.64, in_handle_y: 1.0 })
+      ]
+    },
+    position_y_px: {
+      channel: "position_y_px",
+      enabled: true,
+      keyframes: [
+        makeMsKeyframe({ time_s: 0, value: 0, mode: "linear" }),
+        makeMsKeyframe({ time_s: r3(d), value: 0, mode: "linear" })
+      ]
+    },
+    rotation_deg: {
+      channel: "rotation_deg",
+      enabled: true,
+      keyframes: [
+        makeMsKeyframe({ time_s: 0, value: 0, mode: "linear" }),
+        makeMsKeyframe({ time_s: r3(d), value: 0, mode: "linear" })
+      ]
+    },
+    opacity_pct: {
+      channel: "opacity_pct",
+      enabled: true,
+      keyframes: [
+        makeMsKeyframe({ time_s: 0, value: 100, mode: "linear" }),
+        makeMsKeyframe({ time_s: r3(d), value: 100, mode: "linear" })
+      ]
+    }
+  };
+}
+
+export function createDefaultMotionSplineConfigClient(presetId = "whip_zoom_punch") {
+  const pid = ALLOWED_MOTION_SPLINE_PRESET_IDS.includes(presetId) ? presetId : "whip_zoom_punch";
+  const presetsMeta = {
+    whip_zoom_punch: { active_channel: "scale_pct", graph_mode: "speed", shutter: 220, phase: -110, samples: 16 },
+    smooth_dolly_push: { active_channel: "scale_pct", graph_mode: "value", shutter: 180, phase: -90, samples: 12 },
+    hero_title_overshoot: { active_channel: "position_y_px", graph_mode: "value", shutter: 180, phase: -90, samples: 16 },
+    cinematic_pan_hold: { active_channel: "position_x_px", graph_mode: "speed", shutter: 180, phase: -90, samples: 16 },
+    custom: { active_channel: "scale_pct", graph_mode: "value", shutter: 180, phase: -90, samples: 16 }
+  };
+  const m = presetsMeta[pid];
+  return {
+    preset_id: pid,
+    active_channel: m.active_channel,
+    graph_mode: m.graph_mode,
+    fps: 25,
+    duration_s: 4.0,
+    width: 1920,
+    height: 1080,
+    sample_count: 96,
+    motion_blur: {
+      enabled: true,
+      shutter_angle_deg: m.shutter,
+      shutter_phase_deg: m.phase,
+      samples: m.samples
+    },
+    channels: buildDefaultMotionSplineChannelsClient(pid, 4.0)
+  };
+}
+
+export const MOTION_SPLINE_PRESETS_CLIENT = [
+  {
+    preset_id: "whip_zoom_punch",
+    label: "Whip Zoom Punch",
+    description: "High-velocity Bezier whip zoom with rotational kick and 220 deg shutter.",
+    default_shutter_angle_deg: 220,
+    default_config: createDefaultMotionSplineConfigClient("whip_zoom_punch")
+  },
+  {
+    preset_id: "smooth_dolly_push",
+    label: "Smooth Dolly Push",
+    description: "Subtle Easy Ease camera push with soft 180 deg cinematic motion blur.",
+    default_shutter_angle_deg: 180,
+    default_config: createDefaultMotionSplineConfigClient("smooth_dolly_push")
+  },
+  {
+    preset_id: "hero_title_overshoot",
+    label: "Hero Title Overshoot",
+    description: "Elastic Bezier overshoot settling on scale and Y axis.",
+    default_shutter_angle_deg: 180,
+    default_config: createDefaultMotionSplineConfigClient("hero_title_overshoot")
+  },
+  {
+    preset_id: "cinematic_pan_hold",
+    label: "Cinematic Pan & Hold",
+    description: "Smooth pan with mid-shot Hold plateau and twin bell speed curves.",
+    default_shutter_angle_deg: 180,
+    default_config: createDefaultMotionSplineConfigClient("cinematic_pan_hold")
+  },
+  {
+    preset_id: "custom",
+    label: "Custom",
+    description: "Custom multi-channel cubic Bezier curves and shutter settings.",
+    default_shutter_angle_deg: 180,
+    default_config: createDefaultMotionSplineConfigClient("custom")
+  }
+];
+
+export function normalizeMotionSplineConfigClient(raw) {
+  if (!raw || typeof raw !== "object") {
+    return createDefaultMotionSplineConfigClient("whip_zoom_punch");
+  }
+  const pid = ALLOWED_MOTION_SPLINE_PRESET_IDS.includes(String(raw.preset_id || "").trim().toLowerCase())
+    ? String(raw.preset_id).trim().toLowerCase()
+    : "whip_zoom_punch";
+  const base = createDefaultMotionSplineConfigClient(pid);
+  const durationS = msClamp(Number(raw.duration_s ?? base.duration_s), 0.5, 120);
+  const fps = msClamp(Number(raw.fps ?? base.fps), 1, 120);
+  const width = Math.round(msClamp(Number(raw.width ?? base.width), 320, 7680));
+  const height = Math.round(msClamp(Number(raw.height ?? base.height), 180, 4320));
+  const sampleCount = Math.round(msClamp(Number(raw.sample_count ?? base.sample_count), 16, 480));
+  const activeChannel = ALLOWED_MOTION_SPLINE_CHANNELS.includes(raw.active_channel)
+    ? raw.active_channel
+    : base.active_channel;
+  const graphMode = raw.graph_mode === "speed" ? "speed" : "value";
+
+  const rawBlur = raw.motion_blur && typeof raw.motion_blur === "object" ? raw.motion_blur : {};
+  const motionBlur = {
+    enabled: rawBlur.enabled === undefined ? base.motion_blur.enabled : Boolean(rawBlur.enabled),
+    shutter_angle_deg: Number(msClamp(Number(rawBlur.shutter_angle_deg ?? base.motion_blur.shutter_angle_deg), 0, 360).toFixed(2)),
+    shutter_phase_deg: Number(msClamp(Number(rawBlur.shutter_phase_deg ?? base.motion_blur.shutter_phase_deg), -360, 360).toFixed(2)),
+    samples: Math.round(msClamp(Number(rawBlur.samples ?? base.motion_blur.samples), 4, 32))
+  };
+
+  const defaultChannels = buildDefaultMotionSplineChannelsClient(pid, durationS);
+  const rawChannels = raw.channels && typeof raw.channels === "object" ? raw.channels : {};
+  const channels = {};
+  for (const chId of ALLOWED_MOTION_SPLINE_CHANNELS) {
+    const spec = MS_SPEC_BY_ID[chId];
+    const srcTrack = rawChannels[chId];
+    const kfsRaw = srcTrack && Array.isArray(srcTrack.keyframes) && srcTrack.keyframes.length > 0
+      ? srcTrack.keyframes
+      : defaultChannels[chId].keyframes;
+    const sorted = kfsRaw
+      .map((k) => makeMsKeyframe({
+        ...k,
+        value: msClamp(Number(k.value ?? spec.default_value), spec.min_value, spec.max_value)
+      }))
+      .sort((a, b) => a.time_s - b.time_s);
+    const deduped = [];
+    for (const kf of sorted) {
+      if (deduped.length > 0 && Math.abs(kf.time_s - deduped[deduped.length - 1].time_s) < 1e-4) {
+        deduped[deduped.length - 1] = kf;
+      } else {
+        deduped.push(kf);
+      }
+    }
+    channels[chId] = {
+      channel: chId,
+      enabled: srcTrack && srcTrack.enabled !== undefined ? Boolean(srcTrack.enabled) : true,
+      keyframes: deduped
+    };
+  }
+
+  return {
+    preset_id: pid,
+    active_channel: activeChannel,
+    graph_mode: graphMode,
+    fps,
+    duration_s: durationS,
+    width,
+    height,
+    sample_count: sampleCount,
+    motion_blur: motionBlur,
+    channels
+  };
+}
+
+function resolveSegmentBezierPointsClient(k0, k1) {
+  if (k0.mode === "hold") return [0.33, 0.0, 0.67, 0.0];
+  if (k0.mode === "linear" && k1.mode === "linear") return [0.33, 0.33, 0.67, 0.67];
+  let p1x = 0.33;
+  let p1y = 0.0;
+  if (k0.mode === "linear") {
+    p1x = 0.33;
+    p1y = 0.33;
+  } else if (k0.mode !== "easy_ease") {
+    p1x = msClamp(Number(k0.out_handle_x ?? 0.33), 0.01, 0.99);
+    p1y = msClamp(Number(k0.out_handle_y ?? 0.0), -1.5, 2.5);
+  }
+  let p2x = 0.67;
+  let p2y = 1.0;
+  if (k1.mode === "linear") {
+    p2x = 0.67;
+    p2y = 0.67;
+  } else if (k1.mode === "overshoot") {
+    p2x = msClamp(Number(k1.in_handle_x ?? 0.58), 0.01, 0.99);
+    p2y = msClamp(Number(k1.in_handle_y !== 1.0 ? k1.in_handle_y : 1.32), -1.5, 2.5);
+  } else if (k1.mode !== "easy_ease") {
+    p2x = msClamp(Number(k1.in_handle_x ?? 0.67), 0.01, 0.99);
+    p2y = msClamp(Number(k1.in_handle_y ?? 1.0), -1.5, 2.5);
+  }
+  return [p1x, p1y, p2x, p2y];
+}
+
+export function solveCubicBezierXClient(xTarget, p1x, p2x) {
+  if (xTarget <= 0) return 0;
+  if (xTarget >= 1) return 1;
+  const c1x = msClamp(p1x, 0.001, 0.999);
+  const c2x = msClamp(p2x, 0.001, 0.999);
+  let lo = 0;
+  let hi = 1;
+  let u = xTarget;
+  for (let i = 0; i < 12; i += 1) {
+    const inv = 1 - u;
+    const bx = 3 * inv * inv * u * c1x + 3 * inv * u * u * c2x + u * u * u;
+    const err = bx - xTarget;
+    if (Math.abs(err) < 1e-7) return msClamp(u, 0, 1);
+    if (err < 0) lo = u;
+    else hi = u;
+    const dxDu = 3 * inv * inv * c1x + 6 * inv * u * (c2x - c1x) + 3 * u * u * (1 - c2x);
+    if (Math.abs(dxDu) > 1e-6) {
+      const cand = u - err / dxDu;
+      if (cand > lo && cand < hi) {
+        u = cand;
+        continue;
+      }
+    }
+    u = 0.5 * (lo + hi);
+  }
+  return msClamp(u, 0, 1);
+}
+
+export function evaluateSplineAtTClient(keyframes, timeS) {
+  if (!Array.isArray(keyframes) || keyframes.length === 0) {
+    return { time_s: Number(Math.max(0, timeS).toFixed(4)), value: 0, velocity_unit_s: 0, speed_abs_unit_s: 0, progress: 0 };
+  }
+  const ordered = [...keyframes].sort((a, b) => a.time_s - b.time_s);
+  const t = Math.max(0, Number(timeS || 0));
+  if (ordered.length === 1 || t <= ordered[0].time_s) {
+    return {
+      time_s: Number(t.toFixed(4)),
+      value: Number(ordered[0].value.toFixed(4)),
+      velocity_unit_s: 0,
+      speed_abs_unit_s: 0,
+      progress: 0
+    };
+  }
+  if (t >= ordered[ordered.length - 1].time_s) {
+    return {
+      time_s: Number(t.toFixed(4)),
+      value: Number(ordered[ordered.length - 1].value.toFixed(4)),
+      velocity_unit_s: 0,
+      speed_abs_unit_s: 0,
+      progress: 1
+    };
+  }
+  let segIdx = 0;
+  for (let i = 0; i < ordered.length - 1; i += 1) {
+    if (t >= ordered[i].time_s && t <= ordered[i + 1].time_s) {
+      segIdx = i;
+      break;
+    }
+  }
+  const k0 = ordered[segIdx];
+  const k1 = ordered[segIdx + 1];
+  const dt = Math.max(1e-6, k1.time_s - k0.time_s);
+  const dv = k1.value - k0.value;
+  if (k0.mode === "hold") {
+    return {
+      time_s: Number(t.toFixed(4)),
+      value: Number(k0.value.toFixed(4)),
+      velocity_unit_s: 0,
+      speed_abs_unit_s: 0,
+      progress: 0
+    };
+  }
+  const xTarget = msClamp((t - k0.time_s) / dt, 0, 1);
+  const [p1x, p1y, p2x, p2y] = resolveSegmentBezierPointsClient(k0, k1);
+  const u = solveCubicBezierXClient(xTarget, p1x, p2x);
+  const inv = 1 - u;
+  const by = 3 * inv * inv * u * p1y + 3 * inv * u * u * p2y + u * u * u;
+  const c1x = msClamp(p1x, 0.001, 0.999);
+  const c2x = msClamp(p2x, 0.001, 0.999);
+  const dxDu = 3 * inv * inv * c1x + 6 * inv * u * (c2x - c1x) + 3 * u * u * (1 - c2x);
+  const dyDu = 3 * inv * inv * p1y + 6 * inv * u * (p2y - p1y) + 3 * u * u * (1 - p2y);
+  const slope = dxDu <= 1e-6 ? (Math.abs(dyDu) <= 1e-6 ? 0 : Math.sign(dyDu) * 12) : dyDu / dxDu;
+  const val = k0.value + dv * by;
+  const vel = (dv / dt) * slope;
+  return {
+    time_s: Number(t.toFixed(4)),
+    value: Number(val.toFixed(4)),
+    velocity_unit_s: Number(vel.toFixed(4)),
+    speed_abs_unit_s: Number(Math.abs(vel).toFixed(4)),
+    progress: Number(by.toFixed(4))
+  };
+}
+
+export function evaluateMotionBlurAtTClient(rawConfig, timeS) {
+  const cfg = normalizeMotionSplineConfigClient(rawConfig);
+  const frameDur = 1 / Math.max(1, cfg.fps);
+  const shutterFrac = cfg.motion_blur.enabled ? cfg.motion_blur.shutter_angle_deg / 360 : 0;
+  const phaseFrac = cfg.motion_blur.shutter_phase_deg / 360;
+  const tStart = Math.max(0, timeS + phaseFrac * frameDur);
+  const tEnd = Math.max(tStart, Math.min(cfg.duration_s, tStart + shutterFrac * frameDur));
+  const nSamples = cfg.motion_blur.samples;
+  if (!cfg.motion_blur.enabled || cfg.motion_blur.shutter_angle_deg <= 0 || tEnd <= tStart) {
+    return {
+      time_s: Number(timeS.toFixed(4)),
+      shutter_start_s: Number(timeS.toFixed(4)),
+      shutter_end_s: Number(timeS.toFixed(4)),
+      blur_streak_px: 0,
+      blur_rotation_deg: 0,
+      blur_scale_pct: 0,
+      sample_count: nSamples
+    };
+  }
+  const xs = [];
+  const ys = [];
+  const scales = [];
+  const rots = [];
+  for (let i = 0; i < nSamples; i += 1) {
+    const frac = i / Math.max(1, nSamples - 1);
+    const ts = tStart + frac * (tEnd - tStart);
+    xs.push(evaluateSplineAtTClient(cfg.channels.position_x_px.keyframes, ts).value);
+    ys.push(evaluateSplineAtTClient(cfg.channels.position_y_px.keyframes, ts).value);
+    scales.push(evaluateSplineAtTClient(cfg.channels.scale_pct.keyframes, ts).value);
+    rots.push(evaluateSplineAtTClient(cfg.channels.rotation_deg.keyframes, ts).value);
+  }
+  const dx = Math.max(...xs) - Math.min(...xs);
+  const dy = Math.max(...ys) - Math.min(...ys);
+  const dScale = Math.max(...scales) - Math.min(...scales);
+  const dRot = Math.max(...rots) - Math.min(...rots);
+  const refRadiusPx = 0.35 * Math.min(cfg.width, cfg.height);
+  const transStreak = Math.hypot(dx, dy);
+  const rotStreak = refRadiusPx * ((dRot * Math.PI) / 180);
+  const scaleStreak = refRadiusPx * (dScale / 100);
+  return {
+    time_s: Number(timeS.toFixed(4)),
+    shutter_start_s: Number(tStart.toFixed(4)),
+    shutter_end_s: Number(tEnd.toFixed(4)),
+    blur_streak_px: Number((transStreak + rotStreak + scaleStreak).toFixed(3)),
+    blur_rotation_deg: Number(dRot.toFixed(3)),
+    blur_scale_pct: Number(dScale.toFixed(3)),
+    sample_count: nSamples
+  };
+}
+
+export function evaluateMotionSplineStudioClient(rawConfig, activeTimeS = 0) {
+  const cfg = normalizeMotionSplineConfigClient(rawConfig);
+  const nPts = cfg.sample_count;
+  const times = [];
+  for (let i = 0; i < nPts; i += 1) {
+    times.push(Number(((i / Math.max(1, nPts - 1)) * cfg.duration_s).toFixed(4)));
+  }
+  const curves = {};
+  let peakVel = 0;
+  for (const chId of ALLOWED_MOTION_SPLINE_CHANNELS) {
+    const spec = MS_SPEC_BY_ID[chId];
+    const track = cfg.channels[chId];
+    const pts = times.map((t) => evaluateSplineAtTClient(track.keyframes, t));
+    const vals = pts.map((p) => p.value);
+    const chPeak = pts.reduce((acc, p) => Math.max(acc, p.speed_abs_unit_s), 0);
+    if (track.enabled && chPeak > peakVel) peakVel = chPeak;
+    curves[chId] = {
+      channel: chId,
+      label: spec.label,
+      unit: spec.unit,
+      color_hex: spec.color_hex,
+      min_value: Number(Math.min(...vals).toFixed(4)),
+      max_value: Number(Math.max(...vals).toFixed(4)),
+      peak_velocity_unit_s: Number(chPeak.toFixed(4)),
+      samples: pts
+    };
+  }
+  const blurEnvelope = times.map((t) => evaluateMotionBlurAtTClient(cfg, t));
+  const peakBlurPx = blurEnvelope.reduce((acc, b) => Math.max(acc, b.blur_streak_px), 0);
+  const tAct = msClamp(Number(activeTimeS || 0), 0, cfg.duration_s);
+  const activeValues = {};
+  const activeVelocities = {};
+  for (const chId of ALLOWED_MOTION_SPLINE_CHANNELS) {
+    const ev = evaluateSplineAtTClient(cfg.channels[chId].keyframes, tAct);
+    activeValues[chId] = ev.value;
+    activeVelocities[chId] = ev.velocity_unit_s;
+  }
+  return {
+    config: cfg,
+    active_time_s: Number(tAct.toFixed(4)),
+    active_values: activeValues,
+    active_velocities: activeVelocities,
+    active_blur: evaluateMotionBlurAtTClient(cfg, tAct),
+    peak_velocity_unit_s: Number(peakVel.toFixed(4)),
+    peak_blur_streak_px: Number(peakBlurPx.toFixed(3)),
+    curves,
+    blur_envelope: blurEnvelope
+  };
+}
+
+function buildPiecewiseFfmpegExprClient(keyframes, defaultVal, scaleFactor = 1) {
+  const ordered = [...(keyframes || [])].sort((a, b) => a.time_s - b.time_s);
+  if (ordered.length === 0) return (defaultVal * scaleFactor).toFixed(4);
+  if (ordered.length === 1) return (ordered[0].value * scaleFactor).toFixed(4);
+  const terms = [`lt(t,${ordered[0].time_s.toFixed(3)})*${(ordered[0].value * scaleFactor).toFixed(4)}`];
+  for (let i = 0; i < ordered.length - 1; i += 1) {
+    const k0 = ordered[i];
+    const k1 = ordered[i + 1];
+    const v0 = k0.value * scaleFactor;
+    const v1 = k1.value * scaleFactor;
+    const dv = v1 - v0;
+    const dt = Math.max(1e-4, k1.time_s - k0.time_s);
+    const uExpr = `((t-${k0.time_s.toFixed(3)})/${dt.toFixed(4)})`;
+    let segVal = `${v0.toFixed(4)}`;
+    if (k0.mode === "linear" && k1.mode === "linear") {
+      segVal = `(${v0.toFixed(4)}+(${dv.toFixed(4)})*${uExpr})`;
+    } else if (k0.mode === "overshoot" || k1.mode === "overshoot") {
+      segVal = `(${v0.toFixed(4)}+(${dv.toFixed(4)})*(3*pow(${uExpr},2)-2*pow(${uExpr},3)+0.22*sin(PI*${uExpr})))`;
+    } else if (k0.mode !== "hold") {
+      const [p1x, p1y, p2x, p2y] = resolveSegmentBezierPointsClient(k0, k1);
+      segVal = `(${v0.toFixed(4)}+(${dv.toFixed(4)})*(3*pow(1-${uExpr},2)*${uExpr}*${p1y.toFixed(3)}+3*(1-${uExpr})*pow(${uExpr},2)*${p2y.toFixed(3)}+pow(${uExpr},3)+0.08*(${(0.5 - (p1x + p2x) * 0.5).toFixed(3)})*sin(PI*${uExpr})))`;
+    }
+    terms.push(`between(t,${k0.time_s.toFixed(3)},${k1.time_s.toFixed(3)})*${segVal}`);
+  }
+  const last = ordered[ordered.length - 1];
+  terms.push(`gt(t,${last.time_s.toFixed(3)})*${(last.value * scaleFactor).toFixed(4)}`);
+  return terms.join("+");
+}
+
+export function compileMotionSplineFiltergraphClient(rawConfig) {
+  const cfg = normalizeMotionSplineConfigClient(rawConfig);
+  const evalRes = evaluateMotionSplineStudioClient(cfg);
+  const w = cfg.width;
+  const h = cfg.height;
+  const activeChannels = [];
+  for (const chId of ALLOWED_MOTION_SPLINE_CHANNELS) {
+    const spec = MS_SPEC_BY_ID[chId];
+    const track = cfg.channels[chId];
+    if (!track.enabled || !track.keyframes.length) continue;
+    const first = track.keyframes[0].value;
+    const anim = track.keyframes.some((k) => Math.abs(k.value - first) > 1e-4) || Math.abs(first - spec.default_value) > 1e-4;
+    if (anim) activeChannels.push(chId);
+  }
+  const scaleExpr = buildPiecewiseFfmpegExprClient(cfg.channels.scale_pct.keyframes, 100, 0.01);
+  const pxExpr = buildPiecewiseFfmpegExprClient(cfg.channels.position_x_px.keyframes, 0, 1);
+  const pyExpr = buildPiecewiseFfmpegExprClient(cfg.channels.position_y_px.keyframes, 0, 1);
+  const rotExpr = buildPiecewiseFfmpegExprClient(cfg.channels.rotation_deg.keyframes, 0, 1);
+  const opExpr = buildPiecewiseFfmpegExprClient(cfg.channels.opacity_pct.keyframes, 100, 0.01);
+  const filters = [];
+  const shutterFrac = cfg.motion_blur.enabled ? Number((cfg.motion_blur.shutter_angle_deg / 360).toFixed(4)) : 0;
+  let tmixFrames = 1;
+  let weightsStr = "1";
+  if (cfg.motion_blur.enabled && cfg.motion_blur.shutter_angle_deg > 0) {
+    const subMult = Math.max(2, Math.min(8, Math.round(cfg.motion_blur.samples / 2)));
+    const subFps = Number((cfg.fps * subMult).toFixed(2));
+    tmixFrames = Math.max(2, Math.min(16, Math.round(cfg.motion_blur.samples * shutterFrac)));
+    const center = (tmixFrames - 1) * (0.5 + msClamp(cfg.motion_blur.shutter_phase_deg / 360, -0.5, 0.5));
+    const weights = [];
+    for (let i = 0; i < tmixFrames; i += 1) {
+      const wt = Math.exp(-0.5 * ((i - center) / Math.max(0.85, tmixFrames * 0.35)) ** 2);
+      weights.push(wt.toFixed(3));
+    }
+    weightsStr = weights.join(" ");
+    filters.push(`minterpolate=fps=${subFps}:mi_mode=blend`);
+  }
+  filters.push(`zoompan=z='max(0.1,${scaleExpr})':x='iw/2-(iw/zoom/2)+(${pxExpr})':y='ih/2-(ih/zoom/2)+(${pyExpr})':d=1:s=${w}x${h}:fps=${cfg.fps.toFixed(3)}`);
+  if (activeChannels.includes("rotation_deg")) {
+    filters.push(`rotate=a='(${rotExpr})*PI/180':ow=${w}:oh=${h}:fillcolor=black@0`);
+  }
+  filters.push(`crop=w=${w}:h=${h}:x='max(0,(iw-ow)/2)':y='max(0,(ih-oh)/2)'`);
+  if (activeChannels.includes("opacity_pct")) {
+    filters.push(`format=rgba,colorchannelmixer=aa='min(1,max(0,${opExpr}))'`);
+  }
+  if (cfg.motion_blur.enabled && cfg.motion_blur.shutter_angle_deg > 0) {
+    filters.push(`tmix=frames=${tmixFrames}:weights='${weightsStr}'`);
+    filters.push(`fps=${cfg.fps.toFixed(3)}`);
+  }
+  const vfChain = filters.join(",");
+  const filterComplex = `[0:v]${vfChain}[v_spline]`;
+  return {
+    config: cfg,
+    vf_chain: vfChain,
+    filter_complex: filterComplex,
+    ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "${filterComplex}" -map "[v_spline]" -map 0:a? -c:v libx264 -pix_fmt yuv420p output_motion_spline.mp4`,
+    shutter_fraction: shutterFrac,
+    tmix_frames: tmixFrames,
+    tmix_weights: weightsStr,
+    active_channels: activeChannels,
+    peak_velocity_unit_s: evalRes.peak_velocity_unit_s,
+    peak_blur_streak_px: evalRes.peak_blur_streak_px,
+    summary: `${activeChannels.length} active channels | Shutter ${cfg.motion_blur.shutter_angle_deg.toFixed(0)} deg (${tmixFrames}f tmix) | Peak Vel ${evalRes.peak_velocity_unit_s.toFixed(1)} u/s | Blur ${evalRes.peak_blur_streak_px.toFixed(1)} px`
+  };
+}
+
+export function exportMotionSplineJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizeMotionSplineConfigClient(rawConfig);
+  const evalRes = evaluateMotionSplineStudioClient(cfg);
+  const compiled = compileMotionSplineFiltergraphClient(cfg);
+  const cleanTitle = String(opts.title || "TAKTCUT_SPLINE").trim().replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "TAKTCUT_SPLINE";
+  const filename = opts.filename || `${cleanTitle.toLowerCase()}_motion_spline.json`;
+  const channelsPayload = {};
+  let totalKfs = 0;
+  for (const chId of ALLOWED_MOTION_SPLINE_CHANNELS) {
+    const track = cfg.channels[chId];
+    totalKfs += track.keyframes.length;
+    channelsPayload[chId] = {
+      enabled: track.enabled,
+      unit: MS_SPEC_BY_ID[chId].unit,
+      peak_velocity_unit_s: evalRes.curves[chId].peak_velocity_unit_s,
+      keyframes: track.keyframes.map((kf, idx) => {
+        const dtPrev = idx > 0 ? Math.max(1e-4, kf.time_s - track.keyframes[idx - 1].time_s) : 0;
+        const dtNext = idx + 1 < track.keyframes.length ? Math.max(1e-4, track.keyframes[idx + 1].time_s - kf.time_s) : 0;
+        return {
+          time_s: kf.time_s,
+          frame: Math.round(kf.time_s * cfg.fps),
+          value: kf.value,
+          mode: kf.mode,
+          bezier: {
+            in_handle_x: kf.in_handle_x,
+            in_handle_y: kf.in_handle_y,
+            out_handle_x: kf.out_handle_x,
+            out_handle_y: kf.out_handle_y
+          },
+          after_effects_temporal_ease: {
+            in_influence_pct: Number(((1 - kf.in_handle_x) * 100).toFixed(2)),
+            out_influence_pct: Number((kf.out_handle_x * 100).toFixed(2))
+          },
+          fusion_spline_handles: {
+            LH: [-Number((dtPrev * (1 - kf.in_handle_x)).toFixed(4)), 0],
+            RH: [Number((dtNext * kf.out_handle_x).toFixed(4)), 0]
+          }
+        };
+      })
+    };
+  }
+  const docPayload = {
+    schema: "taktcut.motion_spline.v1",
+    title: cleanTitle,
+    compatible_hosts: ["After Effects CC", "DaVinci Resolve Fusion"],
+    preset_id: cfg.preset_id,
+    composition: {
+      width: cfg.width,
+      height: cfg.height,
+      fps: cfg.fps,
+      duration_s: cfg.duration_s
+    },
+    motion_blur: cfg.motion_blur,
+    peak_metrics: {
+      peak_velocity_unit_s: evalRes.peak_velocity_unit_s,
+      peak_blur_streak_px: evalRes.peak_blur_streak_px
+    },
+    channels: channelsPayload,
+    ffmpeg_vf: compiled.vf_chain
+  };
+  return {
+    schema_version: "taktcut.motion_spline.v1",
+    filename,
+    title: cleanTitle,
+    json_text: JSON.stringify(docPayload, null, 2),
+    keyframe_count: totalKfs,
+    peak_velocity_unit_s: evalRes.peak_velocity_unit_s,
+    peak_blur_streak_px: evalRes.peak_blur_streak_px,
+    saved_path: null
+  };
+}
+
+export function applyMotionSplineToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const cfg = normalizeMotionSplineConfigClient(rawConfig);
+  const compiled = compileMotionSplineFiltergraphClient(cfg);
+  const trackIndex = Number(opts.track_index || 1);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === "video" && t.index === trackIndex)
+    || (nextDoc.tracks || []).find((t) => t.kind === "video");
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error(`Video track V${trackIndex} has no clips`);
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, Number(opts.clip_index || 0)));
+  const serializedChannels = {};
+  for (const chId of ALLOWED_MOTION_SPLINE_CHANNELS) {
+    serializedChannels[chId] = cfg.channels[chId].keyframes.map((k) => ({ ...k }));
+  }
+  trk.clips[safeIdx] = {
+    ...trk.clips[safeIdx],
+    motion_spline: {
+      enabled: true,
+      preset_id: cfg.preset_id,
+      shutter_angle_deg: cfg.motion_blur.shutter_angle_deg,
+      shutter_phase_deg: cfg.motion_blur.shutter_phase_deg,
+      samples: cfg.motion_blur.samples,
+      fps: cfg.fps,
+      duration_s: cfg.duration_s,
+      peak_velocity_unit_s: compiled.peak_velocity_unit_s,
+      peak_blur_streak_px: compiled.peak_blur_streak_px,
+      ffmpeg_vf: compiled.vf_chain,
+      channels: serializedChannels
+    }
+  };
+  return nextDoc;
+}

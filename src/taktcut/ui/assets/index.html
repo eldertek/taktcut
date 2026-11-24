@@ -1504,6 +1504,16 @@
                   </svg>
                   <span data-i18n="timeline.tool.autoReframe">Auto Reframe</span>
                 </button>
+                <button type="button" id="btn-timeline-motion-spline-studio" class="btn btn-mini tl-ms-studio-btn ms-studio-btn" title="Open Keyframe Spline, Speed Graph &amp; Optical Motion Blur Studio (Shift+E)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M2 12 C5 12, 6 3, 14 3" stroke="#38bdf8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                    <circle cx="2" cy="12" r="1.4" fill="#f59e0b"/>
+                    <circle cx="14" cy="3" r="1.4" fill="#f59e0b"/>
+                    <line x1="2" y1="12" x2="6" y2="12" stroke="#94a3b8" stroke-width="1"/>
+                  </svg>
+                  <span data-i18n="msStudio.btn.toolbar">Spline &amp; Blur</span>
+                  <span class="kbd-chip mono">Shift+E</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1709,6 +1719,10 @@
                   <input type="range" id="fx-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="FX split wipe position">
                   <span id="fx-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
                 </div>
+                <button type="button" id="btn-fx-motion-spline-studio" class="btn btn-secondary ms-studio-btn" title="Open Keyframe Spline, Speed Graph &amp; Optical Motion Blur Studio (Shift+E)">
+                  <span data-i18n="msStudio.btn.fx">Spline Graph</span>
+                  <span class="kbd-chip mono">Shift+E</span>
+                </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
                   <span class="kbd-chip mono">Shift+S</span>
@@ -4954,6 +4968,137 @@
           </div>
           <pre id="mc-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="mc-edl-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="ms-studio-dialog" class="nle-dialog ms-studio-dialog" aria-labelledby="ms-studio-title" aria-describedby="ms-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="ms-studio-title" data-i18n="msStudio.dialog.title">Keyframe Spline, Speed Graph &amp; Optical Motion Blur Studio</h2>
+        <p id="ms-studio-subtitle" class="nle-dialog-subtitle" data-i18n="msStudio.dialog.subtitle">After Effects / Fusion Cubic Bezier Value &amp; Speed Graph (dx/dt), Shutter Angle Motion Blur &amp; FFmpeg Compiler</p>
+      </div>
+      <div class="ms-header-actions">
+        <span id="ms-active-preset-badge" class="nle-tag mono">WHIP ZOOM PUNCH</span>
+        <span id="ms-peak-badge" class="nle-tag mono ms-peak-pill">PEAK 0 u/s | 0.0px</span>
+        <button type="button" id="btn-close-ms-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body ms-dialog-body">
+      <div class="ms-preset-strip" id="ms-preset-strip" role="group" aria-label="Motion Spline presets">
+        <span class="pill-label" data-i18n="msStudio.presetsLabel">SPLINE PRESETS</span>
+        <button type="button" class="btn btn-chip ms-preset-btn is-active" data-ms-preset="whip_zoom_punch" aria-pressed="true" data-i18n="msStudio.preset.whip_zoom_punch">Whip Zoom Punch</button>
+        <button type="button" class="btn btn-chip ms-preset-btn" data-ms-preset="smooth_dolly_push" aria-pressed="false" data-i18n="msStudio.preset.smooth_dolly_push">Smooth Dolly Push</button>
+        <button type="button" class="btn btn-chip ms-preset-btn" data-ms-preset="hero_title_overshoot" aria-pressed="false" data-i18n="msStudio.preset.hero_title_overshoot">Hero Overshoot</button>
+        <button type="button" class="btn btn-chip ms-preset-btn" data-ms-preset="cinematic_pan_hold" aria-pressed="false" data-i18n="msStudio.preset.cinematic_pan_hold">Cinematic Pan &amp; Hold</button>
+        <button type="button" class="btn btn-chip ms-preset-btn" data-ms-preset="custom" aria-pressed="false" data-i18n="msStudio.preset.custom">Custom</button>
+      </div>
+
+      <div class="ms-toolbar-bar">
+        <div class="ms-channel-tabs" id="ms-channel-tabs" role="tablist" aria-label="Transform animation channels">
+          <button type="button" role="tab" class="btn btn-mini ms-ch-tab is-active" data-ms-channel="scale_pct" aria-selected="true" data-i18n="msStudio.ch.scale_pct">Scale (%)</button>
+          <button type="button" role="tab" class="btn btn-mini ms-ch-tab" data-ms-channel="position_x_px" aria-selected="false" data-i18n="msStudio.ch.position_x_px">Pos X (px)</button>
+          <button type="button" role="tab" class="btn btn-mini ms-ch-tab" data-ms-channel="position_y_px" aria-selected="false" data-i18n="msStudio.ch.position_y_px">Pos Y (px)</button>
+          <button type="button" role="tab" class="btn btn-mini ms-ch-tab" data-ms-channel="rotation_deg" aria-selected="false" data-i18n="msStudio.ch.rotation_deg">Rotation (deg)</button>
+          <button type="button" role="tab" class="btn btn-mini ms-ch-tab" data-ms-channel="opacity_pct" aria-selected="false" data-i18n="msStudio.ch.opacity_pct">Opacity (%)</button>
+        </div>
+
+        <div class="ms-graph-mode-group" id="ms-graph-mode-group" role="group" aria-label="Graph view mode">
+          <span class="pill-label" data-i18n="msStudio.graphModeLabel">GRAPH</span>
+          <button type="button" id="btn-ms-mode-value" class="btn btn-mini ms-mode-btn is-active" data-ms-graph-mode="value" aria-pressed="true" data-i18n="msStudio.mode.value">Value Graph</button>
+          <button type="button" id="btn-ms-mode-speed" class="btn btn-mini ms-mode-btn" data-ms-graph-mode="speed" aria-pressed="false" data-i18n="msStudio.mode.speed">Speed Graph (dx/dt)</button>
+        </div>
+
+        <div class="ms-ease-group" role="group" aria-label="Keyframe easing presets">
+          <button type="button" class="btn btn-mini ms-ease-btn" data-ms-ease="linear" data-i18n="msStudio.ease.linear">Linear</button>
+          <button type="button" class="btn btn-mini ms-ease-btn" data-ms-ease="easy_ease" data-i18n="msStudio.ease.easy_ease">Easy Ease</button>
+          <button type="button" class="btn btn-mini ms-ease-btn" data-ms-ease="overshoot" data-i18n="msStudio.ease.overshoot">Overshoot</button>
+          <button type="button" class="btn btn-mini ms-ease-btn" data-ms-ease="hold" data-i18n="msStudio.ease.hold">Hold</button>
+          <button type="button" id="btn-ms-add-kf" class="btn btn-mini btn-secondary" data-i18n="msStudio.btn.addKf">+ Keyframe</button>
+          <button type="button" id="btn-ms-del-kf" class="btn btn-mini" data-i18n="msStudio.btn.delKf">Delete Key</button>
+        </div>
+      </div>
+
+      <div class="ms-workstation-grid">
+        <div class="ms-graph-card">
+          <div class="pane-subheader">
+            <span data-i18n="msStudio.graphTitle">Interactive Bezier Spline &amp; Velocity Editor (Drag Handles or Scrub Playhead)</span>
+            <span id="ms-active-channel-readout" class="nle-tag mono">SCALE: 100.0% | 0.0%/s</span>
+          </div>
+          <div class="viewer-well">
+            <canvas id="ms-graph-canvas" class="studio-canvas ms-graph-canvas" aria-label="After Effects / Fusion Value and Speed Spline Graph"></canvas>
+          </div>
+        </div>
+
+        <div class="ms-preview-card">
+          <div class="pane-subheader">
+            <span data-i18n="msStudio.previewTitle">Motion Blur Viewport (Shutter Angle Sub-Frame Simulation)</span>
+            <span id="ms-playhead-tc" class="nle-tag mono">00:00:00:00</span>
+          </div>
+          <div class="viewer-well">
+            <canvas id="ms-preview-canvas" class="studio-canvas ms-preview-canvas" aria-label="Optical Motion Blur Viewport Preview"></canvas>
+          </div>
+          <div class="ms-transport-bar">
+            <button type="button" id="btn-ms-step-back" class="btn btn-mini mono" title="Step -1 frame">-1f</button>
+            <button type="button" id="btn-ms-play" class="btn btn-mini btn-primary" aria-pressed="false" data-i18n="msStudio.btn.play">Play / Pause</button>
+            <button type="button" id="btn-ms-step-fwd" class="btn btn-mini mono" title="Step +1 frame">+1f</button>
+            <input type="range" id="ms-playhead-slider" class="scrub-slider ms-playhead-slider" min="0" max="4" step="0.02" value="0.45" aria-label="Motion Spline Studio playhead">
+          </div>
+
+          <div class="ms-shutter-panel">
+            <label class="inline-check ms-blur-toggle" for="ms-blur-enabled">
+              <input type="checkbox" id="ms-blur-enabled" checked>
+              <span data-i18n="msStudio.blurEnabled">Optical Motion Blur</span>
+            </label>
+            <div class="ms-shutter-grid">
+              <div class="ms-ctrl-field">
+                <label for="ms-shutter-angle-num" data-i18n="msStudio.shutterAngle">Shutter Angle (deg)</label>
+                <div class="ms-range-pair">
+                  <input type="range" id="ms-shutter-angle" min="0" max="360" step="5" value="220" aria-label="Shutter angle slider">
+                  <input type="number" id="ms-shutter-angle-num" class="input-control input-num mono" min="0" max="360" step="5" value="220">
+                </div>
+              </div>
+              <div class="ms-ctrl-field">
+                <label for="ms-shutter-phase-num" data-i18n="msStudio.shutterPhase">Shutter Phase (deg)</label>
+                <input type="number" id="ms-shutter-phase-num" class="input-control input-num mono" min="-360" max="360" step="10" value="-110">
+              </div>
+              <div class="ms-ctrl-field">
+                <label for="ms-blur-samples" data-i18n="msStudio.blurSamples">Samples</label>
+                <input type="number" id="ms-blur-samples" class="input-control input-num mono" min="4" max="32" step="2" value="16">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ms-keyframes-card">
+        <div class="pane-subheader">
+          <span data-i18n="msStudio.keyframesTitle">Channel Keyframes &amp; Bezier Handles</span>
+          <span id="ms-kf-count-badge" class="nle-tag mono">4 keys</span>
+        </div>
+        <div id="ms-keyframe-list" class="ms-keyframe-list" aria-live="polite"></div>
+      </div>
+
+      <div id="ms-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="msStudio.status.idle">Drag Bezier tangent handles or scrub the playhead to inspect optical shutter motion blur.</div>
+
+      <div class="btn-row ms-actions">
+        <button type="button" id="btn-ms-apply-timeline" class="btn btn-primary" data-i18n="msStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-ms-send-deliver" class="btn btn-secondary" data-i18n="msStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-ms-export-json" class="btn btn-secondary" data-i18n="msStudio.btn.exportJson">Export AE/Fusion JSON</button>
+        <button type="button" id="btn-ms-download-json" class="btn btn-secondary" data-i18n="msStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-ms-copy-fg" class="btn btn-mini" data-i18n="msStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="ms-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="msStudio.drawerTitle">FFmpeg Expression (zoompan/rotate/minterpolate/tmix) &amp; AE/Fusion JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="ms-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="ms-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

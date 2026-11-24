@@ -191,6 +191,19 @@ from taktcut.models import (
     TimelineDocument,
     list_dve_layout_presets,
 )
+from taktcut.motion_spline_studio import (
+    ALLOWED_MOTION_SPLINE_CHANNELS,
+    ALLOWED_MOTION_SPLINE_HANDLE_MODES,
+    ALLOWED_MOTION_SPLINE_PRESET_IDS,
+    MOTION_SPLINE_CHANNEL_SPECS,
+    MotionSplineStudioConfig,
+    apply_motion_spline_to_document,
+    compile_motion_spline_filtergraph,
+    evaluate_motion_spline_studio,
+    export_motion_spline_json,
+    list_motion_spline_presets,
+    normalize_motion_spline_config,
+)
 from taktcut.multicam import (
     ALLOWED_MULTICAM_COMPILE_MODES,
     ALLOWED_MULTICAM_OPS,
@@ -1852,6 +1865,20 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "planar_tracker_presets": [
                         p.model_dump(mode="json") for p in list_planar_tracker_presets()
                     ],
+                },
+            )
+            return
+
+        if route == "/api/fx/motion-spline/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_motion_spline_presets()],
+                    "preset_ids": list(ALLOWED_MOTION_SPLINE_PRESET_IDS),
+                    "channels": [s.model_dump(mode="json") for s in MOTION_SPLINE_CHANNEL_SPECS],
+                    "channel_ids": list(ALLOWED_MOTION_SPLINE_CHANNELS),
+                    "handle_modes": list(ALLOWED_MOTION_SPLINE_HANDLE_MODES),
+                    "default_config": MotionSplineStudioConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -4707,6 +4734,91 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 pix_fmt=pix_fmt,
             )
             self._send_json(HTTPStatus.OK, compiled_trans.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/motion-spline/evaluate":
+            ms_cfg = normalize_motion_spline_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_t = payload.get("time_s")
+            active_t = float(raw_t) if raw_t is not None else None
+            ms_eval = evaluate_motion_spline_studio(ms_cfg, active_time_s=active_t)
+            self._send_json(HTTPStatus.OK, ms_eval.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/motion-spline/compile":
+            ms_cfg = normalize_motion_spline_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            ms_compiled = compile_motion_spline_filtergraph(ms_cfg)
+            self._send_json(HTTPStatus.OK, ms_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/motion-spline/export-json":
+            ms_cfg = normalize_motion_spline_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            ms_title = str(payload.get("title", "TAKTCUT_SPLINE")).strip() or "TAKTCUT_SPLINE"
+            ms_exported = export_motion_spline_json(ms_cfg, title=ms_title)
+            raw_ms_out = payload.get("out_path")
+            ms_saved_rel: str | None = None
+            if raw_ms_out is not None and str(raw_ms_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_ms_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(ms_exported.json_text, encoding="utf-8")
+                ms_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                ms_exported.model_copy(update={"saved_path": ms_saved_rel}).model_dump(mode="json"),
+            )
+            return
+
+        if route == "/api/fx/motion-spline/download":
+            ms_cfg = normalize_motion_spline_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            ms_title = str(payload.get("title", "TAKTCUT_SPLINE")).strip() or "TAKTCUT_SPLINE"
+            ms_exported_dl = export_motion_spline_json(ms_cfg, title=ms_title)
+            ms_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or ms_exported_dl.filename),
+                "taktcut_motion_spline",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                ms_exported_dl.json_text.encode("utf-8"),
+                extra_headers={"Content-Disposition": f'attachment; filename="{ms_dl_filename}"'},
+            )
+            return
+
+        if route == "/api/fx/motion-spline/apply":
+            ms_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            ms_cfg = normalize_motion_spline_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_doc = apply_motion_spline_to_document(
+                ms_doc,
+                ms_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            ms_compiled_apply = compile_motion_spline_filtergraph(ms_cfg)
+            val = validate_timeline(updated_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_doc.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                    "compiled": ms_compiled_apply.model_dump(mode="json"),
+                },
+            )
             return
 
         if route == "/api/fx/chroma-key/compile":

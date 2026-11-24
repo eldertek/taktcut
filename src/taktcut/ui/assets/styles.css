@@ -10441,3 +10441,281 @@ dialog.nle-dialog.mc-studio-dialog {
     min-width: 44px;
   }
 }
+
+/* ============================================================================
+   AFTER EFFECTS / FUSION KEYFRAME SPLINE & MOTION BLUR STUDIO (CYCLE #107)
+   ============================================================================ */
+
+dialog.nle-dialog.ms-studio-dialog {
+  width: min(1180px, calc(100vw - 24px));
+  max-width: min(1180px, calc(100vw - 24px));
+  max-height: min(92vh, 880px);
+}
+
+.ms-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.ms-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.ms-dialog-body .code-box,
+.ms-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.ms-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ms-peak-pill {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: #38bdf8;
+  color: #bae6fd;
+  font-weight: 700;
+}
+
+.ms-preset-strip,
+.ms-toolbar-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.ms-toolbar-bar {
+  padding: 7px 9px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+}
+
+.ms-channel-tabs,
+.ms-graph-mode-group,
+.ms-ease-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ms-preset-btn.is-active,
+.ms-mode-btn.is-active {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+
+.ms-ch-tab.is-active {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+
+.ms-workstation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.85fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.ms-graph-card,
+.ms-preview-card,
+.ms-keyframes-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.ms-graph-canvas {
+  display: block;
+  width: 100%;
+  height: 290px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.ms-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 210px;
+}
+
+.ms-transport-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ms-playhead-slider {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: #f59e0b;
+}
+
+.ms-shutter-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  background: #0d1017;
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.ms-shutter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.ms-ctrl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ms-ctrl-field label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ms-range-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ms-range-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 48px;
+  accent-color: #38bdf8;
+}
+
+.ms-range-pair .input-num {
+  width: 68px;
+}
+
+.ms-keyframe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ms-kf-row {
+  display: grid;
+  grid-template-columns: 32px repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  align-items: end;
+  padding: 6px 8px;
+  background: #0e1118;
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.ms-kf-row.is-selected {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.ms-kf-idx-btn {
+  font-weight: 800;
+}
+
+.ms-kf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ms-kf-field label {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.ms-kf-field .input-control {
+  width: 100%;
+  min-width: 0;
+}
+
+.ms-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#ms-studio-dialog .btn:focus-visible,
+#ms-studio-dialog .input-control:focus-visible,
+#ms-studio-dialog input[type="range"]:focus-visible,
+.ms-studio-btn:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 1px;
+}
+
+@media (max-width: 960px) {
+  .ms-workstation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ms-kf-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  dialog.nle-dialog.ms-studio-dialog {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: min(94vh, 780px);
+  }
+  .ms-shutter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ms-kf-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ms-studio-btn,
+  .ms-preset-btn,
+  .ms-ch-tab,
+  .ms-mode-btn,
+  .ms-ease-btn,
+  .ms-actions .btn,
+  .ms-transport-bar .btn,
+  .ms-kf-idx-btn,
+  #btn-ms-add-kf,
+  #btn-ms-del-kf,
+  #btn-close-ms-studio,
+  #ms-studio-dialog .input-control {
+    min-height: 45px;
+  }
+}
