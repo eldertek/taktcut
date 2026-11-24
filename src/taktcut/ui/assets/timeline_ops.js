@@ -20187,3 +20187,773 @@ export function applyPowerWindowToDocumentClient(doc, rawConfig, opts = {}) {
   };
   return nextDoc;
 }
+
+// ============================================================================
+// RETIME STUDIO (SPEED-RAMP CURVE, FREEZE-FRAME & PITCH-LOCK) CLIENT PARITY
+// ============================================================================
+
+export const RETIME_STUDIO_SPEED_PCT_MIN = 10.0;
+export const RETIME_STUDIO_SPEED_PCT_MAX = 1200.0;
+export const RETIME_STUDIO_MAX_POINTS = 16;
+
+export const ALLOWED_RETIME_STUDIO_PRESET_IDS = [
+  "hero_slowmo_drop",
+  "action_speed_whip",
+  "hyperlapse_400",
+  "freeze_frame_punch",
+  "reverse_boomerang",
+  "custom"
+];
+
+export const ALLOWED_RETIME_STUDIO_EASINGS = [
+  "linear",
+  "bezier_smooth",
+  "step_hold"
+];
+
+export const ALLOWED_RETIME_STUDIO_DIRECTIONS = [
+  "forward",
+  "reverse"
+];
+
+export const ALLOWED_RETIME_STUDIO_INTERPOLATIONS = [
+  "nearest",
+  "frame_blend",
+  "optical_flow_minterpolate"
+];
+
+function rtStudioClamp(val, lo, hi, fallback) {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(hi, Math.max(lo, num));
+}
+
+function rtStudioSmoothstep01(t) {
+  const u = Math.min(1, Math.max(0, Number(t) || 0));
+  return u * u * (3 - 2 * u);
+}
+
+function rtStudioDefaultPoints() {
+  return [
+    { t_src_norm: 0.0, speed_pct: 100.0, easing: "bezier_smooth" },
+    { t_src_norm: 0.25, speed_pct: 25.0, easing: "bezier_smooth" },
+    { t_src_norm: 0.72, speed_pct: 25.0, easing: "bezier_smooth" },
+    { t_src_norm: 1.0, speed_pct: 100.0, easing: "bezier_smooth" }
+  ];
+}
+
+export const RETIME_STUDIO_PRESETS_CLIENT = [
+  {
+    preset_id: "hero_slowmo_drop",
+    label: "Hero Slow-Mo Drop (100% -> 25% -> 100%)",
+    category: "Slow Motion",
+    description: "Optical-flow deceleration into a 25% hero action beat with pitch-locked audio.",
+    default_config: {
+      enabled: true,
+      preset_id: "hero_slowmo_drop",
+      direction: "forward",
+      boomerang: false,
+      interpolation: "optical_flow_minterpolate",
+      pitch_preserve: true,
+      motion_blur_amount: 0.35,
+      freeze_enabled: false,
+      freeze_at_norm: 0.5,
+      freeze_duration_s: 1.0,
+      ripple_timeline: true,
+      source_duration_s: 8.0,
+      fps: 25.0,
+      playhead_norm: 0.48,
+      control_points: rtStudioDefaultPoints()
+    }
+  },
+  {
+    preset_id: "action_speed_whip",
+    label: "Action Speed Whip (100% -> 650% -> 40%)",
+    category: "Speed Whip",
+    description: "Aggressive 650% whip acceleration slamming into a 40% optical-flow impact.",
+    default_config: {
+      enabled: true,
+      preset_id: "action_speed_whip",
+      direction: "forward",
+      boomerang: false,
+      interpolation: "optical_flow_minterpolate",
+      pitch_preserve: true,
+      motion_blur_amount: 0.65,
+      freeze_enabled: false,
+      freeze_at_norm: 0.6,
+      freeze_duration_s: 0.8,
+      ripple_timeline: true,
+      source_duration_s: 8.0,
+      fps: 25.0,
+      playhead_norm: 0.35,
+      control_points: [
+        { t_src_norm: 0.0, speed_pct: 100.0, easing: "bezier_smooth" },
+        { t_src_norm: 0.32, speed_pct: 650.0, easing: "bezier_smooth" },
+        { t_src_norm: 0.62, speed_pct: 40.0, easing: "bezier_smooth" },
+        { t_src_norm: 1.0, speed_pct: 100.0, easing: "bezier_smooth" }
+      ]
+    }
+  },
+  {
+    preset_id: "hyperlapse_400",
+    label: "Hyperlapse 400% Motion Blur",
+    category: "Hyperlapse",
+    description: "Sustained 400% to 480% timelapse drive with shutter motion blur accumulation.",
+    default_config: {
+      enabled: true,
+      preset_id: "hyperlapse_400",
+      direction: "forward",
+      boomerang: false,
+      interpolation: "frame_blend",
+      pitch_preserve: true,
+      motion_blur_amount: 0.75,
+      freeze_enabled: false,
+      freeze_at_norm: 0.5,
+      freeze_duration_s: 0.5,
+      ripple_timeline: true,
+      source_duration_s: 8.0,
+      fps: 25.0,
+      playhead_norm: 0.5,
+      control_points: [
+        { t_src_norm: 0.0, speed_pct: 400.0, easing: "linear" },
+        { t_src_norm: 0.5, speed_pct: 480.0, easing: "bezier_smooth" },
+        { t_src_norm: 1.0, speed_pct: 400.0, easing: "linear" }
+      ]
+    }
+  },
+  {
+    preset_id: "freeze_frame_punch",
+    label: "Freeze-Frame Punch (Step Hold + 280%)",
+    category: "Freeze Frame",
+    description: "Fast 280% ramp into a 1.50s cloned freeze frame hold before snappy release.",
+    default_config: {
+      enabled: true,
+      preset_id: "freeze_frame_punch",
+      direction: "forward",
+      boomerang: false,
+      interpolation: "optical_flow_minterpolate",
+      pitch_preserve: true,
+      motion_blur_amount: 0.28,
+      freeze_enabled: true,
+      freeze_at_norm: 0.48,
+      freeze_duration_s: 1.5,
+      ripple_timeline: true,
+      source_duration_s: 8.0,
+      fps: 25.0,
+      playhead_norm: 0.48,
+      control_points: [
+        { t_src_norm: 0.0, speed_pct: 100.0, easing: "bezier_smooth" },
+        { t_src_norm: 0.45, speed_pct: 280.0, easing: "step_hold" },
+        { t_src_norm: 0.55, speed_pct: 100.0, easing: "bezier_smooth" },
+        { t_src_norm: 1.0, speed_pct: 100.0, easing: "linear" }
+      ]
+    }
+  },
+  {
+    preset_id: "reverse_boomerang",
+    label: "Reverse Boomerang Ping-Pong",
+    category: "Reverse",
+    description: "Forward + reversed optical-flow boomerang loop with mirrored speed ramp.",
+    default_config: {
+      enabled: true,
+      preset_id: "reverse_boomerang",
+      direction: "reverse",
+      boomerang: true,
+      interpolation: "optical_flow_minterpolate",
+      pitch_preserve: true,
+      motion_blur_amount: 0.40,
+      freeze_enabled: false,
+      freeze_at_norm: 0.5,
+      freeze_duration_s: 0.6,
+      ripple_timeline: true,
+      source_duration_s: 8.0,
+      fps: 25.0,
+      playhead_norm: 0.5,
+      control_points: [
+        { t_src_norm: 0.0, speed_pct: 100.0, easing: "bezier_smooth" },
+        { t_src_norm: 0.5, speed_pct: 220.0, easing: "bezier_smooth" },
+        { t_src_norm: 1.0, speed_pct: 100.0, easing: "bezier_smooth" }
+      ]
+    }
+  },
+  {
+    preset_id: "custom",
+    label: "Custom Speed-Ramp Curve",
+    category: "Custom",
+    description: "Clean 100% baseline curve ready for custom Resolve-style speed points.",
+    default_config: {
+      enabled: true,
+      preset_id: "custom",
+      direction: "forward",
+      boomerang: false,
+      interpolation: "optical_flow_minterpolate",
+      pitch_preserve: true,
+      motion_blur_amount: 0.0,
+      freeze_enabled: false,
+      freeze_at_norm: 0.5,
+      freeze_duration_s: 1.0,
+      ripple_timeline: true,
+      source_duration_s: 8.0,
+      fps: 25.0,
+      playhead_norm: 0.5,
+      control_points: [
+        { t_src_norm: 0.0, speed_pct: 100.0, easing: "bezier_smooth" },
+        { t_src_norm: 0.5, speed_pct: 100.0, easing: "bezier_smooth" },
+        { t_src_norm: 1.0, speed_pct: 100.0, easing: "bezier_smooth" }
+      ]
+    }
+  }
+];
+
+export function createDefaultRetimeStudioConfigClient(presetId = "hero_slowmo_drop") {
+  const found = RETIME_STUDIO_PRESETS_CLIENT.find((p) => p.preset_id === presetId)
+    || RETIME_STUDIO_PRESETS_CLIENT[0];
+  const base = found.default_config;
+  return {
+    ...base,
+    control_points: base.control_points.map((pt) => ({ ...pt }))
+  };
+}
+
+function normalizeRtControlPointsClient(rawPoints, fallbackPoints) {
+  const src = Array.isArray(rawPoints) && rawPoints.length ? rawPoints : fallbackPoints;
+  const parsed = src
+    .map((pt) => {
+      const easingRaw = String(pt?.easing || "bezier_smooth").trim().toLowerCase();
+      const easing = ALLOWED_RETIME_STUDIO_EASINGS.includes(easingRaw) ? easingRaw : "bezier_smooth";
+      return {
+        t_src_norm: Number(rtStudioClamp(pt?.t_src_norm, 0, 1, 0.5).toFixed(4)),
+        speed_pct: Number(
+          rtStudioClamp(pt?.speed_pct, RETIME_STUDIO_SPEED_PCT_MIN, RETIME_STUDIO_SPEED_PCT_MAX, 100).toFixed(2)
+        ),
+        easing
+      };
+    })
+    .sort((a, b) => a.t_src_norm - b.t_src_norm);
+
+  const deduped = [];
+  for (const pt of parsed) {
+    if (deduped.length > 0 && Math.abs(pt.t_src_norm - deduped[deduped.length - 1].t_src_norm) < 1e-3) {
+      deduped[deduped.length - 1] = {
+        t_src_norm: deduped[deduped.length - 1].t_src_norm,
+        speed_pct: pt.speed_pct,
+        easing: pt.easing
+      };
+    } else {
+      deduped.push(pt);
+    }
+  }
+  if (!deduped.length) return rtStudioDefaultPoints();
+  if (deduped[0].t_src_norm > 0) {
+    deduped.unshift({ t_src_norm: 0.0, speed_pct: deduped[0].speed_pct, easing: deduped[0].easing });
+  }
+  if (deduped[deduped.length - 1].t_src_norm < 1) {
+    const last = deduped[deduped.length - 1];
+    deduped.push({ t_src_norm: 1.0, speed_pct: last.speed_pct, easing: last.easing });
+  }
+  if (deduped.length > RETIME_STUDIO_MAX_POINTS) {
+    return [deduped[0], ...deduped.slice(1, RETIME_STUDIO_MAX_POINTS - 1), deduped[deduped.length - 1]];
+  }
+  return deduped;
+}
+
+export function normalizeRetimeStudioConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const presetRaw = String(src.preset_id || "hero_slowmo_drop").trim().toLowerCase();
+  const presetId = ALLOWED_RETIME_STUDIO_PRESET_IDS.includes(presetRaw) ? presetRaw : "hero_slowmo_drop";
+  const base = createDefaultRetimeStudioConfigClient(presetId);
+  const dirRaw = String(src.direction ?? base.direction).trim().toLowerCase();
+  const interpRaw = String(src.interpolation ?? base.interpolation).trim().toLowerCase();
+  return {
+    enabled: typeof src.enabled === "boolean" ? src.enabled : base.enabled,
+    preset_id: presetId,
+    direction: ALLOWED_RETIME_STUDIO_DIRECTIONS.includes(dirRaw) ? dirRaw : base.direction,
+    boomerang: typeof src.boomerang === "boolean" ? src.boomerang : base.boomerang,
+    interpolation: ALLOWED_RETIME_STUDIO_INTERPOLATIONS.includes(interpRaw) ? interpRaw : base.interpolation,
+    pitch_preserve: typeof src.pitch_preserve === "boolean" ? src.pitch_preserve : base.pitch_preserve,
+    motion_blur_amount: Number(rtStudioClamp(src.motion_blur_amount, 0, 1, base.motion_blur_amount).toFixed(4)),
+    freeze_enabled: typeof src.freeze_enabled === "boolean" ? src.freeze_enabled : base.freeze_enabled,
+    freeze_at_norm: Number(rtStudioClamp(src.freeze_at_norm, 0, 1, base.freeze_at_norm).toFixed(4)),
+    freeze_duration_s: Number(rtStudioClamp(src.freeze_duration_s, 0, 30, base.freeze_duration_s).toFixed(3)),
+    ripple_timeline: typeof src.ripple_timeline === "boolean" ? src.ripple_timeline : base.ripple_timeline,
+    source_duration_s: Number(rtStudioClamp(src.source_duration_s, 0.25, 3600, base.source_duration_s).toFixed(4)),
+    fps: Number(rtStudioClamp(src.fps, 1, 120, base.fps).toFixed(3)),
+    playhead_norm: Number(rtStudioClamp(src.playhead_norm, 0, 1, base.playhead_norm).toFixed(4)),
+    control_points: normalizeRtControlPointsClient(src.control_points, base.control_points)
+  };
+}
+
+export function evaluateRetimeStudioSpeedAtClient(controlPoints, tSrcNorm) {
+  const pts = [...(controlPoints || [])].sort((a, b) => a.t_src_norm - b.t_src_norm);
+  if (!pts.length) return 100.0;
+  const t = rtStudioClamp(tSrcNorm, 0, 1, 0);
+  if (t <= pts[0].t_src_norm) return Number(pts[0].speed_pct);
+  if (t >= pts[pts.length - 1].t_src_norm) return Number(pts[pts.length - 1].speed_pct);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i];
+    const p1 = pts[i + 1];
+    if (t <= p1.t_src_norm + 1e-9) {
+      const span = Math.max(1e-6, p1.t_src_norm - p0.t_src_norm);
+      const local = Math.min(1, Math.max(0, (t - p0.t_src_norm) / span));
+      if (p0.easing === "step_hold") {
+        return Number(local >= 0.9999 ? p1.speed_pct : p0.speed_pct);
+      }
+      if (p0.easing === "linear") {
+        return Number(p0.speed_pct + (p1.speed_pct - p0.speed_pct) * local);
+      }
+      const s = rtStudioSmoothstep01(local);
+      return Number(p0.speed_pct + (p1.speed_pct - p0.speed_pct) * s);
+    }
+  }
+  return Number(pts[pts.length - 1].speed_pct);
+}
+
+function rtIntegrateOutputTimeClient(controlPoints, srcDurS, tEndNorm, steps = 320) {
+  const tEnd = rtStudioClamp(tEndNorm, 0, 1, 0);
+  if (tEnd <= 0) return 0;
+  const n = Math.max(16, steps);
+  const du = tEnd / n;
+  let acc = 0;
+  let prevInv = 100.0 / Math.max(RETIME_STUDIO_SPEED_PCT_MIN, evaluateRetimeStudioSpeedAtClient(controlPoints, 0));
+  for (let step = 1; step <= n; step++) {
+    const u = (step / n) * tEnd;
+    const spd = Math.max(RETIME_STUDIO_SPEED_PCT_MIN, evaluateRetimeStudioSpeedAtClient(controlPoints, u));
+    const curInv = 100.0 / spd;
+    acc += 0.5 * (prevInv + curInv) * du;
+    prevInv = curInv;
+  }
+  return acc * srcDurS;
+}
+
+export function evaluateRetimeStudioCurveClient(rawConfig, opts = {}) {
+  const cfg = normalizeRetimeStudioConfigClient(rawConfig);
+  const count = Math.max(9, Math.min(257, Math.round(Number(opts.sample_count || 65))));
+  const srcDur = cfg.source_duration_s;
+
+  if (!cfg.enabled) {
+    const samples = [];
+    for (let i = 0; i < count; i++) {
+      const u = i / (count - 1);
+      samples.push({
+        t_src_norm: Number(u.toFixed(4)),
+        t_out_s: Number((u * srcDur).toFixed(4)),
+        speed_pct: 100.0,
+        speed_multiplier: 1.0,
+        is_freeze_zone: false
+      });
+    }
+    return {
+      enabled: false,
+      preset_id: cfg.preset_id,
+      direction: cfg.direction,
+      boomerang: cfg.boomerang,
+      interpolation: cfg.interpolation,
+      pitch_preserve: cfg.pitch_preserve,
+      source_duration_s: Number(srcDur.toFixed(4)),
+      output_duration_s: Number(srcDur.toFixed(4)),
+      ripple_shift_s: 0.0,
+      output_frames: Math.max(1, Math.round(srcDur * cfg.fps)),
+      fps: cfg.fps,
+      avg_speed_pct: 100.0,
+      min_speed_pct: 100.0,
+      max_speed_pct: 100.0,
+      freeze_enabled: false,
+      freeze_at_norm: cfg.freeze_at_norm,
+      freeze_duration_s: 0.0,
+      freeze_out_start_s: 0.0,
+      freeze_out_end_s: 0.0,
+      motion_blur_amount: 0.0,
+      peak_optical_flow_load: 0.0,
+      playhead_speed_pct: 100.0,
+      playhead_out_s: Number((cfg.playhead_norm * srcDur).toFixed(4)),
+      samples
+    };
+  }
+
+  const baseOutS = rtIntegrateOutputTimeClient(cfg.control_points, srcDur, 1.0, 400);
+  const passFactor = cfg.boomerang ? 2.0 : 1.0;
+  const warpOutS = baseOutS * passFactor;
+  const freezeHoldS = cfg.freeze_enabled ? cfg.freeze_duration_s : 0.0;
+  const freezeOutStart = cfg.freeze_enabled
+    ? rtIntegrateOutputTimeClient(cfg.control_points, srcDur, cfg.freeze_at_norm, 240)
+    : 0.0;
+  const freezeOutEnd = freezeOutStart + freezeHoldS;
+  const totalOutS = Math.max(0.05, warpOutS + freezeHoldS);
+  const rippleShiftS = totalOutS - srcDur;
+
+  const samples = [];
+  let minSpd = RETIME_STUDIO_SPEED_PCT_MAX;
+  let maxSpd = RETIME_STUDIO_SPEED_PCT_MIN;
+  let cumOutS = 0.0;
+  let prevU = 0.0;
+  let prevInv = 100.0 / Math.max(RETIME_STUDIO_SPEED_PCT_MIN, evaluateRetimeStudioSpeedAtClient(cfg.control_points, 0));
+
+  for (let i = 0; i < count; i++) {
+    const u = i / (count - 1);
+    const spd = evaluateRetimeStudioSpeedAtClient(cfg.control_points, u);
+    minSpd = Math.min(minSpd, spd);
+    maxSpd = Math.max(maxSpd, spd);
+    const curInv = 100.0 / Math.max(RETIME_STUDIO_SPEED_PCT_MIN, spd);
+    if (i > 0) {
+      cumOutS += 0.5 * (prevInv + curInv) * (u - prevU) * srcDur;
+    }
+    prevU = u;
+    prevInv = curInv;
+    const tOutShifted = cumOutS + (cfg.freeze_enabled && u > cfg.freeze_at_norm ? freezeHoldS : 0.0);
+    const isFreeze = cfg.freeze_enabled && Math.abs(u - cfg.freeze_at_norm) <= 0.5 / (count - 1);
+    samples.push({
+      t_src_norm: Number(u.toFixed(4)),
+      t_out_s: Number(tOutShifted.toFixed(4)),
+      speed_pct: Number(spd.toFixed(2)),
+      speed_multiplier: Number((spd / 100.0).toFixed(4)),
+      is_freeze_zone: isFreeze
+    });
+  }
+
+  const avgSpeedPct = rtStudioClamp(
+    (srcDur / Math.max(1e-5, baseOutS)) * 100.0,
+    RETIME_STUDIO_SPEED_PCT_MIN,
+    RETIME_STUDIO_SPEED_PCT_MAX,
+    100.0
+  );
+  const playheadSpd = evaluateRetimeStudioSpeedAtClient(cfg.control_points, cfg.playhead_norm);
+  let playheadOut = rtIntegrateOutputTimeClient(cfg.control_points, srcDur, cfg.playhead_norm, 200);
+  if (cfg.freeze_enabled && cfg.playhead_norm > cfg.freeze_at_norm) playheadOut += freezeHoldS;
+
+  const flowWeight = cfg.interpolation === "optical_flow_minterpolate"
+    ? 1.0
+    : (cfg.interpolation === "frame_blend" ? 0.45 : 0.1);
+  const slowmoStress = Math.max(0, (100 - minSpd) / 90);
+  const whipStress = Math.max(0, (maxSpd - 100) / 1100);
+  const peakFlowLoad = Number(
+    (Math.min(1, Math.max(0, flowWeight * (0.35 + 0.45 * slowmoStress + 0.25 * whipStress))) * 100).toFixed(1)
+  );
+
+  return {
+    enabled: true,
+    preset_id: cfg.preset_id,
+    direction: cfg.direction,
+    boomerang: cfg.boomerang,
+    interpolation: cfg.interpolation,
+    pitch_preserve: cfg.pitch_preserve,
+    source_duration_s: Number(srcDur.toFixed(4)),
+    output_duration_s: Number(totalOutS.toFixed(4)),
+    ripple_shift_s: Number(rippleShiftS.toFixed(4)),
+    output_frames: Math.max(1, Math.round(totalOutS * cfg.fps)),
+    fps: cfg.fps,
+    avg_speed_pct: Number(avgSpeedPct.toFixed(2)),
+    min_speed_pct: Number(minSpd.toFixed(2)),
+    max_speed_pct: Number(maxSpd.toFixed(2)),
+    freeze_enabled: cfg.freeze_enabled,
+    freeze_at_norm: cfg.freeze_at_norm,
+    freeze_duration_s: Number(freezeHoldS.toFixed(3)),
+    freeze_out_start_s: Number(freezeOutStart.toFixed(4)),
+    freeze_out_end_s: Number(freezeOutEnd.toFixed(4)),
+    motion_blur_amount: cfg.motion_blur_amount,
+    peak_optical_flow_load: peakFlowLoad,
+    playhead_speed_pct: Number(playheadSpd.toFixed(2)),
+    playhead_out_s: Number(playheadOut.toFixed(4)),
+    samples
+  };
+}
+
+export function buildRetimeStudioAtempoStagesClient(speedMultiplier) {
+  const rate = rtStudioClamp(speedMultiplier, 0.1, 12.0, 1.0);
+  if (Math.abs(rate - 1.0) <= 1e-4) return [];
+  const stages = [];
+  let rem = rate;
+  if (rem < 1.0) {
+    while (rem < 0.5 - 1e-9) {
+      stages.push(0.5);
+      rem /= 0.5;
+    }
+    if (Math.abs(rem - 1.0) > 1e-4) stages.push(Number(rem.toFixed(4)));
+  } else {
+    while (rem > 2.0 + 1e-9) {
+      stages.push(2.0);
+      rem /= 2.0;
+    }
+    if (Math.abs(rem - 1.0) > 1e-4) stages.push(Number(rem.toFixed(4)));
+  }
+  return stages;
+}
+
+function compileRtSetptsPiecewiseClient(cfg) {
+  const dur = cfg.source_duration_s;
+  const knots = cfg.control_points;
+  if (knots.length < 2) {
+    const mult = Math.max(0.1, (knots[0]?.speed_pct || 100) / 100);
+    return `setpts=PTS/${mult.toFixed(4)}`;
+  }
+  const segments = [];
+  let cumOutS = 0.0;
+  for (let i = 0; i < knots.length - 1; i++) {
+    const p0 = knots[i];
+    const p1 = knots[i + 1];
+    if (p1.t_src_norm - p0.t_src_norm <= 1e-4) continue;
+    const t0 = p0.t_src_norm * dur;
+    const t1 = p1.t_src_norm * dur;
+    const avgPct = p0.easing === "step_hold" ? p0.speed_pct : 0.5 * (p0.speed_pct + p1.speed_pct);
+    const mult = rtStudioClamp(avgPct / 100.0, 0.1, 12.0, 1.0);
+    segments.push([t0, t1, mult, cumOutS]);
+    cumOutS += (t1 - t0) / mult;
+  }
+  if (!segments.length) {
+    const mult = Math.max(0.1, knots[0].speed_pct / 100.0);
+    return `setpts=PTS/${mult.toFixed(4)}`;
+  }
+  const [lastT0, , lastMult, lastOff] = segments[segments.length - 1];
+  let expr = lastT0 <= 1e-6
+    ? `PTS/${lastMult.toFixed(4)}`
+    : `${lastOff.toFixed(6)}/TB+(PTS-${lastT0.toFixed(4)}/TB)/${lastMult.toFixed(4)}`;
+  for (let i = segments.length - 2; i >= 0; i--) {
+    const [t0, t1, mult, offS] = segments[i];
+    const branch = t0 <= 1e-6
+      ? `PTS/${mult.toFixed(4)}`
+      : `${offS.toFixed(6)}/TB+(PTS-${t0.toFixed(4)}/TB)/${mult.toFixed(4)}`;
+    expr = `if(lt(T,${t1.toFixed(4)}),${branch},${expr})`;
+  }
+  return `setpts='${expr}'`;
+}
+
+export function compileRetimeStudioFiltergraphClient(rawConfig) {
+  const cfg = normalizeRetimeStudioConfigClient(rawConfig);
+  const evalRes = evaluateRetimeStudioCurveClient(cfg, { sample_count: 33 });
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      preset_id: cfg.preset_id,
+      direction: cfg.direction,
+      boomerang: cfg.boomerang,
+      interpolation: cfg.interpolation,
+      pitch_preserve: cfg.pitch_preserve,
+      audio_pitch_filter: "anull",
+      has_freeze_hold: false,
+      has_motion_blur: false,
+      output_duration_s: evalRes.output_duration_s,
+      ripple_shift_s: 0.0,
+      vf_chain: "null",
+      af_chain: "anull",
+      filter_complex: "[0:v]null[vout];[0:a]anull[aout]",
+      ffmpeg_command: 'ffmpeg -i input.mp4 -filter_complex "[0:v]null[vout];[0:a]anull[aout]" -map "[vout]" -map "[aout]" output.mp4',
+      warnings: []
+    };
+  }
+  const warnings = [];
+  const vfParts = [compileRtSetptsPiecewiseClient(cfg)];
+  const fpsStr = String(Number(cfg.fps.toFixed(3)));
+  if (cfg.interpolation === "optical_flow_minterpolate") {
+    vfParts.push(`minterpolate=fps=${fpsStr}:mi_mode=mci:mc_mode=aobmc:me_mode=bilat:vsbmc=1`);
+  } else if (cfg.interpolation === "frame_blend") {
+    vfParts.push(`minterpolate=fps=${fpsStr}:mi_mode=blend`);
+  }
+  const hasMblur = cfg.motion_blur_amount > 0.01;
+  if (hasMblur) {
+    const taps = Math.max(2, Math.min(8, 2 + Math.round(cfg.motion_blur_amount * 6)));
+    const weights = Array.from({ length: taps }, () => "1").join(" ");
+    vfParts.push(`tmix=frames=${taps}:weights='${weights}'`);
+  }
+  const hasFreeze = cfg.freeze_enabled && cfg.freeze_duration_s > 0.01;
+  if (hasFreeze) {
+    vfParts.push(`tpad=stop_mode=clone:stop_duration=${cfg.freeze_duration_s.toFixed(3)}`);
+  }
+  if (cfg.direction === "reverse" && !cfg.boomerang) {
+    vfParts.push("reverse");
+    warnings.push("Video reverse buffers frames in RAM; keep clips concise for 4K sources.");
+  }
+  const vfBase = vfParts.join(",");
+  let vfChain = vfBase;
+  let videoGraph = `[0:v]${vfChain}[vout]`;
+  if (cfg.boomerang) {
+    vfChain = "split[rt_fwd][rt_rev_src];[rt_rev_src]reverse[rt_rev];[rt_fwd][rt_rev]concat=n=2:v=1:a=0";
+    videoGraph = `[0:v]${vfBase},${vfChain}[vout]`;
+  }
+
+  const avgMult = rtStudioClamp(evalRes.avg_speed_pct / 100.0, 0.1, 12.0, 1.0);
+  const afParts = [];
+  let audioPitchFilter = "anull";
+  if (cfg.pitch_preserve) {
+    audioPitchFilter = `rubberband=tempo=${avgMult.toFixed(4)}:pitch=1.0`;
+    if (Math.abs(avgMult - 1.0) > 1e-4) afParts.push(audioPitchFilter);
+  } else {
+    const stages = buildRetimeStudioAtempoStagesClient(avgMult);
+    if (stages.length) {
+      audioPitchFilter = stages.map((s) => `atempo=${s.toFixed(4)}`).join(",");
+      afParts.push(audioPitchFilter);
+    }
+  }
+  if (hasFreeze) afParts.push(`apad=pad_dur=${cfg.freeze_duration_s.toFixed(3)}`);
+  if (cfg.direction === "reverse" && !cfg.boomerang) afParts.push("areverse");
+
+  const afBase = afParts.length ? afParts.join(",") : "anull";
+  let afChain = afBase;
+  let audioGraph = `[0:a]${afChain}[aout]`;
+  if (cfg.boomerang) {
+    afChain = "asplit[rt_afwd][rt_arev_src];[rt_arev_src]areverse[rt_arev];[rt_afwd][rt_arev]concat=n=2:v=0:a=1";
+    audioGraph = `[0:a]${afBase},${afChain}[aout]`;
+  }
+  const filterComplex = `${videoGraph};${audioGraph}`;
+  return {
+    enabled: true,
+    preset_id: cfg.preset_id,
+    direction: cfg.direction,
+    boomerang: cfg.boomerang,
+    interpolation: cfg.interpolation,
+    pitch_preserve: cfg.pitch_preserve,
+    audio_pitch_filter: audioPitchFilter,
+    has_freeze_hold: hasFreeze,
+    has_motion_blur: hasMblur,
+    output_duration_s: evalRes.output_duration_s,
+    ripple_shift_s: evalRes.ripple_shift_s,
+    vf_chain: vfChain,
+    af_chain: afChain,
+    filter_complex: filterComplex,
+    ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "${filterComplex}" -map "[vout]" -map "[aout]" output.mp4`,
+    warnings
+  };
+}
+
+export function exportRetimeStudioJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizeRetimeStudioConfigClient(rawConfig);
+  const evalRes = evaluateRetimeStudioCurveClient(cfg, { sample_count: 33 });
+  const compiled = compileRetimeStudioFiltergraphClient(cfg);
+  const rawTitle = String(opts.title || "TAKTCUT_RETIME_STUDIO").trim();
+  const cleanTitle = rawTitle.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "TAKTCUT_RETIME_STUDIO";
+  const hosts = [
+    "DaVinci Resolve Speed Editor",
+    "Adobe Premiere Pro Time Remapping",
+    "FFmpeg Minterpolate / Rubberband"
+  ];
+  const payload = {
+    schema_version: "taktcut.retime_studio.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: hosts,
+    retime: {
+      enabled: cfg.enabled,
+      direction: cfg.direction,
+      boomerang: cfg.boomerang,
+      interpolation: cfg.interpolation,
+      pitch_preserve: cfg.pitch_preserve,
+      motion_blur_amount: cfg.motion_blur_amount,
+      freeze_enabled: cfg.freeze_enabled,
+      freeze_at_norm: cfg.freeze_at_norm,
+      freeze_duration_s: cfg.freeze_duration_s,
+      ripple_timeline: cfg.ripple_timeline,
+      source_duration_s: evalRes.source_duration_s,
+      output_duration_s: evalRes.output_duration_s,
+      ripple_shift_s: evalRes.ripple_shift_s,
+      output_frames: evalRes.output_frames,
+      avg_speed_pct: evalRes.avg_speed_pct,
+      fps: cfg.fps
+    },
+    control_points: cfg.control_points.map((pt) => ({ ...pt })),
+    ffmpeg: {
+      vf_chain: compiled.vf_chain,
+      af_chain: compiled.af_chain,
+      filter_complex: compiled.filter_complex
+    }
+  };
+  return {
+    schema_version: "taktcut.retime_studio.v1",
+    title: cleanTitle,
+    preset_id: cfg.preset_id,
+    compatible_hosts: hosts,
+    json_text: JSON.stringify(payload, null, 2),
+    filename: `${cleanTitle.toLowerCase()}_${cfg.preset_id}_retime_studio.json`,
+    saved_path: null
+  };
+}
+
+export function applyRetimeStudioToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = cloneTimelineDoc(doc);
+  const cfg = normalizeRetimeStudioConfigClient(rawConfig);
+  const trackIndex = Number(opts.track_index || 1);
+  const trk = (nextDoc.tracks || []).find((t) => t.kind === "video" && t.index === trackIndex)
+    || (nextDoc.tracks || []).find((t) => t.kind === "video");
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error(`Video track V${trackIndex} has no clips`);
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, Number(opts.clip_index || 0)));
+  const clip = trk.clips[safeIdx];
+  const docFps = nextDoc.fps && nextDoc.fps.num > 0 && nextDoc.fps.den > 0
+    ? nextDoc.fps.num / nextDoc.fps.den
+    : cfg.fps;
+  const clipSrcDurS = Math.max(0.25, Number(clip.duration_frames || 0) / Math.max(1, docFps));
+  const scopedCfg = {
+    ...cfg,
+    source_duration_s: Number(clipSrcDurS.toFixed(4)),
+    fps: Number(docFps.toFixed(3))
+  };
+  const evalRes = evaluateRetimeStudioCurveClient(scopedCfg, { sample_count: 33 });
+  const compiled = compileRetimeStudioFiltergraphClient(scopedCfg);
+  const retimeProc = scopedCfg.interpolation === "optical_flow_minterpolate"
+    ? "optical_flow"
+    : (scopedCfg.interpolation === "frame_blend" ? "frame_blend" : "nearest");
+
+  const updatedClip = {
+    ...clip,
+    reverse: Boolean(scopedCfg.enabled && scopedCfg.direction === "reverse"),
+    retime_process: retimeProc,
+    speed_rate: Number(rtStudioClamp(evalRes.avg_speed_pct / 100.0, 0.25, 4.0, 1.0).toFixed(3)),
+    retime_studio: {
+      enabled: scopedCfg.enabled,
+      preset_id: scopedCfg.preset_id,
+      direction: scopedCfg.direction,
+      boomerang: scopedCfg.boomerang,
+      interpolation: scopedCfg.interpolation,
+      pitch_preserve: scopedCfg.pitch_preserve,
+      motion_blur_amount: scopedCfg.motion_blur_amount,
+      freeze_enabled: scopedCfg.freeze_enabled,
+      freeze_at_norm: scopedCfg.freeze_at_norm,
+      freeze_duration_s: scopedCfg.freeze_duration_s,
+      ripple_timeline: scopedCfg.ripple_timeline,
+      source_duration_s: evalRes.source_duration_s,
+      output_duration_s: evalRes.output_duration_s,
+      ripple_shift_s: evalRes.ripple_shift_s,
+      avg_speed_pct: evalRes.avg_speed_pct,
+      fps: scopedCfg.fps,
+      ffmpeg_vf: compiled.vf_chain.slice(0, 16384),
+      ffmpeg_af: compiled.af_chain.slice(0, 8192),
+      control_points: scopedCfg.control_points.map((pt) => ({ ...pt }))
+    }
+  };
+  trk.clips[safeIdx] = updatedClip;
+
+  if (scopedCfg.enabled && scopedCfg.ripple_timeline && clip.duration_frames > 0) {
+    const oldDur = clip.duration_frames;
+    const oldEnd = clip.start_frame + oldDur;
+    const newDur = Math.max(1, Math.round(evalRes.output_duration_s * docFps));
+    const delta = newDur - oldDur;
+    if (delta !== 0) {
+      updatedClip.duration_frames = newDur;
+      for (let i = 0; i < trk.clips.length; i++) {
+        if (i !== safeIdx && trk.clips[i].start_frame >= oldEnd) {
+          trk.clips[i] = {
+            ...trk.clips[i],
+            start_frame: Math.max(0, trk.clips[i].start_frame + delta)
+          };
+        }
+      }
+      if (clip.link_group_id) {
+        for (const t of nextDoc.tracks || []) {
+          if (t === trk) continue;
+          const li = (t.clips || []).findIndex((c) => c.link_group_id === clip.link_group_id);
+          if (li >= 0) {
+            const linkedOldEnd = t.clips[li].start_frame + t.clips[li].duration_frames;
+            t.clips[li] = { ...t.clips[li], duration_frames: newDur };
+            for (let j = 0; j < t.clips.length; j++) {
+              if (j !== li && t.clips[j].start_frame >= linkedOldEnd) {
+                t.clips[j] = {
+                  ...t.clips[j],
+                  start_frame: Math.max(0, t.clips[j].start_frame + delta)
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return nextDoc;
+}

@@ -43,6 +43,9 @@ import {
   evaluateActiveNodeMaskAtClient,
   evaluateAutoReframeAtTimeClient,
   evaluateClipFadeEnvelope,
+  evaluateRetimeStudioCurveClient,
+  evaluateRetimeStudioSpeedAtClient,
+  normalizeRetimeStudioConfigClient,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
   evaluateCstRgbClient,
@@ -13666,4 +13669,330 @@ export function drawPowerWindowTrackTimelineCanvas(canvas, rawConfig) {
   ctx.fillText("CX", padL + plotW - 44, 11);
   ctx.fillStyle = "#c084fc";
   ctx.fillText("CY", padL + plotW - 20, 11);
+}
+
+// ============================================================================
+// RETIME STUDIO: INTERACTIVE SPEED-RAMP CURVE & CADENCE CANVAS
+// ============================================================================
+
+export function drawRetimeStudioCurveCanvas(canvas, rawConfig, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 252);
+  if (!ctx) return null;
+
+  const cfg = normalizeRetimeStudioConfigClient(rawConfig);
+  const evalRes = opts.evalResult || evaluateRetimeStudioCurveClient(cfg, { sample_count: 81 });
+  const selectedIdx = Number.isInteger(opts.selectedIdx) ? opts.selectedIdx : -1;
+
+  ctx.fillStyle = "#090c12";
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 46;
+  const padR = 16;
+  const padT = 26;
+  const padB = 26;
+  const plotW = Math.max(80, w - padL - padR);
+  const plotH = Math.max(80, h - padT - padB);
+
+  const maxPtSpeed = Math.max(800, ...(cfg.control_points || []).map((p) => Number(p.speed_pct || 100)));
+  const maxSpeedPct = maxPtSpeed > 800 ? 1200 : 800;
+  const minSpeedPct = 10;
+
+  // Logarithmic-friendly or piecewise visual scale so 10..100% gets clear precision and 100..800% fits cleanly
+  const speedToY = (spdPct) => {
+    const s = Math.min(maxSpeedPct, Math.max(minSpeedPct, Number(spdPct) || 100));
+    const norm = (Math.log10(s) - Math.log10(minSpeedPct)) / (Math.log10(maxSpeedPct) - Math.log10(minSpeedPct));
+    return padT + (1 - norm) * plotH;
+  };
+  const yToSpeed = (py) => {
+    const norm = Math.min(1, Math.max(0, 1 - (py - padT) / plotH));
+    const logVal = Math.log10(minSpeedPct) + norm * (Math.log10(maxSpeedPct) - Math.log10(minSpeedPct));
+    return Math.round(Math.min(maxSpeedPct, Math.max(minSpeedPct, 10 ** logVal)));
+  };
+  const tToX = (tNorm) => padL + Math.min(1, Math.max(0, Number(tNorm) || 0)) * plotW;
+
+  // Plot background & grid
+  ctx.fillStyle = "#0d111a";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  // Horizontal speed grid lines
+  const gridSpeeds = maxSpeedPct > 800
+    ? [10, 25, 50, 100, 200, 400, 800, 1200]
+    : [10, 25, 50, 100, 200, 400, 800];
+  ctx.font = "600 9.5px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (const gs of gridSpeeds) {
+    const gy = speedToY(gs);
+    const isBaseline = gs === 100;
+    ctx.strokeStyle = isBaseline ? "rgba(245, 158, 11, 0.55)" : "rgba(148, 163, 184, 0.14)";
+    ctx.lineWidth = isBaseline ? 1.4 : 1;
+    if (isBaseline) ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = isBaseline ? "#fbbf24" : "#8b97ab";
+    ctx.fillText(`${gs}%`, padL - 6, gy);
+  }
+
+  // Vertical source time grid lines
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const tv of [0, 0.25, 0.5, 0.75, 1.0]) {
+    const gx = tToX(tv);
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.12)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+    const secLabel = `${(tv * cfg.source_duration_s).toFixed(1)}s`;
+    ctx.fillStyle = "#8b97ab";
+    ctx.fillText(secLabel, gx, padT + plotH + 6);
+  }
+
+  // Freeze-frame vertical marker band
+  if (cfg.freeze_enabled && cfg.freeze_duration_s > 0.01) {
+    const fx = tToX(cfg.freeze_at_norm);
+    ctx.fillStyle = "rgba(56, 189, 248, 0.14)";
+    ctx.fillRect(fx - 5, padT, 10, plotH);
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(fx, padT);
+    ctx.lineTo(fx, padT + plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = "#7dd3fc";
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(`HOLD ${cfg.freeze_duration_s.toFixed(1)}s`, fx, padT - 3);
+  }
+
+  // Shaded area under curve relative to 100% line
+  const y100 = speedToY(100);
+  const curveSamples = evalRes && Array.isArray(evalRes.samples) && evalRes.samples.length > 1
+    ? evalRes.samples
+    : null;
+  const sampleCount = curveSamples ? curveSamples.length : 81;
+
+  ctx.beginPath();
+  for (let i = 0; i < sampleCount; i++) {
+    const u = curveSamples ? curveSamples[i].t_src_norm : i / (sampleCount - 1);
+    const spd = curveSamples
+      ? curveSamples[i].speed_pct
+      : evaluateRetimeStudioSpeedAtClient(cfg.control_points, u);
+    const px = tToX(u);
+    const py = speedToY(spd);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.lineTo(padL + plotW, y100);
+  ctx.lineTo(padL, y100);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+  grad.addColorStop(0, "rgba(245, 158, 11, 0.28)");
+  grad.addColorStop(0.55, "rgba(56, 189, 248, 0.14)");
+  grad.addColorStop(1, "rgba(34, 211, 238, 0.25)");
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Main speed-ramp curve stroke
+  ctx.strokeStyle = cfg.enabled ? "#38bdf8" : "#64748b";
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  for (let i = 0; i < sampleCount; i++) {
+    const u = curveSamples ? curveSamples[i].t_src_norm : i / (sampleCount - 1);
+    const spd = curveSamples
+      ? curveSamples[i].speed_pct
+      : evaluateRetimeStudioSpeedAtClient(cfg.control_points, u);
+    const px = tToX(u);
+    const py = speedToY(spd);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // Playhead needle
+  const headX = tToX(cfg.playhead_norm);
+  const headSpd = evaluateRetimeStudioSpeedAtClient(cfg.control_points, cfg.playhead_norm);
+  const headY = speedToY(headSpd);
+  ctx.strokeStyle = "#fb7185";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(headX, padT);
+  ctx.lineTo(headX, padT + plotH);
+  ctx.stroke();
+
+  ctx.fillStyle = "#fb7185";
+  ctx.beginPath();
+  ctx.arc(headX, headY, 3.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Interactive control point handles
+  const ptMeta = [];
+  (cfg.control_points || []).forEach((pt, idx) => {
+    const px = tToX(pt.t_src_norm);
+    const py = speedToY(pt.speed_pct);
+    const isSel = idx === selectedIdx;
+    const isEndpoint = idx === 0 || idx === cfg.control_points.length - 1;
+    const r = isSel ? 7.5 : 6.0;
+
+    ctx.fillStyle = isSel ? "#f59e0b" : (pt.speed_pct < 100 ? "#38bdf8" : "#e2e8f0");
+    ctx.strokeStyle = "#090c12";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (pt.easing === "step_hold") {
+      ctx.rect(px - r, py - r, r * 2, r * 2);
+    } else {
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    if (isSel) {
+      ctx.strokeStyle = "#fef3c7";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(px, py, r + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = isSel ? "#fde68a" : "#cbd5e1";
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.textAlign = idx === 0 ? "left" : (isEndpoint ? "right" : "center");
+    ctx.textBaseline = py < padT + 18 ? "top" : "bottom";
+    const labelY = py < padT + 18 ? py + 10 : py - 9;
+    ctx.fillText(`${Math.round(pt.speed_pct)}%`, px, labelY);
+
+    ptMeta.push({
+      idx,
+      x: px,
+      y: py,
+      r: r + 8,
+      isEndpoint,
+      t_src_norm: pt.t_src_norm,
+      speed_pct: pt.speed_pct
+    });
+  });
+
+  // Top-left Resolve HUD
+  const outDur = evalRes ? evalRes.output_duration_s : cfg.source_duration_s;
+  const shift = evalRes ? evalRes.ripple_shift_s : 0;
+  const shiftTxt = `${shift >= 0 ? "+" : ""}${shift.toFixed(2)}s`;
+  const interpTag = cfg.interpolation === "optical_flow_minterpolate"
+    ? "OPTICAL FLOW"
+    : (cfg.interpolation === "frame_blend" ? "FRAME BLEND" : "NEAREST");
+  const dirTag = cfg.boomerang ? "BOOMERANG" : cfg.direction.toUpperCase();
+  ctx.fillStyle = "rgba(10, 12, 16, 0.88)";
+  ctx.fillRect(padL + 4, 4, Math.min(plotW - 8, 360), 17);
+  ctx.fillStyle = "#38bdf8";
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(
+    `${interpTag} | ${dirTag} | OUT ${outDur.toFixed(2)}s (${shiftTxt})`,
+    padL + 10,
+    12.5
+  );
+
+  // Border
+  ctx.strokeStyle = "#262b36";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL, padT, plotW, plotH);
+
+  const meta = {
+    padL,
+    padT,
+    plotW,
+    plotH,
+    minSpeedPct,
+    maxSpeedPct,
+    points: ptMeta,
+    yToSpeed,
+    speedToY
+  };
+  canvas._rtStudioMeta = meta;
+  return meta;
+}
+
+export function drawRetimeStudioCadenceCanvas(canvas, rawConfig, evalResult) {
+  if (!canvas) return;
+  const { ctx, width: w, height: h } = setupCanvas(canvas, 68);
+  if (!ctx) return;
+
+  const cfg = normalizeRetimeStudioConfigClient(rawConfig);
+  const evalRes = evalResult || evaluateRetimeStudioCurveClient(cfg, { sample_count: 65 });
+
+  ctx.fillStyle = "#090c12";
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 46;
+  const padR = 16;
+  const padT = 18;
+  const padB = 12;
+  const plotW = Math.max(80, w - padL - padR);
+  const plotH = Math.max(24, h - padT - padB);
+
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.16)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL, padT, plotW, plotH);
+
+  const totalOut = Math.max(0.05, Number(evalRes.output_duration_s || cfg.source_duration_s));
+  const samples = Array.isArray(evalRes.samples) ? evalRes.samples : [];
+  const barCount = Math.min(48, Math.max(16, Math.floor(plotW / 10)));
+
+  for (let i = 0; i < barCount; i++) {
+    const u = i / Math.max(1, barCount - 1);
+    const sIdx = Math.min(samples.length - 1, Math.round(u * (samples.length - 1)));
+    const samp = samples[sIdx] || { speed_pct: 100, is_freeze_zone: false };
+    const bx = padL + (i / barCount) * plotW + 1;
+    const bw = Math.max(2, plotW / barCount - 2);
+    const spd = Number(samp.speed_pct || 100);
+    const isFreeze = cfg.freeze_enabled && Math.abs(u - cfg.freeze_at_norm) < 0.04;
+
+    if (isFreeze) {
+      ctx.fillStyle = "#38bdf8";
+      ctx.fillRect(bx, padT + 2, bw, plotH - 4);
+    } else if (spd < 95) {
+      ctx.fillStyle = "rgba(56, 189, 248, 0.72)";
+      const bh = Math.max(6, (1 - spd / 120) * (plotH - 6));
+      ctx.fillRect(bx, padT + plotH - bh - 2, bw, bh);
+    } else if (spd > 110) {
+      ctx.fillStyle = "rgba(245, 158, 11, 0.8)";
+      const bh = Math.max(6, Math.min(1, (spd - 100) / 700) * (plotH - 6));
+      ctx.fillRect(bx, padT + plotH - bh - 2, bw, bh);
+    } else {
+      ctx.fillStyle = "rgba(148, 163, 184, 0.45)";
+      ctx.fillRect(bx, padT + plotH * 0.45, bw, plotH * 0.5);
+    }
+  }
+
+  // Playhead needle
+  const headX = padL + Math.min(1, Math.max(0, cfg.playhead_norm)) * plotW;
+  ctx.strokeStyle = "#fb7185";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(headX, 4);
+  ctx.lineTo(headX, h - 4);
+  ctx.stroke();
+
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.fillText("FLOW", 8, padT + plotH * 0.5 + 3);
+  ctx.fillText(
+    `SRC ${cfg.source_duration_s.toFixed(2)}s -> OUT ${totalOut.toFixed(2)}s (${evalRes.output_frames}f)`,
+    padL,
+    12
+  );
+  ctx.fillStyle = cfg.pitch_preserve ? "#34d399" : "#f59e0b";
+  ctx.textAlign = "right";
+  ctx.fillText(cfg.pitch_preserve ? "PITCH LOCK ON" : "ATEMPO", padL + plotW, 12);
 }

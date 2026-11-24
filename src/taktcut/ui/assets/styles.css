@@ -11228,3 +11228,268 @@ dialog.nle-dialog.pw-studio-dialog {
     width: 100%;
   }
 }
+
+/* ============================================================================
+   DAVINCI RESOLVE SPEED EDITOR & OPTICAL-FLOW RETIME STUDIO (CYCLE #110)
+   ============================================================================ */
+
+dialog.nle-dialog.rt-studio-dialog {
+  width: min(1180px, calc(100vw - 24px));
+  max-width: min(1180px, calc(100vw - 24px));
+  max-height: min(92vh, 900px);
+}
+
+.rt-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.rt-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.rt-dialog-body .code-box,
+.rt-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.rt-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rt-telemetry-pill {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: #38bdf8;
+  color: #e0f2fe;
+  font-weight: 700;
+}
+
+.rt-preset-strip,
+.rt-toolbar-bar,
+.rt-curve-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.rt-toolbar-bar {
+  padding: 7px 9px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+}
+
+.rt-mode-group,
+.rt-flags-group,
+.rt-time-ctrl {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.rt-time-ctrl {
+  flex: 1 1 180px;
+}
+
+.rt-time-ctrl input[type="range"] {
+  flex: 1 1 90px;
+  min-width: 70px;
+  accent-color: #fb7185;
+}
+
+.rt-preset-btn.is-active {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+
+.rt-workstation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.rt-viewport-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.rt-curve-canvas {
+  display: block;
+  width: 100%;
+  height: 252px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.rt-cadence-canvas {
+  display: block;
+  width: 100%;
+  height: 68px;
+}
+
+.rt-param-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.rt-param-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rt-param-field label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.rt-range-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rt-range-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 48px;
+  accent-color: #38bdf8;
+}
+
+.rt-range-pair .input-num {
+  width: 72px;
+}
+
+.rt-freeze-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.rt-freeze-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rt-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.rt-metric-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 7px;
+  background: rgba(9, 12, 18, 0.72);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.rt-metric-k {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.rt-metric-v {
+  font-size: 12px;
+  font-weight: 700;
+  color: #e0f2fe;
+}
+
+.rt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#retime-studio-dialog .btn:focus-visible,
+#retime-studio-dialog .input-control:focus-visible,
+#retime-studio-dialog input[type="range"]:focus-visible,
+.rt-studio-btn:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+@media (max-width: 960px) {
+  .rt-workstation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  dialog.nle-dialog.rt-studio-dialog {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: min(94vh, 780px);
+  }
+  .rt-param-grid-2,
+  .rt-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rt-studio-btn,
+  .rt-preset-btn,
+  .rt-curve-toolbar .btn,
+  .rt-actions .btn,
+  #btn-close-retime-studio,
+  #retime-studio-dialog .input-control {
+    min-height: 45px;
+  }
+  .rt-mode-group,
+  .rt-flags-group,
+  .rt-time-ctrl {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .rt-param-grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

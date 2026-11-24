@@ -32,6 +32,8 @@ import {
   drawQualifierKeyerPreviewCanvas,
   drawQualifierSpectrumCanvas,
   drawRetimeRampEditorCanvas,
+  drawRetimeStudioCadenceCanvas,
+  drawRetimeStudioCurveCanvas,
   drawSceneCutConfidenceCanvas,
   drawSourceMonitorCanvas,
   drawStereoVuMeterCanvas,
@@ -184,6 +186,7 @@ import {
   applyMulticamStudioToDocumentClient,
   applyOpticalGlowToDocumentClient,
   applyPowerWindowToDocumentClient,
+  applyRetimeStudioToDocumentClient,
   applySplitEditJlInDocument,
   auditMediaPoolLinksClient,
   autoSwitchMulticamSpeakersClient,
@@ -210,6 +213,7 @@ import {
   compilePowerWindowFiltergraphClient,
   compileProxyPlanClient,
   compileRetimeFilterClient,
+  compileRetimeStudioFiltergraphClient,
   compileRoughcutSelectFiltergraphClient,
   compileSplitEditFiltergraphClient,
   compileTransitionFilterClient,
@@ -239,6 +243,7 @@ import {
   createDefaultOpticalGlowConfigClient,
   createDefaultPowerWindow,
   createDefaultPowerWindowConfigClient,
+  createDefaultRetimeStudioConfigClient,
   createDefaultQualifier,
   createDefaultQualifierKeyerConfigClient,
   createEmptyTransformKeyframes,
@@ -259,6 +264,8 @@ import {
   evaluatePowerWindowMask,
   evaluatePowerWindowSamplesClient,
   evaluateRetimeSpeedAt,
+  evaluateRetimeStudioCurveClient,
+  evaluateRetimeStudioSpeedAtClient,
   evaluateTitleMotionState,
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
@@ -267,6 +274,7 @@ import {
   exportMulticamEdlClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
+  exportRetimeStudioJsonClient,
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
   interpolatePowerWindowAtTimeClient,
@@ -274,6 +282,7 @@ import {
   normalizeMulticamStudioConfigClient,
   normalizeOpticalGlowConfigClient,
   normalizePowerWindowConfigClient,
+  normalizeRetimeStudioConfigClient,
   resolveMulticamStudioSegmentsClient,
   simulatePowerWindowTrackClient,
   syncMulticamStudioAnglesClient,
@@ -743,6 +752,19 @@ const state = {
     trackResult: null,
     compiled: null,
     exportedJson: null,
+    dragState: null,
+    playing: false,
+    rafId: null,
+    lastTs: 0,
+    syncSeq: 0
+  },
+  rtStudio: {
+    isOpen: false,
+    config: createDefaultRetimeStudioConfigClient("hero_slowmo_drop"),
+    evalResult: null,
+    compiled: null,
+    exportedJson: null,
+    selectedPointIdx: 1,
     dragState: null,
     playing: false,
     rafId: null,
@@ -13272,6 +13294,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+E", descKey: "shortcuts.key.motionSplineStudio" },
       { kbd: "Shift+A", descKey: "shortcuts.key.opticalGlowStudio" },
       { kbd: "Shift+W", descKey: "shortcuts.key.powerWindowStudio" },
+      { kbd: "Shift+Y", descKey: "shortcuts.key.retimeStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13366,6 +13389,22 @@ function handleTransportKeydown(ev) {
     if (ev.key === "Escape") {
       ev.preventDefault();
       closeOpticalGlowStudioDialog();
+    }
+    return;
+  }
+
+  const rtStudioDlg = byId("retime-studio-dialog");
+  if (rtStudioDlg && rtStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeRetimeStudioDialog();
+      return;
+    }
+    if (isEditableTarget(ev.target)) return;
+    if ((ev.code === "Space" || ev.key === " ") && !(ev.target instanceof Element && ev.target.tagName === "BUTTON")) {
+      ev.preventDefault();
+      toggleRetimeStudioPlay();
+      return;
     }
     return;
   }
@@ -13561,6 +13600,11 @@ function handleTransportKeydown(ev) {
     if (lower === "w") {
       ev.preventDefault();
       openPowerWindowStudioDialog();
+      return;
+    }
+    if (lower === "y") {
+      ev.preventDefault();
+      openRetimeStudioDialog();
       return;
     }
   }
@@ -20246,6 +20290,7 @@ function wireEvents() {
   wireMotionSplineStudioEvents();
   wireOpticalGlowStudioEvents();
   wirePowerWindowStudioEvents();
+  wireRetimeStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -27919,6 +27964,625 @@ function wirePowerWindowStudioEvents() {
       // Clipboard may be unavailable in headless mode
     }
     setPwStudioStatus(t("pwStudio.status.copied"));
+  });
+}
+
+// ============================================================================
+// DAVINCI RESOLVE SPEED EDITOR & OPTICAL-FLOW RETIME STUDIO (CYCLE #110)
+// ============================================================================
+
+function setRtStudioStatus(msg) {
+  const el = byId("rt-status-note");
+  if (el) el.textContent = String(msg || "");
+}
+
+function refreshRtStudioLocalDerived() {
+  const st = state.rtStudio;
+  st.evalResult = evaluateRetimeStudioCurveClient(st.config, { sample_count: 65 });
+  st.compiled = compileRetimeStudioFiltergraphClient(st.config);
+}
+
+function syncRetimeStudioUI() {
+  const st = state.rtStudio;
+  const cfg = normalizeRetimeStudioConfigClient(st.config);
+  st.config = cfg;
+  if (!st.evalResult) refreshRtStudioLocalDerived();
+  const ev = st.evalResult;
+  const comp = st.compiled;
+
+  const pts = cfg.control_points || [];
+  if (st.selectedPointIdx < 0 || st.selectedPointIdx >= pts.length) {
+    st.selectedPointIdx = pts.length > 1 ? 1 : 0;
+  }
+  const selPt = pts[st.selectedPointIdx] || pts[0] || { t_src_norm: 0.5, speed_pct: 100, easing: "bezier_smooth" };
+
+  const presetBadge = byId("rt-active-preset-badge");
+  if (presetBadge) presetBadge.textContent = cfg.preset_id.toUpperCase().replace(/_/g, " ");
+
+  const teleBadge = byId("rt-telemetry-badge");
+  if (teleBadge && ev) {
+    const shiftStr = `${ev.ripple_shift_s >= 0 ? "+" : ""}${ev.ripple_shift_s.toFixed(2)}s`;
+    teleBadge.textContent = `OUT ${ev.output_duration_s.toFixed(2)}s | ${shiftStr} | AVG ${Math.round(ev.avg_speed_pct)}%`;
+  }
+
+  for (const btn of document.querySelectorAll(".rt-preset-btn[data-rt-preset]")) {
+    const pid = btn.getAttribute("data-rt-preset");
+    const active = pid === cfg.preset_id;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const interpEl = byId("rt-interpolation");
+  if (interpEl) interpEl.value = cfg.interpolation;
+  const dirEl = byId("rt-direction");
+  if (dirEl) dirEl.value = cfg.direction;
+  const boomEl = byId("rt-boomerang");
+  if (boomEl) boomEl.checked = Boolean(cfg.boomerang);
+  const pitchEl = byId("rt-pitch-preserve");
+  if (pitchEl) pitchEl.checked = Boolean(cfg.pitch_preserve);
+  const rippleEl = byId("rt-ripple-timeline");
+  if (rippleEl) rippleEl.checked = Boolean(cfg.ripple_timeline);
+  const enEl = byId("rt-enabled");
+  if (enEl) enEl.checked = Boolean(cfg.enabled);
+
+  const phSlider = byId("rt-playhead-slider");
+  if (phSlider) phSlider.value = String(Math.round(cfg.playhead_norm * 100));
+  const phLbl = byId("rt-playhead-label");
+  if (phLbl) phLbl.textContent = cfg.playhead_norm.toFixed(2);
+
+  const curveReadout = byId("rt-curve-readout");
+  if (curveReadout) {
+    curveReadout.textContent = `PT #${st.selectedPointIdx + 1} | ${Math.round(selPt.speed_pct)}% @ ${selPt.t_src_norm.toFixed(2)}`;
+  }
+
+  const delBtn = byId("btn-rt-del-pt");
+  if (delBtn) {
+    delBtn.disabled = pts.length <= 2 || st.selectedPointIdx <= 0 || st.selectedPointIdx >= pts.length - 1;
+  }
+
+  const playBtn = byId("btn-rt-play");
+  if (playBtn) {
+    playBtn.setAttribute("aria-pressed", st.playing ? "true" : "false");
+    playBtn.textContent = st.playing ? "Pause" : t("rtStudio.btn.play");
+  }
+
+  const syncInputVal = (id, val, digits = null) => {
+    const el = byId(id);
+    if (!el) return;
+    if (document.activeElement === el && el.type === "number") return;
+    el.value = digits !== null ? Number(val).toFixed(digits) : String(val);
+  };
+  syncInputVal("rt-pt-speed", Math.min(800, Math.round(selPt.speed_pct)));
+  syncInputVal("rt-pt-speed-num", Math.round(selPt.speed_pct));
+  syncInputVal("rt-pt-t", selPt.t_src_norm, 2);
+  syncInputVal("rt-pt-t-num", selPt.t_src_norm, 2);
+  const easingEl = byId("rt-pt-easing");
+  if (easingEl) easingEl.value = selPt.easing || "bezier_smooth";
+  syncInputVal("rt-src-dur-num", cfg.source_duration_s, 2);
+  syncInputVal("rt-mblur", cfg.motion_blur_amount, 2);
+  syncInputVal("rt-mblur-num", cfg.motion_blur_amount, 2);
+
+  const frzEnEl = byId("rt-freeze-enabled");
+  if (frzEnEl) frzEnEl.checked = Boolean(cfg.freeze_enabled);
+  const frzBadge = byId("rt-freeze-badge");
+  if (frzBadge) frzBadge.textContent = cfg.freeze_enabled ? `${cfg.freeze_duration_s.toFixed(1)}s HOLD` : "OFF";
+  syncInputVal("rt-freeze-at", cfg.freeze_at_norm, 2);
+  syncInputVal("rt-freeze-at-num", cfg.freeze_at_norm, 2);
+  syncInputVal("rt-freeze-dur", Math.min(15, cfg.freeze_duration_s), 1);
+  syncInputVal("rt-freeze-dur-num", cfg.freeze_duration_s, 1);
+
+  if (ev) {
+    const flowBadge = byId("rt-flow-load-badge");
+    if (flowBadge) flowBadge.textContent = `FLOW ${ev.peak_optical_flow_load.toFixed(0)}%`;
+    const shiftTxt = `${ev.ripple_shift_s >= 0 ? "+" : ""}${ev.ripple_shift_s.toFixed(2)}s`;
+    const rippBadge = byId("rt-ripple-badge");
+    if (rippBadge) rippBadge.textContent = shiftTxt;
+    const outEl = byId("rt-metric-out");
+    if (outEl) outEl.textContent = `${ev.output_duration_s.toFixed(2)}s`;
+    const rippEl = byId("rt-metric-ripple");
+    if (rippEl) rippEl.textContent = shiftTxt;
+    const frmEl = byId("rt-metric-frames");
+    if (frmEl) frmEl.textContent = `${ev.output_frames}f`;
+    const avgEl = byId("rt-metric-avg");
+    if (avgEl) avgEl.textContent = `${Math.round(ev.avg_speed_pct)}%`;
+  }
+
+  const fgEl = byId("rt-fg-output");
+  if (fgEl && comp) fgEl.textContent = comp.filter_complex || comp.vf_chain || "";
+  const jsEl = byId("rt-json-preview");
+  if (jsEl && st.exportedJson) jsEl.textContent = st.exportedJson.json_text || "";
+
+  const curveCanvas = byId("rt-curve-canvas");
+  if (curveCanvas) {
+    drawRetimeStudioCurveCanvas(curveCanvas, cfg, {
+      evalResult: ev,
+      selectedIdx: st.selectedPointIdx
+    });
+  }
+  const cadCanvas = byId("rt-cadence-canvas");
+  if (cadCanvas) {
+    drawRetimeStudioCadenceCanvas(cadCanvas, cfg, ev);
+  }
+}
+
+async function syncRetimeStudioServer() {
+  const st = state.rtStudio;
+  const seq = ++st.syncSeq;
+  refreshRtStudioLocalDerived();
+  syncRetimeStudioUI();
+  try {
+    const [evRes, compRes] = await Promise.all([
+      api.evaluateRetimeStudio({ config: st.config, sample_count: 65 }),
+      api.compileRetimeStudio({ config: st.config })
+    ]);
+    if (seq !== state.rtStudio.syncSeq) return;
+    if (evRes) state.rtStudio.evalResult = evRes;
+    if (compRes) state.rtStudio.compiled = compRes;
+    syncRetimeStudioUI();
+  } catch {
+    // Offline/static fallback already computed locally
+  }
+}
+
+function updateRtStudioConfig(patch, opts = {}) {
+  const st = state.rtStudio;
+  const nextRaw = { ...st.config, ...patch };
+  if (opts.customPreset && patch.preset_id === undefined) {
+    nextRaw.preset_id = "custom";
+  }
+  st.config = normalizeRetimeStudioConfigClient(nextRaw);
+  refreshRtStudioLocalDerived();
+  syncRetimeStudioUI();
+}
+
+function toggleRetimeStudioPlay() {
+  const st = state.rtStudio;
+  st.playing = !st.playing;
+  if (!st.playing) {
+    if (st.rafId) cancelAnimationFrame(st.rafId);
+    st.rafId = null;
+    syncRetimeStudioUI();
+    return;
+  }
+  st.lastTs = performance.now();
+  const step = (ts) => {
+    if (!state.rtStudio.playing) return;
+    const dt = Math.max(0, Math.min(0.1, (ts - state.rtStudio.lastTs) / 1000));
+    state.rtStudio.lastTs = ts;
+    let nextT = Number(state.rtStudio.config.playhead_norm || 0) + dt * 0.25;
+    if (nextT > 1) nextT = 0;
+    state.rtStudio.config = normalizeRetimeStudioConfigClient({
+      ...state.rtStudio.config,
+      playhead_norm: Number(nextT.toFixed(4))
+    });
+    refreshRtStudioLocalDerived();
+    syncRetimeStudioUI();
+    state.rtStudio.rafId = requestAnimationFrame(step);
+  };
+  syncRetimeStudioUI();
+  st.rafId = requestAnimationFrame(step);
+}
+
+function openRetimeStudioDialog() {
+  const dlg = byId("retime-studio-dialog");
+  if (!dlg) return;
+  const selInfo = getSelectedClipTrack();
+  if (selInfo && selInfo.clip) {
+    const fpsVal = state.timelineDoc && state.timelineDoc.fps ? state.timelineDoc.fps.num / state.timelineDoc.fps.den : 25;
+    const srcDur = Math.max(0.25, Number(selInfo.clip.duration_frames || 200) / Math.max(1, fpsVal));
+    if (selInfo.clip.retime_studio) {
+      state.rtStudio.config = normalizeRetimeStudioConfigClient({
+        ...selInfo.clip.retime_studio,
+        source_duration_s: srcDur,
+        fps: fpsVal
+      });
+    } else {
+      state.rtStudio.config = normalizeRetimeStudioConfigClient({
+        ...state.rtStudio.config,
+        source_duration_s: srcDur,
+        fps: fpsVal
+      });
+    }
+  }
+  state.rtStudio.isOpen = true;
+  if (!dlg.open && typeof dlg.showModal === "function") dlg.showModal();
+  refreshRtStudioLocalDerived();
+  syncRetimeStudioUI();
+  syncRetimeStudioServer();
+}
+
+function closeRetimeStudioDialog() {
+  const st = state.rtStudio;
+  st.playing = false;
+  if (st.rafId) cancelAnimationFrame(st.rafId);
+  st.rafId = null;
+  st.isOpen = false;
+  const dlg = byId("retime-studio-dialog");
+  if (dlg && dlg.open && typeof dlg.close === "function") dlg.close();
+}
+
+async function applyRetimeStudioToTimelineAction() {
+  if (!state.timelineDoc) return;
+  const st = state.rtStudio;
+  const selInfo = getSelectedClipTrack();
+  const trackIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex = selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyRetimeStudio({
+      document: state.timelineDoc,
+      config: st.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      pushTimelineUndoSnapshot("Apply Retime Studio");
+      applyTimelineMutationResponse(res, { syncClipSelection: true });
+      setRtStudioStatus(t("rtStudio.status.applied"));
+    }
+  } catch (err) {
+    try {
+      const nextDoc = applyRetimeStudioToDocumentClient(state.timelineDoc, st.config, {
+        track_index: trackIndex,
+        clip_index: clipIndex
+      });
+      pushTimelineUndoSnapshot("Apply Retime Studio");
+      state.timelineDoc = nextDoc;
+      renderTimelineUI();
+      setRtStudioStatus(t("rtStudio.status.applied"));
+    } catch {
+      setRtStudioStatus(`Apply failed: ${err.message || err}`);
+    }
+  }
+}
+
+async function sendRetimeStudioToDeliverAction() {
+  const st = state.rtStudio;
+  let compiled = st.compiled;
+  try {
+    compiled = await api.compileRetimeStudio({ config: st.config });
+    if (compiled) st.compiled = compiled;
+  } catch {
+    compiled = compileRetimeStudioFiltergraphClient(st.config);
+  }
+  const outEl = byId("render-filtergraph-preview") || byId("fx-filtergraph-output");
+  if (outEl && compiled && compiled.filter_complex) {
+    outEl.textContent = compiled.filter_complex;
+  }
+  const chk = byId("render-use-clip-retime");
+  if (chk) chk.checked = true;
+  closeRetimeStudioDialog();
+  switchTab("render");
+  setRtStudioStatus(t("rtStudio.status.deliver"));
+}
+
+async function exportRetimeStudioJsonAction() {
+  const st = state.rtStudio;
+  try {
+    const res = await api.exportRetimeStudioJson({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`
+    });
+    st.exportedJson = res;
+    const drawer = byId("rt-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncRetimeStudioUI();
+    setRtStudioStatus(
+      t("rtStudio.status.exportedJson").replace(
+        "{schema}",
+        String(res.schema_version || "taktcut.retime_studio.v1")
+      )
+    );
+  } catch (err) {
+    setRtStudioStatus(`JSON export failed: ${err.message || err}`);
+  }
+}
+
+async function downloadRetimeStudioJsonAction() {
+  const st = state.rtStudio;
+  const filename = `taktcut_${st.config.preset_id}_retime_studio.json`;
+  try {
+    const blob = await api.downloadRetimeStudioBlob({
+      config: st.config,
+      title: `TAKTCUT_${st.config.preset_id}`,
+      filename
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setRtStudioStatus(`Download failed: ${err.message || err}`);
+  }
+}
+
+function wireRetimeStudioEvents() {
+  byId("btn-timeline-retime-studio")?.addEventListener("click", openRetimeStudioDialog);
+  byId("btn-inspector-retime-studio")?.addEventListener("click", openRetimeStudioDialog);
+  byId("btn-fx-retime-studio")?.addEventListener("click", openRetimeStudioDialog);
+  byId("btn-close-retime-studio")?.addEventListener("click", closeRetimeStudioDialog);
+
+  const dlg = byId("retime-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeRetimeStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeRetimeStudioDialog();
+    });
+    dlg.addEventListener("close", () => {
+      state.rtStudio.playing = false;
+      state.rtStudio.isOpen = false;
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".rt-preset-btn[data-rt-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-rt-preset") || "hero_slowmo_drop";
+      const presetCfg = createDefaultRetimeStudioConfigClient(pid);
+      state.rtStudio.config = normalizeRetimeStudioConfigClient({
+        ...presetCfg,
+        source_duration_s: state.rtStudio.config.source_duration_s,
+        fps: state.rtStudio.config.fps
+      });
+      state.rtStudio.selectedPointIdx = state.rtStudio.config.control_points.length > 1 ? 1 : 0;
+      refreshRtStudioLocalDerived();
+      syncRetimeStudioUI();
+      syncRetimeStudioServer();
+      const ev = state.rtStudio.evalResult;
+      const shift = ev ? `${ev.ripple_shift_s >= 0 ? "+" : ""}${ev.ripple_shift_s.toFixed(2)}` : "0.00";
+      setRtStudioStatus(
+        t("rtStudio.status.presetApplied")
+          .replace("{preset}", pid)
+          .replace("{outDur}", ev ? ev.output_duration_s.toFixed(2) : "8.00")
+          .replace("{shift}", shift)
+      );
+    });
+  }
+
+  byId("rt-interpolation")?.addEventListener("change", (ev) => {
+    updateRtStudioConfig({ interpolation: ev.target.value });
+    syncRetimeStudioServer();
+  });
+  byId("rt-direction")?.addEventListener("change", (ev) => {
+    updateRtStudioConfig({ direction: ev.target.value });
+    syncRetimeStudioServer();
+  });
+  byId("rt-boomerang")?.addEventListener("change", (ev) => {
+    updateRtStudioConfig({ boomerang: Boolean(ev.target.checked) });
+    syncRetimeStudioServer();
+  });
+  byId("rt-pitch-preserve")?.addEventListener("change", (ev) => {
+    updateRtStudioConfig({ pitch_preserve: Boolean(ev.target.checked) });
+    syncRetimeStudioServer();
+  });
+  byId("rt-ripple-timeline")?.addEventListener("change", (ev) => {
+    updateRtStudioConfig({ ripple_timeline: Boolean(ev.target.checked) });
+    syncRetimeStudioServer();
+  });
+  byId("rt-enabled")?.addEventListener("change", (ev) => {
+    updateRtStudioConfig({ enabled: Boolean(ev.target.checked) });
+    syncRetimeStudioServer();
+  });
+  byId("rt-freeze-enabled")?.addEventListener("change", (ev) => {
+    updateRtStudioConfig({ freeze_enabled: Boolean(ev.target.checked) });
+    syncRetimeStudioServer();
+  });
+
+  byId("btn-rt-play")?.addEventListener("click", toggleRetimeStudioPlay);
+  byId("rt-playhead-slider")?.addEventListener("input", (ev) => {
+    const val = Math.max(0, Math.min(1, Number(ev.target.value) / 100));
+    updateRtStudioConfig({ playhead_norm: Number(val.toFixed(2)) });
+  });
+
+  byId("btn-rt-add-pt")?.addEventListener("click", () => {
+    const cfg = state.rtStudio.config;
+    const tNow = Number(cfg.playhead_norm.toFixed(3));
+    const clampedT = Math.min(0.98, Math.max(0.02, tNow));
+    const curSpd = evaluateRetimeStudioSpeedAtClient(cfg.control_points, clampedT);
+    const nextPts = [...cfg.control_points.filter((p) => Math.abs(p.t_src_norm - clampedT) > 0.02)];
+    nextPts.push({ t_src_norm: clampedT, speed_pct: Math.round(curSpd), easing: "bezier_smooth" });
+    nextPts.sort((a, b) => a.t_src_norm - b.t_src_norm);
+    const selIdx = nextPts.findIndex((p) => Math.abs(p.t_src_norm - clampedT) < 1e-3);
+    state.rtStudio.selectedPointIdx = Math.max(0, selIdx);
+    updateRtStudioConfig({ control_points: nextPts }, { customPreset: true });
+    syncRetimeStudioServer();
+  });
+
+  byId("btn-rt-del-pt")?.addEventListener("click", () => {
+    const cfg = state.rtStudio.config;
+    const idx = state.rtStudio.selectedPointIdx;
+    if (cfg.control_points.length <= 2 || idx <= 0 || idx >= cfg.control_points.length - 1) return;
+    const nextPts = cfg.control_points.filter((_, i) => i !== idx);
+    state.rtStudio.selectedPointIdx = Math.min(idx, nextPts.length - 1);
+    updateRtStudioConfig({ control_points: nextPts }, { customPreset: true });
+    syncRetimeStudioServer();
+  });
+
+  byId("btn-rt-reset-curve")?.addEventListener("click", () => {
+    const base = createDefaultRetimeStudioConfigClient("custom");
+    state.rtStudio.selectedPointIdx = 1;
+    updateRtStudioConfig({
+      preset_id: "custom",
+      control_points: base.control_points,
+      freeze_enabled: false,
+      boomerang: false,
+      direction: "forward"
+    });
+    syncRetimeStudioServer();
+  });
+
+  const updateSelectedPoint = (patch, commitServer = false) => {
+    const cfg = state.rtStudio.config;
+    const pts = cfg.control_points.map((p) => ({ ...p }));
+    const idx = Math.max(0, Math.min(pts.length - 1, state.rtStudio.selectedPointIdx));
+    const isEndpoint = idx === 0 || idx === pts.length - 1;
+    const target = { ...pts[idx], ...patch };
+    if (isEndpoint && patch.t_src_norm !== undefined) {
+      target.t_src_norm = idx === 0 ? 0.0 : 1.0;
+    }
+    pts[idx] = target;
+    pts.sort((a, b) => a.t_src_norm - b.t_src_norm);
+    updateRtStudioConfig({ control_points: pts }, { customPreset: true });
+    if (commitServer) syncRetimeStudioServer();
+  };
+
+  byId("rt-pt-speed")?.addEventListener("input", (ev) => {
+    const v = Number(ev.target.value);
+    if (Number.isFinite(v)) updateSelectedPoint({ speed_pct: v });
+  });
+  byId("rt-pt-speed")?.addEventListener("change", () => syncRetimeStudioServer());
+  byId("rt-pt-speed-num")?.addEventListener("input", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(v) && v >= 10 && v <= 1200) {
+      updateSelectedPoint({ speed_pct: v });
+    }
+  });
+  byId("rt-pt-speed-num")?.addEventListener("change", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    const clamped = Number.isFinite(v) ? Math.min(1200, Math.max(10, v)) : 100;
+    updateSelectedPoint({ speed_pct: clamped }, true);
+  });
+
+  byId("rt-pt-t")?.addEventListener("input", (ev) => {
+    const v = Number(ev.target.value);
+    if (Number.isFinite(v)) updateSelectedPoint({ t_src_norm: v });
+  });
+  byId("rt-pt-t")?.addEventListener("change", () => syncRetimeStudioServer());
+  byId("rt-pt-t-num")?.addEventListener("input", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    if (Number.isFinite(v) && v >= 0 && v <= 1) {
+      updateSelectedPoint({ t_src_norm: v });
+    }
+  });
+  byId("rt-pt-t-num")?.addEventListener("change", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    const clamped = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.5;
+    updateSelectedPoint({ t_src_norm: clamped }, true);
+  });
+
+  byId("rt-pt-easing")?.addEventListener("change", (ev) => {
+    updateSelectedPoint({ easing: ev.target.value }, true);
+  });
+
+  byId("rt-src-dur-num")?.addEventListener("change", (ev) => {
+    const v = Number.parseFloat(ev.target.value);
+    const clamped = Number.isFinite(v) ? Math.min(3600, Math.max(0.25, v)) : 8.0;
+    updateRtStudioConfig({ source_duration_s: clamped });
+    syncRetimeStudioServer();
+  });
+
+  const bindRtRangePair = (rangeId, numId, key, minV, maxV) => {
+    const rangeEl = byId(rangeId);
+    const numEl = byId(numId);
+    if (rangeEl) {
+      rangeEl.addEventListener("input", () => {
+        const v = Number.parseFloat(rangeEl.value);
+        if (Number.isFinite(v)) updateRtStudioConfig({ [key]: v });
+      });
+      rangeEl.addEventListener("change", () => syncRetimeStudioServer());
+    }
+    if (numEl) {
+      numEl.addEventListener("input", () => {
+        const v = Number.parseFloat(numEl.value);
+        if (Number.isFinite(v) && v >= minV && v <= maxV) {
+          updateRtStudioConfig({ [key]: v });
+        }
+      });
+      numEl.addEventListener("change", () => {
+        const v = Number.parseFloat(numEl.value);
+        const clamped = Number.isFinite(v) ? Math.min(maxV, Math.max(minV, v)) : state.rtStudio.config[key];
+        updateRtStudioConfig({ [key]: clamped });
+        syncRetimeStudioServer();
+      });
+    }
+  };
+  bindRtRangePair("rt-mblur", "rt-mblur-num", "motion_blur_amount", 0, 1);
+  bindRtRangePair("rt-freeze-at", "rt-freeze-at-num", "freeze_at_norm", 0, 1);
+  bindRtRangePair("rt-freeze-dur", "rt-freeze-dur-num", "freeze_duration_s", 0, 30);
+
+  // Interactive speed-ramp curve canvas drag
+  const curveCanvas = byId("rt-curve-canvas");
+  if (curveCanvas) {
+    curveCanvas.addEventListener("pointerdown", (ev) => {
+      const meta = curveCanvas._rtStudioMeta;
+      if (!meta) return;
+      const rect = curveCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      for (const pt of meta.points || []) {
+        const d = Math.hypot(x - pt.x, y - pt.y);
+        if (d <= pt.r && d < bestDist) {
+          bestDist = d;
+          bestIdx = pt.idx;
+        }
+      }
+
+      if (bestIdx >= 0) {
+        state.rtStudio.selectedPointIdx = bestIdx;
+        state.rtStudio.dragState = { idx: bestIdx, meta };
+        try {
+          curveCanvas.setPointerCapture(ev.pointerId);
+        } catch {
+          // Ignore synthetic pointer events
+        }
+        syncRetimeStudioUI();
+      } else {
+        const tNorm = Math.min(1, Math.max(0, (x - meta.padL) / Math.max(1, meta.plotW)));
+        updateRtStudioConfig({ playhead_norm: Number(tNorm.toFixed(3)) });
+      }
+    });
+
+    curveCanvas.addEventListener("pointermove", (ev) => {
+      const drag = state.rtStudio.dragState;
+      if (!drag) return;
+      const rect = curveCanvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      const m = drag.meta;
+      const pts = state.rtStudio.config.control_points.map((p) => ({ ...p }));
+      const idx = Math.max(0, Math.min(pts.length - 1, drag.idx));
+      const newSpeedPct = m.yToSpeed(y);
+      let newT = pts[idx].t_src_norm;
+      if (idx > 0 && idx < pts.length - 1) {
+        const minT = pts[idx - 1].t_src_norm + 0.02;
+        const maxT = pts[idx + 1].t_src_norm - 0.02;
+        const rawT = (x - m.padL) / Math.max(1, m.plotW);
+        newT = Number(Math.min(maxT, Math.max(minT, rawT)).toFixed(4));
+      }
+      pts[idx] = { ...pts[idx], t_src_norm: newT, speed_pct: newSpeedPct };
+      updateRtStudioConfig({ control_points: pts }, { customPreset: true });
+    });
+
+    const endDrag = () => {
+      if (state.rtStudio.dragState) {
+        state.rtStudio.dragState = null;
+        syncRetimeStudioServer();
+      }
+    };
+    curveCanvas.addEventListener("pointerup", endDrag);
+    curveCanvas.addEventListener("pointercancel", endDrag);
+  }
+
+  byId("btn-rt-apply-timeline")?.addEventListener("click", applyRetimeStudioToTimelineAction);
+  byId("btn-rt-send-deliver")?.addEventListener("click", sendRetimeStudioToDeliverAction);
+  byId("btn-rt-export-json")?.addEventListener("click", exportRetimeStudioJsonAction);
+  byId("btn-rt-download-json")?.addEventListener("click", downloadRetimeStudioJsonAction);
+  byId("btn-rt-copy-fg")?.addEventListener("click", async () => {
+    const compiled = state.rtStudio.compiled || compileRetimeStudioFiltergraphClient(state.rtStudio.config);
+    try {
+      await navigator.clipboard.writeText(compiled.filter_complex || "");
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    setRtStudioStatus(t("rtStudio.status.copied"));
   });
 }
 

@@ -342,6 +342,19 @@ from taktcut.render import (
     validate_review_watermark_text,
     validate_timecode_burnin,
 )
+from taktcut.retime_studio import (
+    ALLOWED_RETIME_STUDIO_DIRECTIONS,
+    ALLOWED_RETIME_STUDIO_EASINGS,
+    ALLOWED_RETIME_STUDIO_INTERPOLATIONS,
+    ALLOWED_RETIME_STUDIO_PRESET_IDS,
+    RetimeStudioConfig,
+    apply_retime_studio_to_document,
+    compile_retime_studio_filtergraph,
+    evaluate_retime_studio_curve,
+    export_retime_studio_json,
+    list_retime_studio_presets,
+    normalize_retime_studio_config,
+)
 from taktcut.scene_cut import (
     SCENE_CUT_MIN_SHOT_FRAMES_DEFAULT,
     SCENE_CUT_THRESHOLD_DEFAULT,
@@ -1930,6 +1943,20 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "shape_types": list(ALLOWED_POWER_WINDOW_SHAPE_TYPES),
                     "view_modes": list(ALLOWED_POWER_WINDOW_VIEW_MODES),
                     "default_config": PowerWindowConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/retime/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_retime_studio_presets()],
+                    "preset_ids": list(ALLOWED_RETIME_STUDIO_PRESET_IDS),
+                    "easings": list(ALLOWED_RETIME_STUDIO_EASINGS),
+                    "directions": list(ALLOWED_RETIME_STUDIO_DIRECTIONS),
+                    "interpolations": list(ALLOWED_RETIME_STUDIO_INTERPOLATIONS),
+                    "default_config": RetimeStudioConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -5114,6 +5141,99 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "document": updated_pw_doc.model_dump(mode="json"),
                     "validation": pw_val.model_dump(mode="json"),
                     "compiled": pw_compiled_apply.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/retime/evaluate":
+            rt_cfg = normalize_retime_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_samples = payload.get("sample_count", 65)
+            sample_count = (
+                int(raw_samples)
+                if isinstance(raw_samples, int) and not isinstance(raw_samples, bool)
+                else 65
+            )
+            rt_eval = evaluate_retime_studio_curve(rt_cfg, sample_count=sample_count)
+            self._send_json(HTTPStatus.OK, rt_eval.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/retime/compile":
+            rt_cfg = normalize_retime_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            rt_compiled = compile_retime_studio_filtergraph(rt_cfg)
+            self._send_json(HTTPStatus.OK, rt_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/retime/export-json":
+            rt_cfg = normalize_retime_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            rt_title = str(payload.get("title", "TAKTCUT_RETIME_STUDIO")).strip() or (
+                "TAKTCUT_RETIME_STUDIO"
+            )
+            rt_exported = export_retime_studio_json(rt_cfg, title=rt_title)
+            raw_rt_out = payload.get("out_path")
+            rt_saved_rel: str | None = None
+            if raw_rt_out is not None and str(raw_rt_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_rt_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(rt_exported.json_text, encoding="utf-8")
+                rt_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                rt_exported.model_copy(update={"saved_path": rt_saved_rel}).model_dump(mode="json"),
+            )
+            return
+
+        if route == "/api/fx/retime/download":
+            rt_cfg = normalize_retime_studio_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            rt_title = str(payload.get("title", "TAKTCUT_RETIME_STUDIO")).strip() or (
+                "TAKTCUT_RETIME_STUDIO"
+            )
+            rt_exported_dl = export_retime_studio_json(rt_cfg, title=rt_title)
+            rt_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or rt_exported_dl.filename),
+                "taktcut_retime_studio",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                rt_exported_dl.json_text.encode("utf-8"),
+                extra_headers={"Content-Disposition": f'attachment; filename="{rt_dl_filename}"'},
+            )
+            return
+
+        if route == "/api/fx/retime/apply":
+            rt_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            rt_cfg = normalize_retime_studio_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_rt_doc = apply_retime_studio_to_document(
+                rt_doc,
+                rt_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            rt_compiled_apply = compile_retime_studio_filtergraph(rt_cfg)
+            rt_val = validate_timeline(updated_rt_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_rt_doc.model_dump(mode="json"),
+                    "validation": rt_val.model_dump(mode="json"),
+                    "compiled": rt_compiled_apply.model_dump(mode="json"),
                 },
             )
             return

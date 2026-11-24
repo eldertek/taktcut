@@ -14644,3 +14644,309 @@ def test_ui_playwright_power_window_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_ui_retime_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/fx/retime/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 6
+    assert "action_speed_whip" in meta["preset_ids"]
+    assert "optical_flow_minterpolate" in meta["interpolations"]
+    assert "step_hold" in meta["easings"]
+
+    ev_status, _, ev_raw = _http_call(
+        f"{base_url}/api/fx/retime/evaluate",
+        method="POST",
+        payload={"config": {"preset_id": "hero_slowmo_drop"}},
+    )
+    assert ev_status == 200
+    ev_payload = json.loads(ev_raw.decode("utf-8"))
+    assert ev_payload["output_duration_s"] > ev_payload["source_duration_s"]
+    assert ev_payload["ripple_shift_s"] > 0.0
+    assert len(ev_payload["samples"]) == 65
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/retime/compile",
+        method="POST",
+        payload={
+            "config": {
+                "preset_id": "freeze_frame_punch",
+                "interpolation": "optical_flow_minterpolate",
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert "setpts=" in compiled["vf_chain"]
+    assert "minterpolate=" in compiled["vf_chain"]
+    assert "tpad=" in compiled["vf_chain"]
+    assert "rubberband=" in compiled["af_chain"]
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/fx/retime/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "action_speed_whip"},
+            "title": "Action Whip",
+            "out_path": "exports/whip_retime.json",
+        },
+    )
+    assert ex_status == 200
+    exported = json.loads(ex_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/whip_retime.json"
+    assert (workspace / "exports" / "whip_retime.json").is_file()
+    assert exported["schema_version"] == "taktcut.retime_studio.v1"
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/fx/retime/export-json",
+        method="POST",
+        payload={
+            "config": {"preset_id": "hero_slowmo_drop"},
+            "out_path": "../escape_rt.json",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    dl_status, dl_headers, dl_raw = _http_call(
+        f"{base_url}/api/fx/retime/download",
+        method="POST",
+        payload={
+            "config": {"preset_id": "action_speed_whip"},
+            "title": "Whip DL",
+            "filename": "../../evil_rt.json",
+        },
+    )
+    assert dl_status == 200
+    disp = dl_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "taktcut.retime_studio.v1" in dl_raw.decode("utf-8")
+
+    # Apply to Timeline document
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+    ap_status, _, ap_raw = _http_call(
+        f"{base_url}/api/fx/retime/apply",
+        method="POST",
+        payload={
+            "document": doc_payload,
+            "config": {
+                "preset_id": "action_speed_whip",
+                "interpolation": "optical_flow_minterpolate",
+            },
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert ap_status == 200
+    ap_data = json.loads(ap_raw.decode("utf-8"))
+    assert ap_data["changed"] is True
+    assert ap_data["validation"]["valid"] is True
+    rt_clip = ap_data["document"]["tracks"][0]["clips"][0]["retime_studio"]
+    assert rt_clip["preset_id"] == "action_speed_whip"
+    assert rt_clip["interpolation"] == "optical_flow_minterpolate"
+
+    # Node.js static-demo parity check via demo_adapter.js
+    assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+    demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+    node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+const api = createApiClient();
+const pre = await api.getRetimeStudioPresets();
+assert.equal(pre.presets.length, 6);
+const ev = await api.evaluateRetimeStudio({{
+  config: {{ preset_id: "hero_slowmo_drop" }}
+}});
+assert.ok(ev.output_duration_s > ev.source_duration_s);
+assert.ok(ev.ripple_shift_s > 0);
+const comp = await api.compileRetimeStudio({{
+  config: {{ preset_id: "freeze_frame_punch", interpolation: "optical_flow_minterpolate" }}
+}});
+assert.ok(comp.vf_chain.includes("minterpolate="));
+assert.ok(comp.vf_chain.includes("tpad="));
+assert.ok(comp.af_chain.includes("rubberband="));
+const exp = await api.exportRetimeStudioJson({{
+  config: {{ preset_id: "action_speed_whip" }},
+  title: "Demo RT"
+}});
+assert.equal(exp.schema_version, "taktcut.retime_studio.v1");
+const blob = await api.downloadRetimeStudioBlob({{
+  config: {{ preset_id: "action_speed_whip" }},
+  title: "Demo RT DL"
+}});
+assert.ok((await blob.text()).includes("taktcut.retime_studio.v1"));
+const sampleDoc = {{
+  title: "Demo",
+  fps: {{ num: 25, den: 1 }},
+  width: 1920,
+  height: 1080,
+  start_frame: 0,
+  tracks: [{{
+    index: 1,
+    kind: "video",
+    name: "V1",
+    clips: [{{
+      name: "C1",
+      track_index: 1,
+      media_type: "video",
+      start_frame: 0,
+      duration_frames: 100
+    }}]
+  }}]
+}};
+const applied = await api.applyRetimeStudio({{
+  document: sampleDoc,
+  config: {{ preset_id: "action_speed_whip", interpolation: "optical_flow_minterpolate" }},
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(applied.changed, true);
+assert.equal(applied.validation.valid, true);
+assert.equal(
+  applied.document.tracks[0].clips[0].retime_studio.preset_id,
+  "action_speed_whip"
+);
+"""
+    node_proc = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert node_proc.returncode == 0, node_proc.stderr
+
+
+def test_ui_playwright_retime_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("Playwright not installed")
+
+    base_url, _ = ui_server
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#btn-timeline-retime-studio")
+
+            # Open Retime Studio via Shift+Y shortcut
+            page.keyboard.press("Shift+Y")
+            page.wait_for_selector("#retime-studio-dialog[open]")
+
+            # Drag control point #2 vertically/horizontally on Speed-Ramp Curve Canvas
+            spd_before = float(page.input_value("#rt-pt-speed-num"))
+            drag_pt = page.evaluate(
+                """() => {
+                  const c = document.getElementById('rt-curve-canvas');
+                  const r = c.getBoundingClientRect();
+                  const m = c._rtStudioMeta;
+                  const pt = m.points[1];
+                  return { x: r.left + pt.x, y: r.top + pt.y };
+                }"""
+            )
+            page.mouse.move(drag_pt["x"], drag_pt["y"])
+            page.mouse.down()
+            page.mouse.move(drag_pt["x"] + 28, drag_pt["y"] - 64, steps=4)
+            page.mouse.up()
+            spd_after = float(page.input_value("#rt-pt-speed-num"))
+            assert spd_after > spd_before
+
+            # Switch preset to action_speed_whip + optical_flow_minterpolate
+            page.click(".rt-preset-btn[data-rt-preset='action_speed_whip']")
+            page.wait_for_function(
+                "() => (document.getElementById('rt-active-preset-badge')?.textContent || '')"
+                ".includes('ACTION SPEED WHIP')"
+            )
+            page.select_option("#rt-interpolation", "optical_flow_minterpolate")
+
+            # Export JSON taktcut.retime_studio.v1
+            page.click("#btn-rt-export-json")
+            page.wait_for_function(
+                "() => (document.getElementById('rt-json-preview')?.textContent || '')"
+                ".includes('taktcut.retime_studio.v1')"
+            )
+            fg_text = page.locator("#rt-fg-output").text_content() or ""
+            assert "minterpolate=" in fg_text
+            assert "rubberband=" in fg_text
+
+            # Apply to Timeline
+            page.click("#btn-rt-apply-timeline")
+            page.wait_for_function(
+                "() => (document.getElementById('rt-status-note')?.textContent || '')"
+                ".includes('Timeline')"
+            )
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#btn-close-retime-studio")
+            page.click("#lang-fr")
+            page.click("#btn-timeline-retime-studio")
+            page.wait_for_selector("#retime-studio-dialog[open]")
+            fr_txt = page.locator("#retime-studio-dialog").text_content() or ""
+            assert "Rampe de Vitesse" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+
+            page.click("#btn-close-retime-studio")
+            page.click("#lang-en")
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.wait_for_function("() => window.innerWidth === 375")
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+            page.click("#btn-timeline-retime-studio")
+            page.wait_for_selector("#retime-studio-dialog[open]")
+            overflow_mobile_dlg = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+            dlg_w = page.evaluate(
+                "() => document.getElementById('retime-studio-dialog')"
+                ".getBoundingClientRect().width"
+            )
+            assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+            for ctrl_id in (
+                "btn-timeline-retime-studio",
+                "btn-rt-play",
+                "btn-rt-add-pt",
+                "btn-rt-apply-timeline",
+                "btn-rt-send-deliver",
+                "btn-rt-export-json",
+                "btn-close-retime-studio",
+                "rt-pt-speed-num",
+            ):
+                h = page.evaluate(
+                    f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                )
+                assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+            page.click("#btn-close-retime-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

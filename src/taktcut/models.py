@@ -1411,6 +1411,44 @@ class ClipPowerWindowTrack(BaseModel):
     track_keyframes: list[ClipPowerWindowKeyframeRef] = Field(default_factory=list)
 
 
+class ClipRetimeStudioPointRef(BaseModel):
+    """Single speed-ramp control point stored on a TimelineClip retime studio track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    t_src_norm: float = Field(ge=0.0, le=1.0)
+    speed_pct: float = Field(ge=10.0, le=1200.0)
+    easing: Literal["linear", "bezier_smooth", "step_hold"] = "bezier_smooth"
+
+
+class ClipRetimeStudioTrack(BaseModel):
+    """Non-destructive Optical-Flow Speed-Ramp, Freeze-Frame & Pitch-Locked Retime track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    preset_id: str = Field(default="hero_slowmo_drop", max_length=64)
+    direction: Literal["forward", "reverse"] = "forward"
+    boomerang: bool = False
+    interpolation: Literal[
+        "nearest", "frame_blend", "optical_flow_minterpolate"
+    ] = "optical_flow_minterpolate"
+    pitch_preserve: bool = True
+    motion_blur_amount: float = Field(default=0.35, ge=0.0, le=1.0)
+    freeze_enabled: bool = False
+    freeze_at_norm: float = Field(default=0.5, ge=0.0, le=1.0)
+    freeze_duration_s: float = Field(default=1.2, ge=0.0, le=30.0)
+    ripple_timeline: bool = True
+    source_duration_s: float = Field(default=8.0, ge=0.25, le=3600.0)
+    output_duration_s: float = Field(default=8.0, ge=0.05, le=7200.0)
+    ripple_shift_s: float = Field(default=0.0, ge=-3600.0, le=7200.0)
+    avg_speed_pct: float = Field(default=100.0, ge=10.0, le=1200.0)
+    fps: float = Field(default=25.0, ge=1.0, le=120.0)
+    ffmpeg_vf: str = Field(default="", max_length=16384)
+    ffmpeg_af: str = Field(default="", max_length=8192)
+    control_points: list[ClipRetimeStudioPointRef] = Field(default_factory=list)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1441,6 +1479,7 @@ class TimelineClip(BaseModel):
     motion_spline: ClipMotionSplineTrack | None = None
     optical_glow: ClipOpticalGlowTrack | None = None
     power_window: ClipPowerWindowTrack | None = None
+    retime_studio: ClipRetimeStudioTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

@@ -1204,6 +1204,7 @@
                   <span data-i18n="timeline.retime.title">Clip Speed / Retime</span>
                   <div class="viewer-controls">
                     <span id="clip-retime-badge" class="nle-tag mono">1.0x NORMAL</span>
+                    <button type="button" id="btn-inspector-retime-studio" class="btn btn-mini rt-studio-btn" data-i18n="rtStudio.btn.inspector" title="Open Optical-Flow Speed-Ramp &amp; Freeze-Frame Studio (Shift+Y)">Speed Studio</button>
                     <button type="button" id="btn-clip-retime-to-deliver" class="btn btn-mini" data-i18n="timeline.retime.sendDeliver">Use in Deliver</button>
                   </div>
                 </div>
@@ -1532,6 +1533,16 @@
                   <span data-i18n="pwStudio.btn.toolbar">Power Window</span>
                   <span class="kbd-chip mono">Shift+W</span>
                 </button>
+                <button type="button" id="btn-timeline-retime-studio" class="btn btn-mini tl-rt-studio-btn rt-studio-btn" title="Open Optical-Flow Speed-Ramp, Freeze-Frame &amp; Pitch-Lock Retime Studio (Shift+Y)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M2 11 L5 11 C7 11, 7 4, 10 4 L14 4" stroke="#38bdf8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                    <circle cx="5" cy="11" r="1.4" fill="#f59e0b"/>
+                    <circle cx="10" cy="4" r="1.4" fill="#38bdf8"/>
+                    <line x1="2" y1="8" x2="14" y2="8" stroke="#94a3b8" stroke-width="0.9" stroke-dasharray="2 1.5"/>
+                  </svg>
+                  <span data-i18n="rtStudio.btn.toolbar">Retime Studio</span>
+                  <span class="kbd-chip mono">Shift+Y</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1748,6 +1759,10 @@
                 <button type="button" id="btn-fx-power-window-studio" class="btn btn-secondary pw-studio-btn" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">
                   <span data-i18n="pwStudio.btn.fx">Power Windows</span>
                   <span class="kbd-chip mono">Shift+W</span>
+                </button>
+                <button type="button" id="btn-fx-retime-studio" class="btn btn-secondary rt-studio-btn" title="Open Optical-Flow Speed-Ramp, Freeze-Frame &amp; Pitch-Lock Retime Studio (Shift+Y)">
+                  <span data-i18n="rtStudio.btn.fx">Retime Studio</span>
+                  <span class="kbd-chip mono">Shift+Y</span>
                 </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
@@ -5608,6 +5623,215 @@
         <div class="fg-drawer-body">
           <pre id="pw-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="pw-json-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="retime-studio-dialog" class="nle-dialog rt-studio-dialog" aria-labelledby="rt-studio-title" aria-describedby="rt-studio-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="rt-studio-title" data-i18n="rtStudio.dialog.title">DaVinci Resolve Speed Editor &amp; Optical-Flow Retime Studio</h2>
+        <p id="rt-studio-subtitle" class="nle-dialog-subtitle" data-i18n="rtStudio.dialog.subtitle">Interactive Speed-Ramp Curve (10%..1200%), Freeze-Frame Hold, Optical Flow MCI &amp; Rubberband Pitch-Lock</p>
+      </div>
+      <div class="rt-header-actions">
+        <span id="rt-active-preset-badge" class="nle-tag mono">HERO SLOWMO DROP</span>
+        <span id="rt-telemetry-badge" class="nle-tag mono rt-telemetry-pill">OUT 8.00s | +0.00s | AVG 100%</span>
+        <button type="button" id="btn-close-retime-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+
+    <div class="nle-dialog-body rt-dialog-body">
+      <div class="rt-preset-strip" id="rt-preset-strip" role="group" aria-label="Retime Studio speed-ramp presets">
+        <span class="pill-label" data-i18n="rtStudio.presetsLabel">SPEED PRESETS</span>
+        <button type="button" class="btn btn-chip rt-preset-btn is-active" data-rt-preset="hero_slowmo_drop" aria-pressed="true" data-i18n="rtStudio.preset.hero_slowmo_drop">Hero Slow-Mo</button>
+        <button type="button" class="btn btn-chip rt-preset-btn" data-rt-preset="action_speed_whip" aria-pressed="false" data-i18n="rtStudio.preset.action_speed_whip">Action Speed Whip</button>
+        <button type="button" class="btn btn-chip rt-preset-btn" data-rt-preset="hyperlapse_400" aria-pressed="false" data-i18n="rtStudio.preset.hyperlapse_400">Hyperlapse 400%</button>
+        <button type="button" class="btn btn-chip rt-preset-btn" data-rt-preset="freeze_frame_punch" aria-pressed="false" data-i18n="rtStudio.preset.freeze_frame_punch">Freeze-Frame Punch</button>
+        <button type="button" class="btn btn-chip rt-preset-btn" data-rt-preset="reverse_boomerang" aria-pressed="false" data-i18n="rtStudio.preset.reverse_boomerang">Reverse Boomerang</button>
+        <button type="button" class="btn btn-chip rt-preset-btn" data-rt-preset="custom" aria-pressed="false" data-i18n="rtStudio.preset.custom">Custom</button>
+      </div>
+
+      <div class="rt-toolbar-bar">
+        <div class="rt-mode-group">
+          <label class="inline-label" for="rt-interpolation" data-i18n="rtStudio.interpLabel">Optical Flow</label>
+          <select id="rt-interpolation" class="input-control mono">
+            <option value="optical_flow_minterpolate" selected data-i18n="rtStudio.interp.optical_flow_minterpolate">Optical Flow (MCI)</option>
+            <option value="frame_blend" data-i18n="rtStudio.interp.frame_blend">Frame Blend</option>
+            <option value="nearest" data-i18n="rtStudio.interp.nearest">Nearest Frame</option>
+          </select>
+          <label class="inline-label" for="rt-direction" data-i18n="rtStudio.dirLabel">Direction</label>
+          <select id="rt-direction" class="input-control mono">
+            <option value="forward" selected data-i18n="rtStudio.dir.forward">Forward</option>
+            <option value="reverse" data-i18n="rtStudio.dir.reverse">Reverse</option>
+          </select>
+        </div>
+
+        <div class="rt-flags-group">
+          <label class="inline-check" for="rt-boomerang">
+            <input type="checkbox" id="rt-boomerang">
+            <span data-i18n="rtStudio.boomerangLabel">Boomerang</span>
+          </label>
+          <label class="inline-check" for="rt-pitch-preserve">
+            <input type="checkbox" id="rt-pitch-preserve" checked>
+            <span data-i18n="rtStudio.pitchLabel">Pitch-Lock (Rubberband)</span>
+          </label>
+          <label class="inline-check" for="rt-ripple-timeline">
+            <input type="checkbox" id="rt-ripple-timeline" checked>
+            <span data-i18n="rtStudio.rippleLabel">Ripple Timeline</span>
+          </label>
+          <label class="inline-check" for="rt-enabled">
+            <input type="checkbox" id="rt-enabled" checked>
+            <span data-i18n="rtStudio.enabledLabel">Enable Retime</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="rt-workstation-grid">
+        <div class="rt-viewport-col">
+          <div class="rt-card">
+            <div class="pane-subheader">
+              <span data-i18n="rtStudio.curveTitle">Speed-Ramp Curve (Drag Nodes Vertically = % Speed, Horizontally = Source Time)</span>
+              <span id="rt-curve-readout" class="nle-tag mono">PT #1 | 100%</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="rt-curve-canvas" class="studio-canvas rt-curve-canvas" aria-label="Interactive Speed-Ramp Curve Editor Canvas"></canvas>
+            </div>
+            <div class="rt-curve-toolbar">
+              <button type="button" id="btn-rt-play" class="btn btn-mini" aria-pressed="false" data-i18n="rtStudio.btn.play">Play</button>
+              <button type="button" id="btn-rt-add-pt" class="btn btn-mini" data-i18n="rtStudio.btn.addPoint">+ Point @ PH</button>
+              <button type="button" id="btn-rt-del-pt" class="btn btn-mini" data-i18n="rtStudio.btn.delPoint">- Point</button>
+              <button type="button" id="btn-rt-reset-curve" class="btn btn-mini" data-i18n="rtStudio.btn.resetCurve">Reset</button>
+              <div class="rt-time-ctrl">
+                <label class="inline-label" for="rt-playhead-slider" data-i18n="rtStudio.timeLabel">Source</label>
+                <input type="range" id="rt-playhead-slider" min="0" max="100" step="1" value="48" aria-label="Retime Studio playhead scrubber">
+                <span id="rt-playhead-label" class="mono nle-tag">0.48</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="rt-card">
+            <div class="pane-subheader">
+              <span data-i18n="rtStudio.cadenceTitle">Optical-Flow Frame Cadence &amp; Freeze Hold Map</span>
+              <span id="rt-flow-load-badge" class="nle-tag mono">FLOW 0%</span>
+            </div>
+            <div class="viewer-well">
+              <canvas id="rt-cadence-canvas" class="studio-canvas rt-cadence-canvas" aria-label="Optical-Flow frame cadence and freeze-frame strip"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="rt-inspector-col rt-card">
+          <div class="pane-subheader">
+            <span data-i18n="rtStudio.inspectorTitle">Resolve Speed Inspector</span>
+            <span id="rt-ripple-badge" class="nle-tag mono">+0.00s</span>
+          </div>
+
+          <div class="rt-param-grid-2">
+            <div class="rt-param-field">
+              <label for="rt-pt-speed-num" data-i18n="rtStudio.param.pointSpeed">Point Speed (%)</label>
+              <div class="rt-range-pair">
+                <input type="range" id="rt-pt-speed" min="10" max="800" step="1" value="100" aria-label="Selected control point speed percentage slider">
+                <input type="number" id="rt-pt-speed-num" class="input-control input-num mono" min="10" max="1200" step="1" value="100">
+              </div>
+            </div>
+            <div class="rt-param-field">
+              <label for="rt-pt-t-num" data-i18n="rtStudio.param.pointTime">Source Position (0..1)</label>
+              <div class="rt-range-pair">
+                <input type="range" id="rt-pt-t" min="0" max="1" step="0.01" value="0.25" aria-label="Selected control point normalized source position slider">
+                <input type="number" id="rt-pt-t-num" class="input-control input-num mono" min="0" max="1" step="0.01" value="0.25">
+              </div>
+            </div>
+          </div>
+
+          <div class="rt-param-grid-2">
+            <div class="rt-param-field">
+              <label for="rt-pt-easing" data-i18n="rtStudio.param.easing">Curve Easing</label>
+              <select id="rt-pt-easing" class="input-control mono">
+                <option value="bezier_smooth" selected data-i18n="rtStudio.easing.bezier_smooth">Bezier Smooth</option>
+                <option value="linear" data-i18n="rtStudio.easing.linear">Linear</option>
+                <option value="step_hold" data-i18n="rtStudio.easing.step_hold">Step Hold</option>
+              </select>
+            </div>
+            <div class="rt-param-field">
+              <label for="rt-src-dur-num" data-i18n="rtStudio.param.sourceDur">Source Dur. (s)</label>
+              <input type="number" id="rt-src-dur-num" class="input-control input-num mono" min="0.25" max="3600" step="0.25" value="8.0">
+            </div>
+          </div>
+
+          <div class="rt-param-field">
+            <label for="rt-mblur-num" data-i18n="rtStudio.param.mblur">Speed Motion Blur (tmix Shutter)</label>
+            <div class="rt-range-pair">
+              <input type="range" id="rt-mblur" min="0" max="1" step="0.02" value="0.35" aria-label="Speed motion blur amount slider">
+              <input type="number" id="rt-mblur-num" class="input-control input-num mono" min="0" max="1" step="0.02" value="0.35">
+            </div>
+          </div>
+
+          <div class="rt-freeze-box">
+            <div class="rt-freeze-head">
+              <label class="inline-check" for="rt-freeze-enabled">
+                <input type="checkbox" id="rt-freeze-enabled">
+                <span data-i18n="rtStudio.freezeLabel">Freeze-Frame Hold (tpad clone)</span>
+              </label>
+              <span id="rt-freeze-badge" class="nle-tag mono">OFF</span>
+            </div>
+            <div class="rt-param-grid-2">
+              <div class="rt-param-field">
+                <label for="rt-freeze-at-num" data-i18n="rtStudio.param.freezeAt">Freeze At (t_norm)</label>
+                <div class="rt-range-pair">
+                  <input type="range" id="rt-freeze-at" min="0" max="1" step="0.01" value="0.50" aria-label="Freeze frame position slider">
+                  <input type="number" id="rt-freeze-at-num" class="input-control input-num mono" min="0" max="1" step="0.01" value="0.50">
+                </div>
+              </div>
+              <div class="rt-param-field">
+                <label for="rt-freeze-dur-num" data-i18n="rtStudio.param.freezeDur">Hold Duration (s)</label>
+                <div class="rt-range-pair">
+                  <input type="range" id="rt-freeze-dur" min="0" max="15" step="0.1" value="1.2" aria-label="Freeze frame duration seconds slider">
+                  <input type="number" id="rt-freeze-dur-num" class="input-control input-num mono" min="0" max="30" step="0.1" value="1.2">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rt-metrics-grid mono" id="rt-metrics-grid">
+            <div class="rt-metric-cell">
+              <span class="rt-metric-k" data-i18n="rtStudio.metric.outDur">Output Dur</span>
+              <span class="rt-metric-v" id="rt-metric-out">8.00s</span>
+            </div>
+            <div class="rt-metric-cell">
+              <span class="rt-metric-k" data-i18n="rtStudio.metric.ripple">Ripple Shift</span>
+              <span class="rt-metric-v" id="rt-metric-ripple">+0.00s</span>
+            </div>
+            <div class="rt-metric-cell">
+              <span class="rt-metric-k" data-i18n="rtStudio.metric.frames">Out Frames</span>
+              <span class="rt-metric-v" id="rt-metric-frames">200f</span>
+            </div>
+            <div class="rt-metric-cell">
+              <span class="rt-metric-k" data-i18n="rtStudio.metric.avgSpeed">Avg Speed</span>
+              <span class="rt-metric-v" id="rt-metric-avg">100%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="rt-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="rtStudio.status.idle">Drag speed-ramp control points on the curve canvas, enable freeze hold, or switch presets.</div>
+
+      <div class="btn-row rt-actions">
+        <button type="button" id="btn-rt-apply-timeline" class="btn btn-primary" data-i18n="rtStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-rt-send-deliver" class="btn btn-secondary" data-i18n="rtStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-rt-export-json" class="btn btn-secondary" data-i18n="rtStudio.btn.exportJson">Export JSON</button>
+        <button type="button" id="btn-rt-download-json" class="btn btn-secondary" data-i18n="rtStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-rt-copy-fg" class="btn btn-mini" data-i18n="rtStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="rt-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="rtStudio.drawerTitle">FFmpeg Speed-Ramp (setpts / minterpolate / rubberband / tpad) &amp; JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="rt-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="rt-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

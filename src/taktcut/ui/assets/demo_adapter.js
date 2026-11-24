@@ -19,6 +19,10 @@ import {
   ALLOWED_QUALIFIER_DESPILL_MODES,
   ALLOWED_QUALIFIER_HIGHLIGHT_MODES,
   ALLOWED_QUALIFIER_KEY_MODES,
+  ALLOWED_RETIME_STUDIO_DIRECTIONS,
+  ALLOWED_RETIME_STUDIO_EASINGS,
+  ALLOWED_RETIME_STUDIO_INTERPOLATIONS,
+  ALLOWED_RETIME_STUDIO_PRESET_IDS,
   ASPECT_RATIO_PRESETS,
   AUTO_REFRAME_ASPECT_SPECS_CLIENT,
   AUTO_REFRAME_MOTION_PRESETS_CLIENT,
@@ -82,6 +86,7 @@ import {
   applyMulticamStudioToDocumentClient,
   applyOpticalGlowToDocumentClient,
   applyPowerWindowToDocumentClient,
+  applyRetimeStudioToDocumentClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
@@ -115,6 +120,7 @@ import {
   compilePowerWindowFiltergraphClient,
   compileRetimeFilterClient,
   compileRetimeRampSetptsClient,
+  compileRetimeStudioFiltergraphClient,
   compileSplitEditFiltergraphClient,
   compileStabilizerFilterClient,
   compileTransformFilterClient,
@@ -133,6 +139,7 @@ import {
   createDefaultOpticalGlowConfigClient,
   createDefaultPowerWindowConfigClient,
   createDefaultQualifierKeyerConfigClient,
+  createDefaultRetimeStudioConfigClient,
   createMulticamClipInDocument,
   decomposeCompoundClipInDocument,
   deleteMulticamCutInDocument,
@@ -141,10 +148,12 @@ import {
   estimateRenderFileSize,
   evaluateMotionSplineStudioClient,
   evaluatePowerWindowSamplesClient,
+  evaluateRetimeStudioCurveClient,
   evaluateTitleMotionState,
   exportMotionSplineJsonClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
+  exportRetimeStudioJsonClient,
   exportMulticamEdlClient,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
@@ -160,6 +169,8 @@ import {
   normalizePowerWindowConfigClient,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
+  normalizeRetimeStudioConfigClient,
+  RETIME_STUDIO_PRESETS_CLIENT,
   simulatePowerWindowTrackClient,
   syncMulticamStudioAnglesClient,
   parseCubeLutTextClient,
@@ -4491,6 +4502,86 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/power-window/apply", { method: "POST", body: payload });
+    },
+    async getRetimeStudioPresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: RETIME_STUDIO_PRESETS_CLIENT,
+          preset_ids: ALLOWED_RETIME_STUDIO_PRESET_IDS,
+          easings: ALLOWED_RETIME_STUDIO_EASINGS,
+          directions: ALLOWED_RETIME_STUDIO_DIRECTIONS,
+          interpolations: ALLOWED_RETIME_STUDIO_INTERPOLATIONS,
+          default_config: createDefaultRetimeStudioConfigClient()
+        };
+      }
+      return requestJson("/api/fx/retime/presets");
+    },
+    async evaluateRetimeStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeRetimeStudioConfigClient(p.config ? p.config : p);
+        return evaluateRetimeStudioCurveClient(cfg, {
+          sample_count: p.sample_count !== undefined ? Number(p.sample_count) : 65
+        });
+      }
+      return requestJson("/api/fx/retime/evaluate", { method: "POST", body: payload });
+    },
+    async compileRetimeStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeRetimeStudioConfigClient(p.config ? p.config : p);
+        return compileRetimeStudioFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/retime/compile", { method: "POST", body: payload });
+    },
+    async exportRetimeStudioJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeRetimeStudioConfigClient(p.config ? p.config : p);
+        return exportRetimeStudioJsonClient(cfg, {
+          title: p.title || "TAKTCUT_RETIME_STUDIO"
+        });
+      }
+      return requestJson("/api/fx/retime/export-json", { method: "POST", body: payload });
+    },
+    async downloadRetimeStudioBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeRetimeStudioConfigClient(p.config ? p.config : p);
+        const exp = exportRetimeStudioJsonClient(cfg, {
+          title: p.title || "TAKTCUT_RETIME_STUDIO"
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/retime/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyRetimeStudio(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyRetimeStudioToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compileRetimeStudioFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/retime/apply", { method: "POST", body: payload });
     }
   };
 }
