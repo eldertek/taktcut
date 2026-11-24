@@ -8,6 +8,7 @@ import {
   COLOR_WARPER_SAT_RINGS,
   CURVE_CHANNELS,
   FAIRLIGHT_EQ_BAND_SPECS,
+  FALSE_COLOR_PALETTES_CLIENT,
   FFT_BAND_FREQS_HZ,
   HSL_CURVE_MODES,
   HSL_HUE_ANCHOR_DEGREES,
@@ -18,6 +19,7 @@ import {
   RETIME_SPEED_MIN,
   TRANSFORM_PARAM_BOUNDS,
   TRANSIENT_FOCUS_FREQ_RANGES,
+  applyBroadcastLegalClampClient,
   applyColorNodeChainRgbAtClient,
   applyColorNodeChainRgbClient,
   applyColorNodesBeforeTargetClient,
@@ -66,6 +68,7 @@ import {
   normalizeClipRetime,
   normalizeClipTransform,
   normalizeClipTransition,
+  normalizeBroadcastConfigClient,
   normalizeColorCurves,
   normalizeColorWarper,
   normalizeCurvePoints,
@@ -4479,6 +4482,12 @@ export function drawProgramMonitorCanvas(
     }
   }
 
+  if (renderOpts && renderOpts.broadcastMonitor && !offlineActive) {
+    applyBroadcastMonitorPixelPass(ctx, fx, fy, frameW, frameH, renderOpts.broadcastMonitor, {
+      drawLegend: true
+    });
+  }
+
   ctx.restore();
 
   // Frame border
@@ -7038,6 +7047,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     ctx.restore();
   };
 
+  const bmConfig = splitOpts && splitOpts.broadcastMonitor ? splitOpts.broadcastMonitor : null;
   if (wipeEnabled) {
     const geom = computeSplitWipeGeometry(0, 0, width, height, wipePct);
     if (isRefMatchMode && splitOpts && splitOpts.refGrade) {
@@ -7046,6 +7056,12 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     } else {
       drawHalf(0, geom.dividerX, false);
       drawHalf(geom.dividerX, width, true);
+    }
+    if (bmConfig) {
+      const rx = Math.max(0, Math.round(geom.dividerX));
+      applyBroadcastMonitorPixelPass(ctx, rx, 0, Math.max(0, width - rx), height, bmConfig, {
+        drawLegend: true
+      });
     }
     const overlayOpts = isRefMatchMode
       ? {
@@ -7062,6 +7078,11 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     };
   } else {
     drawHalf(0, width, true);
+    if (bmConfig) {
+      applyBroadcastMonitorPixelPass(ctx, 0, 0, width, height, bmConfig, {
+        drawLegend: true
+      });
+    }
     canvas._splitWipeGeom = null;
   }
 
@@ -7119,6 +7140,13 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   const gradedCtx = gradedBuf.getContext("2d", { willReadFrequently: true });
   if (gradedCtx) {
     renderColorPreviewScene(gradedCtx, scopeW, scopeH, cdl, true, false);
+    if (bmConfig && bmConfig.limiter_enabled && bmConfig.broadcast_standard !== "bypass") {
+      applyBroadcastMonitorPixelPass(gradedCtx, 0, 0, scopeW, scopeH, {
+        ...bmConfig,
+        false_color_enabled: false,
+        zebra: { ...(bmConfig.zebra || {}), enabled: false }
+      }, { drawLegend: false });
+    }
   }
 }
 
@@ -7683,18 +7711,29 @@ function drawVectorscope(ctx, width, height, srcImageData) {
   ctx.fillText("VECTORSCOPE (Cb / Cr)", 12, 14);
 }
 
-export function drawColorScopeCanvas(canvas, cdl, scopeMode = "parade", previewCanvas = null) {
+export function drawColorScopeCanvas(
+  canvas,
+  cdl,
+  scopeMode = "parade",
+  previewCanvas = null,
+  broadcastConfig = null
+) {
   const { ctx, width, height } = setupCanvas(canvas, 224);
   ctx.fillStyle = "#141416";
   ctx.fillRect(0, 0, width, height);
 
   const srcImageData = getGradedPreviewImageData(previewCanvas, cdl);
-  const mode = scopeMode === "waveform" || scopeMode === "vectorscope" ? scopeMode : "parade";
+  const mode =
+    scopeMode === "waveform" || scopeMode === "vectorscope" || scopeMode === "histogram"
+      ? scopeMode
+      : "parade";
 
   if (mode === "waveform") {
     drawLumaWaveformScope(ctx, width, height, srcImageData);
   } else if (mode === "vectorscope") {
     drawVectorscope(ctx, width, height, srcImageData);
+  } else if (mode === "histogram") {
+    drawIreHistogramScope(ctx, width, height, srcImageData, broadcastConfig);
   } else {
     drawRgbParadeScope(ctx, width, height, srcImageData);
   }
@@ -10007,4 +10046,368 @@ export function drawTextEditWaveformCanvas(canvas, analysis, opts = {}) {
     plotRect: { x: padL, y: padT, w: plotW, h: plotH },
     totalFrames
   };
+}
+
+const _falseColorLutCache = new Map();
+
+function _hexToRgbBytes(hex) {
+  const clean = String(hex || "#808080").replace(/^#/, "");
+  const num = Number.parseInt(clean.length === 6 ? clean : "808080", 16);
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+
+function _getFalseColorLut256(paletteId) {
+  const pid = Object.prototype.hasOwnProperty.call(FALSE_COLOR_PALETTES_CLIENT, paletteId)
+    ? paletteId
+    : "arri_ire";
+  if (_falseColorLutCache.has(pid)) return _falseColorLutCache.get(pid);
+  const bands = FALSE_COLOR_PALETTES_CLIENT[pid] || FALSE_COLOR_PALETTES_CLIENT.arri_ire;
+  const lut = new Uint8Array(256 * 3);
+  for (let y = 0; y < 256; y += 1) {
+    const ire = ((y - 16) / 219) * 100;
+    let chosen = bands[bands.length - 1];
+    for (const band of bands) {
+      if (ire >= band.min_ire && ire < band.max_ire) {
+        chosen = band;
+        break;
+      }
+    }
+    const [r, g, b] = _hexToRgbBytes(chosen.color_hex);
+    lut[y * 3] = r;
+    lut[y * 3 + 1] = g;
+    lut[y * 3 + 2] = b;
+  }
+  _falseColorLutCache.set(pid, lut);
+  return lut;
+}
+
+export function applyBroadcastMonitorPixelPass(ctx, x0, y0, width, height, rawConfig, opts = {}) {
+  const cfg = normalizeBroadcastConfigClient(rawConfig);
+  const limiterActive = Boolean(cfg.limiter_enabled && cfg.broadcast_standard !== "bypass");
+  const fcActive = Boolean(cfg.false_color_enabled);
+  const zebraActive = Boolean(cfg.zebra && cfg.zebra.enabled);
+  if (!limiterActive && !fcActive && !zebraActive) return;
+
+  const rx = Math.max(0, Math.floor(x0));
+  const ry = Math.max(0, Math.floor(y0));
+  const rw = Math.max(0, Math.floor(width));
+  const rh = Math.max(0, Math.floor(height));
+  if (rw <= 0 || rh <= 0) return;
+
+  const img = ctx.getImageData(rx, ry, rw, rh);
+  const d = img.data;
+  const fcLut = fcActive ? _getFalseColorLut256(cfg.false_color_palette) : null;
+  const fcAlpha = cfg.false_color_opacity;
+  const fcInv = 1 - fcAlpha;
+  const zHighIre = cfg.zebra.high_ire;
+  const zLowIre = cfg.zebra.low_ire;
+  const zSkinMin = cfg.zebra.skin_min_ire;
+  const zSkinMax = cfg.zebra.skin_max_ire;
+
+  for (let py = 0; py < rh; py += 1) {
+    const rowBase = py * rw;
+    for (let px = 0; px < rw; px += 1) {
+      const idx = (rowBase + px) * 4;
+      let r = d[idx];
+      let g = d[idx + 1];
+      let b = d[idx + 2];
+
+      if (limiterActive) {
+        const clamped = applyBroadcastLegalClampClient(r, g, b, cfg);
+        r = clamped[0];
+        g = clamped[1];
+        b = clamped[2];
+      }
+
+      const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const yIdx = Math.max(0, Math.min(255, Math.round(y)));
+      const ire = ((y - 16) / 219) * 100;
+
+      if (fcLut) {
+        const fr = fcLut[yIdx * 3];
+        const fg = fcLut[yIdx * 3 + 1];
+        const fb = fcLut[yIdx * 3 + 2];
+        r = r * fcInv + fr * fcAlpha;
+        g = g * fcInv + fg * fcAlpha;
+        b = b * fcInv + fb * fcAlpha;
+      }
+
+      if (zebraActive) {
+        if (cfg.zebra.high_enabled && ire >= zHighIre && (px + py) % 8 < 3) {
+          r = 255;
+          g = 72;
+          b = 48;
+        } else if (cfg.zebra.low_enabled && ire <= zLowIre && (px - py + 4096) % 8 < 3) {
+          r = 42;
+          g = 212;
+          b = 255;
+        } else if (
+          cfg.zebra.skin_enabled &&
+          ire >= zSkinMin &&
+          ire <= zSkinMax &&
+          (px + py) % 6 < 2
+        ) {
+          r = 244;
+          g = 114;
+          b = 182;
+        }
+      }
+
+      d[idx] = Math.max(0, Math.min(255, Math.round(r)));
+      d[idx + 1] = Math.max(0, Math.min(255, Math.round(g)));
+      d[idx + 2] = Math.max(0, Math.min(255, Math.round(b)));
+    }
+  }
+  ctx.putImageData(img, rx, ry);
+
+  if (opts.drawLegend !== false && rw >= 110) {
+    ctx.save();
+    const badges = [];
+    if (fcActive) badges.push(`FC:${cfg.false_color_palette.split("_")[0].toUpperCase()}`);
+    if (zebraActive) badges.push(`ZEB:${Math.round(zHighIre)}%`);
+    if (limiterActive) badges.push(`LEGAL:${cfg.luma_min_8bit}-${cfg.luma_max_8bit}`);
+    if (badges.length > 0) {
+      const label = badges.join(" | ");
+      ctx.font = "700 9.5px ui-monospace, monospace";
+      const bw = Math.min(rw - 12, ctx.measureText(label).width + 12);
+      const bx = rx + 6;
+      const by = ry + rh - 22;
+      ctx.fillStyle = "rgba(15, 16, 20, 0.88)";
+      ctx.fillRect(bx, by, bw, 16);
+      ctx.strokeStyle = limiterActive ? "#22c55e" : fcActive ? "#f472b6" : "#f97316";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, 15);
+      ctx.fillStyle = "#f1f5f9";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, bx + 6, by + 8.5, bw - 10);
+    }
+    ctx.restore();
+  }
+}
+
+export function sampleCanvasBroadcastRgb(previewCanvas, maxSamples = 256) {
+  const buf =
+    previewCanvas && previewCanvas._gradedScopeCanvas
+      ? previewCanvas._gradedScopeCanvas
+      : previewCanvas;
+  if (!buf || !buf.width || !buf.height) return [];
+  const ctx = buf.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return [];
+  const img = ctx.getImageData(0, 0, buf.width, buf.height).data;
+  const totalPixels = Math.floor(img.length / 4);
+  if (totalPixels <= 0) return [];
+  const step = Math.max(1, Math.floor(totalPixels / Math.max(32, maxSamples)));
+  const out = [];
+  for (let p = 0; p < totalPixels && out.length < maxSamples; p += step) {
+    const i = p * 4;
+    out.push([img[i], img[i + 1], img[i + 2]]);
+  }
+  return out;
+}
+
+function drawIreHistogramScope(ctx, width, height, srcImageData, broadcastConfig = null) {
+  const cfg = normalizeBroadcastConfigClient(broadcastConfig);
+  const padL = 30;
+  const padR = 10;
+  const padT = 22;
+  const padB = 18;
+  const plotW = Math.max(96, width - padL - padR);
+  const plotH = Math.max(60, height - padT - padB);
+
+  const binCount = 64;
+  const bins = new Uint32Array(binCount);
+  const d = srcImageData.data;
+  let minIre = Infinity;
+  let maxIre = -Infinity;
+  let sumIre = 0;
+  let total = 0;
+  let excursion = 0;
+  const ireMin = -5;
+  const ireMax = 109;
+  const ireSpan = ireMax - ireMin;
+
+  for (let i = 0; i < d.length; i += 16) {
+    const r = d[i];
+    const g = d[i + 1];
+    const b = d[i + 2];
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const ire = ((y - 16) / 219) * 100;
+    if (ire < minIre) minIre = ire;
+    if (ire > maxIre) maxIre = ire;
+    sumIre += ire;
+    total += 1;
+    if (y < cfg.luma_min_8bit - 0.05 || y > cfg.luma_max_8bit + 0.05) {
+      excursion += 1;
+    }
+    const bIdx = Math.max(0, Math.min(binCount - 1, Math.floor(((ire - ireMin) / ireSpan) * binCount)));
+    bins[bIdx] += 1;
+  }
+
+  let peakBin = 1;
+  for (let b = 0; b < binCount; b += 1) {
+    if (bins[b] > peakBin) peakBin = bins[b];
+  }
+
+  ctx.fillStyle = "#18181d";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  const ireToX = (ire) => padL + clamp01((ire - ireMin) / ireSpan) * plotW;
+  const xLegal0 = ireToX(0);
+  const xLegal100 = ireToX(100);
+
+  // Sub-black & super-white danger zones
+  ctx.fillStyle = "rgba(239, 68, 68, 0.12)";
+  ctx.fillRect(padL, padT, Math.max(0, xLegal0 - padL), plotH);
+  ctx.fillRect(xLegal100, padT, Math.max(0, padL + plotW - xLegal100), plotH);
+
+  // Bars
+  const barW = Math.max(1.5, plotW / binCount);
+  for (let b = 0; b < binCount; b += 1) {
+    const frac = bins[b] / peakBin;
+    if (frac <= 0) continue;
+    const binIre = ireMin + ((b + 0.5) / binCount) * ireSpan;
+    const bh = Math.max(1, frac * (plotH - 6));
+    const bx = padL + (b / binCount) * plotW;
+    if (binIre < 0 || binIre > 100) ctx.fillStyle = "#ef4444";
+    else if (binIre >= 48 && binIre <= 65) ctx.fillStyle = "#f472b6";
+    else ctx.fillStyle = "#38bdf8";
+    ctx.fillRect(bx, padT + plotH - bh, Math.max(1, barW - 0.5), bh);
+  }
+
+  // Legal brackets 0 IRE (16) and 100 IRE (235)
+  ctx.save();
+  ctx.strokeStyle = "#22c55e";
+  ctx.lineWidth = 1.25;
+  ctx.setLineDash([3, 3]);
+  for (const xLine of [xLegal0, xLegal100]) {
+    ctx.beginPath();
+    ctx.moveTo(Math.round(xLine) + 0.5, padT);
+    ctx.lineTo(Math.round(xLine) + 0.5, padT + plotH);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.strokeStyle = "#2c2c34";
+  ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
+
+  const avgIre = total > 0 ? sumIre / total : 0;
+  const excPct = total > 0 ? (excursion / total) * 100 : 0;
+  const statusLabel =
+    cfg.broadcast_standard === "bypass" ? "BYPASS" : excPct >= 1.0 ? "FAIL" : excPct > 0.25 ? "WARN" : "PASS";
+  const statusColor = statusLabel === "FAIL" ? "#ef4444" : statusLabel === "WARN" ? "#f59e0b" : "#22c55e";
+
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.fillStyle = "#cbd5e1";
+  ctx.textAlign = "left";
+  ctx.fillText(
+    `IRE HIST  MIN:${(Number.isFinite(minIre) ? minIre : 0).toFixed(0)}  AVG:${avgIre.toFixed(0)}  MAX:${(Number.isFinite(maxIre) ? maxIre : 0).toFixed(0)}`,
+    padL,
+    14
+  );
+  ctx.textAlign = "right";
+  ctx.fillStyle = statusColor;
+  ctx.fillText(`EBU R103: ${statusLabel} (${excPct.toFixed(1)}%)`, padL + plotW, 14);
+
+  ctx.font = "8.5px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  ctx.textAlign = "center";
+  for (const tick of [0, 25, 50, 75, 100]) {
+    ctx.fillText(String(tick), ireToX(tick), height - 4);
+  }
+}
+
+export function drawBroadcastHistogramCanvas(canvas, report, rawConfig) {
+  if (!canvas) return;
+  const { ctx, width, height } = setupCanvas(canvas, 168);
+  const cfg = normalizeBroadcastConfigClient(rawConfig);
+  ctx.fillStyle = "#111216";
+  ctx.fillRect(0, 0, width, height);
+
+  const padL = 32;
+  const padR = 12;
+  const padT = 24;
+  const padB = 22;
+  const plotW = Math.max(120, width - padL - padR);
+  const plotH = Math.max(70, height - padT - padB);
+  const ireMin = -5;
+  const ireMax = 109;
+  const ireSpan = ireMax - ireMin;
+  const ireToX = (ire) => padL + clamp01((ire - ireMin) / ireSpan) * plotW;
+
+  ctx.fillStyle = "#171920";
+  ctx.fillRect(padL, padT, plotW, plotH);
+
+  const x0 = ireToX(0);
+  const x100 = ireToX(100);
+  ctx.fillStyle = "rgba(239, 68, 68, 0.14)";
+  ctx.fillRect(padL, padT, Math.max(0, x0 - padL), plotH);
+  ctx.fillRect(x100, padT, Math.max(0, padL + plotW - x100), plotH);
+
+  const bins = report && Array.isArray(report.histogram_bins) ? report.histogram_bins : [];
+  const nBins = Math.max(1, bins.length);
+  const barW = Math.max(2, plotW / nBins);
+  for (let i = 0; i < bins.length; i += 1) {
+    const v = clamp01(Number(bins[i]) || 0);
+    if (v <= 0) continue;
+    const binIre = ireMin + ((i + 0.5) / nBins) * ireSpan;
+    const bh = Math.max(2, v * (plotH - 8));
+    const bx = padL + (i / nBins) * plotW;
+    if (binIre < 0 || binIre > 100) ctx.fillStyle = "#ef4444";
+    else if (binIre >= cfg.zebra.skin_min_ire && binIre <= cfg.zebra.skin_max_ire) ctx.fillStyle = "#f472b6";
+    else ctx.fillStyle = "#38bdf8";
+    ctx.fillRect(bx, padT + plotH - bh, Math.max(1, barW - 1), bh);
+  }
+
+  // Legal brackets & Zebra threshold lines
+  ctx.save();
+  ctx.strokeStyle = "#22c55e";
+  ctx.lineWidth = 1.25;
+  ctx.setLineDash([4, 3]);
+  for (const xLine of [x0, x100]) {
+    ctx.beginPath();
+    ctx.moveTo(Math.round(xLine) + 0.5, padT);
+    ctx.lineTo(Math.round(xLine) + 0.5, padT + plotH);
+    ctx.stroke();
+  }
+  if (cfg.zebra.enabled && cfg.zebra.high_enabled) {
+    const zx = Math.round(ireToX(cfg.zebra.high_ire)) + 0.5;
+    ctx.strokeStyle = "#f97316";
+    ctx.beginPath();
+    ctx.moveTo(zx, padT);
+    ctx.lineTo(zx, padT + plotH);
+    ctx.stroke();
+  }
+  if (cfg.zebra.enabled && cfg.zebra.low_enabled) {
+    const zxLow = Math.round(ireToX(cfg.zebra.low_ire)) + 0.5;
+    ctx.strokeStyle = "#22d3ee";
+    ctx.beginPath();
+    ctx.moveTo(zxLow, padT);
+    ctx.lineTo(zxLow, padT + plotH);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.strokeStyle = "#2c2f3a";
+  ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
+
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.textAlign = "left";
+  const minTxt = report ? Number(report.min_ire).toFixed(1) : "--";
+  const avgTxt = report ? Number(report.avg_ire).toFixed(1) : "--";
+  const maxTxt = report ? Number(report.max_ire).toFixed(1) : "--";
+  ctx.fillText(`IRE HISTOGRAM  MIN:${minTxt}  AVG:${avgTxt}  PEAK:${maxTxt}`, padL, 15);
+
+  const st = report ? report.compliance_status : "PASS";
+  ctx.textAlign = "right";
+  ctx.fillStyle = st === "FAIL" ? "#ef4444" : st === "WARN" ? "#f59e0b" : "#22c55e";
+  ctx.fillText(`${String(cfg.broadcast_standard).toUpperCase()} : ${st}`, padL + plotW, 15);
+
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  ctx.textAlign = "center";
+  for (const tick of [0, 25, 50, 75, 100]) {
+    ctx.fillText(`${tick}`, ireToX(tick), height - 5);
+  }
 }

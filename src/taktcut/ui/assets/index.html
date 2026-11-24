@@ -326,6 +326,9 @@
                   <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="actionSafe" aria-pressed="true" data-i18n="timeline.framing.actionSafe">Action 90%</button>
                   <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="titleSafe" aria-pressed="true" data-i18n="timeline.framing.titleSafe">Title 80%</button>
                   <button type="button" class="btn btn-mini safe-guide-chip is-active" data-safe-guide="socialHud" aria-pressed="true" data-i18n="timeline.framing.socialHud">Reels HUD</button>
+                  <button type="button" id="btn-program-false-color" class="btn btn-mini bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.falseColor" title="Toggle False Color IRE Exposure Map (Shift+F)">False Color</button>
+                  <button type="button" id="btn-program-zebra" class="btn btn-mini bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.zebra" title="Toggle Dual Zebra Clipping Stripes (Shift+Z)">Zebra</button>
+                  <button type="button" id="btn-program-broadcast-studio" class="btn btn-mini bm-studio-btn" data-i18n="broadcast.btn.studio" title="Open False Color, Zebra &amp; EBU R103 Broadcast Safe Studio (Shift+G)">IRE / Safe</button>
                 </div>
               </div>
               <div id="timeline-viewer-well" class="viewer-well">
@@ -2494,6 +2497,12 @@
                 <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="teal_orange" aria-pressed="false" data-i18n="color.preset.tealOrange">Teal &amp; Orange</button>
                 <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="film_warm" aria-pressed="false" data-i18n="color.preset.filmWarm">Film Warm</button>
                 <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="noir_bw" aria-pressed="false" data-i18n="color.preset.noirBw">Noir B&amp;W</button>
+                <span class="broadcast-quick-sep" aria-hidden="true"></span>
+                <button type="button" id="btn-color-false-color" class="btn btn-chip bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.falseColor" title="False Color IRE Exposure Map (Shift+F)">False Color</button>
+                <button type="button" id="btn-color-zebra" class="btn btn-chip bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.zebra" title="Dual Zebra Clipping Overlay (Shift+Z)">Zebra</button>
+                <button type="button" id="btn-color-broadcast-safe" class="btn btn-chip bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.legalSafe" title="EBU R103 / Rec.709 Legal Limiter 16-235 (Shift+B)">Legal Safe</button>
+                <button type="button" id="btn-open-broadcast-studio" class="btn btn-chip bm-studio-btn" data-i18n="broadcast.btn.studio" title="Open False Color, Zebra &amp; Broadcast Safe Studio (Shift+G)">IRE / Safe</button>
+                <span id="color-broadcast-badge" class="nle-tag mono" aria-live="polite">EBU 16-235</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
@@ -2507,6 +2516,7 @@
                   <button type="button" id="btn-scope-parade" class="scope-btn is-active" data-scope-mode="parade" aria-pressed="true" data-i18n="color.scopes.parade">RGB Parade</button>
                   <button type="button" id="btn-scope-waveform" class="scope-btn" data-scope-mode="waveform" aria-pressed="false" data-i18n="color.scopes.waveform">Luma Waveform</button>
                   <button type="button" id="btn-scope-vectorscope" class="scope-btn" data-scope-mode="vectorscope" aria-pressed="false" data-i18n="color.scopes.vectorscope">Vectorscope</button>
+                  <button type="button" id="btn-scope-histogram" class="scope-btn" data-scope-mode="histogram" aria-pressed="false" data-i18n="color.scopes.histogram">IRE Hist</button>
                 </div>
                 <span class="nle-tag mono">Rec.709</span>
               </div>
@@ -4149,6 +4159,114 @@
       <div class="form-row">
         <label for="text-edit-fg-preview" data-i18n="textEdit.ffmpegPreview">Compiled FFmpeg silencedetect + select Filtergraph</label>
         <pre id="text-edit-fg-preview" class="code-box mono"></pre>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="broadcast-monitor-dialog" class="nle-dialog broadcast-monitor-dialog" aria-labelledby="broadcast-monitor-title" aria-describedby="broadcast-monitor-subtitle">
+    <div class="nle-dialog-header">
+      <div>
+        <h2 id="broadcast-monitor-title" data-i18n="broadcast.dialog.title">False Color IRE, Zebra &amp; Broadcast Safe Studio</h2>
+        <p id="broadcast-monitor-subtitle" class="nle-dialog-subtitle" data-i18n="broadcast.dialog.subtitle">ARRI / Atomos IRE Exposure Map, Dual Zebra Clipping &amp; EBU R103 16-235 Legal Gamut Limiter</p>
+      </div>
+      <button type="button" id="btn-close-broadcast-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+    </div>
+    <div class="nle-dialog-body broadcast-dialog-body">
+      <div class="broadcast-form-grid">
+        <div class="form-row">
+          <label for="bm-fc-palette" data-i18n="broadcast.fc.palette">False Color Palette</label>
+          <select id="bm-fc-palette" class="input-control mono">
+            <option value="arri_ire" data-i18n="broadcast.palette.arri">ARRI IRE (11-Zone)</option>
+            <option value="atomos_ire" data-i18n="broadcast.palette.atomos">Atomos IRE (8-Zone)</option>
+            <option value="davinci_exposure" data-i18n="broadcast.palette.davinci">DaVinci Exposure Map</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="bm-fc-opacity-range" data-i18n="broadcast.fc.opacity">False Color Opacity</label>
+          <div class="broadcast-range-pair">
+            <input type="range" id="bm-fc-opacity-range" min="0.25" max="1" step="0.05" value="0.92">
+            <input type="number" id="bm-fc-opacity-num" class="input-control input-num mono" min="0.25" max="1" step="0.05" value="0.92" aria-label="False color opacity">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="bm-zebra-high-ire" data-i18n="broadcast.zebra.high">High Zebra Threshold (IRE)</label>
+          <input type="number" id="bm-zebra-high-ire" class="input-control mono" min="70" max="109" step="1" value="95">
+        </div>
+        <div class="form-row">
+          <label for="bm-zebra-low-ire" data-i18n="broadcast.zebra.low">Shadow Zebra Threshold (IRE)</label>
+          <input type="number" id="bm-zebra-low-ire" class="input-control mono" min="0" max="30" step="1" value="5">
+        </div>
+        <div class="form-row">
+          <label for="bm-standard" data-i18n="broadcast.legal.standard">Broadcast Legal Standard</label>
+          <select id="bm-standard" class="input-control mono">
+            <option value="ebu_r103" data-i18n="broadcast.std.ebu">EBU R103 Broadcast Safe (16-235)</option>
+            <option value="itu_rec709" data-i18n="broadcast.std.rec709">ITU-R BT.709 Legal (16-235)</option>
+            <option value="smpte_rp2077" data-i18n="broadcast.std.smpte">SMPTE RP 2077 Soft Limiter</option>
+            <option value="bypass" data-i18n="broadcast.std.bypass">Full Range Bypass (0-255)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="bm-limiter-mode" data-i18n="broadcast.legal.mode">Limiter Knee Curve</label>
+          <select id="bm-limiter-mode" class="input-control mono">
+            <option value="soft_knee" data-i18n="broadcast.mode.softKnee">Soft Knee Roll-Off</option>
+            <option value="hard_clip" data-i18n="broadcast.mode.hardClip">Hard Legal Clamp (16-235)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="bm-soft-knee-range" data-i18n="broadcast.legal.softKnee">Soft Knee Rolloff</label>
+          <div class="broadcast-range-pair">
+            <input type="range" id="bm-soft-knee-range" min="0" max="1" step="0.05" value="0.15">
+            <input type="number" id="bm-soft-knee-num" class="input-control input-num mono" min="0" max="1" step="0.05" value="0.15" aria-label="Soft knee rolloff">
+          </div>
+        </div>
+        <div class="form-row broadcast-checks-cell">
+          <label class="check-label">
+            <input type="checkbox" id="bm-fc-enabled">
+            <span data-i18n="broadcast.check.fc">Enable False Color</span>
+          </label>
+          <label class="check-label">
+            <input type="checkbox" id="bm-zebra-enabled">
+            <span data-i18n="broadcast.check.zebra">Enable Zebra</span>
+          </label>
+          <label class="check-label">
+            <input type="checkbox" id="bm-zebra-low-enabled">
+            <span data-i18n="broadcast.check.zebraLow">Shadow Crush Zebra</span>
+          </label>
+          <label class="check-label">
+            <input type="checkbox" id="bm-zebra-skin-enabled">
+            <span data-i18n="broadcast.check.zebraSkin">Skin Zone Zebra (48-62 IRE)</span>
+          </label>
+          <label class="check-label">
+            <input type="checkbox" id="bm-limiter-enabled">
+            <span data-i18n="broadcast.check.limiter">Apply 16-235 Legal Limiter</span>
+          </label>
+          <label class="check-label">
+            <input type="checkbox" id="bm-gamut-desaturate" checked>
+            <span data-i18n="broadcast.check.desaturate">Clamp Illegal Chroma Gamut</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="btn-row broadcast-actions">
+        <button type="button" id="btn-broadcast-analyze" class="btn btn-secondary" data-i18n="broadcast.action.analyze">Analyze Frame Compliance</button>
+        <button type="button" id="btn-broadcast-toggle-legal" class="btn btn-primary" data-i18n="broadcast.action.applyLegal">Enable 16-235 Legal Safe</button>
+        <button type="button" id="btn-broadcast-copy-fg" class="btn btn-mini" data-i18n="broadcast.action.copyFg">Copy Filtergraph</button>
+        <button type="button" id="btn-broadcast-reset" class="btn btn-mini" data-i18n="broadcast.action.reset">Reset</button>
+      </div>
+
+      <div class="viewer-well broadcast-canvas-well">
+        <canvas id="broadcast-histogram-canvas" class="studio-canvas" aria-label="Broadcast IRE luminance histogram and legal gamut compliance"></canvas>
+      </div>
+
+      <div id="broadcast-ire-legend" class="broadcast-ire-legend" role="list" aria-label="False color IRE exposure bands"></div>
+
+      <div id="broadcast-compliance-grid" class="broadcast-compliance-grid" aria-live="polite"></div>
+
+      <div id="broadcast-compliance-status" class="telemetry-note mono" aria-live="polite" data-i18n="broadcast.status.idle">Ready to inspect exposure IRE and EBU R103 legal range.</div>
+
+      <div class="form-row">
+        <label for="broadcast-fg-preview" data-i18n="broadcast.ffmpegPreview">Compiled FFmpeg Broadcast Legal Limiter Filtergraph</label>
+        <pre id="broadcast-fg-preview" class="code-box mono"></pre>
       </div>
     </div>
   </dialog>

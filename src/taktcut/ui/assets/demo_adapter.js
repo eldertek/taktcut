@@ -1,7 +1,9 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ASPECT_RATIO_PRESETS,
+  BROADCAST_STANDARDS_CLIENT,
   COLOR_CURVE_PRESETS,
+  FALSE_COLOR_PALETTES_CLIENT,
   COLOR_WARPER_BOUNDS,
   COLOR_WARPER_HUE_COUNT,
   COLOR_WARPER_PRESETS_CLIENT,
@@ -35,10 +37,12 @@ import {
   buildAtempoStagesClient,
   alignAvSplitInDocument,
   analyzeAvSyncClient,
+  analyzeBroadcastComplianceClient,
   analyzeAudioSpectrumClient,
   analyzeClipSceneCutsClient,
   analyzeClipTranscriptClient,
   applyAvSyncInDocumentClient,
+  applyBroadcastLegalClampClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
@@ -49,6 +53,7 @@ import {
   toggleClipOfflineInDocumentClient,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
+  compileBroadcastFilterClient,
   compileColorNodeChainClient,
   compileCompoundFiltergraphClient,
   compileFairlightAudioFilterClient,
@@ -85,6 +90,7 @@ import {
   getDeliveryPresetClient,
   linkAvClipsInDocument,
   listStudioLutPresetsClient,
+  normalizeBroadcastConfigClient,
   normalizeFairlightAudioParams,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
@@ -1800,6 +1806,15 @@ function compileSubtitlesClient(payload, opts = {}) {
     ass_preview: exportAssClient({ ...src, style: styleId, font_size: fontSize, margin_bottom_pct: marginBottomPct, karaoke_mode: karaokeMode, highlight_color: hlHex, uppercase })
   };
 }
+
+export {
+  BROADCAST_STANDARDS_CLIENT,
+  FALSE_COLOR_PALETTES_CLIENT,
+  analyzeBroadcastComplianceClient,
+  applyBroadcastLegalClampClient,
+  compileBroadcastFilterClient,
+  normalizeBroadcastConfigClient,
+} from "./timeline_ops.js";
 
 export function createApiClient() {
   const cfg = typeof window !== "undefined" && window.__TAKTCUT_CONFIG__ ? window.__TAKTCUT_CONFIG__ : {};
@@ -3849,6 +3864,27 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/timeline/text-edit/apply", { method: "POST", body: payload });
+    },
+    async getBroadcastMonitorPalettes() {
+      if (resolvedMode === "static-demo") {
+        return {
+          palettes: FALSE_COLOR_PALETTES_CLIENT,
+          standards: Object.values(BROADCAST_STANDARDS_CLIENT)
+        };
+      }
+      return requestJson("/api/color/broadcast-monitor/palettes");
+    },
+    async compileBroadcastFilter(payload) {
+      if (resolvedMode === "static-demo") {
+        return compileBroadcastFilterClient(payload);
+      }
+      return requestJson("/api/color/broadcast-monitor/compile", { method: "POST", body: payload });
+    },
+    async analyzeBroadcastCompliance(payload) {
+      if (resolvedMode === "static-demo") {
+        return analyzeBroadcastComplianceClient(payload);
+      }
+      return requestJson("/api/color/broadcast-monitor/analyze", { method: "POST", body: payload });
     }
   };
 }

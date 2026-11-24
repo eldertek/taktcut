@@ -4,6 +4,7 @@ import {
   clientPosToColorWarperOffset,
   computeCueWordTimingsCanvas,
   drawAvSyncWaveformCanvas,
+  drawBroadcastHistogramCanvas,
   drawColorCurvesCanvas,
   drawColorPreviewCanvas,
   drawColorScopeCanvas,
@@ -31,6 +32,7 @@ import {
   renderFairlightDynamicsCanvas,
   renderFairlightEqCurveCanvas,
   renderFairlightFftCanvas,
+  sampleCanvasBroadcastRgb,
   sampleColorViewerInputRgb,
   sampleDataUrlRgbGrid,
   trackPointSequenceCanvas
@@ -60,6 +62,7 @@ import {
   BPM_MIN,
   BPM_OFFSET_MAX_S,
   BPM_OFFSET_MIN_S,
+  BROADCAST_STANDARDS_CLIENT,
   COLOR_CURVE_PRESETS,
   COLOR_WARPER_BOUNDS,
   COLOR_WARPER_HUE_COUNT,
@@ -72,6 +75,7 @@ import {
   DYNAMIC_ZOOM_DEFAULT,
   FAIRLIGHT_EQ_BAND_ORDER,
   FAIRLIGHT_EQ_BAND_SPECS,
+  FALSE_COLOR_PALETTES_CLIENT,
   HSL_CURVE_MODES,
   HSL_CURVE_PRESETS,
   HSL_HUE_ANCHOR_DEGREES,
@@ -187,6 +191,7 @@ import {
   createCompoundClipInDocument,
   createDefaultColorCurves,
   createDefaultColorNodeTree,
+  createDefaultBroadcastMonitorConfig,
   createDefaultColorWarper,
   createDefaultHslCurves,
   createDefaultPowerWindow,
@@ -259,6 +264,7 @@ import {
   moveClipInDocument,
   moveColorNodeInTree,
   normalizeAutoDuckParams,
+  normalizeBroadcastConfigClient,
   normalizeClipAudio,
   normalizeClipLabelColor,
   normalizeClipRetime,
@@ -600,6 +606,10 @@ const state = {
   colorGrade: cloneGradeParams(COLOR_GRADE_PRESETS.rec709_clean.params),
   colorActivePresetId: "rec709_clean",
   colorScopeMode: "parade",
+  broadcastMonitor: createDefaultBroadcastMonitorConfig(),
+  broadcastComplianceReport: null,
+  broadcastCompileResult: null,
+  broadcastAnalyzeSeq: 0,
   colorPresetsCatalog: null,
   colorLastCompile: null,
   colorCompileTimer: null,
@@ -973,6 +983,7 @@ function setLanguage(lang) {
   renderShortcutsDialog();
   renderStillsGallery();
   renderUpdateButton();
+  syncBroadcastMonitorUI();
   renderTimelineUI();
   renderMediaPool();
   const teSearch = byId("text-edit-search");
@@ -1341,7 +1352,8 @@ function redrawActiveCanvases() {
         multicamQuadView: Boolean(state.multicamQuadView && mcCtx),
         multicamClip: mcCtx ? mcCtx.clip : null,
         multicamHoveredAngle: state.multicamHoveredAngle,
-        proxyModeEnabled: Boolean(state.mediaPoolProxyMode)
+        proxyModeEnabled: Boolean(state.mediaPoolProxyMode),
+        broadcastMonitor: state.broadcastMonitor
       }
     );
     const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
@@ -1496,13 +1508,15 @@ function redrawActiveCanvases() {
       powerWindow: {
         window: activeNode ? activeNode.power_window : null,
         showOverlay: Boolean(state.powerWindowOverlay)
-      }
+      },
+      broadcastMonitor: state.broadcastMonitor
     });
     drawColorScopeCanvas(
       byId("color-scope-canvas"),
       activeColorChain,
       state.colorScopeMode,
-      previewCanvas
+      previewCanvas,
+      state.broadcastMonitor
     );
     drawQualifierSpectrumCanvas(
       byId("qual-spectrum-canvas"),
@@ -5020,7 +5034,7 @@ function serializeFullProjectState() {
       selected_node_id: state.colorNodeTree.selectedNodeId || "node-1",
       active_preset_id: String(state.colorActivePresetId || ""),
       wipe_ratio: Math.min(1, Math.max(0, Number(state.wipeRatio ?? 0.5))),
-      scope_mode: ["parade", "waveform", "vectorscope"].includes(state.colorScopeMode)
+      scope_mode: ["parade", "waveform", "vectorscope", "histogram"].includes(state.colorScopeMode)
         ? state.colorScopeMode
         : "parade"
     },
@@ -5143,7 +5157,7 @@ function applyFullProjectState(project, validation) {
   state.colorActivePresetId = String(col.active_preset_id || "");
   state.colorSplitWipe.positionPct = clampSplitWipePercent(Number(col.wipe_ratio ?? 0.5) * 100);
   state.wipeRatio = state.colorSplitWipe.positionPct / 100;
-  state.colorScopeMode = ["parade", "waveform", "vectorscope"].includes(col.scope_mode)
+  state.colorScopeMode = ["parade", "waveform", "vectorscope", "histogram"].includes(col.scope_mode)
     ? col.scope_mode
     : "parade";
   syncSplitWipeControls("color");
@@ -9703,7 +9717,7 @@ function wireColorInputs() {
   for (const btn of document.querySelectorAll("[data-scope-mode]")) {
     btn.addEventListener("click", () => {
       const mode = btn.getAttribute("data-scope-mode");
-      if (mode !== "parade" && mode !== "waveform" && mode !== "vectorscope") return;
+      if (mode !== "parade" && mode !== "waveform" && mode !== "vectorscope" && mode !== "histogram") return;
       state.colorScopeMode = mode;
       for (const other of document.querySelectorAll("[data-scope-mode]")) {
         const active = other.getAttribute("data-scope-mode") === mode;
@@ -13043,6 +13057,10 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Alt+P", descKey: "shortcuts.key.proxyToggle" },
       { kbd: "Shift+P", descKey: "shortcuts.key.mediaPoolPro" },
       { kbd: "Shift+D", descKey: "shortcuts.key.textEdit" },
+      { kbd: "Shift+F", descKey: "shortcuts.key.falseColor" },
+      { kbd: "Shift+Z", descKey: "shortcuts.key.zebra" },
+      { kbd: "Shift+B", descKey: "shortcuts.key.broadcastSafe" },
+      { kbd: "Shift+G", descKey: "shortcuts.key.broadcastStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13216,6 +13234,29 @@ function handleTransportKeydown(ev) {
     ev.preventDefault();
     runShotMatchAction();
     return;
+  }
+
+  if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    if (lower === "f") {
+      ev.preventDefault();
+      toggleBroadcastFalseColorAction();
+      return;
+    }
+    if (lower === "z") {
+      ev.preventDefault();
+      toggleBroadcastZebraAction();
+      return;
+    }
+    if (lower === "b") {
+      ev.preventDefault();
+      toggleBroadcastLegalLimiterAction();
+      return;
+    }
+    if (lower === "g") {
+      ev.preventDefault();
+      openBroadcastMonitorDialog();
+      return;
+    }
   }
 
   const onPlayheadTab =
@@ -19886,6 +19927,7 @@ function wireEvents() {
   wireMediaPoolProEvents();
   wireSceneCutEvents();
   wireTextEditEvents();
+  wireBroadcastMonitorEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -20347,6 +20389,7 @@ async function bootstrap() {
   renderDeliveryPresetStrip();
   updateDeliverSizeEstimate();
   syncColorInputsFromState();
+  syncBroadcastMonitorUI();
   syncSplitWipeControls("color");
   syncSplitWipeControls("fx");
   renderStillsGallery();
@@ -22772,6 +22815,416 @@ function wireTextEditEvents() {
       renderTextEditUI();
     });
   }
+}
+
+// =========================================================================
+// CYCLE #102: FALSE COLOR IRE, ZEBRA CLIPPING & EBU R103 BROADCAST SAFE STUDIO
+// =========================================================================
+
+function syncBroadcastMonitorUI() {
+  const cfg = normalizeBroadcastConfigClient(state.broadcastMonitor);
+  state.broadcastMonitor = cfg;
+
+  const fcActive = Boolean(cfg.false_color_enabled);
+  const zebraActive = Boolean(cfg.zebra && cfg.zebra.enabled);
+  const legalActive = Boolean(cfg.limiter_enabled && cfg.broadcast_standard !== "bypass");
+
+  for (const id of ["btn-color-false-color", "btn-program-false-color"]) {
+    const el = byId(id);
+    if (el) {
+      el.classList.toggle("is-active", fcActive);
+      el.setAttribute("aria-pressed", fcActive ? "true" : "false");
+    }
+  }
+  for (const id of ["btn-color-zebra", "btn-program-zebra"]) {
+    const el = byId(id);
+    if (el) {
+      el.classList.toggle("is-active", zebraActive);
+      el.setAttribute("aria-pressed", zebraActive ? "true" : "false");
+    }
+  }
+  const safeBtn = byId("btn-color-broadcast-safe");
+  if (safeBtn) {
+    safeBtn.classList.toggle("is-active", legalActive);
+    safeBtn.setAttribute("aria-pressed", legalActive ? "true" : "false");
+  }
+
+  const toggleLegalBtn = byId("btn-broadcast-toggle-legal");
+  if (toggleLegalBtn) {
+    toggleLegalBtn.textContent = legalActive
+      ? t("broadcast.action.disableLegal")
+      : t("broadcast.action.applyLegal");
+  }
+
+  const badgeEl = byId("color-broadcast-badge");
+  if (badgeEl) {
+    const rep = state.broadcastComplianceReport;
+    const status = rep ? rep.compliance_status : legalActive ? "PASS" : "MON";
+    badgeEl.classList.remove("is-pass", "is-warn", "is-fail");
+    if (status === "PASS") badgeEl.classList.add("is-pass");
+    else if (status === "WARN") badgeEl.classList.add("is-warn");
+    else if (status === "FAIL") badgeEl.classList.add("is-fail");
+    const stdTag =
+      cfg.broadcast_standard === "bypass"
+        ? "0-255"
+        : `${cfg.luma_min_8bit}-${cfg.luma_max_8bit}`;
+    badgeEl.textContent = rep
+      ? `${stdTag} ${rep.compliance_status}`
+      : legalActive
+        ? `LEGAL ${stdTag}`
+        : `EBU ${stdTag}`;
+  }
+
+  const setVal = (id, val) => {
+    const el = byId(id);
+    if (el && document.activeElement !== el) el.value = String(val);
+  };
+  const setChk = (id, chk) => {
+    const el = byId(id);
+    if (el) el.checked = Boolean(chk);
+  };
+
+  setVal("bm-fc-palette", cfg.false_color_palette);
+  setVal("bm-fc-opacity-range", cfg.false_color_opacity.toFixed(2));
+  setVal("bm-fc-opacity-num", cfg.false_color_opacity.toFixed(2));
+  setVal("bm-zebra-high-ire", Math.round(cfg.zebra.high_ire));
+  setVal("bm-zebra-low-ire", Math.round(cfg.zebra.low_ire));
+  setVal("bm-standard", cfg.broadcast_standard);
+  setVal("bm-limiter-mode", cfg.limiter_mode);
+  setVal("bm-soft-knee-range", cfg.soft_knee.toFixed(2));
+  setVal("bm-soft-knee-num", cfg.soft_knee.toFixed(2));
+
+  setChk("bm-fc-enabled", cfg.false_color_enabled);
+  setChk("bm-zebra-enabled", cfg.zebra.enabled);
+  setChk("bm-zebra-low-enabled", cfg.zebra.low_enabled);
+  setChk("bm-zebra-skin-enabled", cfg.zebra.skin_enabled);
+  setChk("bm-limiter-enabled", cfg.limiter_enabled);
+  setChk("bm-gamut-desaturate", cfg.gamut_desaturate_illegal);
+
+  renderBroadcastIreLegend(cfg.false_color_palette);
+  renderBroadcastComplianceGrid(state.broadcastComplianceReport, cfg);
+  drawBroadcastHistogramCanvas(
+    byId("broadcast-histogram-canvas"),
+    state.broadcastComplianceReport,
+    cfg
+  );
+}
+
+function renderBroadcastIreLegend(paletteId) {
+  const container = byId("broadcast-ire-legend");
+  if (!container) return;
+  const bands =
+    FALSE_COLOR_PALETTES_CLIENT[paletteId] || FALSE_COLOR_PALETTES_CLIENT.arri_ire;
+  const chips = bands.map((band) => {
+    const chip = dom("div", "broadcast-ire-chip mono");
+    chip.setAttribute("role", "listitem");
+    const swatch = dom("span", "broadcast-ire-swatch");
+    swatch.style.backgroundColor = band.color_hex;
+    const text = dom("span", "", `${band.label} (${band.stop_note})`);
+    chip.appendChild(swatch);
+    chip.appendChild(text);
+    return chip;
+  });
+  container.replaceChildren(...chips);
+}
+
+function renderBroadcastComplianceGrid(report, cfg) {
+  const grid = byId("broadcast-compliance-grid");
+  const statusEl = byId("broadcast-compliance-status");
+  const fgEl = byId("broadcast-fg-preview");
+  if (fgEl) {
+    const fgText =
+      (state.broadcastCompileResult && state.broadcastCompileResult.filtergraph) ||
+      (report && report.filtergraph) ||
+      "null";
+    fgEl.textContent = fgText;
+  }
+  if (!grid) return;
+
+  if (!report) {
+    grid.replaceChildren();
+    if (statusEl) statusEl.textContent = t("broadcast.status.idle");
+    return;
+  }
+
+  const cards = [
+    {
+      label: t("broadcast.kv.status"),
+      value: `${report.compliance_status} (${String(report.standard).toUpperCase()})`,
+      tone:
+        report.compliance_status === "FAIL"
+          ? "is-fail"
+          : report.compliance_status === "WARN"
+            ? "is-warn"
+            : "is-pass"
+    },
+    {
+      label: t("broadcast.kv.ireRange"),
+      value: `${report.min_ire.toFixed(1)} .. ${report.max_ire.toFixed(1)} IRE`,
+      tone: ""
+    },
+    {
+      label: t("broadcast.kv.lumaCode"),
+      value: `${report.min_luma_8bit} .. ${report.peak_luma_8bit} / 255`,
+      tone: ""
+    },
+    {
+      label: t("broadcast.kv.subBlack"),
+      value: `${report.sub_black_pct.toFixed(2)}%`,
+      tone: report.sub_black_pct > 0 ? "is-fail" : "is-pass"
+    },
+    {
+      label: t("broadcast.kv.superWhite"),
+      value: `${report.super_white_pct.toFixed(2)}%`,
+      tone: report.super_white_pct > 0 ? "is-fail" : "is-pass"
+    },
+    {
+      label: t("broadcast.kv.gamut"),
+      value: `${report.skin_zone_pct.toFixed(1)}% skin | ${report.gamut_illegal_pct.toFixed(2)}% exc`,
+      tone: report.gamut_illegal_pct > 0 ? "is-warn" : ""
+    }
+  ];
+
+  const nodes = cards.map((item) => {
+    const card = dom("div", "broadcast-kv-card");
+    card.appendChild(dom("span", "broadcast-kv-label", item.label));
+    const cls = item.tone ? `broadcast-kv-value mono ${item.tone}` : "broadcast-kv-value mono";
+    card.appendChild(dom("span", cls, item.value));
+    return card;
+  });
+  grid.replaceChildren(...nodes);
+
+  if (statusEl) {
+    statusEl.textContent = t("broadcast.status.summary", {
+      status: report.compliance_status,
+      minIre: report.min_ire.toFixed(1),
+      maxIre: report.max_ire.toFixed(1),
+      sub: report.sub_black_pct.toFixed(2),
+      sup: report.super_white_pct.toFixed(2),
+      gamut: report.gamut_illegal_pct.toFixed(2)
+    });
+  }
+}
+
+async function analyzeBroadcastMonitorAction() {
+  const seq = ++state.broadcastAnalyzeSeq;
+  const cfg = normalizeBroadcastConfigClient(state.broadcastMonitor);
+  state.broadcastMonitor = cfg;
+  // Sample un-clamped source from color preview canvas when available; otherwise let server probe procedural bars
+  const previewCanvas = byId("color-preview-canvas");
+  const rgbSamples =
+    previewCanvas && previewCanvas._ungradedSourceCanvas
+      ? sampleCanvasBroadcastRgb(previewCanvas, 256)
+      : null;
+
+  try {
+    const [compileRes, reportRes] = await Promise.all([
+      api.compileBroadcastFilter({ config: cfg }),
+      api.analyzeBroadcastCompliance({
+        config: cfg,
+        rgb_samples: rgbSamples && rgbSamples.length >= 16 ? rgbSamples : undefined
+      })
+    ]);
+    if (seq !== state.broadcastAnalyzeSeq) return;
+    state.broadcastCompileResult = compileRes;
+    state.broadcastComplianceReport = reportRes;
+    syncBroadcastMonitorUI();
+  } catch (err) {
+    if (seq !== state.broadcastAnalyzeSeq) return;
+    const statusEl = byId("broadcast-compliance-status");
+    if (statusEl) statusEl.textContent = String(err && err.message ? err.message : err);
+  }
+}
+
+function applyBroadcastMonitorChange(updater, { analyze = true } = {}) {
+  const next = normalizeBroadcastConfigClient({
+    ...state.broadcastMonitor,
+    ...(typeof updater === "function" ? updater(state.broadcastMonitor) : updater)
+  });
+  state.broadcastMonitor = next;
+  syncBroadcastMonitorUI();
+  redrawActiveCanvases();
+  if (analyze) analyzeBroadcastMonitorAction();
+}
+
+function toggleBroadcastFalseColorAction() {
+  applyBroadcastMonitorChange((cur) => ({
+    false_color_enabled: !cur.false_color_enabled
+  }));
+}
+
+function toggleBroadcastZebraAction() {
+  applyBroadcastMonitorChange((cur) => ({
+    zebra: { ...cur.zebra, enabled: !cur.zebra.enabled }
+  }));
+}
+
+function toggleBroadcastLegalLimiterAction() {
+  applyBroadcastMonitorChange((cur) => {
+    const nextEnabled = !cur.limiter_enabled;
+    const nextStd =
+      nextEnabled && cur.broadcast_standard === "bypass" ? "ebu_r103" : cur.broadcast_standard;
+    const spec = BROADCAST_STANDARDS_CLIENT[nextStd] || BROADCAST_STANDARDS_CLIENT.ebu_r103;
+    return {
+      broadcast_standard: nextStd,
+      limiter_enabled: nextEnabled,
+      luma_min_8bit: spec.luma_min_8bit,
+      luma_max_8bit: spec.luma_max_8bit,
+      chroma_max_8bit: spec.chroma_max_8bit
+    };
+  });
+}
+
+function openBroadcastMonitorDialog() {
+  const dlg = byId("broadcast-monitor-dialog");
+  if (!dlg) return;
+  if (typeof dlg.showModal === "function") {
+    if (!dlg.open) dlg.showModal();
+  } else {
+    dlg.setAttribute("open", "open");
+  }
+  syncBroadcastMonitorUI();
+  analyzeBroadcastMonitorAction();
+}
+
+function closeBroadcastMonitorDialog() {
+  const dlg = byId("broadcast-monitor-dialog");
+  if (!dlg) return;
+  if (typeof dlg.close === "function") {
+    if (dlg.open) dlg.close();
+  } else {
+    dlg.removeAttribute("open");
+  }
+}
+
+function wireBroadcastMonitorEvents() {
+  byId("btn-color-false-color")?.addEventListener("click", toggleBroadcastFalseColorAction);
+  byId("btn-program-false-color")?.addEventListener("click", toggleBroadcastFalseColorAction);
+  byId("btn-color-zebra")?.addEventListener("click", toggleBroadcastZebraAction);
+  byId("btn-program-zebra")?.addEventListener("click", toggleBroadcastZebraAction);
+  byId("btn-color-broadcast-safe")?.addEventListener("click", toggleBroadcastLegalLimiterAction);
+  byId("btn-broadcast-toggle-legal")?.addEventListener("click", toggleBroadcastLegalLimiterAction);
+  byId("btn-open-broadcast-studio")?.addEventListener("click", openBroadcastMonitorDialog);
+  byId("btn-program-broadcast-studio")?.addEventListener("click", openBroadcastMonitorDialog);
+  byId("btn-close-broadcast-studio")?.addEventListener("click", closeBroadcastMonitorDialog);
+
+  const dlg = byId("broadcast-monitor-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeBroadcastMonitorDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeBroadcastMonitorDialog();
+    });
+  }
+
+  byId("bm-fc-enabled")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange({ false_color_enabled: Boolean(ev.target.checked) });
+  });
+  byId("bm-fc-palette")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange({ false_color_palette: ev.target.value });
+  });
+
+  const bindRangePair = (rangeId, numId, minV, maxV, key) => {
+    const rEl = byId(rangeId);
+    const nEl = byId(numId);
+    if (!rEl || !nEl) return;
+    rEl.addEventListener("input", () => {
+      const v = Number(rEl.value);
+      nEl.value = v.toFixed(2);
+      applyBroadcastMonitorChange({ [key]: v }, { analyze: false });
+    });
+    rEl.addEventListener("change", () => analyzeBroadcastMonitorAction());
+    nEl.addEventListener("input", () => {
+      const parsed = Number.parseFloat(nEl.value);
+      if (Number.isFinite(parsed) && parsed >= minV && parsed <= maxV) {
+        rEl.value = String(parsed);
+        applyBroadcastMonitorChange({ [key]: parsed }, { analyze: false });
+      }
+    });
+    nEl.addEventListener("change", () => {
+      const parsed = Number.parseFloat(nEl.value);
+      const clamped = Number.isFinite(parsed) ? Math.min(maxV, Math.max(minV, parsed)) : minV;
+      nEl.value = clamped.toFixed(2);
+      rEl.value = String(clamped);
+      applyBroadcastMonitorChange({ [key]: clamped });
+    });
+  };
+  bindRangePair("bm-fc-opacity-range", "bm-fc-opacity-num", 0.25, 1.0, "false_color_opacity");
+  bindRangePair("bm-soft-knee-range", "bm-soft-knee-num", 0.0, 1.0, "soft_knee");
+
+  byId("bm-zebra-enabled")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange((cur) => ({
+      zebra: { ...cur.zebra, enabled: Boolean(ev.target.checked) }
+    }));
+  });
+  byId("bm-zebra-low-enabled")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange((cur) => ({
+      zebra: { ...cur.zebra, low_enabled: Boolean(ev.target.checked) }
+    }));
+  });
+  byId("bm-zebra-skin-enabled")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange((cur) => ({
+      zebra: { ...cur.zebra, skin_enabled: Boolean(ev.target.checked) }
+    }));
+  });
+  byId("bm-zebra-high-ire")?.addEventListener("change", (ev) => {
+    const parsed = Number.parseFloat(ev.target.value);
+    const clamped = Number.isFinite(parsed) ? Math.min(109, Math.max(70, Math.round(parsed))) : 95;
+    ev.target.value = String(clamped);
+    applyBroadcastMonitorChange((cur) => ({
+      zebra: { ...cur.zebra, high_ire: clamped }
+    }));
+  });
+  byId("bm-zebra-low-ire")?.addEventListener("change", (ev) => {
+    const parsed = Number.parseFloat(ev.target.value);
+    const clamped = Number.isFinite(parsed) ? Math.min(30, Math.max(0, Math.round(parsed))) : 5;
+    ev.target.value = String(clamped);
+    applyBroadcastMonitorChange((cur) => ({
+      zebra: { ...cur.zebra, low_ire: clamped }
+    }));
+  });
+
+  byId("bm-standard")?.addEventListener("change", (ev) => {
+    const std = String(ev.target.value || "ebu_r103");
+    const spec = BROADCAST_STANDARDS_CLIENT[std] || BROADCAST_STANDARDS_CLIENT.ebu_r103;
+    applyBroadcastMonitorChange({
+      broadcast_standard: std,
+      luma_min_8bit: spec.luma_min_8bit,
+      luma_max_8bit: spec.luma_max_8bit,
+      chroma_max_8bit: spec.chroma_max_8bit
+    });
+  });
+  byId("bm-limiter-mode")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange({ limiter_mode: ev.target.value });
+  });
+  byId("bm-limiter-enabled")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange({ limiter_enabled: Boolean(ev.target.checked) });
+  });
+  byId("bm-gamut-desaturate")?.addEventListener("change", (ev) => {
+    applyBroadcastMonitorChange({ gamut_desaturate_illegal: Boolean(ev.target.checked) });
+  });
+
+  byId("btn-broadcast-analyze")?.addEventListener("click", analyzeBroadcastMonitorAction);
+  byId("btn-broadcast-copy-fg")?.addEventListener("click", async () => {
+    const fgText = byId("broadcast-fg-preview")?.textContent || "null";
+    try {
+      await navigator.clipboard.writeText(fgText);
+    } catch {
+      // Clipboard API may be unavailable in headless mode
+    }
+    const statusEl = byId("broadcast-compliance-status");
+    if (statusEl) statusEl.textContent = t("broadcast.action.copied");
+  });
+  byId("btn-broadcast-reset")?.addEventListener("click", () => {
+    state.broadcastMonitor = createDefaultBroadcastMonitorConfig();
+    state.broadcastComplianceReport = null;
+    state.broadcastCompileResult = null;
+    syncBroadcastMonitorUI();
+    redrawActiveCanvases();
+    analyzeBroadcastMonitorAction();
+  });
 }
 
 bootstrap();

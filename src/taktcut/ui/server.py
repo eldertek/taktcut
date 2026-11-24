@@ -30,6 +30,14 @@ from taktcut.audio_analysis import (
     analyze_audio_spectrum,
     detect_audio_transients,
 )
+from taktcut.broadcast_monitor import (
+    ALLOWED_FALSE_COLOR_PALETTES,
+    analyze_broadcast_compliance,
+    compile_broadcast_legal_filtergraph,
+    get_false_color_palette,
+    list_broadcast_standards,
+    normalize_broadcast_config,
+)
 from taktcut.color import (
     COLOR_BALANCE_MAX,
     COLOR_BALANCE_MIN,
@@ -1888,6 +1896,19 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/color/broadcast-monitor/palettes":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "palettes": {
+                        pid: [b.model_dump(mode="json") for b in get_false_color_palette(pid)]
+                        for pid in ALLOWED_FALSE_COLOR_PALETTES
+                    },
+                    "standards": [s.model_dump(mode="json") for s in list_broadcast_standards()],
+                },
+            )
+            return
+
         if route == "/api/transform/presets":
             self._send_json(
                 HTTPStatus.OK,
@@ -3509,6 +3530,48 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 cube_bytes,
                 extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'},
             )
+            return
+
+        if route == "/api/color/broadcast-monitor/compile":
+            bm_cfg = normalize_broadcast_config(payload.get("config"))
+            bm_compiled = compile_broadcast_legal_filtergraph(bm_cfg)
+            self._send_json(HTTPStatus.OK, bm_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/color/broadcast-monitor/analyze":
+            bm_cfg = normalize_broadcast_config(payload.get("config"))
+            raw_luma = payload.get("luma_samples")
+            luma_samples: list[float] | None = None
+            if isinstance(raw_luma, list) and len(raw_luma) > 0:
+                luma_samples = [
+                    float(x)
+                    for x in raw_luma
+                    if isinstance(x, (int, float)) and not isinstance(x, bool)
+                ]
+            raw_rgb = payload.get("rgb_samples")
+            rgb_samples: list[tuple[float, float, float]] | None = None
+            if isinstance(raw_rgb, list) and len(raw_rgb) > 0:
+                rgb_samples = []
+                for item in raw_rgb:
+                    if not isinstance(item, (list, tuple)) or len(item) != 3:
+                        raise ValueError("Each rgb_samples entry must be [R, G, B]")
+                    rgb_samples.append((float(item[0]), float(item[1]), float(item[2])))
+            raw_media = payload.get("media_path")
+            media_path = (
+                str(raw_media).strip()
+                if isinstance(raw_media, str) and raw_media.strip()
+                else None
+            )
+            exec_ffmpeg = bool(payload.get("execute_ffmpeg", False))
+            bm_report = analyze_broadcast_compliance(
+                luma_samples=luma_samples,
+                rgb_samples=rgb_samples,
+                config=bm_cfg,
+                media_path=media_path,
+                workspace_root=self.app_state.workspace_root,
+                execute_ffmpeg=exec_ffmpeg,
+            )
+            self._send_json(HTTPStatus.OK, bm_report.model_dump(mode="json"))
             return
 
         if route == "/api/render/plan":

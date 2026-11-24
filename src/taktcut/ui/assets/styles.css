@@ -9300,3 +9300,218 @@ input[type="range"] {
     min-height: 45px;
   }
 }
+
+/* BROADCAST MONITOR, FALSE COLOR IRE, ZEBRA & EBU R103 LEGAL STUDIO */
+.broadcast-quick-sep {
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  background: var(--border-strong);
+  margin: 0 2px;
+}
+
+.bm-toggle-btn.is-active {
+  background: rgba(244, 114, 182, 0.16);
+  border-color: #f472b6;
+  color: #fbcfe8;
+}
+
+#btn-color-zebra.is-active,
+#btn-program-zebra.is-active {
+  background: rgba(249, 115, 22, 0.18);
+  border-color: #f97316;
+  color: #fed7aa;
+}
+
+#btn-color-broadcast-safe.is-active {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: #22c55e;
+  color: #bbf7d0;
+}
+
+.bm-studio-btn {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #bae6fd;
+}
+
+.bm-studio-btn:hover {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+}
+
+#color-broadcast-badge.is-pass {
+  border-color: rgba(34, 197, 94, 0.55);
+  color: #86efac;
+}
+
+#color-broadcast-badge.is-warn {
+  border-color: rgba(245, 158, 11, 0.65);
+  color: #fde68a;
+}
+
+#color-broadcast-badge.is-fail {
+  border-color: rgba(239, 68, 68, 0.7);
+  color: #fca5a5;
+}
+
+.broadcast-monitor-dialog {
+  max-width: min(840px, calc(100vw - 16px));
+  width: min(840px, calc(100vw - 16px));
+}
+
+.broadcast-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(80vh, 740px);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.broadcast-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.broadcast-dialog-body .code-box,
+.broadcast-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.broadcast-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.broadcast-range-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.broadcast-range-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.broadcast-range-pair .input-num {
+  width: 68px;
+  flex: 0 0 auto;
+}
+
+.broadcast-checks-cell {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.broadcast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.broadcast-canvas-well {
+  min-height: 168px;
+}
+
+.broadcast-ire-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.broadcast-ire-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-primary);
+}
+
+.broadcast-ire-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+
+.broadcast-compliance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.broadcast-kv-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.broadcast-kv-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.broadcast-kv-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.broadcast-kv-value.is-pass {
+  color: #4ade80;
+}
+
+.broadcast-kv-value.is-warn {
+  color: #fbbf24;
+}
+
+.broadcast-kv-value.is-fail {
+  color: #f87171;
+}
+
+#broadcast-monitor-dialog .btn:focus-visible,
+#broadcast-monitor-dialog .input-control:focus-visible,
+.bm-toggle-btn:focus-visible,
+.bm-studio-btn:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+@media (max-width: 760px) {
+  .broadcast-form-grid,
+  .broadcast-checks-cell,
+  .broadcast-compliance-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bm-toggle-btn,
+  .bm-studio-btn,
+  .broadcast-actions .btn,
+  #broadcast-monitor-dialog .input-control,
+  #btn-close-broadcast-studio {
+    min-height: 45px;
+  }
+}

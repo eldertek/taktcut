@@ -12219,3 +12219,279 @@ def test_ui_text_edit_rough_cut_endpoints_demo_parity_and_playwright(tmp_path: P
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_ui_broadcast_monitor_endpoints_demo_parity_and_playwright(tmp_path: Path) -> None:
+    """Verify False Color IRE, Zebra, EBU R103 Legal Limiter API, demo parity & Playwright."""
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+    try:
+        # 1. Server API tests (/palettes, /compile, /analyze)
+        status_pal, _, raw_pal = _http_call(
+            f"{base_url}/api/color/broadcast-monitor/palettes",
+            method="GET",
+        )
+        assert status_pal == 200
+        pal_data = json.loads(raw_pal.decode("utf-8"))
+        assert "arri_ire" in pal_data["palettes"]
+        assert "atomos_ire" in pal_data["palettes"]
+        assert "davinci_exposure" in pal_data["palettes"]
+        assert len(pal_data["standards"]) == 4
+
+        excursion_samples = [4.0, 10.0, 128.0, 245.0, 252.0] * 12
+        status_fail, _, raw_fail = _http_call(
+            f"{base_url}/api/color/broadcast-monitor/analyze",
+            method="POST",
+            payload={
+                "config": {
+                    "broadcast_standard": "ebu_r103",
+                    "limiter_enabled": False,
+                    "false_color_enabled": True,
+                    "zebra": {"enabled": True, "high_ire": 95, "low_enabled": True, "low_ire": 5},
+                },
+                "luma_samples": excursion_samples,
+            },
+        )
+        assert status_fail == 200
+        fail_rep = json.loads(raw_fail.decode("utf-8"))
+        assert fail_rep["compliance_status"] == "FAIL"
+        assert fail_rep["sub_black_pct"] > 0
+        assert fail_rep["super_white_pct"] > 0
+        assert fail_rep["filtergraph"] == "null"
+
+        status_pass, _, raw_pass = _http_call(
+            f"{base_url}/api/color/broadcast-monitor/analyze",
+            method="POST",
+            payload={
+                "config": {
+                    "broadcast_standard": "ebu_r103",
+                    "limiter_enabled": True,
+                    "limiter_mode": "soft_knee",
+                    "soft_knee": 0.15,
+                },
+                "luma_samples": excursion_samples,
+            },
+        )
+        assert status_pass == 200
+        pass_rep = json.loads(raw_pass.decode("utf-8"))
+        assert pass_rep["compliance_status"] == "PASS"
+        assert pass_rep["min_luma_8bit"] >= 16
+        assert pass_rep["peak_luma_8bit"] <= 235
+        assert "limiter=min=16:max=235:planes=7" in pass_rep["filtergraph"]
+
+        status_cmp, _, raw_cmp = _http_call(
+            f"{base_url}/api/color/broadcast-monitor/compile",
+            method="POST",
+            payload={
+                "config": {
+                    "broadcast_standard": "itu_rec709",
+                    "limiter_enabled": True,
+                    "limiter_mode": "hard_clip",
+                    "gamut_desaturate_illegal": False,
+                }
+            },
+        )
+        assert status_cmp == 200
+        cmp_data = json.loads(raw_cmp.decode("utf-8"))
+        assert cmp_data["filtergraph"] == "limiter=min=16:max=235:planes=7"
+
+        status_bad, _, _ = _http_call(
+            f"{base_url}/api/color/broadcast-monitor/compile",
+            method="POST",
+            payload={"config": {"broadcast_standard": "invalid_std"}},
+        )
+        assert status_bad == 400
+
+        # 2. demo_adapter.js Node parity check
+        assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+        demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+        node_script = f"""
+import assert from "node:assert/strict";
+import {{
+  compileBroadcastFilterClient,
+  analyzeBroadcastComplianceClient
+}} from {json.dumps(demo_uri)};
+
+const samples = [4, 10, 128, 245, 252, 4, 10, 128, 245, 252];
+const failRep = analyzeBroadcastComplianceClient({{
+  config: {{ broadcast_standard: "ebu_r103", limiter_enabled: false }},
+  luma_samples: samples
+}});
+assert.equal(failRep.compliance_status, "FAIL");
+assert.equal(failRep.filtergraph, "null");
+
+const passRep = analyzeBroadcastComplianceClient({{
+  config: {{
+    broadcast_standard: "ebu_r103",
+    limiter_enabled: true,
+    limiter_mode: "soft_knee",
+    soft_knee: 0.15
+  }},
+  luma_samples: samples
+}});
+assert.equal(passRep.compliance_status, "PASS");
+assert.ok(passRep.min_luma_8bit >= 16);
+assert.ok(passRep.peak_luma_8bit <= 235);
+assert.ok(passRep.filtergraph.includes("limiter=min=16:max=235:planes=7"));
+
+const hardCmp = compileBroadcastFilterClient({{
+  config: {{
+    broadcast_standard: "itu_rec709",
+    limiter_enabled: true,
+    limiter_mode: "hard_clip",
+    gamut_desaturate_illegal: false
+  }}
+}});
+assert.equal(hardCmp.filtergraph, "limiter=min=16:max=235:planes=7");
+"""
+        node_proc = subprocess.run(
+            ["node", "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert node_proc.returncode == 0, node_proc.stderr
+
+        # 3. Live Playwright E2E check at 1440x900 and 375x812
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            pytest.skip("Playwright not installed")
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                console_errors: list[str] = []
+                page.on(
+                    "console",
+                    lambda msg: console_errors.append(msg.text)
+                    if msg.type == "error"
+                    else None,
+                )
+                page.on("pageerror", lambda err: console_errors.append(str(err)))
+
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#timeline-program-canvas")
+
+                # Program monitor False Color & Zebra toggle visibly updates canvas
+                prog_before = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                page.click("#btn-program-false-color")
+                assert (
+                    page.locator("#btn-program-false-color").get_attribute("aria-pressed")
+                    == "true"
+                )
+                prog_fc = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                assert prog_fc != prog_before
+
+                page.click("#btn-program-zebra")
+                assert page.locator("#btn-program-zebra").get_attribute("aria-pressed") == "true"
+
+                # Switch to Color workspace & verify Color Viewer, IRE Histogram Scope & Legal Safe
+                page.click("#tab-color")
+                page.wait_for_selector("#color-preview-canvas")
+                color_fc_before = page.evaluate(
+                    "() => document.getElementById('color-preview-canvas').toDataURL()"
+                )
+                page.click("#btn-color-broadcast-safe")
+                assert (
+                    page.locator("#btn-color-broadcast-safe").get_attribute("aria-pressed")
+                    == "true"
+                )
+                color_fc_after = page.evaluate(
+                    "() => document.getElementById('color-preview-canvas').toDataURL()"
+                )
+                assert color_fc_after != color_fc_before
+
+                # Select 4th scope mode: IRE Histogram
+                scope_before = page.evaluate(
+                    "() => document.getElementById('color-scope-canvas').toDataURL()"
+                )
+                page.click("#btn-scope-histogram")
+                assert (
+                    page.locator("#btn-scope-histogram").get_attribute("aria-pressed") == "true"
+                )
+                scope_hist = page.evaluate(
+                    "() => document.getElementById('color-scope-canvas').toDataURL()"
+                )
+                assert scope_hist != scope_before
+
+                # Open Broadcast Monitor Studio dialog via Shift+G
+                page.keyboard.press("Shift+G")
+                page.wait_for_selector("#broadcast-monitor-dialog[open]")
+                page.wait_for_selector("#broadcast-ire-legend .broadcast-ire-chip")
+                page.wait_for_selector("#broadcast-compliance-grid .broadcast-kv-card")
+                fg_txt = page.locator("#broadcast-fg-preview").text_content() or ""
+                assert "limiter=min=16:max=235:planes=7" in fg_txt
+
+                # Toggle FR i18n inside studio & verify clean copy without en/em-dashes
+                page.click("#btn-close-broadcast-studio")
+                page.wait_for_function(
+                    "() => !document.getElementById('broadcast-monitor-dialog')?.open"
+                )
+                page.click("#lang-fr")
+                fc_btn_txt = (page.locator("#btn-color-false-color").text_content() or "").strip()
+                assert fc_btn_txt == "Fausses Couleurs"
+                page.click("#btn-open-broadcast-studio")
+                page.wait_for_selector("#broadcast-monitor-dialog[open]")
+                fr_dlg_txt = page.locator("#broadcast-monitor-dialog").text_content() or ""
+                assert "Studio Fausses Couleurs" in fr_dlg_txt
+                assert "\u2013" not in fr_dlg_txt and "\u2014" not in fr_dlg_txt
+
+                page.click("#btn-close-broadcast-studio")
+                page.click("#lang-en")
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                page.click("#btn-open-broadcast-studio")
+                page.wait_for_selector("#broadcast-monitor-dialog[open]")
+                overflow_mobile_dlg = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+                dlg_w = page.evaluate(
+                    "() => document.getElementById('broadcast-monitor-dialog')"
+                    ".getBoundingClientRect().width"
+                )
+                assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+                for ctrl_id in (
+                    "btn-color-false-color",
+                    "btn-color-zebra",
+                    "btn-color-broadcast-safe",
+                    "btn-open-broadcast-studio",
+                    "btn-broadcast-analyze",
+                    "btn-broadcast-toggle-legal",
+                    "btn-close-broadcast-studio",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+                page.click("#btn-close-broadcast-studio")
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

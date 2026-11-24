@@ -13928,3 +13928,376 @@ export function applyTextEditRoughCutClient(doc, opts = {}) {
     document: nextDoc
   };
 }
+
+export const FALSE_COLOR_PALETTES_CLIENT = {
+  arri_ire: [
+    { min_ire: -10.0, max_ire: 3.0, color_hex: "#5b21b6", label: "Crush", stop_note: "< 3 IRE" },
+    { min_ire: 3.0, max_ire: 12.0, color_hex: "#2563eb", label: "Deep Shadow", stop_note: "3-12 IRE" },
+    { min_ire: 12.0, max_ire: 25.0, color_hex: "#0891b2", label: "Shadow", stop_note: "12-25 IRE" },
+    { min_ire: 25.0, max_ire: 38.0, color_hex: "#0d9488", label: "Low Mid", stop_note: "25-38 IRE" },
+    { min_ire: 38.0, max_ire: 45.0, color_hex: "#16a34a", label: "18% Grey", stop_note: "38-45 IRE" },
+    { min_ire: 45.0, max_ire: 55.0, color_hex: "#65a30d", label: "Neutral Mid", stop_note: "45-55 IRE" },
+    { min_ire: 55.0, max_ire: 68.0, color_hex: "#f472b6", label: "Skin Key", stop_note: "55-68 IRE" },
+    { min_ire: 68.0, max_ire: 82.0, color_hex: "#cbd5e1", label: "Highlight", stop_note: "68-82 IRE" },
+    { min_ire: 82.0, max_ire: 94.0, color_hex: "#eab308", label: "Caution", stop_note: "82-94 IRE" },
+    { min_ire: 94.0, max_ire: 100.0, color_hex: "#f97316", label: "Hot White", stop_note: "94-100 IRE" },
+    { min_ire: 100.0, max_ire: 120.0, color_hex: "#ef4444", label: "Clipped", stop_note: ">= 100 IRE" }
+  ],
+  atomos_ire: [
+    { min_ire: -10.0, max_ire: 5.0, color_hex: "#4338ca", label: "Black Clip", stop_note: "< 5 IRE" },
+    { min_ire: 5.0, max_ire: 20.0, color_hex: "#0284c7", label: "Shadows", stop_note: "5-20 IRE" },
+    { min_ire: 20.0, max_ire: 40.0, color_hex: "#0f766e", label: "Dark Mid", stop_note: "20-40 IRE" },
+    { min_ire: 40.0, max_ire: 50.0, color_hex: "#22c55e", label: "Mid Grey", stop_note: "40-50 IRE" },
+    { min_ire: 50.0, max_ire: 65.0, color_hex: "#ec4899", label: "Skin Tone", stop_note: "50-65 IRE" },
+    { min_ire: 65.0, max_ire: 85.0, color_hex: "#94a3b8", label: "Upper Mid", stop_note: "65-85 IRE" },
+    { min_ire: 85.0, max_ire: 98.0, color_hex: "#facc15", label: "Over Warn", stop_note: "85-98 IRE" },
+    { min_ire: 98.0, max_ire: 120.0, color_hex: "#dc2626", label: "White Clip", stop_note: ">= 98 IRE" }
+  ],
+  davinci_exposure: [
+    { min_ire: -10.0, max_ire: 4.0, color_hex: "#6d28d9", label: "Sub-Black", stop_note: "< 4 IRE" },
+    { min_ire: 4.0, max_ire: 18.0, color_hex: "#1d4ed8", label: "Toe", stop_note: "4-18 IRE" },
+    { min_ire: 18.0, max_ire: 36.0, color_hex: "#06b6d4", label: "Lower Key", stop_note: "18-36 IRE" },
+    { min_ire: 36.0, max_ire: 46.0, color_hex: "#10b981", label: "Middle Grey", stop_note: "36-46 IRE" },
+    { min_ire: 46.0, max_ire: 62.0, color_hex: "#f472b6", label: "Skin Zone", stop_note: "46-62 IRE" },
+    { min_ire: 62.0, max_ire: 80.0, color_hex: "#e2e8f0", label: "Shoulder", stop_note: "62-80 IRE" },
+    { min_ire: 80.0, max_ire: 95.0, color_hex: "#f59e0b", label: "Peak Warn", stop_note: "80-95 IRE" },
+    { min_ire: 95.0, max_ire: 120.0, color_hex: "#ef4444", label: "Legal Over", stop_note: ">= 95 IRE" }
+  ]
+};
+
+export const BROADCAST_STANDARDS_CLIENT = {
+  bypass: {
+    standard: "bypass",
+    label: "Full Range Bypass (0-255)",
+    luma_min_8bit: 0,
+    luma_max_8bit: 255,
+    chroma_min_8bit: 0,
+    chroma_max_8bit: 255,
+    excursion_warn_pct: 100.0,
+    excursion_fail_pct: 100.0,
+    summary: "Full-range 0-255 monitoring only; no broadcast legal clamping applied."
+  },
+  ebu_r103: {
+    standard: "ebu_r103",
+    label: "EBU R103 Broadcast Safe (16-235)",
+    luma_min_8bit: 16,
+    luma_max_8bit: 235,
+    chroma_min_8bit: 16,
+    chroma_max_8bit: 240,
+    excursion_warn_pct: 0.25,
+    excursion_fail_pct: 1.0,
+    summary: "EBU R103 studio range Y 16-235, C 16-240, max 1.0% transient excursion."
+  },
+  itu_rec709: {
+    standard: "itu_rec709",
+    label: "ITU-R BT.709 Legal (16-235)",
+    luma_min_8bit: 16,
+    luma_max_8bit: 235,
+    chroma_min_8bit: 16,
+    chroma_max_8bit: 240,
+    excursion_warn_pct: 0.5,
+    excursion_fail_pct: 2.0,
+    summary: "ITU-R BT.709 8-bit studio swing Y 16-235 and Cb/Cr 16-240."
+  },
+  smpte_rp2077: {
+    standard: "smpte_rp2077",
+    label: "SMPTE RP 2077 Soft Limiter (16-235)",
+    luma_min_8bit: 16,
+    luma_max_8bit: 235,
+    chroma_min_8bit: 16,
+    chroma_max_8bit: 240,
+    excursion_warn_pct: 0.5,
+    excursion_fail_pct: 1.5,
+    summary: "SMPTE RP 2077 broadcast television safe gamut with soft-knee rolloff."
+  }
+};
+
+export function createDefaultBroadcastMonitorConfig() {
+  return {
+    false_color_enabled: false,
+    false_color_palette: "arri_ire",
+    false_color_opacity: 0.92,
+    zebra: {
+      enabled: false,
+      high_enabled: true,
+      high_ire: 95,
+      low_enabled: false,
+      low_ire: 5,
+      skin_enabled: false,
+      skin_min_ire: 48,
+      skin_max_ire: 62
+    },
+    broadcast_standard: "ebu_r103",
+    limiter_enabled: false,
+    limiter_mode: "soft_knee",
+    soft_knee: 0.15,
+    luma_min_8bit: 16,
+    luma_max_8bit: 235,
+    chroma_max_8bit: 240,
+    gamut_desaturate_illegal: true
+  };
+}
+
+export function normalizeBroadcastConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const stdRaw = String(src.broadcast_standard || "ebu_r103").trim().toLowerCase();
+  const std = Object.prototype.hasOwnProperty.call(BROADCAST_STANDARDS_CLIENT, stdRaw) ? stdRaw : "ebu_r103";
+  const spec = BROADCAST_STANDARDS_CLIENT[std];
+  const paletteRaw = String(src.false_color_palette || "arri_ire").trim().toLowerCase();
+  const palette = Object.prototype.hasOwnProperty.call(FALSE_COLOR_PALETTES_CLIENT, paletteRaw) ? paletteRaw : "arri_ire";
+  const zSrc = src.zebra && typeof src.zebra === "object" ? src.zebra : {};
+  const skinMin = Math.min(75, Math.max(35, Number(zSrc.skin_min_ire ?? 48)));
+  const skinMax = Math.min(80, Math.max(skinMin + 1, Number(zSrc.skin_max_ire ?? 62)));
+  const lumaMin = std === "bypass" && src.luma_min_8bit === undefined
+    ? 0
+    : Math.min(64, Math.max(0, Math.round(Number(src.luma_min_8bit ?? spec.luma_min_8bit))));
+  const lumaMax = std === "bypass" && src.luma_max_8bit === undefined
+    ? 255
+    : Math.min(255, Math.max(Math.max(180, lumaMin + 1), Math.round(Number(src.luma_max_8bit ?? spec.luma_max_8bit))));
+  const chromaMax = std === "bypass" && src.chroma_max_8bit === undefined
+    ? 255
+    : Math.min(255, Math.max(192, Math.round(Number(src.chroma_max_8bit ?? spec.chroma_max_8bit))));
+  return {
+    false_color_enabled: Boolean(src.false_color_enabled),
+    false_color_palette: palette,
+    false_color_opacity: Math.min(1.0, Math.max(0.25, Number(src.false_color_opacity ?? 0.92))),
+    zebra: {
+      enabled: Boolean(zSrc.enabled),
+      high_enabled: zSrc.high_enabled !== false,
+      high_ire: Math.min(109, Math.max(70, Number(zSrc.high_ire ?? 95))),
+      low_enabled: Boolean(zSrc.low_enabled),
+      low_ire: Math.min(30, Math.max(0, Number(zSrc.low_ire ?? 5))),
+      skin_enabled: Boolean(zSrc.skin_enabled),
+      skin_min_ire: skinMin,
+      skin_max_ire: skinMax
+    },
+    broadcast_standard: std,
+    limiter_enabled: Boolean(src.limiter_enabled),
+    limiter_mode: src.limiter_mode === "hard_clip" ? "hard_clip" : "soft_knee",
+    soft_knee: Math.min(1.0, Math.max(0.0, Number(src.soft_knee ?? 0.15))),
+    luma_min_8bit: lumaMin,
+    luma_max_8bit: lumaMax,
+    chroma_max_8bit: chromaMax,
+    gamut_desaturate_illegal: src.gamut_desaturate_illegal !== false
+  };
+}
+
+export function applyBroadcastLegalClampClient(r, g, b, rawConfig) {
+  const cfg = normalizeBroadcastConfigClient(rawConfig);
+  if (!cfg.limiter_enabled || cfg.broadcast_standard === "bypass") {
+    return [
+      Math.max(0, Math.min(255, Number(r))),
+      Math.max(0, Math.min(255, Number(g))),
+      Math.max(0, Math.min(255, Number(b)))
+    ];
+  }
+  const lo = cfg.luma_min_8bit;
+  const hi = cfg.luma_max_8bit;
+  const kneeRatio = cfg.limiter_mode === "soft_knee" ? cfg.soft_knee : 0.0;
+  const clampCh = (val) => {
+    if (kneeRatio <= 0.001) return Math.max(lo, Math.min(hi, val));
+    const span = Math.max(1, hi - lo);
+    const knee = Math.max(2, span * Math.min(0.35, kneeRatio * 0.25));
+    const hiStart = hi - knee;
+    const loEnd = lo + knee;
+    if (val > hiStart) {
+      const over = Math.max(0, val - hiStart);
+      return Math.min(hi, hiStart + knee * Math.tanh(over / Math.max(1, knee * 1.35)));
+    }
+    if (val < loEnd) {
+      const under = Math.max(0, loEnd - val);
+      return Math.max(lo, loEnd - knee * Math.tanh(under / Math.max(1, knee * 1.35)));
+    }
+    return val;
+  };
+  let rr = clampCh(Number(r));
+  let gg = clampCh(Number(g));
+  let bb = clampCh(Number(b));
+  if (cfg.gamut_desaturate_illegal) {
+    const y = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+    const maxRadius = Math.max(12, (cfg.chroma_max_8bit - 128) * 1.1);
+    const peakDiff = Math.max(Math.abs(rr - y), Math.abs(gg - y), Math.abs(bb - y));
+    if (peakDiff > maxRadius && peakDiff > 0.001) {
+      const scale = maxRadius / peakDiff;
+      rr = Math.max(lo, Math.min(hi, y + (rr - y) * scale));
+      gg = Math.max(lo, Math.min(hi, y + (gg - y) * scale));
+      bb = Math.max(lo, Math.min(hi, y + (bb - y) * scale));
+    }
+  }
+  return [Number(rr.toFixed(3)), Number(gg.toFixed(3)), Number(bb.toFixed(3))];
+}
+
+export function compileBroadcastFilterClient(rawPayload) {
+  const cfg = normalizeBroadcastConfigClient(rawPayload && rawPayload.config ? rawPayload.config : rawPayload);
+  const spec = BROADCAST_STANDARDS_CLIENT[cfg.broadcast_standard];
+  const lo = cfg.luma_min_8bit;
+  const hi = cfg.luma_max_8bit;
+  const chromaHi = cfg.chroma_max_8bit;
+  const chromaLo = chromaHi < 255 ? Math.max(0, 256 - chromaHi) : 0;
+  const signalstats_probe_vf = "signalstats=stat=tout+vrep+brng,metadata=print:file=-";
+  const warnings = [];
+  if (!cfg.limiter_enabled || cfg.broadcast_standard === "bypass") {
+    if (cfg.broadcast_standard !== "bypass" && !cfg.limiter_enabled) {
+      warnings.push("Broadcast legal limiter is bypassed; output may exceed legal 16-235 range.");
+    }
+    return {
+      filtergraph: "null",
+      vf_args: [],
+      standard: cfg.broadcast_standard,
+      limiter_enabled: false,
+      limiter_mode: cfg.limiter_mode,
+      legal_min_8bit: spec.luma_min_8bit,
+      legal_max_8bit: spec.luma_max_8bit,
+      chroma_max_8bit: spec.chroma_max_8bit,
+      signalstats_probe_vf,
+      warnings
+    };
+  }
+  const filters = [];
+  if (cfg.limiter_mode === "soft_knee" && cfg.soft_knee > 0) {
+    const span = Math.max(1, hi - lo);
+    const kneePx = Math.max(2, Math.round(span * Math.min(0.35, cfg.soft_knee * 0.25)));
+    const hiStart = hi - kneePx;
+    const loEnd = lo + kneePx;
+    const yHi = `${hiStart}+${kneePx}*((val-${hiStart})/(${kneePx}+(val-${hiStart})))`;
+    const yLo = `${loEnd}-${kneePx}*((${loEnd}-val)/(${kneePx}+(${loEnd}-val)))`;
+    const yExpr = `if(gt(val,${hiStart}),${yHi},if(lt(val,${loEnd}),${yLo},val))`;
+    const cClamp = `clip(val,${chromaLo},${chromaHi})`;
+    filters.push(`lutyuv=y='${yExpr}':u='${cClamp}':v='${cClamp}'`);
+  }
+  if (cfg.gamut_desaturate_illegal) {
+    const rgbClamp = `clip(val,${lo},${hi})`;
+    filters.push(`lutrgb=r='${rgbClamp}':g='${rgbClamp}':b='${rgbClamp}'`);
+  }
+  filters.push(`limiter=min=${lo}:max=${hi}:planes=7`);
+  const fg = filters.join(",");
+  return {
+    filtergraph: fg,
+    vf_args: ["-vf", fg],
+    standard: cfg.broadcast_standard,
+    limiter_enabled: true,
+    limiter_mode: cfg.limiter_mode,
+    legal_min_8bit: lo,
+    legal_max_8bit: hi,
+    chroma_max_8bit: chromaHi,
+    signalstats_probe_vf,
+    warnings
+  };
+}
+
+export function analyzeBroadcastComplianceClient(rawPayload) {
+  const payload = rawPayload && typeof rawPayload === "object" ? rawPayload : {};
+  const cfg = normalizeBroadcastConfigClient(payload.config || payload);
+  const spec = BROADCAST_STANDARDS_CLIENT[cfg.broadcast_standard];
+  const compiled = compileBroadcastFilterClient(cfg);
+  let probeSource = "procedural_preview";
+  const workingRgb = [];
+  if (Array.isArray(payload.rgb_samples) && payload.rgb_samples.length > 0) {
+    probeSource = "samples";
+    for (const item of payload.rgb_samples) {
+      if (Array.isArray(item) && item.length === 3) {
+        workingRgb.push([Number(item[0]), Number(item[1]), Number(item[2])]);
+      }
+    }
+  } else if (Array.isArray(payload.luma_samples) && payload.luma_samples.length > 0) {
+    probeSource = "samples";
+    for (const val of payload.luma_samples) {
+      const v = Math.max(0, Math.min(255, Number(val)));
+      workingRgb.push([v, v, v]);
+    }
+  }
+  if (workingRgb.length === 0) {
+    const nProc = 128;
+    for (let idx = 0; idx < nProc; idx += 1) {
+      const t = idx / Math.max(1, nProc - 1);
+      if (idx % 16 === 0) {
+        workingRgb.push(Math.floor(idx / 16) % 2 === 0 ? [248, 246, 242] : [8, 10, 12]);
+      } else if (idx % 7 === 0) {
+        workingRgb.push([182, 134, 112]);
+      } else {
+        const luma = 14 + t * 228;
+        workingRgb.push([Math.min(255, luma * 1.03), luma, Math.max(0, luma * 0.96)]);
+      }
+    }
+  }
+  const n = workingRgb.length;
+  const bins = new Array(32).fill(0);
+  const ireMin = -5.0;
+  const ireSpan = 114.0;
+  const loLegal = cfg.broadcast_standard === "bypass" ? spec.luma_min_8bit : cfg.luma_min_8bit;
+  const hiLegal = cfg.broadcast_standard === "bypass" ? spec.luma_max_8bit : cfg.luma_max_8bit;
+  const chromaMaxDev = Math.max(12, (cfg.chroma_max_8bit - 128) * 1.1);
+  let minIre = Infinity;
+  let maxIre = -Infinity;
+  let sumIre = 0;
+  let minLuma = 255;
+  let peakLuma = 0;
+  let subBlack = 0;
+  let superWhite = 0;
+  let skinCount = 0;
+  let zHigh = 0;
+  let zLow = 0;
+  let gamutIllegal = 0;
+  for (const [rawR, rawG, rawB] of workingRgb) {
+    const [r, g, b] = applyBroadcastLegalClampClient(rawR, rawG, rawB, cfg);
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const ire = ((y - 16) / 219) * 100;
+    minIre = Math.min(minIre, ire);
+    maxIre = Math.max(maxIre, ire);
+    sumIre += ire;
+    minLuma = Math.min(minLuma, y);
+    peakLuma = Math.max(peakLuma, y);
+    const bIdx = Math.max(0, Math.min(31, Math.floor(((ire - ireMin) / ireSpan) * 32)));
+    bins[bIdx] += 1;
+    if (y < loLegal - 0.05) subBlack += 1;
+    if (y > hiLegal + 0.05) superWhite += 1;
+    if (ire >= cfg.zebra.skin_min_ire && ire <= cfg.zebra.skin_max_ire) skinCount += 1;
+    if (ire >= cfg.zebra.high_ire) zHigh += 1;
+    if (ire <= cfg.zebra.low_ire) zLow += 1;
+    if (cfg.broadcast_standard !== "bypass") {
+      const peakDev = Math.max(Math.abs(r - y), Math.abs(g - y), Math.abs(b - y));
+      if (Math.min(r, g, b) < loLegal - 0.05 || Math.max(r, g, b) > hiLegal + 0.05 || peakDev > chromaMaxDev + 0.05) {
+        gamutIllegal += 1;
+      }
+    }
+  }
+  const maxBin = Math.max(1, ...bins);
+  const subBlackPct = Number(((subBlack / n) * 100).toFixed(2));
+  const superWhitePct = Number(((superWhite / n) * 100).toFixed(2));
+  const gamutIllegalPct = Number(((gamutIllegal / n) * 100).toFixed(2));
+  const violations = [];
+  if (cfg.broadcast_standard !== "bypass") {
+    if (subBlackPct > 0) violations.push(`Sub-black excursion below ${loLegal} (${subBlackPct.toFixed(2)}%)`);
+    if (superWhitePct > 0) violations.push(`Super-white excursion above ${hiLegal} (${superWhitePct.toFixed(2)}%)`);
+    if (gamutIllegalPct > Math.max(subBlackPct, superWhitePct)) {
+      violations.push(`Rec.709 RGB/chroma gamut excursion (${gamutIllegalPct.toFixed(2)}%)`);
+    }
+  }
+  const totalExcursion = Math.max(gamutIllegalPct, subBlackPct + superWhitePct);
+  let complianceStatus = "PASS";
+  if (cfg.broadcast_standard !== "bypass") {
+    if (totalExcursion >= spec.excursion_fail_pct) complianceStatus = "FAIL";
+    else if (totalExcursion > spec.excursion_warn_pct) complianceStatus = "WARN";
+  }
+  return {
+    standard: cfg.broadcast_standard,
+    limiter_applied: compiled.limiter_enabled,
+    sample_count: n,
+    min_ire: Number(minIre.toFixed(2)),
+    max_ire: Number(maxIre.toFixed(2)),
+    avg_ire: Number((sumIre / n).toFixed(2)),
+    min_luma_8bit: Math.round(minLuma),
+    peak_luma_8bit: Math.round(peakLuma),
+    sub_black_pct: subBlackPct,
+    super_white_pct: superWhitePct,
+    skin_zone_pct: Number(((skinCount / n) * 100).toFixed(2)),
+    zebra_high_pct: Number(((zHigh / n) * 100).toFixed(2)),
+    zebra_low_pct: Number(((zLow / n) * 100).toFixed(2)),
+    gamut_illegal_pct: gamutIllegalPct,
+    histogram_bins: bins.map((v) => Number((v / maxBin).toFixed(4))),
+    compliance_status: complianceStatus,
+    violations,
+    probe_source: probeSource,
+    filtergraph: compiled.filtergraph
+  };
+}
