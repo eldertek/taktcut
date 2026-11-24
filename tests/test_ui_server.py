@@ -11255,6 +11255,223 @@ def test_color_lut_browser_and_shot_match_playwright_e2e(tmp_path: Path) -> None
         thread.join(timeout=5)
 
 
+def test_motion_graphics_studio_api_demo_parity(ui_server: tuple[str, Path]) -> None:
+    base_url, _ = ui_server
+
+    p_status, _, p_raw = _http_call(f"{base_url}/api/titles/presets")
+    assert p_status == 200
+    presets_data = json.loads(p_raw.decode("utf-8"))
+    assert len(presets_data["motion_templates"]) == 6
+    assert "spring_overshoot" in presets_data["animation_curves"]
+    assert "typewriter" in presets_data["animation_curves"]
+    assert "glass_pill" in presets_data["plate_styles"]
+
+    motion_payload = {
+        "title_overlay": {
+            "preset_id": "center_title_card",
+            "motion_template": "kinetic_spring_pop",
+            "title": "STUDIO: 'MOTION' \\ 100%",
+            "subtitle": "SPRING TEST",
+            "position": "center",
+            "custom_position_enabled": True,
+            "pos_x": 0.52,
+            "pos_y": 0.44,
+            "accent_color": "#ff9d42",
+            "start_s": 0.2,
+            "end_s": 4.2,
+            "font_size": 52,
+            "box_opacity": 0.0,
+            "animation_curve": "spring_overshoot",
+            "anim_in_s": 0.55,
+            "anim_out_s": 0.28,
+            "spring_stiffness": 240.0,
+            "spring_damping": 11.0,
+            "tracking": 4,
+            "stroke_width": 3,
+            "stroke_color": "#090a0d",
+            "shadow_depth": 4,
+            "plate_style": "none",
+            "bug_badge": "HDR",
+            "enabled": True,
+        }
+    }
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/titles/compile", method="POST", payload=motion_payload
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert compiled["has_motion"] is True
+    assert compiled["animation_curve"] == "spring_overshoot"
+    assert compiled["escaped_bug_badge"] == "HDR"
+    assert "borderw=3:bordercolor=0x090a0d" in compiled["filtergraph"]
+    assert "exp(-" in compiled["filtergraph"]
+
+    m_status, _, m_raw = _http_call(
+        f"{base_url}/api/titles/motion-preview",
+        method="POST",
+        payload={**motion_payload, "t_s": 0.45},
+    )
+    assert m_status == 200
+    motion_res = json.loads(m_raw.decode("utf-8"))
+    assert motion_res["visible"] is True
+    assert motion_res["phase"] == "in"
+    assert motion_res["eased_in"] > 0.0
+
+    # Verify JS demo_adapter + timeline_ops parity via Node
+    node_exe = shutil.which("node")
+    if node_exe:
+        assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+        demo_js = (assets_dir / "demo_adapter.js").as_uri()
+        ops_js = (assets_dir / "timeline_ops.js").as_uri()
+        script = (
+            "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+            f"import {{ createApiClient }} from {json.dumps(demo_js)};\n"
+            f"import {{ evaluateTitleMotionState }} from {json.dumps(ops_js)};\n"
+            "const client = createApiClient();\n"
+            f"const payload = {json.dumps(motion_payload)};\n"
+            "const res = await client.compileTitle(payload);\n"
+            "const mot = evaluateTitleMotionState(payload.title_overlay, 0.45);\n"
+            "const cat = await client.getTitlePresets();\n"
+            "console.log(JSON.stringify({ res, mot, tplCount: cat.motion_templates.length }));\n"
+        )
+        proc = subprocess.run(
+            [node_exe, "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        js_out = json.loads(proc.stdout.strip())
+        assert js_out["tplCount"] == 6
+        assert js_out["res"]["has_motion"] is True
+        assert js_out["res"]["animation_curve"] == "spring_overshoot"
+        assert "borderw=3:bordercolor=0x090a0d" in js_out["res"]["filtergraph"]
+        assert abs(js_out["mot"]["eased_in"] - motion_res["eased_in"]) < 0.01
+
+
+def test_motion_graphics_studio_playwright_e2e_and_responsive(tmp_path: Path) -> None:
+    pw_mod = pytest.importorskip("playwright.sync_api")
+    sync_playwright = pw_mod.sync_playwright
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda exc: console_errors.append(str(exc)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.click("#tab-titles")
+                page.wait_for_selector("#title-motion-template-grid")
+                page.wait_for_selector("#title-curve-canvas")
+
+                assert page.locator(".title-motion-btn").count() == 6
+
+                # Apply Kinetic Spring Pop template
+                page.click(".title-motion-btn[data-motion-template='kinetic_spring_pop']")
+                page.wait_for_function(
+                    "() => document.getElementById('title-anim-curve-select')?.value"
+                    " === 'spring_overshoot'"
+                )
+                assert (
+                    page.locator("#titles-motion-curve-tag").text_content() or ""
+                ).strip() == "SPRING_OVERSHOOT"
+                assert page.locator("#title-bug-badge-input").input_value() == "HDR"
+
+                # Switch to Typewriter Callout and test Broadcast Bug quick chip
+                page.click(".title-motion-btn[data-motion-template='typewriter_terminal']")
+                page.wait_for_function(
+                    "() => document.getElementById('title-anim-curve-select')?.value"
+                    " === 'typewriter'"
+                )
+                page.click(".title-bug-chip[data-bug-chip='LIVE']")
+                assert page.locator("#title-bug-badge-input").input_value() == "LIVE"
+
+                # Test interactive viewer dragging on #titles-program-canvas
+                canvas_box = page.locator("#titles-program-canvas").bounding_box()
+                assert canvas_box is not None and canvas_box["width"] > 100
+                start_x = canvas_box["x"] + canvas_box["width"] * 0.50
+                start_y = canvas_box["y"] + canvas_box["height"] * 0.50
+                page.mouse.move(start_x, start_y)
+                page.mouse.down()
+                page.mouse.move(start_x + 75, start_y - 25, steps=5)
+                page.mouse.up()
+                page.wait_for_function(
+                    "() => Number.parseFloat(document.getElementById('title-pos-x-num')?.value"
+                    " || '0') > 0.58"
+                )
+
+                # Test keyboard nudge on focused canvas
+                pos_before = float(page.locator("#title-pos-x-num").input_value())
+                page.locator("#titles-program-canvas").focus()
+                page.keyboard.press("Shift+ArrowRight")
+                pos_after = float(page.locator("#title-pos-x-num").input_value())
+                assert pos_after > pos_before
+
+                # Compile filtergraph & inspect output
+                page.click("#btn-title-compile")
+                page.wait_for_function(
+                    "() => (document.getElementById('title-filtergraph-output')?.textContent || '')"
+                    ".includes('drawtext=')"
+                )
+                fg_txt = page.locator("#title-filtergraph-output").text_content() or ""
+                assert "expansion=none" in fg_txt
+                assert "LIVE" in fg_txt
+
+                # Verify EN/FR i18n parity & zero U+2013/U+2014 dashes
+                page.click("#lang-fr")
+                fr_panel = page.locator("#panel-titles").text_content() or ""
+                assert "Studio Motion Graphics (Text+)" in fr_panel
+                assert "Rebond Ressort (Overshoot)" in fr_panel
+                assert "\u2013" not in fr_panel and "\u2014" not in fr_panel
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop 1440px overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 responsive & >= 44px touch target audit
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for ctrl_id in (
+                    "title-anim-curve-select",
+                    "title-plate-style-select",
+                    "title-bug-badge-input",
+                    "title-pos-x-num",
+                    "title-pos-y-num",
+                    "btn-title-snap-guides",
+                    "btn-title-reset-anchor",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+
 
 
 

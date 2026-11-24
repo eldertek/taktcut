@@ -1303,6 +1303,94 @@ body {
   color: #f4a46b;
 }
 
+.title-motion-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.title-motion-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 7px 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  color: var(--text-primary);
+  text-align: left;
+  min-width: 0;
+}
+
+.title-motion-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-amber);
+}
+
+.title-motion-btn.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+}
+
+.title-motion-btn.is-active .fx-preset-name {
+  color: #f4a46b;
+}
+
+.title-motion-studio-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.title-curve-canvas {
+  width: 100%;
+  height: 84px;
+  display: block;
+  border: 1px solid var(--border-inner);
+  background: #121318;
+  border-radius: 2px;
+}
+
+.title-bug-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.title-bug-row .input-control {
+  flex: 1 1 110px;
+  min-width: 0;
+}
+
+.title-bug-chip.is-active {
+  background: var(--accent-amber-soft);
+  border-color: var(--accent-amber);
+  color: #f4a46b;
+}
+
+.title-anchor-actions {
+  align-items: center;
+}
+
+.titles-interactive-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.titles-interactive-canvas.is-dragging {
+  cursor: grabbing;
+}
+
+.titles-interactive-canvas:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: -2px;
+}
+
 .title-color-row {
   display: flex;
   align-items: center;
@@ -7687,6 +7775,16 @@ input[type="range"] {
   .fx-color-input,
   .deliver-preset-card,
   .title-preset-btn,
+  .title-motion-btn,
+  .title-bug-chip,
+  #btn-title-snap-guides,
+  #btn-title-reset-anchor,
+  #title-anim-curve-select,
+  #title-plate-style-select,
+  #title-bug-badge-input,
+  #title-pos-x-num,
+  #title-pos-y-num,
+  #title-stroke-color,
   .subtitle-style-btn,
   .title-color-picker,
   .mixer-btn,

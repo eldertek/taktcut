@@ -13,6 +13,9 @@ import {
   QUALIFIER_PRESETS,
   STABILIZER_PRESETS_CLIENT,
   STUDIO_LUT_CATEGORIES_CLIENT,
+  TITLE_ANIMATION_CURVES,
+  TITLE_MOTION_TEMPLATES,
+  TITLE_PLATE_STYLES,
   TRANSFORM_BORDER_FEATHER_MAX,
   TRANSFORM_BORDER_FEATHER_MIN,
   TRANSFORM_BORDER_WIDTH_MAX,
@@ -53,6 +56,7 @@ import {
   compileVideoFadeFilterClient,
   computeAvSplitEditInfo,
   computeRetimeRampSummary,
+  computeTitleOverlayAnchorBox,
   countMulticamClipsInDocument,
   countSyncLockedTracks,
   createColorNode,
@@ -63,6 +67,7 @@ import {
   deserializeColorNodeFromApi,
   detectAudioTransientsClient,
   estimateRenderFileSize,
+  evaluateTitleMotionState,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
   generateStudioLutPresetClient,
@@ -682,7 +687,30 @@ function escapeDrawtextClient(raw) {
   return out;
 }
 
-function compileTitleClient(payload, opts = {}) {
+function sanitizeTitleClientText(raw) {
+  return String(raw ?? "")
+    .replace(/\r\n|\n|\r|\t/g, " ")
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .trim();
+}
+
+function typewriterSlicesClient(text, startS, animInS, endS) {
+  const n = text.length;
+  if (n === 0) return [];
+  const steps = Math.min(n, 16);
+  const typeEnd = Math.min(endS, startS + Math.max(0.05, animInS));
+  if (typeEnd <= startS) return [[startS, endS, text]];
+  const out = [];
+  for (let i = 1; i <= steps; i++) {
+    const count = i === steps ? n : Math.max(1, Math.round((i / steps) * n));
+    const t0 = startS + ((i - 1) / steps) * (typeEnd - startS);
+    const t1 = i === steps ? endS : startS + (i / steps) * (typeEnd - startS);
+    if (t1 > t0) out.push([t0, t1, text.slice(0, count)]);
+  }
+  return out;
+}
+
+function normalizeTitlePayloadClient(payload) {
   const src = payload && payload.title_overlay ? payload.title_overlay : payload || {};
   const enabled = src.enabled !== false;
   const title = String(src.title ?? "ALEXANDRE MOREAU").slice(0, 200);
@@ -693,14 +721,67 @@ function compileTitleClient(payload, opts = {}) {
   const accentColor = /^#[0-9a-fA-F]{6}$/.test(String(src.accent_color || "").trim())
     ? String(src.accent_color).trim().toLowerCase()
     : "#e68442";
+  const strokeColor = /^#[0-9a-fA-F]{6}$/.test(String(src.stroke_color || "").trim())
+    ? String(src.stroke_color).trim().toLowerCase()
+    : "#090a0d";
   const startS = Number.isFinite(Number(src.start_s)) ? Math.max(0, Number(src.start_s)) : 0.5;
   const endS = Number.isFinite(Number(src.end_s)) ? Math.max(startS + 0.1, Number(src.end_s)) : startS + 5.0;
   const fontSize = Math.min(96, Math.max(14, Math.round(Number(src.font_size ?? 34))));
   const boxOpacity = Math.min(1, Math.max(0, Number(src.box_opacity ?? 0.8)));
+  const motionTemplate = typeof src.motion_template === "string" && src.motion_template.trim()
+    ? src.motion_template.trim()
+    : null;
+  const customPositionEnabled = Boolean(src.custom_position_enabled);
+  const posX = Math.min(0.96, Math.max(0.04, Number.isFinite(Number(src.pos_x)) ? Number(src.pos_x) : 0.28));
+  const posY = Math.min(0.96, Math.max(0.04, Number.isFinite(Number(src.pos_y)) ? Number(src.pos_y) : 0.83));
+  const animationCurve = TITLE_ANIMATION_CURVES.includes(src.animation_curve) ? src.animation_curve : "none";
+  const animInS = Math.min(5.0, Math.max(0.05, Number.isFinite(Number(src.anim_in_s)) ? Number(src.anim_in_s) : 0.45));
+  const animOutS = Math.min(5.0, Math.max(0.0, Number.isFinite(Number(src.anim_out_s)) ? Number(src.anim_out_s) : 0.30));
+  const springStiffness = Math.min(600, Math.max(40, Number.isFinite(Number(src.spring_stiffness)) ? Number(src.spring_stiffness) : 180));
+  const springDamping = Math.min(40, Math.max(4, Number.isFinite(Number(src.spring_damping)) ? Number(src.spring_damping) : 14));
+  const tracking = Math.min(24, Math.max(-4, Math.round(Number(src.tracking ?? 0))));
+  const strokeWidth = Math.min(10, Math.max(0, Math.round(Number(src.stroke_width ?? 0))));
+  const shadowDepth = Math.min(12, Math.max(0, Math.round(Number(src.shadow_depth ?? 2))));
+  const plateStyle = TITLE_PLATE_STYLES.includes(src.plate_style) ? src.plate_style : "solid_bar";
+  const bugBadge = String(src.bug_badge ?? "").slice(0, 24);
+  return {
+    preset_id: src.preset_id || "broadcast_lower_third",
+    title,
+    subtitle,
+    position,
+    accent_color: accentColor,
+    start_s: startS,
+    end_s: endS,
+    font_size: fontSize,
+    box_opacity: boxOpacity,
+    enabled,
+    motion_template: motionTemplate,
+    custom_position_enabled: customPositionEnabled,
+    pos_x: posX,
+    pos_y: posY,
+    animation_curve: animationCurve,
+    anim_in_s: animInS,
+    anim_out_s: animOutS,
+    spring_stiffness: springStiffness,
+    spring_damping: springDamping,
+    tracking,
+    stroke_width: strokeWidth,
+    stroke_color: strokeColor,
+    shadow_depth: shadowDepth,
+    plate_style: plateStyle,
+    bug_badge: bugBadge
+  };
+}
 
-  const escTitle = escapeDrawtextClient(title);
-  const escSub = escapeDrawtextClient(subtitle);
-  const active = enabled && Boolean(escTitle || escSub);
+function compileTitleClient(payload, opts = {}) {
+  const params = normalizeTitlePayloadClient(payload);
+  const cleanTitle = sanitizeTitleClientText(params.title);
+  const cleanSub = sanitizeTitleClientText(params.subtitle);
+  const cleanBug = sanitizeTitleClientText(params.bug_badge);
+  const escTitle = escapeDrawtextClient(cleanTitle);
+  const escSub = escapeDrawtextClient(cleanSub);
+  const escBug = escapeDrawtextClient(cleanBug);
+  const active = params.enabled && Boolean(escTitle || escSub);
   if (!active) {
     return {
       filtergraph: "",
@@ -708,27 +789,137 @@ function compileTitleClient(payload, opts = {}) {
       is_active: false,
       escaped_title: escTitle,
       escaped_subtitle: escSub,
-      params: { preset_id: src.preset_id || "broadcast_lower_third", title, subtitle, position, accent_color: accentColor, start_s: startS, end_s: endS, font_size: fontSize, box_opacity: boxOpacity, enabled }
+      escaped_bug_badge: escBug,
+      animation_curve: params.animation_curve,
+      plate_style: params.plate_style,
+      has_motion: params.animation_curve !== "none",
+      params
     };
   }
-  const accent = `0x${accentColor.slice(1)}`;
-  const en = `enable='between(t,${startS.toFixed(3)},${endS.toFixed(3)})'`;
+  const accent = `0x${params.accent_color.slice(1)}`;
+  const en = `enable='between(t,${params.start_s.toFixed(3)},${params.end_s.toFixed(3)})'`;
+  const titleFs = `max(14,round(h*${(params.font_size / 1080).toFixed(5)}))`;
+  const subFs = `max(11,round(h*${(Math.max(12, params.font_size * 0.64) / 1080).toFixed(5)}))`;
   const segs = [];
-  if (position === "bottom-left") {
-    if (boxOpacity > 0) segs.push(`drawbox=x=round(iw*0.05):y=round(ih*0.76):w=round(iw*0.46):h=round(ih*0.14):color=0x141416@${boxOpacity.toFixed(2)}:t=fill:${en}`);
-    segs.push(`drawbox=x=round(iw*0.05):y=round(ih*0.76):w='max(4,round(iw*0.004))':h=round(ih*0.14):color=${accent}@1.00:t=fill:${en}`);
-    if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=round(w*0.068):y=round(h*0.782):fontsize='max(14,round(h*${(fontSize / 1080).toFixed(5)}))':fontcolor=0xd8d8de:${en}`);
-    if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=round(w*0.068):y=round(h*0.838):fontsize='max(11,round(h*${(Math.max(12, fontSize * 0.64) / 1080).toFixed(5)}))':fontcolor=${accent}:${en}`);
-  } else if (position === "center") {
-    if (boxOpacity > 0) segs.push(`drawbox=x=round(iw*0.14):y=round(ih*0.34):w=round(iw*0.72):h=round(ih*0.32):color=0x141416@${boxOpacity.toFixed(2)}:t=fill:${en}`);
-    segs.push(`drawbox=x=round(iw*0.42):y=round(ih*0.34):w=round(iw*0.16):h='max(3,round(ih*0.004))':color=${accent}@1.00:t=fill:${en}`);
-    if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=(w-tw)/2:y=round(h*0.455-th/2):fontsize='max(14,round(h*${(fontSize / 1080).toFixed(5)}))':fontcolor=0xd8d8de:${en}`);
-    if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=(w-tw)/2:y=round(h*0.560-th/2):fontsize='max(11,round(h*${(Math.max(12, fontSize * 0.64) / 1080).toFixed(5)}))':fontcolor=${accent}:${en}`);
+
+  const isLegacyStatic =
+    !params.custom_position_enabled &&
+    params.animation_curve === "none" &&
+    params.plate_style === "solid_bar" &&
+    params.stroke_width === 0 &&
+    params.shadow_depth === 2 &&
+    !cleanBug;
+
+  if (isLegacyStatic) {
+    if (params.position === "bottom-left") {
+      if (params.box_opacity > 0) segs.push(`drawbox=x=round(iw*0.05):y=round(ih*0.76):w=round(iw*0.46):h=round(ih*0.14):color=0x141416@${params.box_opacity.toFixed(2)}:t=fill:${en}`);
+      segs.push(`drawbox=x=round(iw*0.05):y=round(ih*0.76):w='max(4,round(iw*0.004))':h=round(ih*0.14):color=${accent}@1.00:t=fill:${en}`);
+      if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=round(w*0.068):y=round(h*0.782):fontsize='${titleFs}':fontcolor=0xd8d8de:${en}`);
+      if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=round(w*0.068):y=round(h*0.838):fontsize='${subFs}':fontcolor=${accent}:${en}`);
+    } else if (params.position === "center") {
+      if (params.box_opacity > 0) segs.push(`drawbox=x=round(iw*0.14):y=round(ih*0.34):w=round(iw*0.72):h=round(ih*0.32):color=0x141416@${params.box_opacity.toFixed(2)}:t=fill:${en}`);
+      segs.push(`drawbox=x=round(iw*0.42):y=round(ih*0.34):w=round(iw*0.16):h='max(3,round(ih*0.004))':color=${accent}@1.00:t=fill:${en}`);
+      if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=(w-tw)/2:y=round(h*0.455-th/2):fontsize='${titleFs}':fontcolor=0xd8d8de:${en}`);
+      if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=(w-tw)/2:y=round(h*0.560-th/2):fontsize='${subFs}':fontcolor=${accent}:${en}`);
+    } else {
+      if (params.box_opacity > 0) segs.push(`drawbox=x=round(iw*0.16):y=round(ih*0.81):w=round(iw*0.68):h=round(ih*0.11):color=0x141416@${params.box_opacity.toFixed(2)}:t=fill:${en}`);
+      segs.push(`drawbox=x=round(iw*0.44):y=round(ih*0.916):w=round(iw*0.12):h='max(2,round(ih*0.003))':color=${accent}@1.00:t=fill:${en}`);
+      if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=(w-tw)/2:y=round(h*0.842-th/2):fontsize='${titleFs}':fontcolor=0xd8d8de:${en}`);
+      if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=(w-tw)/2:y=round(h*0.885-th/2):fontsize='${subFs}':fontcolor=${accent}:${en}`);
+    }
   } else {
-    if (boxOpacity > 0) segs.push(`drawbox=x=round(iw*0.16):y=round(ih*0.81):w=round(iw*0.68):h=round(ih*0.11):color=0x141416@${boxOpacity.toFixed(2)}:t=fill:${en}`);
-    segs.push(`drawbox=x=round(iw*0.44):y=round(ih*0.916):w=round(iw*0.12):h='max(2,round(ih*0.003))':color=${accent}@1.00:t=fill:${en}`);
-    if (escTitle) segs.push(`drawtext=expansion=none:text='${escTitle}':x=(w-tw)/2:y=round(h*0.842-th/2):fontsize='max(14,round(h*${(fontSize / 1080).toFixed(5)}))':fontcolor=0xd8d8de:${en}`);
-    if (escSub) segs.push(`drawtext=expansion=none:text='${escSub}':x=(w-tw)/2:y=round(h*0.885-th/2):fontsize='max(11,round(h*${(Math.max(12, fontSize * 0.64) / 1080).toFixed(5)}))':fontcolor=${accent}:${en}`);
+    const { boxX, boxY, boxW, boxH, align } = computeTitleOverlayAnchorBox(params);
+    if (params.plate_style === "solid_bar") {
+      if (params.box_opacity > 0) {
+        segs.push(`drawbox=x=round(iw*${boxX.toFixed(4)}):y=round(ih*${boxY.toFixed(4)}):w=round(iw*${boxW.toFixed(4)}):h=round(ih*${boxH.toFixed(4)}):color=0x141416@${params.box_opacity.toFixed(2)}:t=fill:${en}`);
+      }
+      if (align === "left") {
+        segs.push(`drawbox=x=round(iw*${boxX.toFixed(4)}):y=round(ih*${boxY.toFixed(4)}):w='max(4,round(iw*0.004))':h=round(ih*${boxH.toFixed(4)}):color=${accent}@1.00:t=fill:${en}`);
+      } else {
+        segs.push(`drawbox=x=round(iw*${(boxX + boxW * 0.35).toFixed(4)}):y=round(ih*${boxY.toFixed(4)}):w=round(iw*${(boxW * 0.30).toFixed(4)}):h='max(3,round(ih*0.004))':color=${accent}@1.00:t=fill:${en}`);
+      }
+    } else if (params.plate_style === "glass_pill") {
+      if (params.box_opacity > 0) {
+        segs.push(`drawbox=x=round(iw*${boxX.toFixed(4)}):y=round(ih*${boxY.toFixed(4)}):w=round(iw*${boxW.toFixed(4)}):h=round(ih*${boxH.toFixed(4)}):color=0x161820@${params.box_opacity.toFixed(2)}:t=fill:${en}`);
+      }
+      segs.push(`drawbox=x=round(iw*${boxX.toFixed(4)}):y=round(ih*${boxY.toFixed(4)}):w=round(iw*${boxW.toFixed(4)}):h='max(2,round(ih*0.003))':color=${accent}@0.95:t=fill:${en}`);
+    } else if (params.plate_style === "outline_frame") {
+      if (params.box_opacity > 0) {
+        segs.push(`drawbox=x=round(iw*${boxX.toFixed(4)}):y=round(ih*${boxY.toFixed(4)}):w=round(iw*${boxW.toFixed(4)}):h=round(ih*${boxH.toFixed(4)}):color=0x111217@${Math.max(0.14, params.box_opacity * 0.50).toFixed(2)}:t=fill:${en}`);
+      }
+      segs.push(`drawbox=x=round(iw*${boxX.toFixed(4)}):y=round(ih*${boxY.toFixed(4)}):w=round(iw*${boxW.toFixed(4)}):h=round(ih*${boxH.toFixed(4)}):color=${accent}@0.95:t=3:${en}`);
+    }
+
+    if (escBug) {
+      const bugW = Math.min(0.14, Math.max(0.06, 0.02 + cleanBug.length * 0.009));
+      const bugH = 0.036;
+      const bugX = align === "left" ? boxX : Math.max(0.02, boxX + (boxW - bugW) * 0.5);
+      const bugY = Math.max(0.015, boxY - bugH - 0.006);
+      segs.push(`drawbox=x=round(iw*${bugX.toFixed(4)}):y=round(ih*${bugY.toFixed(4)}):w=round(iw*${bugW.toFixed(4)}):h=round(ih*${bugH.toFixed(4)}):color=${accent}@0.96:t=fill:${en}`);
+      segs.push(`drawtext=expansion=none:text='${escBug}':x=round(w*${(bugX + bugW * 0.5).toFixed(4)}-tw/2):y=round(h*${(bugY + bugH * 0.5).toFixed(4)}-th/2):fontsize='max(11,round(h*0.017))':fontcolor=0x111216:${en}`);
+    }
+
+    const baseTx = align === "left" ? `w*${(boxX + 0.018).toFixed(4)}` : `(w*${(boxX + boxW * 0.5).toFixed(4)}-tw/2)`;
+    const baseTitleY = escTitle && escSub ? `(h*${(boxY + boxH * 0.36).toFixed(4)}-th/2)` : `(h*${(boxY + boxH * 0.5).toFixed(4)}-th/2)`;
+    const baseSubY = escTitle && escSub ? `(h*${(boxY + boxH * 0.72).toFixed(4)}-th/2)` : `(h*${(boxY + boxH * 0.5).toFixed(4)}-th/2)`;
+    const strokeOpt = params.stroke_width > 0 ? `:borderw=${params.stroke_width}:bordercolor=0x${params.stroke_color.slice(1)}` : "";
+    const shadowOpt = `:shadowcolor=0x000000@0.75:shadowx=${params.shadow_depth}:shadowy=${params.shadow_depth}`;
+
+    const s = params.start_s;
+    const e = params.end_s;
+    const dur = Math.max(0.05, params.anim_in_s);
+    const fadeIn = Math.min(0.18, Math.max(0.04, dur * 0.38));
+    const alphaExpr = params.anim_out_s > 0
+      ? `min(1,max(0,(t-${s.toFixed(3)})/${fadeIn.toFixed(3)}))*min(1,max(0,(${e.toFixed(3)}-t)/${params.anim_out_s.toFixed(3)}))`
+      : `min(1,max(0,(t-${s.toFixed(3)})/${fadeIn.toFixed(3)}))`;
+    const alphaOpt = params.animation_curve !== "none" ? `:alpha='${alphaExpr}'` : "";
+
+    const buildMotionXy = (bx, by) => {
+      const c = params.animation_curve;
+      if (c === "none" || c === "typewriter") return [bx, by];
+      const sEnd = Math.min(e, s + dur);
+      if (c === "spring_overshoot") {
+        const omega = Math.sqrt(Math.max(40, params.spring_stiffness));
+        const zeta = Math.min(0.95, Math.max(0.12, params.spring_damping / (2 * omega)));
+        const decay = zeta * omega * (0.85 / dur);
+        const freq = omega * Math.sqrt(Math.max(0.01, 1 - zeta * zeta)) * (0.85 / dur);
+        return [`round(${bx}-exp(-${decay.toFixed(3)}*max(0,t-${s.toFixed(3)}))*cos(${freq.toFixed(3)}*max(0,t-${s.toFixed(3)}))*w*0.075*lt(t,${sEnd.toFixed(3)}))`, by];
+      }
+      if (c === "kinetic_bounce") {
+        const omega = Math.sqrt(Math.max(40, params.spring_stiffness));
+        const decay = Math.min(9.0, Math.max(2.5, params.spring_damping * 0.42)) / dur;
+        const freq = (omega * 0.55) / dur;
+        return [bx, `round(${by}-abs(cos(${freq.toFixed(3)}*max(0,t-${s.toFixed(3)})))*exp(-${decay.toFixed(3)}*max(0,t-${s.toFixed(3)}))*h*0.075*lt(t,${sEnd.toFixed(3)}))`];
+      }
+      if (c === "ease_out_expo") {
+        return [bx, `round(${by}+exp(-7.0*max(0,t-${s.toFixed(3)})/${dur.toFixed(3)})*h*0.045*lt(t,${sEnd.toFixed(3)}))`];
+      }
+      return [`round(${bx}-pow(max(0,1-max(0,t-${s.toFixed(3)})/${dur.toFixed(3)}),3)*w*0.11)`, by];
+    };
+
+    if (params.animation_curve === "typewriter") {
+      if (cleanTitle) {
+        for (const [t0, t1, prefix] of typewriterSlicesClient(cleanTitle, s, dur, e)) {
+          segs.push(`drawtext=expansion=none:text='${escapeDrawtextClient(prefix)}':x=${baseTx}:y=${baseTitleY}:fontsize='${titleFs}':fontcolor=0xe8e9ee${strokeOpt}${shadowOpt}${alphaOpt}:enable='between(t,${t0.toFixed(3)},${t1.toFixed(3)})'`);
+        }
+      }
+      if (cleanSub) {
+        const subStart = Math.min(e - 0.05, s + dur * 0.35);
+        const subIn = Math.max(0.05, dur * 0.65);
+        for (const [t0, t1, prefix] of typewriterSlicesClient(cleanSub, subStart, subIn, e)) {
+          segs.push(`drawtext=expansion=none:text='${escapeDrawtextClient(prefix)}':x=${baseTx}:y=${baseSubY}:fontsize='${subFs}':fontcolor=${accent}${strokeOpt}${shadowOpt}${alphaOpt}:enable='between(t,${t0.toFixed(3)},${t1.toFixed(3)})'`);
+        }
+      }
+    } else {
+      if (escTitle) {
+        const [tx, ty] = buildMotionXy(baseTx, baseTitleY);
+        segs.push(`drawtext=expansion=none:text='${escTitle}':x='${tx}':y='${ty}':fontsize='${titleFs}':fontcolor=0xe8e9ee${strokeOpt}${shadowOpt}${alphaOpt}:${en}`);
+      }
+      if (escSub) {
+        const [sx, sy] = buildMotionXy(baseTx, baseSubY);
+        segs.push(`drawtext=expansion=none:text='${escSub}':x='${sx}':y='${sy}':fontsize='${subFs}':fontcolor=${accent}${strokeOpt}${shadowOpt}${alphaOpt}:${en}`);
+      }
+    }
   }
   if (opts.pix_fmt) segs.push(`format=${opts.pix_fmt}`);
   const fg = segs.join(",");
@@ -738,7 +929,11 @@ function compileTitleClient(payload, opts = {}) {
     is_active: true,
     escaped_title: escTitle,
     escaped_subtitle: escSub,
-    params: { preset_id: src.preset_id || "broadcast_lower_third", title, subtitle, position, accent_color: accentColor, start_s: startS, end_s: endS, font_size: fontSize, box_opacity: boxOpacity, enabled }
+    escaped_bug_badge: escBug,
+    animation_curve: params.animation_curve,
+    plate_style: params.plate_style,
+    has_motion: params.animation_curve !== "none",
+    params
   };
 }
 
@@ -3001,7 +3196,14 @@ export function createApiClient() {
     },
     async getTitlePresets() {
       if (resolvedMode === "static-demo") {
-        return { presets: [], positions: ["bottom-left", "center", "bottom-center"], bounds: {} };
+        return {
+          presets: [],
+          positions: ["bottom-left", "center", "bottom-center"],
+          motion_templates: TITLE_MOTION_TEMPLATES,
+          animation_curves: TITLE_ANIMATION_CURVES,
+          plate_styles: TITLE_PLATE_STYLES,
+          bounds: {}
+        };
       }
       return requestJson("/api/titles/presets");
     },
@@ -3010,6 +3212,14 @@ export function createApiClient() {
         return compileTitleClient(payload, payload);
       }
       return requestJson("/api/titles/compile", { method: "POST", body: payload });
+    },
+    async previewTitleMotion(payload) {
+      if (resolvedMode === "static-demo") {
+        const params = normalizeTitlePayloadClient(payload);
+        const tS = Number.isFinite(Number(payload && payload.t_s)) ? Number(payload.t_s) : 0;
+        return evaluateTitleMotionState(params, tS);
+      }
+      return requestJson("/api/titles/motion-preview", { method: "POST", body: payload });
     },
     async compileLowerThird(payload) {
       if (resolvedMode === "static-demo") {

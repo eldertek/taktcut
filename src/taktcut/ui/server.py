@@ -6,6 +6,7 @@ import argparse
 import base64
 import binascii
 import json
+import math
 import os
 import shlex
 import shutil
@@ -263,14 +264,36 @@ from taktcut.timeline_edit import (
     three_point_edit,
 )
 from taktcut.titles import (
+    TITLE_ANIM_IN_MAX,
+    TITLE_ANIM_IN_MIN,
+    TITLE_ANIM_OUT_MAX,
+    TITLE_ANIM_OUT_MIN,
+    TITLE_ANIMATION_CURVES,
+    TITLE_BUG_MAX_LEN,
+    TITLE_DAMPING_MAX,
+    TITLE_DAMPING_MIN,
     TITLE_FONT_SIZE_MAX,
     TITLE_FONT_SIZE_MIN,
     TITLE_MAX_LEN,
+    TITLE_PLATE_STYLES,
+    TITLE_POS_MAX,
+    TITLE_POS_MIN,
     TITLE_POSITIONS,
+    TITLE_SHADOW_MAX,
+    TITLE_SHADOW_MIN,
+    TITLE_STIFFNESS_MAX,
+    TITLE_STIFFNESS_MIN,
+    TITLE_STROKE_MAX,
+    TITLE_STROKE_MIN,
     TITLE_TIME_MAX_S,
+    TITLE_TRACKING_MAX,
+    TITLE_TRACKING_MIN,
     TitleOverlayParams,
+    apply_motion_template,
     apply_title_preset,
     compile_title_overlay,
+    evaluate_title_motion,
+    list_motion_templates,
     list_title_presets,
 )
 from taktcut.transitions import (
@@ -1207,6 +1230,12 @@ def _build_framing_params_from_payload(
 
 
 def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayParams:
+    motion_only = payload.get("motion_template")
+    if motion_only is not None and "title" not in payload and "title_overlay" not in payload:
+        if not isinstance(motion_only, str) or not motion_only.strip():
+            raise ValueError("motion_template must be a non-empty string")
+        return apply_motion_template(motion_only)
+
     preset_only = payload.get("preset")
     if preset_only is not None and "title" not in payload and "title_overlay" not in payload:
         if not isinstance(preset_only, str) or not preset_only.strip():
@@ -1217,12 +1246,17 @@ def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayPa
     if raw_title is not None and not isinstance(raw_title, dict):
         raise ValueError("'title_overlay' must be a JSON object")
     source: dict[str, Any] = raw_title if isinstance(raw_title, dict) else payload
-    preset_id = source.get("preset_id") or source.get("preset") or "broadcast_lower_third"
-    if not isinstance(preset_id, str) or not preset_id.strip():
-        raise ValueError("preset_id must be a non-empty string")
-    base = apply_title_preset(preset_id)
+    raw_motion_tpl = source.get("motion_template")
+    if isinstance(raw_motion_tpl, str) and raw_motion_tpl.strip():
+        base = apply_motion_template(raw_motion_tpl)
+    else:
+        preset_id = source.get("preset_id") or source.get("preset") or "broadcast_lower_third"
+        if not isinstance(preset_id, str) or not preset_id.strip():
+            raise ValueError("preset_id must be a non-empty string")
+        base = apply_title_preset(preset_id)
+
     merged: dict[str, Any] = {
-        "preset_id": base.preset_id,
+        "preset_id": source.get("preset_id", base.preset_id),
         "title": source.get("title", base.title),
         "subtitle": source.get("subtitle", base.subtitle),
         "position": source.get("position", base.position),
@@ -1232,6 +1266,23 @@ def _build_title_overlay_from_payload(payload: dict[str, Any]) -> TitleOverlayPa
         "font_size": source.get("font_size", base.font_size),
         "box_opacity": source.get("box_opacity", base.box_opacity),
         "enabled": bool(source.get("enabled", base.enabled)),
+        "motion_template": raw_motion_tpl if raw_motion_tpl is not None else base.motion_template,
+        "custom_position_enabled": bool(
+            source.get("custom_position_enabled", base.custom_position_enabled)
+        ),
+        "pos_x": source.get("pos_x", base.pos_x),
+        "pos_y": source.get("pos_y", base.pos_y),
+        "animation_curve": source.get("animation_curve", base.animation_curve),
+        "anim_in_s": source.get("anim_in_s", base.anim_in_s),
+        "anim_out_s": source.get("anim_out_s", base.anim_out_s),
+        "spring_stiffness": source.get("spring_stiffness", base.spring_stiffness),
+        "spring_damping": source.get("spring_damping", base.spring_damping),
+        "tracking": source.get("tracking", base.tracking),
+        "stroke_width": source.get("stroke_width", base.stroke_width),
+        "stroke_color": source.get("stroke_color", base.stroke_color),
+        "shadow_depth": source.get("shadow_depth", base.shadow_depth),
+        "plate_style": source.get("plate_style", base.plate_style),
+        "bug_badge": source.get("bug_badge", base.bug_badge),
     }
     return TitleOverlayParams.model_validate(merged)
 
@@ -1847,12 +1898,32 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 {
                     "presets": [p.model_dump(mode="json") for p in list_title_presets()],
                     "positions": list(TITLE_POSITIONS),
+                    "motion_templates": [
+                        tpl.model_dump(mode="json") for tpl in list_motion_templates()
+                    ],
+                    "animation_curves": list(TITLE_ANIMATION_CURVES),
+                    "plate_styles": list(TITLE_PLATE_STYLES),
                     "bounds": {
                         "max_len": TITLE_MAX_LEN,
                         "start_s": {"min": 0.0, "max": TITLE_TIME_MAX_S},
                         "end_s": {"min": 0.0, "max": TITLE_TIME_MAX_S},
                         "font_size": {"min": TITLE_FONT_SIZE_MIN, "max": TITLE_FONT_SIZE_MAX},
                         "box_opacity": {"min": 0.0, "max": 1.0},
+                    },
+                    "motion_bounds": {
+                        "bug_max_len": TITLE_BUG_MAX_LEN,
+                        "pos_x": {"min": TITLE_POS_MIN, "max": TITLE_POS_MAX},
+                        "pos_y": {"min": TITLE_POS_MIN, "max": TITLE_POS_MAX},
+                        "anim_in_s": {"min": TITLE_ANIM_IN_MIN, "max": TITLE_ANIM_IN_MAX},
+                        "anim_out_s": {"min": TITLE_ANIM_OUT_MIN, "max": TITLE_ANIM_OUT_MAX},
+                        "spring_stiffness": {
+                            "min": TITLE_STIFFNESS_MIN,
+                            "max": TITLE_STIFFNESS_MAX,
+                        },
+                        "spring_damping": {"min": TITLE_DAMPING_MIN, "max": TITLE_DAMPING_MAX},
+                        "tracking": {"min": TITLE_TRACKING_MIN, "max": TITLE_TRACKING_MAX},
+                        "stroke_width": {"min": TITLE_STROKE_MIN, "max": TITLE_STROKE_MAX},
+                        "shadow_depth": {"min": TITLE_SHADOW_MIN, "max": TITLE_SHADOW_MAX},
                     },
                 },
             )
@@ -3157,6 +3228,18 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             pix_fmt = str(raw_pix_fmt) if raw_pix_fmt is not None else None
             compiled_title = compile_title_overlay(title_params, pix_fmt=pix_fmt)
             self._send_json(HTTPStatus.OK, compiled_title.model_dump(mode="json"))
+            return
+
+        if route == "/api/titles/motion-preview":
+            title_params = _build_title_overlay_from_payload(payload)
+            raw_t = payload.get("t_s", 0.0)
+            if isinstance(raw_t, bool) or not isinstance(raw_t, (int, float)):
+                raise ValueError("t_s must be a finite number")
+            t_s = float(raw_t)
+            if not math.isfinite(t_s) or t_s < 0.0 or t_s > TITLE_TIME_MAX_S:
+                raise ValueError("t_s out of range [0, 86400]")
+            motion_frame = evaluate_title_motion(title_params, t_s)
+            self._send_json(HTTPStatus.OK, motion_frame.model_dump(mode="json"))
             return
 
         if route == "/api/subtitles/parse":

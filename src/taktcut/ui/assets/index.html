@@ -2006,6 +2006,39 @@
 
               <div class="pane-divider"></div>
 
+              <div class="pane-subheader">
+                <span data-i18n="titles.motion.catalogTitle">Motion Graphics Studio (Text+)</span>
+                <span id="titles-motion-curve-tag" class="nle-tag mono">STATIC</span>
+              </div>
+              <div id="title-motion-template-grid" class="title-motion-grid" role="group" aria-label="Motion Graphics Studio templates">
+                <button type="button" class="btn title-motion-btn" data-motion-template="lower_third_editorial" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.motion.tpl.editorial">Editorial Lower-Third</span>
+                  <span class="fx-preset-meta mono">slide_wipe | STUDIO A</span>
+                </button>
+                <button type="button" class="btn title-motion-btn" data-motion-template="kinetic_spring_pop" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.motion.tpl.kinetic">Kinetic Spring Pop</span>
+                  <span class="fx-preset-meta mono">spring_overshoot | HDR</span>
+                </button>
+                <button type="button" class="btn title-motion-btn" data-motion-template="typewriter_terminal" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.motion.tpl.typewriter">Typewriter Callout</span>
+                  <span class="fx-preset-meta mono">typewriter | TC LOCK</span>
+                </button>
+                <button type="button" class="btn title-motion-btn" data-motion-template="broadcast_corner_bug" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.motion.tpl.cornerBug">Broadcast Corner Bug</span>
+                  <span class="fx-preset-meta mono">ease_out_expo | LIVE</span>
+                </button>
+                <button type="button" class="btn title-motion-btn" data-motion-template="chapter_slate_card" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.motion.tpl.slate">Fusion Title Slate</span>
+                  <span class="fx-preset-meta mono">ease_out_expo | MASTER</span>
+                </button>
+                <button type="button" class="btn title-motion-btn" data-motion-template="breaking_ticker_bar" aria-pressed="false">
+                  <span class="fx-preset-name" data-i18n="titles.motion.tpl.chyron">News Chyron Bar</span>
+                  <span class="fx-preset-meta mono">kinetic_bounce | FLASH</span>
+                </button>
+              </div>
+
+              <div class="pane-divider"></div>
+
               <div class="form-row">
                 <label for="title-text-input" data-i18n="titles.label.titleText">Title Text</label>
                 <input type="text" id="title-text-input" class="input-control" maxlength="200" value="ALEXANDRE MOREAU" placeholder="Primary headline">
@@ -2061,6 +2094,108 @@
                   <input type="number" id="title-opacity-num" class="input-num" min="0" max="1" step="0.02" value="0.82" aria-label="Title plate opacity">
                 </div>
               </div>
+
+              <div class="pane-divider"></div>
+
+              <!-- MOTION PHYSICS & TEXT+ STYLING -->
+              <section id="title-motion-studio-section" class="title-motion-studio-section" aria-label="Motion Physics and Text+ Inspector">
+                <div class="pane-subheader">
+                  <span data-i18n="titles.motion.physicsTitle">Animation Curve &amp; Spring Physics</span>
+                  <span id="titles-motion-phase-badge" class="nle-tag mono">HOLD</span>
+                </div>
+                <div class="form-row-two">
+                  <div class="form-row">
+                    <label for="title-anim-curve-select" data-i18n="titles.motion.curveLabel">Animation Curve</label>
+                    <select id="title-anim-curve-select" class="input-control mono">
+                      <option value="none" selected data-i18n="titles.motion.curve.none">None (Static)</option>
+                      <option value="spring_overshoot" data-i18n="titles.motion.curve.spring">Spring Overshoot</option>
+                      <option value="ease_out_expo" data-i18n="titles.motion.curve.expo">Ease Out Expo</option>
+                      <option value="typewriter" data-i18n="titles.motion.curve.typewriter">Typewriter Reveal</option>
+                      <option value="slide_wipe" data-i18n="titles.motion.curve.slideWipe">Slide Wipe</option>
+                      <option value="kinetic_bounce" data-i18n="titles.motion.curve.bounce">Kinetic Bounce</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label for="title-plate-style-select" data-i18n="titles.motion.plateLabel">Plate Style</label>
+                    <select id="title-plate-style-select" class="input-control mono">
+                      <option value="solid_bar" selected data-i18n="titles.motion.plate.solid">Solid Bar</option>
+                      <option value="glass_pill" data-i18n="titles.motion.plate.glass">Glass Pill</option>
+                      <option value="outline_frame" data-i18n="titles.motion.plate.outline">Outline Frame</option>
+                      <option value="none" data-i18n="titles.motion.plate.none">Floating Text+</option>
+                    </select>
+                  </div>
+                </div>
+                <canvas id="title-curve-canvas" class="title-curve-canvas" aria-label="Title animation curve plot"></canvas>
+
+                <div class="title-param-grid mono">
+                  <div class="title-param-row">
+                    <label for="title-anim-in-range" data-i18n="titles.motion.animIn">Anim In (s)</label>
+                    <input type="range" id="title-anim-in-range" min="0.05" max="3.0" step="0.05" value="0.45">
+                    <input type="number" id="title-anim-in-num" class="input-num" min="0.05" max="5.0" step="0.05" value="0.45" aria-label="Animation in duration seconds">
+                  </div>
+                  <div class="title-param-row">
+                    <label for="title-anim-out-range" data-i18n="titles.motion.animOut">Anim Out (s)</label>
+                    <input type="range" id="title-anim-out-range" min="0" max="2.5" step="0.05" value="0.30">
+                    <input type="number" id="title-anim-out-num" class="input-num" min="0" max="5.0" step="0.05" value="0.30" aria-label="Animation out duration seconds">
+                  </div>
+                  <div class="title-param-row">
+                    <label for="title-spring-stiffness-range" data-i18n="titles.motion.stiffness">Stiffness</label>
+                    <input type="range" id="title-spring-stiffness-range" min="40" max="600" step="10" value="180">
+                    <input type="number" id="title-spring-stiffness-num" class="input-num" min="40" max="600" step="10" value="180" aria-label="Spring stiffness">
+                  </div>
+                  <div class="title-param-row">
+                    <label for="title-spring-damping-range" data-i18n="titles.motion.damping">Damping</label>
+                    <input type="range" id="title-spring-damping-range" min="4" max="40" step="1" value="14">
+                    <input type="number" id="title-spring-damping-num" class="input-num" min="4" max="40" step="1" value="14" aria-label="Spring damping">
+                  </div>
+                </div>
+
+                <div class="pane-subheader">
+                  <span data-i18n="titles.textplus.title">Text+, Broadcast Bug &amp; Anchor</span>
+                </div>
+                <div class="form-row">
+                  <label for="title-bug-badge-input" data-i18n="titles.textplus.bugLabel">Broadcast Bug Badge</label>
+                  <div class="title-bug-row">
+                    <input type="text" id="title-bug-badge-input" class="input-control mono" maxlength="24" value="" placeholder="LIVE / 4K HDR">
+                    <button type="button" class="btn btn-mini title-bug-chip" data-bug-chip="LIVE">LIVE</button>
+                    <button type="button" class="btn btn-mini title-bug-chip" data-bug-chip="4K HDR">4K HDR</button>
+                    <button type="button" class="btn btn-mini title-bug-chip" data-bug-chip="REC">REC</button>
+                    <button type="button" class="btn btn-mini title-bug-chip" data-bug-chip="" data-i18n="titles.textplus.bugClear">Off</button>
+                  </div>
+                </div>
+                <div class="title-param-grid mono">
+                  <div class="title-param-row">
+                    <label for="title-tracking-range" data-i18n="titles.textplus.tracking">Tracking (px)</label>
+                    <input type="range" id="title-tracking-range" min="-4" max="24" step="1" value="0">
+                    <input type="number" id="title-tracking-num" class="input-num" min="-4" max="24" step="1" value="0" aria-label="Letter tracking pixels">
+                  </div>
+                  <div class="title-param-row">
+                    <label for="title-stroke-range" data-i18n="titles.textplus.stroke">Stroke (px)</label>
+                    <input type="range" id="title-stroke-range" min="0" max="10" step="1" value="0">
+                    <input type="number" id="title-stroke-num" class="input-num" min="0" max="10" step="1" value="0" aria-label="Text outline stroke width">
+                  </div>
+                  <div class="title-param-row">
+                    <label for="title-shadow-range" data-i18n="titles.textplus.shadow">Shadow (px)</label>
+                    <input type="range" id="title-shadow-range" min="0" max="12" step="1" value="2">
+                    <input type="number" id="title-shadow-num" class="input-num" min="0" max="12" step="1" value="2" aria-label="Drop shadow depth">
+                  </div>
+                </div>
+                <div class="form-row-two">
+                  <div class="form-row">
+                    <label for="title-pos-x-num" data-i18n="titles.textplus.posX">Anchor X (0.04-0.96)</label>
+                    <input type="number" id="title-pos-x-num" class="input-control mono" min="0.04" max="0.96" step="0.01" value="0.28">
+                  </div>
+                  <div class="form-row">
+                    <label for="title-pos-y-num" data-i18n="titles.textplus.posY">Anchor Y (0.04-0.96)</label>
+                    <input type="number" id="title-pos-y-num" class="input-control mono" min="0.04" max="0.96" step="0.01" value="0.83">
+                  </div>
+                </div>
+                <div class="btn-row title-anchor-actions">
+                  <input type="color" id="title-stroke-color" class="title-color-picker" value="#090a0d" aria-label="Text stroke color" title="Stroke color">
+                  <button type="button" id="btn-title-snap-guides" class="btn btn-mini is-active" aria-pressed="true" data-i18n="titles.textplus.snap">Snap Guides</button>
+                  <button type="button" id="btn-title-reset-anchor" class="btn btn-mini" data-i18n="titles.textplus.resetAnchor">Reset Anchor</button>
+                </div>
+              </section>
             </div>
           </aside>
 
@@ -2076,7 +2211,7 @@
             </div>
             <div class="pane-body">
               <div class="viewer-well">
-                <canvas id="titles-program-canvas" class="studio-canvas" aria-label="Titles Program Monitor preview"></canvas>
+                <canvas id="titles-program-canvas" class="studio-canvas titles-interactive-canvas" tabindex="0" aria-label="Titles Program Monitor preview (drag graphic or use arrow keys to position)"></canvas>
               </div>
               <div class="transport-bar">
                 <div class="btn-row">

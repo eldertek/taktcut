@@ -28,6 +28,7 @@ import {
   computeInOutRangeMetrics,
   computeSplitWipeGeometry,
   computeTimelineZoomViewport,
+  computeTitleOverlayAnchorBox,
   estimateFairlightCompressorGrClient,
   evaluateActiveNodeMaskAtClient,
   evaluateClipFadeEnvelope,
@@ -38,6 +39,7 @@ import {
   evaluateFairlightEqCurveDb,
   evaluatePeriodicHueCurveClient,
   evaluateRetimeSourceOffset,
+  evaluateTitleMotionState,
   evaluateRetimeSpeedAt,
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
@@ -463,6 +465,12 @@ export function drawTransformGraphCanvas(
 
 function clamp01(val) {
   return val < 0 ? 0 : val > 1 ? 1 : val;
+}
+
+function clampNum(val, minVal, maxVal) {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return minVal;
+  return num < minVal ? minVal : num > maxVal ? maxVal : num;
 }
 
 function clampBalance(val) {
@@ -942,119 +950,442 @@ function fitCanvasText(ctx, text, maxWidth) {
   return `${clipped}...`;
 }
 
-export function drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, titleState, tSec) {
+function drawTextPlusLine(ctx, text, x, y, align, maxWidth, trackingPx, strokeWidth, strokeColor) {
+  if (!text) return;
+  const fitted = fitCanvasText(ctx, text, maxWidth);
+  const hasTracking = Math.abs(trackingPx) >= 0.4;
+  if (!hasTracking) {
+    ctx.textAlign = align;
+    if (strokeWidth > 0) {
+      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = strokeColor;
+      ctx.lineJoin = "round";
+      ctx.strokeText(fitted, x, y);
+    }
+    ctx.fillText(fitted, x, y);
+    return;
+  }
+  const chars = Array.from(fitted);
+  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const totalW = widths.reduce((a, b) => a + b, 0) + Math.max(0, chars.length - 1) * trackingPx;
+  let curX = align === "center" ? x - totalW * 0.5 : x;
+  ctx.textAlign = "left";
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (strokeWidth > 0) {
+      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = strokeColor;
+      ctx.lineJoin = "round";
+      ctx.strokeText(ch, curX, y);
+    }
+    ctx.fillText(ch, curX, y);
+    curX += widths[i] + trackingPx;
+  }
+}
+
+export function drawTitleOverlayOnFrame(
+  ctx,
+  fx,
+  fy,
+  frameW,
+  frameH,
+  titleState,
+  tSec,
+  overlayOpts = null
+) {
+  const showGizmo = Boolean(overlayOpts && overlayOpts.showTitleGizmo);
   if (!titleState || titleState.enabled === false) return false;
-  const rawTitle = typeof titleState.title === "string" ? titleState.title.replace(/[\r\n\t]+/g, " ").trim() : "";
-  const rawSub = typeof titleState.subtitle === "string" ? titleState.subtitle.replace(/[\r\n\t]+/g, " ").trim() : "";
+  const rawTitle =
+    typeof titleState.title === "string"
+      ? titleState.title.replace(/[\r\n\t]+/g, " ").trim()
+      : "";
+  const rawSub =
+    typeof titleState.subtitle === "string"
+      ? titleState.subtitle.replace(/[\r\n\t]+/g, " ").trim()
+      : "";
+  const rawBug =
+    typeof titleState.bug_badge === "string"
+      ? titleState.bug_badge.replace(/[\r\n\t]+/g, " ").trim()
+      : "";
   if (!rawTitle && !rawSub) return false;
 
-  const startS = Number.isFinite(Number(titleState.start_s)) ? Number(titleState.start_s) : 0;
-  const endS = Number.isFinite(Number(titleState.end_s)) ? Number(titleState.end_s) : 5;
-  if (tSec < startS || tSec > endS) return false;
-
-  const pos = titleState.position || "bottom-left";
   const accent = /^#[0-9a-fA-F]{6}$/.test(String(titleState.accent_color || "").trim())
     ? String(titleState.accent_color).trim()
     : "#e68442";
   const [ar, ag, ab] = hexToRgbTuple(accent);
   const accentCss = `rgb(${ar}, ${ag}, ${ab})`;
-  const opacity = Math.max(0, Math.min(1, Number.isFinite(Number(titleState.box_opacity)) ? Number(titleState.box_opacity) : 0.8));
-  const refFontSize = Math.max(14, Math.min(96, Number.isFinite(Number(titleState.font_size)) ? Number(titleState.font_size) : 34));
-  const titlePx = Math.max(10, Math.round(frameH * (refFontSize / 1080)));
-  const subPx = Math.max(8, Math.round(frameH * (Math.max(12, refFontSize * 0.64) / 1080)));
+  const strokeCol = /^#[0-9a-fA-F]{6}$/.test(String(titleState.stroke_color || "").trim())
+    ? String(titleState.stroke_color).trim()
+    : "#090a0d";
 
-  ctx.save();
-  ctx.textBaseline = "middle";
-  ctx.shadowColor = "rgba(0, 0, 0, 0.72)";
-  ctx.shadowBlur = 2;
-  ctx.shadowOffsetX = 1;
-  ctx.shadowOffsetY = 1;
+  const motion = evaluateTitleMotionState(titleState, tSec);
+  const { boxX, boxY, boxW, boxH, cx, cy, align } = computeTitleOverlayAnchorBox(titleState);
 
-  if (pos === "bottom-left") {
-    const px = fx + frameW * 0.05;
-    const py = fy + frameH * 0.76;
-    const pw = frameW * 0.46;
-    const ph = frameH * 0.14;
-    if (opacity > 0) {
-      ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
-      ctx.fillRect(px, py, pw, ph);
-    }
-    ctx.fillStyle = accentCss;
-    ctx.fillRect(px, py, Math.max(3, frameW * 0.0045), ph);
+  const isLegacyStatic =
+    !titleState.custom_position_enabled &&
+    (!titleState.animation_curve || titleState.animation_curve === "none") &&
+    (!titleState.plate_style || titleState.plate_style === "solid_bar") &&
+    Number(titleState.stroke_width || 0) === 0 &&
+    Number(titleState.shadow_depth ?? 2) === 2 &&
+    Number(titleState.tracking || 0) === 0 &&
+    !rawBug;
 
-    const tx = fx + frameW * 0.068;
-    const maxTextW = Math.max(40, pw - frameW * 0.032);
-    ctx.textAlign = "left";
-    if (rawTitle) {
-      ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
-      ctx.fillStyle = "#d8d8de";
-      const yPos = rawSub ? fy + frameH * 0.805 : fy + frameH * 0.83;
-      ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), tx, yPos);
+  // Draw snap-guide laser lines when dragging or when snapGuides are active
+  const snapGuides = overlayOpts && overlayOpts.titleSnapGuides ? overlayOpts.titleSnapGuides : null;
+  if (showGizmo && snapGuides) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(104, 156, 255, 0.85)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    if (typeof snapGuides.x === "number") {
+      const gx = fx + frameW * snapGuides.x;
+      ctx.beginPath();
+      ctx.moveTo(gx, fy);
+      ctx.lineTo(gx, fy + frameH);
+      ctx.stroke();
     }
-    if (rawSub) {
-      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
-      ctx.fillStyle = accentCss;
-      const yPos = rawTitle ? fy + frameH * 0.86 : fy + frameH * 0.83;
-      ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), tx, yPos);
+    if (typeof snapGuides.y === "number") {
+      const gy = fy + frameH * snapGuides.y;
+      ctx.beginPath();
+      ctx.moveTo(fx, gy);
+      ctx.lineTo(fx + frameW, gy);
+      ctx.stroke();
     }
-  } else if (pos === "center") {
-    const px = fx + frameW * 0.14;
-    const py = fy + frameH * 0.34;
-    const pw = frameW * 0.72;
-    const ph = frameH * 0.32;
-    if (opacity > 0) {
-      ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
-      ctx.fillRect(px, py, pw, ph);
-    }
-    ctx.fillStyle = accentCss;
-    ctx.fillRect(fx + frameW * 0.42, py, frameW * 0.16, Math.max(2, frameH * 0.006));
-
-    const cx = fx + frameW * 0.5;
-    const maxTextW = Math.max(60, pw - frameW * 0.06);
-    ctx.textAlign = "center";
-    if (rawTitle) {
-      ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
-      ctx.fillStyle = "#d8d8de";
-      const yPos = rawSub ? fy + frameH * 0.455 : fy + frameH * 0.5;
-      ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cx, yPos);
-    }
-    if (rawSub) {
-      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
-      ctx.fillStyle = accentCss;
-      const yPos = rawTitle ? fy + frameH * 0.56 : fy + frameH * 0.5;
-      ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cx, yPos);
-    }
-  } else {
-    const px = fx + frameW * 0.16;
-    const py = fy + frameH * 0.81;
-    const pw = frameW * 0.68;
-    const ph = frameH * 0.11;
-    if (opacity > 0) {
-      ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
-      ctx.fillRect(px, py, pw, ph);
-    }
-    ctx.fillStyle = accentCss;
-    ctx.fillRect(fx + frameW * 0.44, fy + frameH * 0.916, frameW * 0.12, Math.max(2, frameH * 0.004));
-
-    const cx = fx + frameW * 0.5;
-    const maxTextW = Math.max(60, pw - frameW * 0.05);
-    ctx.textAlign = "center";
-    if (rawTitle) {
-      ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
-      ctx.fillStyle = "#d8d8de";
-      const yPos = rawSub ? fy + frameH * 0.842 : fy + frameH * 0.865;
-      ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cx, yPos);
-    }
-    if (rawSub) {
-      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
-      ctx.fillStyle = accentCss;
-      const yPos = rawTitle ? fy + frameH * 0.885 : fy + frameH * 0.865;
-      ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cx, yPos);
-    }
+    ctx.restore();
   }
 
+  const pxBase = fx + frameW * boxX;
+  const pyBase = fy + frameH * boxY;
+  const pwBase = frameW * boxW;
+  const phBase = frameH * boxH;
+
+  if (!motion.visible) {
+    if (showGizmo) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(230, 132, 66, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(pxBase, pyBase, pwBase, phBase);
+      const ax = fx + frameW * cx;
+      const ay = fy + frameH * cy;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(ax, ay, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    return false;
+  }
+
+  const opacity = Math.max(
+    0,
+    Math.min(1, Number.isFinite(Number(titleState.box_opacity)) ? Number(titleState.box_opacity) : 0.8)
+  );
+  const refFontSize = Math.max(
+    14,
+    Math.min(96, Number.isFinite(Number(titleState.font_size)) ? Number(titleState.font_size) : 34)
+  );
+  const titlePx = Math.max(10, Math.round(frameH * (refFontSize / 1080)));
+  const subPx = Math.max(8, Math.round(frameH * (Math.max(12, refFontSize * 0.64) / 1080)));
+  const trackingPx = clampNum(Number(titleState.tracking || 0), -4, 24) * (frameH / 1080);
+  const strokePx = clampNum(Number(titleState.stroke_width || 0), 0, 10) * Math.max(0.75, frameH / 540);
+  const shadowPx = clampNum(Number(titleState.shadow_depth ?? 2), 0, 12) * Math.max(0.6, frameH / 720);
+  const plateStyle = titleState.plate_style || "solid_bar";
+  const curve = titleState.animation_curve || "none";
+
+  ctx.save();
+  ctx.globalAlpha = clampNum(motion.alpha, 0, 1);
+
+  if (isLegacyStatic) {
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.72)";
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+    const pos = titleState.position || "bottom-left";
+    if (pos === "bottom-left") {
+      const px = fx + frameW * 0.05;
+      const py = fy + frameH * 0.76;
+      const pw = frameW * 0.46;
+      const ph = frameH * 0.14;
+      if (opacity > 0) {
+        ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
+        ctx.fillRect(px, py, pw, ph);
+      }
+      ctx.fillStyle = accentCss;
+      ctx.fillRect(px, py, Math.max(3, frameW * 0.0045), ph);
+
+      const tx = fx + frameW * 0.068;
+      const maxTextW = Math.max(40, pw - frameW * 0.032);
+      ctx.textAlign = "left";
+      if (rawTitle) {
+        ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+        ctx.fillStyle = "#d8d8de";
+        const yPos = rawSub ? fy + frameH * 0.805 : fy + frameH * 0.83;
+        ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), tx, yPos);
+      }
+      if (rawSub) {
+        ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+        ctx.fillStyle = accentCss;
+        const yPos = rawTitle ? fy + frameH * 0.86 : fy + frameH * 0.83;
+        ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), tx, yPos);
+      }
+    } else if (pos === "center") {
+      const px = fx + frameW * 0.14;
+      const py = fy + frameH * 0.34;
+      const pw = frameW * 0.72;
+      const ph = frameH * 0.32;
+      if (opacity > 0) {
+        ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
+        ctx.fillRect(px, py, pw, ph);
+      }
+      ctx.fillStyle = accentCss;
+      ctx.fillRect(fx + frameW * 0.42, py, frameW * 0.16, Math.max(2, frameH * 0.006));
+
+      const cxLegacy = fx + frameW * 0.5;
+      const maxTextW = Math.max(60, pw - frameW * 0.06);
+      ctx.textAlign = "center";
+      if (rawTitle) {
+        ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+        ctx.fillStyle = "#d8d8de";
+        const yPos = rawSub ? fy + frameH * 0.455 : fy + frameH * 0.5;
+        ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cxLegacy, yPos);
+      }
+      if (rawSub) {
+        ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+        ctx.fillStyle = accentCss;
+        const yPos = rawTitle ? fy + frameH * 0.56 : fy + frameH * 0.5;
+        ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cxLegacy, yPos);
+      }
+    } else {
+      const px = fx + frameW * 0.16;
+      const py = fy + frameH * 0.81;
+      const pw = frameW * 0.68;
+      const ph = frameH * 0.11;
+      if (opacity > 0) {
+        ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
+        ctx.fillRect(px, py, pw, ph);
+      }
+      ctx.fillStyle = accentCss;
+      ctx.fillRect(fx + frameW * 0.44, fy + frameH * 0.916, frameW * 0.12, Math.max(2, frameH * 0.004));
+
+      const cxLegacy = fx + frameW * 0.5;
+      const maxTextW = Math.max(60, pw - frameW * 0.05);
+      ctx.textAlign = "center";
+      if (rawTitle) {
+        ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+        ctx.fillStyle = "#d8d8de";
+        const yPos = rawSub ? fy + frameH * 0.842 : fy + frameH * 0.865;
+        ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cxLegacy, yPos);
+      }
+      if (rawSub) {
+        ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+        ctx.fillStyle = accentCss;
+        const yPos = rawTitle ? fy + frameH * 0.885 : fy + frameH * 0.865;
+        ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cxLegacy, yPos);
+      }
+    }
+  } else {
+    // Motion Graphics & Text+ rendering with spring scale, wipe, plate style, tracking, stroke & corner bug
+    const offX = motion.offset_x_norm * frameW;
+    const offY = motion.offset_y_norm * frameH;
+    const pivotX = pxBase + pwBase * 0.5 + offX;
+    const pivotY = pyBase + phBase * 0.5 + offY;
+
+    ctx.translate(pivotX, pivotY);
+    if (Math.abs(motion.scale - 1) > 0.001) {
+      ctx.scale(motion.scale, motion.scale);
+    }
+    ctx.translate(-pwBase * 0.5, -phBase * 0.5);
+
+    const drawW = curve === "slide_wipe" ? Math.max(4, pwBase * clampNum(motion.wipe_ratio, 0, 1)) : pwBase;
+    if (plateStyle === "solid_bar") {
+      if (opacity > 0) {
+        ctx.fillStyle = `rgba(20, 20, 22, ${opacity.toFixed(3)})`;
+        ctx.fillRect(0, 0, drawW, phBase);
+      }
+      ctx.fillStyle = accentCss;
+      if (align === "left") {
+        ctx.fillRect(0, 0, Math.max(3, frameW * 0.0045), phBase);
+      } else {
+        ctx.fillRect(pwBase * 0.35, 0, pwBase * 0.30, Math.max(2, frameH * 0.005));
+      }
+    } else if (plateStyle === "glass_pill") {
+      const r = Math.min(12, phBase * 0.28);
+      if (opacity > 0) {
+        ctx.fillStyle = `rgba(22, 24, 32, ${opacity.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.roundRect(0, 0, drawW, phBase, r);
+        ctx.fill();
+      }
+      ctx.fillStyle = accentCss;
+      ctx.fillRect(r * 0.5, 0, Math.max(0, drawW - r), Math.max(2, frameH * 0.0035));
+    } else if (plateStyle === "outline_frame") {
+      if (opacity > 0) {
+        ctx.fillStyle = `rgba(17, 18, 23, ${Math.max(0.14, opacity * 0.50).toFixed(3)})`;
+        ctx.fillRect(0, 0, drawW, phBase);
+      }
+      ctx.strokeStyle = accentCss;
+      ctx.lineWidth = Math.max(1.5, frameH * 0.0035);
+      ctx.strokeRect(0, 0, drawW, phBase);
+    }
+
+    if (rawBug) {
+      const bugPx = Math.max(8, Math.round(frameH * 0.017));
+      ctx.font = `800 ${bugPx}px ui-monospace, monospace`;
+      const bugTw = ctx.measureText(rawBug).width;
+      const bugW = Math.min(pwBase, Math.max(frameW * 0.06, bugTw + 14));
+      const bugH = Math.max(14, frameH * 0.036);
+      const bugX = align === "left" ? 0 : (pwBase - bugW) * 0.5;
+      const bugY = -bugH - Math.max(3, frameH * 0.006);
+      ctx.fillStyle = accentCss;
+      ctx.fillRect(bugX, bugY, bugW, bugH);
+      ctx.fillStyle = "#111216";
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "center";
+      ctx.fillText(rawBug, bugX + bugW * 0.5, bugY + bugH * 0.5);
+    }
+
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = shadowPx > 0 ? "rgba(0, 0, 0, 0.78)" : "transparent";
+    ctx.shadowBlur = shadowPx > 0 ? Math.max(1, shadowPx * 1.1) : 0;
+    ctx.shadowOffsetX = shadowPx;
+    ctx.shadowOffsetY = shadowPx;
+
+    const shownTitle = curve === "typewriter" ? rawTitle.slice(0, motion.reveal_chars_title) : rawTitle;
+    const shownSub = curve === "typewriter" ? rawSub.slice(0, motion.reveal_chars_sub) : rawSub;
+    const titleWithCursor =
+      curve === "typewriter" && motion.cursor_visible && motion.reveal_chars_title < rawTitle.length
+        ? `${shownTitle}|`
+        : shownTitle;
+    const txLocal = align === "left" ? frameW * 0.018 : pwBase * 0.5;
+    const maxTextW = Math.max(40, pwBase - frameW * 0.036);
+
+    if (rawTitle) {
+      ctx.font = `700 ${titlePx}px system-ui, -apple-system, sans-serif`;
+      ctx.fillStyle = "#e8e9ee";
+      const yPos = rawSub ? phBase * 0.36 : phBase * 0.5;
+      drawTextPlusLine(ctx, titleWithCursor, txLocal, yPos, align, maxTextW, trackingPx, strokePx, strokeCol);
+    }
+    if (rawSub) {
+      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+      ctx.fillStyle = accentCss;
+      const subCursor =
+        curve === "typewriter" &&
+        motion.cursor_visible &&
+        motion.reveal_chars_title >= rawTitle.length
+          ? `${shownSub}|`
+          : shownSub;
+      const yPos = rawTitle ? phBase * 0.72 : phBase * 0.5;
+      drawTextPlusLine(ctx, subCursor, txLocal, yPos, align, maxTextW, trackingPx * 0.7, strokePx * 0.8, strokeCol);
+    }
+  }
   ctx.restore();
+
+  if (showGizmo) {
+    ctx.save();
+    const isDragging = Boolean(overlayOpts && overlayOpts.titleDragging);
+    ctx.strokeStyle = isDragging ? "#689cff" : "rgba(230, 132, 66, 0.82)";
+    ctx.lineWidth = isDragging ? 1.5 : 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(pxBase, pyBase, pwBase, phBase);
+    ctx.setLineDash([]);
+    // Corner resize/anchor dots + center reticle
+    const corners = [
+      [pxBase, pyBase],
+      [pxBase + pwBase, pyBase],
+      [pxBase, pyBase + phBase],
+      [pxBase + pwBase, pyBase + phBase]
+    ];
+    ctx.fillStyle = isDragging ? "#689cff" : "#e68442";
+    for (const [hx, hy] of corners) {
+      ctx.fillRect(hx - 2.5, hy - 2.5, 5, 5);
+    }
+    const ax = fx + frameW * cx;
+    const ay = fy + frameH * cy;
+    ctx.strokeStyle = isDragging ? "#689cff" : "#e68442";
+    ctx.beginPath();
+    ctx.arc(ax, ay, 5, 0, Math.PI * 2);
+    ctx.moveTo(ax - 8, ay);
+    ctx.lineTo(ax + 8, ay);
+    ctx.moveTo(ax, ay - 8);
+    ctx.lineTo(ax, ay + 8);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   return true;
+}
+
+export function drawTitleMotionCurveCanvas(canvas, titleState, tSec = 0) {
+  if (!canvas) return;
+  const { ctx, width, height } = setupCanvas(canvas, 84);
+  ctx.fillStyle = "#121318";
+  ctx.fillRect(0, 0, width, height);
+
+  const padL = 24;
+  const padR = 10;
+  const padT = 12;
+  const padB = 14;
+  const plotW = Math.max(40, width - padL - padR);
+  const plotH = Math.max(24, height - padT - padB);
+
+  const valToY = (v) => padT + plotH * (1 - clampNum((v + 0.1) / 1.45, 0, 1));
+  const yZero = valToY(0);
+  const yOne = valToY(1);
+
+  ctx.strokeStyle = "#262832";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, yZero);
+  ctx.lineTo(padL + plotW, yZero);
+  ctx.moveTo(padL, yOne);
+  ctx.lineTo(padL + plotW, yOne);
+  ctx.stroke();
+
+  ctx.fillStyle = "#7a7d8a";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.fillText("1.0", 3, yOne + 3);
+  ctx.fillText("0.0", 3, yZero + 3);
+
+  const startS = Number.isFinite(Number(titleState && titleState.start_s)) ? Number(titleState.start_s) : 0.5;
+  const animIn = clampNum(Number((titleState && titleState.anim_in_s) ?? 0.45), 0.05, 5.0);
+  const curve = (titleState && titleState.animation_curve) || "none";
+  const samples = 64;
+
+  ctx.strokeStyle = curve === "none" ? "#6e7280" : "#e68442";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= samples; i++) {
+    const u = i / samples;
+    const sampleT = startS + u * animIn;
+    const st = evaluateTitleMotionState(
+      { ...(titleState || {}), enabled: true, title: (titleState && titleState.title) || "X" },
+      sampleT
+    );
+    const val = curve === "typewriter" ? (st.reveal_chars_title / Math.max(1, String((titleState && titleState.title) || "X").length)) : st.eased_in;
+    const px = padL + u * plotW;
+    const py = valToY(val);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // Playhead dot within anim_in window
+  const uNow = clampNum((tSec - startS) / animIn, 0, 1);
+  const stNow = evaluateTitleMotionState(titleState, tSec);
+  const valNow =
+    !stNow.visible
+      ? 0
+      : curve === "typewriter"
+        ? stNow.reveal_chars_title / Math.max(1, String((titleState && titleState.title) || "X").length)
+        : stNow.eased_in;
+  const dotX = padL + uNow * plotW;
+  const dotY = valToY(valNow);
+  ctx.fillStyle = stNow.visible ? "#689cff" : "#7a7d8a";
+  ctx.beginPath();
+  ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 export function drawLowerThirdOverlayOnFrame(ctx, fx, fy, frameW, frameH, ltState, tSec) {
@@ -3758,7 +4089,7 @@ export function drawProgramMonitorCanvas(
     const suppressForKeyer = Boolean(pCkRaw && pCkRaw.enabled);
     const titleOnAir = suppressForKeyer
       ? false
-      : drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, passTitleState, tSec);
+      : drawTitleOverlayOnFrame(ctx, fx, fy, frameW, frameH, passTitleState, tSec, renderOpts);
 
     const lowerThirdState = renderOpts && renderOpts.lowerThird ? renderOpts.lowerThird : null;
     const lowerThirdOnAir = suppressForKeyer
@@ -3957,6 +4288,27 @@ export function drawProgramMonitorCanvas(
   // Cinematic Vignette preview overlay
   const vignetteState = renderOpts && renderOpts.vignette ? renderOpts.vignette : null;
   drawCinematicVignetteOverlayOnFrame(ctx, fx, fy, frameW, frameH, vignetteState);
+
+  // Store Title Motion Graphics hit-test box for interactive viewer dragging
+  if (renderOpts && renderOpts.showTitleGizmo && titleState) {
+    const anchor = computeTitleOverlayAnchorBox(titleState);
+    canvas._titleGizmoGeom = {
+      fx,
+      fy,
+      frameW,
+      frameH,
+      boxX: fx + frameW * anchor.boxX,
+      boxY: fy + frameH * anchor.boxY,
+      boxW: frameW * anchor.boxW,
+      boxH: frameH * anchor.boxH,
+      cx: anchor.cx,
+      cy: anchor.cy,
+      canvasWidth: width,
+      canvasHeight: height
+    };
+  } else {
+    canvas._titleGizmoGeom = null;
+  }
 
   // Film Grain (35mm / 16mm / Super 8) preview overlay
   const filmGrainState = renderOpts && renderOpts.filmGrain ? renderOpts.filmGrain : null;

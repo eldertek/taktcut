@@ -11906,3 +11906,426 @@ export function solveShotMatchClient(payload = {}) {
     ffmpeg_filter: ffmpegFilter
   };
 }
+
+// =========================================================================
+// CYCLE #98: MOTION GRAPHICS STUDIO (TEXT+, BROADCAST BUGS & SPRING PHYSICS)
+// =========================================================================
+
+export const TITLE_ANIMATION_CURVES = [
+  "none",
+  "spring_overshoot",
+  "ease_out_expo",
+  "typewriter",
+  "slide_wipe",
+  "kinetic_bounce"
+];
+
+export const TITLE_PLATE_STYLES = ["solid_bar", "glass_pill", "outline_frame", "none"];
+
+export const TITLE_MOTION_TEMPLATES = [
+  {
+    id: "lower_third_editorial",
+    name: "Editorial Lower-Third",
+    category: "lower_third",
+    description: "Slide-wipe lower-third with damped rail and live role badge.",
+    params: {
+      preset_id: "broadcast_lower_third",
+      motion_template: "lower_third_editorial",
+      title: "ALEXANDRE MOREAU",
+      subtitle: "Lead Colorist | Studio Paris",
+      position: "bottom-left",
+      custom_position_enabled: true,
+      pos_x: 0.28,
+      pos_y: 0.82,
+      accent_color: "#e68442",
+      start_s: 0.4,
+      end_s: 5.4,
+      font_size: 34,
+      box_opacity: 0.84,
+      animation_curve: "slide_wipe",
+      anim_in_s: 0.45,
+      anim_out_s: 0.30,
+      spring_stiffness: 190.0,
+      spring_damping: 15.0,
+      tracking: 1,
+      stroke_width: 0,
+      stroke_color: "#090a0d",
+      shadow_depth: 2,
+      plate_style: "solid_bar",
+      bug_badge: "STUDIO A",
+      enabled: true
+    }
+  },
+  {
+    id: "kinetic_spring_pop",
+    name: "Kinetic Spring Pop",
+    category: "kinetic",
+    description: "Spring-overshoot Text+ title with bold stroke and floating punch.",
+    params: {
+      preset_id: "center_title_card",
+      motion_template: "kinetic_spring_pop",
+      title: "NEXT CHAPTER",
+      subtitle: "COLOR SCIENCE WORKFLOW",
+      position: "center",
+      custom_position_enabled: true,
+      pos_x: 0.50,
+      pos_y: 0.48,
+      accent_color: "#ff9d42",
+      start_s: 0.2,
+      end_s: 4.5,
+      font_size: 54,
+      box_opacity: 0.0,
+      animation_curve: "spring_overshoot",
+      anim_in_s: 0.55,
+      anim_out_s: 0.28,
+      spring_stiffness: 240.0,
+      spring_damping: 11.0,
+      tracking: 4,
+      stroke_width: 3,
+      stroke_color: "#090a0d",
+      shadow_depth: 4,
+      plate_style: "none",
+      bug_badge: "HDR",
+      enabled: true
+    }
+  },
+  {
+    id: "typewriter_terminal",
+    name: "Typewriter Callout",
+    category: "typewriter",
+    description: "Progressive character reveal with terminal cursor and crisp glass pill.",
+    params: {
+      preset_id: "broadcast_lower_third",
+      motion_template: "typewriter_terminal",
+      title: "SCENE 04 // EXTERIOR NIGHT",
+      subtitle: "CAM A | 25FPS | 800 ASA",
+      position: "bottom-left",
+      custom_position_enabled: true,
+      pos_x: 0.31,
+      pos_y: 0.78,
+      accent_color: "#38e08d",
+      start_s: 0.3,
+      end_s: 5.5,
+      font_size: 30,
+      box_opacity: 0.80,
+      animation_curve: "typewriter",
+      anim_in_s: 1.10,
+      anim_out_s: 0.25,
+      spring_stiffness: 180.0,
+      spring_damping: 16.0,
+      tracking: 2,
+      stroke_width: 1,
+      stroke_color: "#090a0d",
+      shadow_depth: 2,
+      plate_style: "glass_pill",
+      bug_badge: "TC LOCK",
+      enabled: true
+    }
+  },
+  {
+    id: "broadcast_corner_bug",
+    name: "Broadcast Corner Bug",
+    category: "bug",
+    description: "Top-right network bug with live status tag and exponential ease-out.",
+    params: {
+      preset_id: "minimal_subtitle",
+      motion_template: "broadcast_corner_bug",
+      title: "TAKTCUT LIVE",
+      subtitle: "4K REC.709 FEED",
+      position: "bottom-center",
+      custom_position_enabled: true,
+      pos_x: 0.84,
+      pos_y: 0.11,
+      accent_color: "#ef5350",
+      start_s: 0.0,
+      end_s: 8.0,
+      font_size: 22,
+      box_opacity: 0.86,
+      animation_curve: "ease_out_expo",
+      anim_in_s: 0.35,
+      anim_out_s: 0.25,
+      spring_stiffness: 200.0,
+      spring_damping: 18.0,
+      tracking: 2,
+      stroke_width: 0,
+      stroke_color: "#090a0d",
+      shadow_depth: 1,
+      plate_style: "outline_frame",
+      bug_badge: "LIVE",
+      enabled: true
+    }
+  },
+  {
+    id: "chapter_slate_card",
+    name: "Fusion Title Slate",
+    category: "slate",
+    description: "Cinematic wide-tracked opener with glass frame and exponential settle.",
+    params: {
+      preset_id: "center_title_card",
+      motion_template: "chapter_slate_card",
+      title: "ECLIPSE SHOWREEL 2026",
+      subtitle: "MASTER GRADE | PARIS",
+      position: "center",
+      custom_position_enabled: true,
+      pos_x: 0.50,
+      pos_y: 0.50,
+      accent_color: "#689cff",
+      start_s: 0.2,
+      end_s: 5.0,
+      font_size: 46,
+      box_opacity: 0.76,
+      animation_curve: "ease_out_expo",
+      anim_in_s: 0.50,
+      anim_out_s: 0.35,
+      spring_stiffness: 170.0,
+      spring_damping: 16.0,
+      tracking: 6,
+      stroke_width: 1,
+      stroke_color: "#090a0d",
+      shadow_depth: 3,
+      plate_style: "outline_frame",
+      bug_badge: "MASTER",
+      enabled: true
+    }
+  },
+  {
+    id: "breaking_ticker_bar",
+    name: "News Chyron Bar",
+    category: "chyron",
+    description: "Full-width broadcast chyron with kinetic bounce headline and alert bug.",
+    params: {
+      preset_id: "minimal_subtitle",
+      motion_template: "breaking_ticker_bar",
+      title: "BROADCAST DELIVERY PIPELINE ACTIVE",
+      subtitle: "EBU R128 -23.0 LUFS VERIFIED | FASTSTART OK",
+      position: "bottom-center",
+      custom_position_enabled: true,
+      pos_x: 0.50,
+      pos_y: 0.87,
+      accent_color: "#ffd54f",
+      start_s: 0.3,
+      end_s: 6.5,
+      font_size: 28,
+      box_opacity: 0.88,
+      animation_curve: "kinetic_bounce",
+      anim_in_s: 0.50,
+      anim_out_s: 0.30,
+      spring_stiffness: 220.0,
+      spring_damping: 12.0,
+      tracking: 1,
+      stroke_width: 1,
+      stroke_color: "#090a0d",
+      shadow_depth: 2,
+      plate_style: "solid_bar",
+      bug_badge: "FLASH",
+      enabled: true
+    }
+  }
+];
+
+export function computeTitleOverlayAnchorBox(titleState) {
+  const src = titleState || {};
+  const tpl = typeof src.motion_template === "string" ? src.motion_template : "";
+  const pos = src.position || "bottom-left";
+  let boxW = 0.46;
+  let boxH = 0.14;
+  let align = "left";
+  if (tpl === "broadcast_corner_bug") {
+    boxW = 0.25;
+    boxH = 0.11;
+    align = "left";
+  } else if (tpl === "breaking_ticker_bar") {
+    boxW = 0.84;
+    boxH = 0.12;
+    align = "center";
+  } else if (pos === "center") {
+    boxW = 0.68;
+    boxH = 0.28;
+    align = "center";
+  } else if (pos === "bottom-center") {
+    boxW = 0.66;
+    boxH = 0.12;
+    align = "center";
+  }
+
+  let cx = 0.28;
+  let cy = 0.83;
+  if (src.custom_position_enabled) {
+    cx = clampNum(Number.isFinite(Number(src.pos_x)) ? Number(src.pos_x) : 0.28, 0.04, 0.96);
+    cy = clampNum(Number.isFinite(Number(src.pos_y)) ? Number(src.pos_y) : 0.83, 0.04, 0.96);
+  } else if (pos === "center") {
+    cx = 0.50;
+    cy = 0.50;
+  } else if (pos === "bottom-center") {
+    cx = 0.50;
+    cy = 0.865;
+  }
+
+  const boxX = clampNum(cx - boxW / 2, 0.02, 0.98 - boxW);
+  const boxY = clampNum(cy - boxH / 2, 0.02, 0.98 - boxH);
+  return { boxX, boxY, boxW, boxH, cx, cy, align };
+}
+
+function springOvershootClient(u, stiffness, damping) {
+  if (u <= 0) return 0;
+  if (u >= 1) return 1;
+  const omega = Math.sqrt(Math.max(40, stiffness));
+  const zeta = Math.min(0.95, Math.max(0.12, damping / (2 * omega)));
+  const omegaD = omega * Math.sqrt(Math.max(0.01, 1 - zeta * zeta));
+  const tPhys = u * 0.85;
+  const env = Math.exp(-zeta * omega * tPhys);
+  const dampTerm = zeta / Math.sqrt(Math.max(0.01, 1 - zeta * zeta));
+  return 1 - env * (Math.cos(omegaD * tPhys) + dampTerm * Math.sin(omegaD * tPhys));
+}
+
+export function evaluateTitleMotionState(titleState, tSec = 0) {
+  const src = titleState || {};
+  const enabled = src.enabled !== false;
+  const cleanTitle = typeof src.title === "string" ? src.title.replace(/[\r\n\t]+/g, " ").trim() : "";
+  const cleanSub = typeof src.subtitle === "string" ? src.subtitle.replace(/[\r\n\t]+/g, " ").trim() : "";
+  const startS = Number.isFinite(Number(src.start_s)) ? Math.max(0, Number(src.start_s)) : 0.5;
+  const endS = Number.isFinite(Number(src.end_s)) ? Math.max(startS + 0.1, Number(src.end_s)) : startS + 5.0;
+  const t = Number.isFinite(Number(tSec)) ? Number(tSec) : 0;
+
+  if (!enabled || (!cleanTitle && !cleanSub) || t < startS || t > endS) {
+    return {
+      t_s: t,
+      visible: false,
+      phase: "outside",
+      progress_in: 0,
+      progress_out: 0,
+      eased_in: 0,
+      offset_x_norm: 0,
+      offset_y_norm: 0,
+      scale: 1,
+      alpha: 0,
+      reveal_chars_title: 0,
+      reveal_chars_sub: 0,
+      cursor_visible: false,
+      wipe_ratio: 0
+    };
+  }
+
+  const curve = TITLE_ANIMATION_CURVES.includes(src.animation_curve) ? src.animation_curve : "none";
+  if (curve === "none") {
+    return {
+      t_s: t,
+      visible: true,
+      phase: "hold",
+      progress_in: 1,
+      progress_out: 1,
+      eased_in: 1,
+      offset_x_norm: 0,
+      offset_y_norm: 0,
+      scale: 1,
+      alpha: 1,
+      reveal_chars_title: cleanTitle.length,
+      reveal_chars_sub: cleanSub.length,
+      cursor_visible: false,
+      wipe_ratio: 1
+    };
+  }
+
+  const animIn = clampNum(Number(src.anim_in_s ?? 0.45), 0.05, 5.0);
+  const animOut = clampNum(Number(src.anim_out_s ?? 0.30), 0.0, 5.0);
+  const stiffness = clampNum(Number(src.spring_stiffness ?? 180.0), 40, 600);
+  const damping = clampNum(Number(src.spring_damping ?? 14.0), 4, 40);
+
+  const elapsed = Math.max(0, t - startS);
+  const remaining = Math.max(0, endS - t);
+  const progressIn = Math.min(1, elapsed / animIn);
+  const progressOut = animOut > 0 ? Math.min(1, remaining / animOut) : 1;
+
+  let phase = "hold";
+  if (elapsed < animIn) phase = "in";
+  else if (animOut > 0 && remaining < animOut) phase = "out";
+
+  let easedIn = progressIn;
+  let offsetX = 0;
+  let offsetY = 0;
+  let scale = 1;
+  let wipeRatio = 1;
+  let revealTitle = cleanTitle.length;
+  let revealSub = cleanSub.length;
+  let cursorVisible = false;
+
+  if (curve === "spring_overshoot") {
+    easedIn = springOvershootClient(progressIn, stiffness, damping);
+    offsetX = -(1 - easedIn) * 0.075;
+    scale = 0.88 + 0.12 * easedIn;
+    wipeRatio = clampNum(easedIn, 0, 1.25);
+  } else if (curve === "kinetic_bounce") {
+    const omega = Math.sqrt(Math.max(40, stiffness));
+    const decay = clampNum(damping * 0.42, 2.5, 9.0);
+    const bounce = Math.abs(Math.cos(omega * 0.55 * progressIn)) * Math.exp(-decay * progressIn);
+    easedIn = progressIn < 1 ? 1 - bounce : 1;
+    offsetY = -bounce * 0.075;
+    scale = 1 + bounce * 0.10;
+    wipeRatio = Math.min(1, progressIn * 1.4);
+  } else if (curve === "ease_out_expo") {
+    easedIn = progressIn >= 1 ? 1 : 1 - Math.pow(2, -10 * progressIn);
+    offsetY = (1 - easedIn) * 0.045;
+    scale = 0.96 + 0.04 * easedIn;
+    wipeRatio = easedIn;
+  } else if (curve === "slide_wipe") {
+    const inv = 1 - progressIn;
+    easedIn = 1 - inv * inv * inv;
+    offsetX = -(1 - easedIn) * 0.11;
+    wipeRatio = easedIn;
+  } else if (curve === "typewriter") {
+    easedIn = progressIn;
+    revealTitle = Math.min(cleanTitle.length, Math.max(0, Math.floor(progressIn * (cleanTitle.length + 0.99))));
+    const subProg = clampNum((progressIn - 0.35) / 0.65, 0, 1);
+    revealSub = Math.min(cleanSub.length, Math.max(0, Math.floor(subProg * (cleanSub.length + 0.99))));
+    cursorVisible = progressIn < 1 || Math.floor(elapsed * 4) % 2 === 0;
+    wipeRatio = Math.min(1, progressIn * 1.6);
+  }
+
+  const fadeIn = Math.min(1, elapsed / Math.min(0.16, animIn));
+  const alpha = clampNum(fadeIn * progressOut, 0, 1);
+
+  return {
+    t_s: t,
+    visible: true,
+    phase,
+    progress_in: Number(progressIn.toFixed(4)),
+    progress_out: Number(progressOut.toFixed(4)),
+    eased_in: Number(easedIn.toFixed(4)),
+    offset_x_norm: Number(offsetX.toFixed(5)),
+    offset_y_norm: Number(offsetY.toFixed(5)),
+    scale: Number(scale.toFixed(4)),
+    alpha: Number(alpha.toFixed(4)),
+    reveal_chars_title: revealTitle,
+    reveal_chars_sub: revealSub,
+    cursor_visible: cursorVisible,
+    wipe_ratio: Number(wipeRatio.toFixed(4))
+  };
+}
+
+export function snapTitleAnchor(posX, posY, snapEnabled = true) {
+  let x = clampNum(Number(posX) || 0.5, 0.04, 0.96);
+  let y = clampNum(Number(posY) || 0.5, 0.04, 0.96);
+  const snapGuides = { x: null, y: null };
+  if (!snapEnabled) {
+    return { pos_x: Number(x.toFixed(3)), pos_y: Number(y.toFixed(3)), snapGuides };
+  }
+  const threshold = 0.024;
+  const xTargets = [0.50, 0.10, 0.90, 0.05, 0.95, 0.28, 0.84];
+  const yTargets = [0.50, 0.10, 0.90, 0.05, 0.95, 0.82, 0.11];
+  for (const tx of xTargets) {
+    if (Math.abs(x - tx) <= threshold) {
+      x = tx;
+      snapGuides.x = tx;
+      break;
+    }
+  }
+  for (const ty of yTargets) {
+    if (Math.abs(y - ty) <= threshold) {
+      y = ty;
+      snapGuides.y = ty;
+      break;
+    }
+  }
+  return { pos_x: Number(x.toFixed(3)), pos_y: Number(y.toFixed(3)), snapGuides };
+}
+

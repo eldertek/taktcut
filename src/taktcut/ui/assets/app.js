@@ -19,6 +19,7 @@ import {
   drawStereoVuMeterCanvas,
   drawTimelineCanvas,
   drawTimelineOverviewCanvas,
+  drawTitleMotionCurveCanvas,
   drawTransformGraphCanvas,
   findActiveSubtitleCue,
   framesToSmpte,
@@ -90,6 +91,9 @@ import {
   SPLIT_WIPE_POS_DEFAULT,
   STABILIZER_PRESETS_CLIENT,
   STILLS_GALLERY_MAX,
+  TITLE_ANIMATION_CURVES,
+  TITLE_MOTION_TEMPLATES,
+  TITLE_PLATE_STYLES,
   TRACK_PAN_MAX,
   TRACK_PAN_MIN,
   TRACK_VOLUME_DB_MAX,
@@ -195,6 +199,7 @@ import {
   evaluateCurvePchipClient,
   evaluatePowerWindowMask,
   evaluateRetimeSpeedAt,
+  evaluateTitleMotionState,
   evaluateTrackPointClient,
   evaluateTransformParamAtTime,
   evaluateTimelineAudioLevels,
@@ -298,6 +303,7 @@ import {
   slideClipInDocument,
   slipClipInDocument,
   smartInsertClipInDocument,
+  snapTitleAnchor,
   solveShotMatchClient,
   splitClipInDocument,
   splitClipsAtPlayhead,
@@ -444,17 +450,33 @@ const TITLE_PRESETS_FALLBACK = {
 };
 
 function cloneTitleParams(p) {
+  const src = p || {};
   return {
-    preset_id: p.preset_id || "broadcast_lower_third",
-    title: String(p.title ?? ""),
-    subtitle: String(p.subtitle ?? ""),
-    position: p.position || "bottom-left",
-    accent_color: p.accent_color || "#e68442",
-    start_s: Number(p.start_s ?? 0.5),
-    end_s: Number(p.end_s ?? 5.5),
-    font_size: Number(p.font_size ?? 34),
-    box_opacity: Number(p.box_opacity ?? 0.82),
-    enabled: p.enabled !== false
+    preset_id: src.preset_id || "broadcast_lower_third",
+    title: String(src.title ?? ""),
+    subtitle: String(src.subtitle ?? ""),
+    position: src.position || "bottom-left",
+    accent_color: src.accent_color || "#e68442",
+    start_s: Number(src.start_s ?? 0.5),
+    end_s: Number(src.end_s ?? 5.5),
+    font_size: Number(src.font_size ?? 34),
+    box_opacity: Number(src.box_opacity ?? 0.82),
+    enabled: src.enabled !== false,
+    motion_template: src.motion_template || null,
+    custom_position_enabled: Boolean(src.custom_position_enabled),
+    pos_x: Number.isFinite(Number(src.pos_x)) ? Number(src.pos_x) : 0.28,
+    pos_y: Number.isFinite(Number(src.pos_y)) ? Number(src.pos_y) : 0.83,
+    animation_curve: TITLE_ANIMATION_CURVES.includes(src.animation_curve) ? src.animation_curve : "none",
+    anim_in_s: Number.isFinite(Number(src.anim_in_s)) ? Number(src.anim_in_s) : 0.45,
+    anim_out_s: Number.isFinite(Number(src.anim_out_s)) ? Number(src.anim_out_s) : 0.30,
+    spring_stiffness: Number.isFinite(Number(src.spring_stiffness)) ? Number(src.spring_stiffness) : 180.0,
+    spring_damping: Number.isFinite(Number(src.spring_damping)) ? Number(src.spring_damping) : 14.0,
+    tracking: Number.isFinite(Number(src.tracking)) ? Number(src.tracking) : 0,
+    stroke_width: Number.isFinite(Number(src.stroke_width)) ? Number(src.stroke_width) : 0,
+    stroke_color: src.stroke_color || "#090a0d",
+    shadow_depth: Number.isFinite(Number(src.shadow_depth)) ? Number(src.shadow_depth) : 2,
+    plate_style: TITLE_PLATE_STYLES.includes(src.plate_style) ? src.plate_style : "solid_bar",
+    bug_badge: String(src.bug_badge ?? "")
   };
 }
 
@@ -683,6 +705,10 @@ const state = {
   },
   titleOverlay: cloneTitleParams(TITLE_PRESETS_FALLBACK.broadcast_lower_third.params),
   titlePresetsCatalog: null,
+  titleMotionTemplatesCatalog: null,
+  titleSnapEnabled: true,
+  titleSnapGuides: null,
+  titleDrag: { active: false, pointerId: null },
   titleLastCompile: null,
   titleCompileTimer: null,
   titleCompileSeq: 0,
@@ -1394,9 +1420,18 @@ function redrawActiveCanvases() {
         reframe: { ...state.reframe },
         filmGrain: { ...state.filmGrain },
         vignette: { ...state.vignette },
-        showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay)
+        showPlanarTrackerOverlay: state.activeTab === "fx" && Boolean(state.planarTrackerOverlay),
+        showTitleGizmo: true,
+        titleSnapGuides: state.titleSnapGuides,
+        titleDragging: Boolean(state.titleDrag && state.titleDrag.active)
       }
     );
+    drawTitleMotionCurveCanvas(
+      byId("title-curve-canvas"),
+      state.titleOverlay,
+      state.playheadFrame / getTimelineFps()
+    );
+    updateTitleTimingBadges();
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
     const activeNode = getSelectedColorNode(state.colorNodeTree);
@@ -6809,13 +6844,38 @@ function updateTitleTimingBadges() {
     winBadge.textContent = `${ov.start_s.toFixed(2)}s - ${ov.end_s.toFixed(2)}s`;
   }
 
+  const motionState = evaluateTitleMotionState(ov, tSec);
+  const phaseBadge = byId("titles-motion-phase-badge");
+  if (phaseBadge) {
+    const phaseTxt = String(motionState.phase || "outside").toUpperCase();
+    phaseBadge.textContent = phaseTxt;
+    phaseBadge.className =
+      phaseTxt === "IN"
+        ? "nle-tag is-active mono"
+        : phaseTxt === "HOLD"
+          ? "nle-tag is-pass mono"
+          : phaseTxt === "OUT"
+            ? "nle-tag is-warn mono"
+            : "nle-tag mono";
+  }
+
+  const curveTag = byId("titles-motion-curve-tag");
+  if (curveTag) {
+    const curve = ov.animation_curve || "none";
+    curveTag.textContent = curve === "none" ? "STATIC" : curve.toUpperCase();
+    curveTag.className = curve === "none" ? "nle-tag mono" : "nle-tag is-active mono";
+  }
+
   const kv = byId("title-window-kv");
   if (kv) {
     const dur = Math.max(0, ov.end_s - ov.start_s);
+    const anchorLabel = ov.custom_position_enabled
+      ? `${ov.pos_x.toFixed(2)}, ${ov.pos_y.toFixed(2)}`
+      : ov.position;
     renderKv(kv, [
-      ["Preset", ov.preset_id],
-      ["Position", ov.position],
-      ["Accent", ov.accent_color],
+      ["Preset", ov.motion_template || ov.preset_id],
+      ["Anchor", anchorLabel],
+      ["Curve", `${ov.animation_curve || "none"} (${motionState.phase})`],
       ["Playhead", `${tSec.toFixed(2)}s (${inWindow ? "VISIBLE" : "HIDDEN"})`],
       ["Window", `${ov.start_s.toFixed(2)}s .. ${ov.end_s.toFixed(2)}s (${dur.toFixed(2)}s)`]
     ]);
@@ -6825,9 +6885,20 @@ function updateTitleTimingBadges() {
 function updateTitlePresetButtons() {
   for (const btn of document.querySelectorAll("[data-title-preset]")) {
     const pid = btn.getAttribute("data-title-preset");
-    const isMatch = pid === state.titleOverlay.preset_id;
+    const isMatch = !state.titleOverlay.motion_template && pid === state.titleOverlay.preset_id;
     btn.classList.toggle("is-active", isMatch);
     btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+  for (const btn of document.querySelectorAll("[data-motion-template]")) {
+    const tid = btn.getAttribute("data-motion-template");
+    const isMatch = tid === state.titleOverlay.motion_template;
+    btn.classList.toggle("is-active", isMatch);
+    btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+  }
+  const curBug = String(state.titleOverlay.bug_badge || "").trim();
+  for (const chip of document.querySelectorAll("[data-bug-chip]")) {
+    const val = chip.getAttribute("data-bug-chip") ?? "";
+    chip.classList.toggle("is-active", val === curBug);
   }
 }
 
@@ -6856,8 +6927,57 @@ function syncTitleInputsFromState() {
   if (fsNum) fsNum.value = String(ov.font_size);
   if (opRange) opRange.value = String(ov.box_opacity);
   if (opNum) opNum.value = ov.box_opacity.toFixed(2);
+
+  const curveEl = byId("title-anim-curve-select");
+  const plateEl = byId("title-plate-style-select");
+  const animInRange = byId("title-anim-in-range");
+  const animInNum = byId("title-anim-in-num");
+  const animOutRange = byId("title-anim-out-range");
+  const animOutNum = byId("title-anim-out-num");
+  const stiffRange = byId("title-spring-stiffness-range");
+  const stiffNum = byId("title-spring-stiffness-num");
+  const dampRange = byId("title-spring-damping-range");
+  const dampNum = byId("title-spring-damping-num");
+  const bugInput = byId("title-bug-badge-input");
+  const trkRange = byId("title-tracking-range");
+  const trkNum = byId("title-tracking-num");
+  const strkRange = byId("title-stroke-range");
+  const strkNum = byId("title-stroke-num");
+  const strkCol = byId("title-stroke-color");
+  const shdRange = byId("title-shadow-range");
+  const shdNum = byId("title-shadow-num");
+  const posXNum = byId("title-pos-x-num");
+  const posYNum = byId("title-pos-y-num");
+  const snapBtn = byId("btn-title-snap-guides");
+
+  if (curveEl) curveEl.value = ov.animation_curve || "none";
+  if (plateEl) plateEl.value = ov.plate_style || "solid_bar";
+  if (animInRange) animInRange.value = String(ov.anim_in_s);
+  if (animInNum) animInNum.value = Number(ov.anim_in_s).toFixed(2);
+  if (animOutRange) animOutRange.value = String(ov.anim_out_s);
+  if (animOutNum) animOutNum.value = Number(ov.anim_out_s).toFixed(2);
+  if (stiffRange) stiffRange.value = String(ov.spring_stiffness);
+  if (stiffNum) stiffNum.value = String(Math.round(ov.spring_stiffness));
+  if (dampRange) dampRange.value = String(ov.spring_damping);
+  if (dampNum) dampNum.value = String(Math.round(ov.spring_damping));
+  if (bugInput) bugInput.value = ov.bug_badge || "";
+  if (trkRange) trkRange.value = String(ov.tracking);
+  if (trkNum) trkNum.value = String(ov.tracking);
+  if (strkRange) strkRange.value = String(ov.stroke_width);
+  if (strkNum) strkNum.value = String(ov.stroke_width);
+  if (strkCol) strkCol.value = ov.stroke_color || "#090a0d";
+  if (shdRange) shdRange.value = String(ov.shadow_depth);
+  if (shdNum) shdNum.value = String(ov.shadow_depth);
+  if (posXNum) posXNum.value = Number(ov.pos_x).toFixed(2);
+  if (posYNum) posYNum.value = Number(ov.pos_y).toFixed(2);
+  if (snapBtn) {
+    snapBtn.classList.toggle("is-active", state.titleSnapEnabled);
+    snapBtn.setAttribute("aria-pressed", state.titleSnapEnabled ? "true" : "false");
+  }
+
   updateTitlePresetButtons();
   updateTitleTimingBadges();
+  drawTitleMotionCurveCanvas(byId("title-curve-canvas"), ov, state.playheadFrame / getTimelineFps());
 }
 
 function applyTitlePreset(presetId) {
@@ -6870,7 +6990,21 @@ function applyTitlePreset(presetId) {
     presetParams = TITLE_PRESETS_FALLBACK[presetId].params;
   }
   if (!presetParams) return;
-  state.titleOverlay = cloneTitleParams(presetParams);
+  state.titleOverlay = cloneTitleParams({
+    ...presetParams,
+    motion_template: null,
+    custom_position_enabled: false
+  });
+  syncTitleInputsFromState();
+  redrawActiveCanvases();
+  compileTitleNow();
+}
+
+function applyMotionTemplate(templateId) {
+  const catalog = state.titleMotionTemplatesCatalog || TITLE_MOTION_TEMPLATES;
+  const found = catalog.find((tpl) => tpl.id === templateId);
+  if (!found || !found.params) return;
+  state.titleOverlay = cloneTitleParams(found.params);
   syncTitleInputsFromState();
   redrawActiveCanvases();
   compileTitleNow();
@@ -6893,13 +7027,14 @@ function renderTitleCompileResult(res) {
     ]);
     return;
   }
-  badge.textContent = "COMPILED";
+  badge.textContent = res.has_motion ? "ANIMATED" : "COMPILED";
   badge.className = "nle-tag is-active mono";
   out.textContent = res.filtergraph;
   renderKv(kv, [
-    ["Status", "ACTIVE"],
+    ["Status", res.has_motion ? `MOTION (${res.animation_curve})` : "ACTIVE"],
     ["Escaped Title", res.escaped_title || t("common.none")],
     ["Escaped Subtitle", res.escaped_subtitle || t("common.none")],
+    ["Broadcast Bug", res.escaped_bug_badge || t("common.none")],
     ["Time Gate", `between(t,${res.params.start_s.toFixed(3)},${res.params.end_s.toFixed(3)})`]
   ]);
 }
@@ -17627,6 +17762,241 @@ function wireEvents() {
       byId("title-opacity-num").value = state.titleOverlay.box_opacity.toFixed(2);
     }
   });
+
+  // Motion Graphics Studio & Text+ inspector events
+  for (const btn of document.querySelectorAll("[data-motion-template]")) {
+    btn.addEventListener("click", () => {
+      const tid = btn.getAttribute("data-motion-template");
+      if (tid) applyMotionTemplate(tid);
+    });
+  }
+  byId("title-anim-curve-select")?.addEventListener("change", (ev) => {
+    state.titleOverlay.animation_curve = ev.target.value;
+    syncTitleInputsFromState();
+    redrawActiveCanvases();
+    compileTitleNow();
+  });
+  byId("title-plate-style-select")?.addEventListener("change", (ev) => {
+    state.titleOverlay.plate_style = ev.target.value;
+    redrawActiveCanvases();
+    compileTitleNow();
+  });
+  byId("title-bug-badge-input")?.addEventListener("input", (ev) => {
+    state.titleOverlay.bug_badge = String(ev.target.value || "").slice(0, 24);
+    updateTitlePresetButtons();
+    redrawActiveCanvases();
+    scheduleTitleCompile();
+  });
+  for (const chip of document.querySelectorAll("[data-bug-chip]")) {
+    chip.addEventListener("click", () => {
+      const val = chip.getAttribute("data-bug-chip") ?? "";
+      state.titleOverlay.bug_badge = val;
+      const bugIn = byId("title-bug-badge-input");
+      if (bugIn) bugIn.value = val;
+      updateTitlePresetButtons();
+      redrawActiveCanvases();
+      compileTitleNow();
+    });
+  }
+  byId("title-stroke-color")?.addEventListener("input", (ev) => {
+    state.titleOverlay.stroke_color = ev.target.value;
+    redrawActiveCanvases();
+    scheduleTitleCompile();
+  });
+
+  function bindTitleRangePair(rangeId, numId, key, minVal, maxVal, decimals = 0) {
+    const rangeEl = byId(rangeId);
+    const numEl = byId(numId);
+    const fmt = (v) => (decimals > 0 ? Number(v).toFixed(decimals) : String(Math.round(v)));
+    rangeEl?.addEventListener("input", () => {
+      const val = decimals > 0 ? Number.parseFloat(rangeEl.value) : Number.parseInt(rangeEl.value, 10);
+      if (!Number.isFinite(val)) return;
+      state.titleOverlay[key] = val;
+      if (numEl) numEl.value = fmt(val);
+      redrawActiveCanvases();
+      scheduleTitleCompile();
+    });
+    numEl?.addEventListener("input", () => {
+      const val = decimals > 0 ? Number.parseFloat(numEl.value) : Number.parseInt(numEl.value, 10);
+      if (Number.isFinite(val) && val >= minVal && val <= maxVal) {
+        state.titleOverlay[key] = val;
+        if (rangeEl) rangeEl.value = String(Math.min(Number(rangeEl.max || maxVal), val));
+        redrawActiveCanvases();
+        scheduleTitleCompile();
+      }
+    });
+    numEl?.addEventListener("blur", () => {
+      const raw = decimals > 0 ? Number.parseFloat(numEl.value) : Number.parseInt(numEl.value, 10);
+      if (!Number.isFinite(raw) || raw < minVal || raw > maxVal) {
+        numEl.value = fmt(state.titleOverlay[key]);
+      }
+    });
+  }
+
+  bindTitleRangePair("title-anim-in-range", "title-anim-in-num", "anim_in_s", 0.05, 5.0, 2);
+  bindTitleRangePair("title-anim-out-range", "title-anim-out-num", "anim_out_s", 0.0, 5.0, 2);
+  bindTitleRangePair("title-spring-stiffness-range", "title-spring-stiffness-num", "spring_stiffness", 40, 600, 0);
+  bindTitleRangePair("title-spring-damping-range", "title-spring-damping-num", "spring_damping", 4, 40, 0);
+  bindTitleRangePair("title-tracking-range", "title-tracking-num", "tracking", -4, 24, 0);
+  bindTitleRangePair("title-stroke-range", "title-stroke-num", "stroke_width", 0, 10, 0);
+  bindTitleRangePair("title-shadow-range", "title-shadow-num", "shadow_depth", 0, 12, 0);
+
+  for (const [id, key] of [
+    ["title-pos-x-num", "pos_x"],
+    ["title-pos-y-num", "pos_y"]
+  ]) {
+    const el = byId(id);
+    el?.addEventListener("input", () => {
+      const val = Number.parseFloat(el.value);
+      if (Number.isFinite(val) && val >= 0.04 && val <= 0.96) {
+        state.titleOverlay.custom_position_enabled = true;
+        state.titleOverlay[key] = Number(val.toFixed(3));
+        redrawActiveCanvases();
+        scheduleTitleCompile();
+      }
+    });
+    el?.addEventListener("blur", () => {
+      const raw = Number.parseFloat(el.value);
+      if (!Number.isFinite(raw) || raw < 0.04 || raw > 0.96) {
+        el.value = Number(state.titleOverlay[key]).toFixed(2);
+      }
+    });
+  }
+
+  byId("btn-title-snap-guides")?.addEventListener("click", () => {
+    state.titleSnapEnabled = !state.titleSnapEnabled;
+    const btn = byId("btn-title-snap-guides");
+    if (btn) {
+      btn.classList.toggle("is-active", state.titleSnapEnabled);
+      btn.setAttribute("aria-pressed", state.titleSnapEnabled ? "true" : "false");
+    }
+  });
+
+  byId("btn-title-reset-anchor")?.addEventListener("click", () => {
+    state.titleOverlay.custom_position_enabled = false;
+    const pos = state.titleOverlay.position;
+    if (pos === "center") {
+      state.titleOverlay.pos_x = 0.50;
+      state.titleOverlay.pos_y = 0.50;
+    } else if (pos === "bottom-center") {
+      state.titleOverlay.pos_x = 0.50;
+      state.titleOverlay.pos_y = 0.865;
+    } else {
+      state.titleOverlay.pos_x = 0.28;
+      state.titleOverlay.pos_y = 0.83;
+    }
+    state.titleSnapGuides = null;
+    syncTitleInputsFromState();
+    redrawActiveCanvases();
+    compileTitleNow();
+  });
+
+  // Interactive Program Monitor Canvas Dragging + Arrow Key Nudging
+  const titlesCanvas = byId("titles-program-canvas");
+  if (titlesCanvas) {
+    const pointerToNormFrame = (ev) => {
+      const rect = titlesCanvas.getBoundingClientRect();
+      const geom = titlesCanvas._titleGizmoGeom;
+      if (!geom || rect.width <= 0 || rect.height <= 0 || geom.frameW <= 0 || geom.frameH <= 0) {
+        return null;
+      }
+      const canvasAspect = geom.canvasWidth / Math.max(1, geom.canvasHeight);
+      const rectAspect = rect.width / Math.max(1, rect.height);
+      let renderW = rect.width;
+      let renderH = rect.height;
+      let padX = 0;
+      let padY = 0;
+      if (rectAspect > canvasAspect) {
+        renderW = rect.height * canvasAspect;
+        padX = (rect.width - renderW) * 0.5;
+      } else if (rectAspect < canvasAspect) {
+        renderH = rect.width / canvasAspect;
+        padY = (rect.height - renderH) * 0.5;
+      }
+      const cx = ((ev.clientX - rect.left - padX) / Math.max(1, renderW)) * geom.canvasWidth;
+      const cy = ((ev.clientY - rect.top - padY) / Math.max(1, renderH)) * geom.canvasHeight;
+      return {
+        nx: (cx - geom.fx) / geom.frameW,
+        ny: (cy - geom.fy) / geom.frameH
+      };
+    };
+
+    titlesCanvas.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      const norm = pointerToNormFrame(ev);
+      if (!norm) return;
+      state.titleDrag = { active: true, pointerId: ev.pointerId };
+      titlesCanvas.classList.add("is-dragging");
+      try {
+        titlesCanvas.setPointerCapture(ev.pointerId);
+      } catch {
+        // Ignore capture failure in headless environments
+      }
+      const snapped = snapTitleAnchor(norm.nx, norm.ny, state.titleSnapEnabled && !ev.altKey);
+      state.titleOverlay.custom_position_enabled = true;
+      state.titleOverlay.pos_x = snapped.pos_x;
+      state.titleOverlay.pos_y = snapped.pos_y;
+      state.titleSnapGuides = snapped.snapGuides;
+      syncTitleInputsFromState();
+      redrawActiveCanvases();
+    });
+
+    titlesCanvas.addEventListener("pointermove", (ev) => {
+      if (!state.titleDrag || !state.titleDrag.active) return;
+      const norm = pointerToNormFrame(ev);
+      if (!norm) return;
+      const snapped = snapTitleAnchor(norm.nx, norm.ny, state.titleSnapEnabled && !ev.altKey);
+      state.titleOverlay.custom_position_enabled = true;
+      state.titleOverlay.pos_x = snapped.pos_x;
+      state.titleOverlay.pos_y = snapped.pos_y;
+      state.titleSnapGuides = snapped.snapGuides;
+      syncTitleInputsFromState();
+      redrawActiveCanvases();
+    });
+
+    const endTitleDrag = (ev) => {
+      if (!state.titleDrag || !state.titleDrag.active) return;
+      state.titleDrag = { active: false, pointerId: null };
+      state.titleSnapGuides = null;
+      titlesCanvas.classList.remove("is-dragging");
+      try {
+        if (ev && ev.pointerId !== undefined) titlesCanvas.releasePointerCapture(ev.pointerId);
+      } catch {
+        // Ignore release error
+      }
+      redrawActiveCanvases();
+      compileTitleNow();
+    };
+    titlesCanvas.addEventListener("pointerup", endTitleDrag);
+    titlesCanvas.addEventListener("pointercancel", endTitleDrag);
+
+    titlesCanvas.addEventListener("keydown", (ev) => {
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const step = ev.shiftKey ? 0.05 : 0.01;
+      let dx = 0;
+      let dy = 0;
+      if (ev.key === "ArrowLeft") dx = -step;
+      else if (ev.key === "ArrowRight") dx = step;
+      else if (ev.key === "ArrowUp") dy = -step;
+      else if (ev.key === "ArrowDown") dy = step;
+      else if (ev.key === "r" || ev.key === "R") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        byId("btn-title-reset-anchor")?.click();
+        return;
+      } else {
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      state.titleOverlay.custom_position_enabled = true;
+      state.titleOverlay.pos_x = Number(Math.min(0.96, Math.max(0.04, state.titleOverlay.pos_x + dx)).toFixed(3));
+      state.titleOverlay.pos_y = Number(Math.min(0.96, Math.max(0.04, state.titleOverlay.pos_y + dy)).toFixed(3));
+      syncTitleInputsFromState();
+      redrawActiveCanvases();
+      scheduleTitleCompile();
+    });
+  }
   byId("btn-titles-play").addEventListener("click", togglePlayPause);
   byId("btn-titles-step").addEventListener("click", () => {
     stopPlayback();
@@ -19828,6 +20198,9 @@ async function loadTitlesCatalog() {
     const data = await api.getTitlePresets();
     if (data && Array.isArray(data.presets) && data.presets.length > 0) {
       state.titlePresetsCatalog = data.presets;
+    }
+    if (data && Array.isArray(data.motion_templates) && data.motion_templates.length > 0) {
+      state.titleMotionTemplatesCatalog = data.motion_templates;
     }
   } catch {
     // Fallback to built-in TITLE_PRESETS_FALLBACK constants
