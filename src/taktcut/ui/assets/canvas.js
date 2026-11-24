@@ -14758,3 +14758,405 @@ export function drawFilmLookCurveCanvas(canvas, rawConfig, opts = {}) {
   canvas._flCurveMeta = meta;
   return meta;
 }
+
+
+// ============================================================================
+// OPTICAL GLOW, HALATION & ANAMORPHIC LENS FLARE CANVASES (CYCLE #113)
+// ============================================================================
+
+function ofDrawHexagon(ctx, cx, cy, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i += 1) {
+    const a = (Math.PI / 3) * i - Math.PI / 6;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+function ofDrawBaseCinemaScene(ctx, width, height, ox, oy) {
+  // Deep cinema nocturnal skyline & studio backlight plate
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+  bgGrad.addColorStop(0, "#0b1120");
+  bgGrad.addColorStop(0.54, "#152036");
+  bgGrad.addColorStop(0.76, "#1a1f2c");
+  bgGrad.addColorStop(1, "#0a0d14");
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, width, height);
+
+  // Subtle cinema horizon & silhouettes
+  const horY = height * 0.68;
+  ctx.fillStyle = "#0d1322";
+  ctx.beginPath();
+  ctx.moveTo(0, height);
+  ctx.lineTo(0, horY + 6);
+  ctx.lineTo(width * 0.14, horY - 12);
+  ctx.lineTo(width * 0.24, horY - 12);
+  ctx.lineTo(width * 0.26, horY + 4);
+  ctx.lineTo(width * 0.44, horY - 22);
+  ctx.lineTo(width * 0.56, horY - 18);
+  ctx.lineTo(width * 0.62, horY + 6);
+  ctx.lineTo(width * 0.82, horY - 14);
+  ctx.lineTo(width, horY + 2);
+  ctx.lineTo(width, height);
+  ctx.closePath();
+  ctx.fill();
+
+  // Practical specular highlights in the plate (street/rig lamps)
+  const lamps = [
+    [width * 0.18, horY - 4, 3.2],
+    [width * 0.48, horY - 14, 2.8],
+    [width * 0.86, horY - 6, 3.0]
+  ];
+  for (const [lx, ly, lr] of lamps) {
+    ctx.fillStyle = "rgba(248, 250, 252, 0.9)";
+    ctx.beginPath();
+    ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Primary specular key source at flare origin
+  const coreGrad = ctx.createRadialGradient(ox, oy, 1, ox, oy, 22);
+  coreGrad.addColorStop(0, "rgba(255, 255, 255, 0.98)");
+  coreGrad.addColorStop(0.35, "rgba(226, 242, 255, 0.72)");
+  coreGrad.addColorStop(1, "rgba(226, 242, 255, 0)");
+  ctx.fillStyle = coreGrad;
+  ctx.beginPath();
+  ctx.arc(ox, oy, 22, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+export function drawOpticalFlarePreviewCanvas(canvas, config, evalResult) {
+  const { ctx, width, height } = setupCanvas(canvas, 224);
+  const cfg = config || {};
+  const enabled = cfg.enabled !== false;
+  const compareSplit = cfg.compare_split !== false;
+  const splitPos = Math.max(0.02, Math.min(0.98, Number(cfg.split_position ?? 0.5)));
+  const splitX = compareSplit ? Math.round(width * splitPos) : 0;
+
+  const ox = Math.max(0.0, Math.min(1.0, Number(cfg.flare_origin_x ?? 0.72))) * width;
+  const oy = Math.max(0.0, Math.min(1.0, Number(cfg.flare_origin_y ?? 0.28))) * height;
+
+  // 1. Draw BEFORE plate across entire frame
+  ofDrawBaseCinemaScene(ctx, width, height, ox, oy);
+
+  // 2. Draw AFTER optical bloom, halation, anamorphic streak & coaxial ghosts clipped right of splitX
+  if (enabled) {
+    const tintRgb =
+      evalResult && Array.isArray(evalResult.tint_rgb) && evalResult.tint_rgb.length === 3
+        ? evalResult.tint_rgb
+        : [90, 195, 255];
+    const [tr, tg, tb] = tintRgb;
+    const brightness = Math.max(0, Math.min(3, Number(cfg.glow_brightness ?? 1.35)));
+    const glowWidth = Math.max(4, Math.min(240, Number(cfg.glow_width_px ?? 72)));
+    const stretchX = Math.max(1, Math.min(6, Number(cfg.anamorphic_stretch_x ?? 3.8)));
+    const halSpread = Math.max(0, Math.min(120, Number(cfg.halation_spread_px ?? 26)));
+    const aberrPx = Math.max(0, Math.min(12, Number(cfg.aberration_px ?? 3.2)));
+    const blendMode = String(cfg.blend_mode || "screen").toLowerCase();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(splitX, 0, Math.max(0, width - splitX), height);
+    ctx.clip();
+
+    ctx.globalCompositeOperation =
+      blendMode === "add" ? "lighter" : blendMode === "softlight" ? "soft-light" : "screen";
+
+    const scaleFactor = width / 640;
+    const coreR = Math.max(18, glowWidth * 0.72 * scaleFactor);
+    const alphaMain = Math.min(0.95, 0.24 + brightness * 0.28);
+
+    // 2a. Red-orange emulsion halation scatter ring
+    if (halSpread > 0.5) {
+      const halR = Math.max(22, (glowWidth * 0.45 + halSpread * 0.85) * scaleFactor);
+      const halAlpha = Math.min(0.75, (halSpread / 120) * 0.58 * (0.5 + brightness * 0.25));
+      const halGrad = ctx.createRadialGradient(ox, oy, halR * 0.08, ox, oy, halR);
+      halGrad.addColorStop(0, `rgba(255, 118, 64, ${halAlpha.toFixed(3)})`);
+      halGrad.addColorStop(0.5, `rgba(239, 68, 68, ${(halAlpha * 0.48).toFixed(3)})`);
+      halGrad.addColorStop(1, "rgba(220, 38, 38, 0)");
+      ctx.fillStyle = halGrad;
+      ctx.beginPath();
+      ctx.arc(ox, oy, halR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 2b. Spherical optical bloom core
+    const bloomGrad = ctx.createRadialGradient(ox, oy, 2, ox, oy, coreR);
+    bloomGrad.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, alphaMain * 1.15).toFixed(3)})`);
+    bloomGrad.addColorStop(0.28, `rgba(${tr}, ${tg}, ${tb}, ${(alphaMain * 0.78).toFixed(3)})`);
+    bloomGrad.addColorStop(0.68, `rgba(${tr}, ${tg}, ${tb}, ${(alphaMain * 0.22).toFixed(3)})`);
+    bloomGrad.addColorStop(1, `rgba(${tr}, ${tg}, ${tb}, 0)`);
+    ctx.fillStyle = bloomGrad;
+    ctx.beginPath();
+    ctx.arc(ox, oy, coreR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2c. Anamorphic horizontal streak (with chromatic aberration split)
+    if (stretchX > 1.05 && brightness > 0.05) {
+      const streakRx = Math.max(42, glowWidth * stretchX * 0.52 * scaleFactor);
+      const streakRy = Math.max(4, coreR * (0.28 / Math.sqrt(stretchX)));
+      const streakAlpha = Math.min(0.92, alphaMain * (0.42 + (stretchX - 1) * 0.14));
+
+      const drawStreak = (dx, colR, colG, colB, aMul) => {
+        ctx.save();
+        ctx.translate(ox + dx, oy);
+        ctx.scale(streakRx / streakRy, 1);
+        const sg = ctx.createRadialGradient(0, 0, 0.5, 0, 0, streakRy);
+        sg.addColorStop(0, `rgba(${colR}, ${colG}, ${colB}, ${(streakAlpha * aMul).toFixed(3)})`);
+        sg.addColorStop(0.42, `rgba(${colR}, ${colG}, ${colB}, ${(streakAlpha * aMul * 0.42).toFixed(3)})`);
+        sg.addColorStop(1, `rgba(${colR}, ${colG}, ${colB}, 0)`);
+        ctx.fillStyle = sg;
+        ctx.beginPath();
+        ctx.arc(0, 0, streakRy, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      };
+
+      if (aberrPx > 0.4) {
+        const shift = aberrPx * 1.3 * scaleFactor;
+        drawStreak(-shift, 255, 88, 96, 0.48);
+        drawStreak(shift, 64, 168, 255, 0.52);
+      }
+      drawStreak(0, tr, tg, tb, 1.0);
+    }
+
+    // 2d. Coaxial lens reflection ghost elements
+    const ghosts = evalResult && Array.isArray(evalResult.ghost_elements) ? evalResult.ghost_elements : [];
+    const minDim = Math.min(width, height);
+    for (const g of ghosts) {
+      const gx = Number(g.x_norm) * width;
+      const gy = Number(g.y_norm) * height;
+      const gr = Math.max(4, Number(g.radius_norm) * minDim);
+      const op = Math.max(0.03, Math.min(0.9, Number(g.opacity) || 0.25));
+      const hex = String(g.color_hex || "#38bdf8");
+
+      ctx.save();
+      ctx.globalAlpha = op;
+      if (g.kind === "ring") {
+        ctx.strokeStyle = hex;
+        ctx.lineWidth = Math.max(1.2, gr * 0.14);
+        ctx.beginPath();
+        ctx.arc(gx, gy, gr, 0, Math.PI * 2);
+        ctx.stroke();
+        if (aberrPx > 1.2) {
+          ctx.globalAlpha = op * 0.45;
+          ctx.strokeStyle = "#f87171";
+          ctx.beginPath();
+          ctx.arc(gx - aberrPx * 0.4, gy, gr * 1.04, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else if (g.kind === "hex") {
+        ctx.fillStyle = hex;
+        ofDrawHexagon(ctx, gx, gy, gr);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.45)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else if (g.kind === "halo") {
+        const hg = ctx.createRadialGradient(gx, gy, gr * 0.55, gx, gy, gr);
+        hg.addColorStop(0, "rgba(255,255,255,0)");
+        hg.addColorStop(0.75, hex);
+        hg.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = hg;
+        ctx.beginPath();
+        ctx.arc(gx, gy, gr, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        const og = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
+        og.addColorStop(0, "#ffffff");
+        og.addColorStop(0.45, hex);
+        og.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = og;
+        ctx.beginPath();
+        ctx.arc(gx, gy, gr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  // 3. Optical axis dashed line through frame center (0.5, 0.5)
+  ctx.save();
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.34)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(ox, oy);
+  ctx.lineTo(width - ox, height - oy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Frame center optical pivot
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.55)";
+  ctx.beginPath();
+  ctx.moveTo(width * 0.5 - 4, height * 0.5);
+  ctx.lineTo(width * 0.5 + 4, height * 0.5);
+  ctx.moveTo(width * 0.5, height * 0.5 - 4);
+  ctx.lineTo(width * 0.5, height * 0.5 + 4);
+  ctx.stroke();
+
+  // 4. Draggable Flare Origin Reticle
+  ctx.strokeStyle = "#38bdf8";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(ox, oy, 11, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ox - 16, oy);
+  ctx.lineTo(ox - 6, oy);
+  ctx.moveTo(ox + 6, oy);
+  ctx.lineTo(ox + 16, oy);
+  ctx.moveTo(ox, oy - 16);
+  ctx.lineTo(ox, oy - 6);
+  ctx.moveTo(ox, oy + 6);
+  ctx.lineTo(ox, oy + 16);
+  ctx.stroke();
+  ctx.fillStyle = "#e0f2fe";
+  ctx.beginPath();
+  ctx.arc(ox, oy, 2.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 5. Split wipe bar & handle
+  if (compareSplit) {
+    ctx.strokeStyle = "#f8fafc";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(splitX + 0.5, 0);
+    ctx.lineTo(splitX + 0.5, height);
+    ctx.stroke();
+
+    const hy = Math.round(height * 0.5);
+    ctx.fillStyle = "#0f172a";
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(splitX - 9, hy - 14, 18, 28, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#e0f2fe";
+    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("<>", splitX, hy + 3);
+    ctx.textAlign = "left";
+  }
+
+  // Top corner badges
+  ctx.font = "700 9.5px ui-monospace, monospace";
+  if (compareSplit && splitX > 66) {
+    ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+    ctx.fillRect(8, 8, 56, 16);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.fillText("BEFORE", 14, 19);
+  }
+  const afterLabel = enabled ? `OPTICAL ${String(cfg.blend_mode || "screen").toUpperCase()}` : "BYPASS";
+  const tw = ctx.measureText(afterLabel).width + 12;
+  ctx.fillStyle = "rgba(15, 23, 42, 0.84)";
+  ctx.fillRect(width - tw - 8, 8, tw, 16);
+  ctx.fillStyle = enabled ? "#38bdf8" : "#94a3b8";
+  ctx.fillText(afterLabel, width - tw - 2, 19);
+  ctx.restore();
+
+  return { splitX, originX: ox, originY: oy, width, height };
+}
+
+export function drawOpticalFlareFalloffCanvas(canvas, config, evalResult) {
+  const { ctx, width, height } = setupCanvas(canvas, 178);
+  const padL = 34;
+  const padR = 14;
+  const padT = 22;
+  const padB = 22;
+  const plotW = Math.max(40, width - padL - padR);
+  const plotH = Math.max(40, height - padT - padB);
+
+  ctx.fillStyle = "#0b101b";
+  ctx.fillRect(0, 0, width, height);
+
+  // Subtle graticule grid
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.14)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const gy = padT + (plotH * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+    const gx = padL + (plotW * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(gx, padT);
+    ctx.lineTo(gx, padT + plotH);
+    ctx.stroke();
+  }
+
+  const samples =
+    evalResult && Array.isArray(evalResult.falloff_samples) ? evalResult.falloff_samples : [];
+  const maxE = 1.4;
+  const toX = (rNorm) => padL + Math.max(0, Math.min(1, rNorm)) * plotW;
+  const toY = (energy) => padT + (1 - Math.max(0, Math.min(1, energy / maxE))) * plotH;
+
+  if (samples.length >= 2) {
+    const drawCurve = (key, strokeCol, fillCol, lineW) => {
+      ctx.save();
+      ctx.beginPath();
+      samples.forEach((s, i) => {
+        const x = toX(Number(s.radius_norm) || 0);
+        const y = toY(Number(s[key]) || 0);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      if (fillCol) {
+        ctx.lineTo(toX(1), padT + plotH);
+        ctx.lineTo(toX(0), padT + plotH);
+        ctx.closePath();
+        ctx.fillStyle = fillCol;
+        ctx.fill();
+        ctx.beginPath();
+        samples.forEach((s, i) => {
+          const x = toX(Number(s.radius_norm) || 0);
+          const y = toY(Number(s[key]) || 0);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+      }
+      ctx.strokeStyle = strokeCol;
+      ctx.lineWidth = lineW;
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    drawCurve("total_energy", "#f8fafc", "rgba(248, 250, 252, 0.08)", 1.6);
+    drawCurve("anamorphic_streak", "#38bdf8", "rgba(56, 189, 248, 0.12)", 1.8);
+    drawCurve("core_bloom", "#a78bfa", null, 1.5);
+    drawCurve("halation_red", "#f97316", "rgba(249, 115, 22, 0.10)", 1.6);
+  }
+
+  // Axis labels & legend
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.fillText("1.4", 6, padT + 4);
+  ctx.fillText("0.7", 6, padT + plotH * 0.5 + 3);
+  ctx.fillText("0.0", 6, padT + plotH + 3);
+  const maxPx = evalResult ? Number(evalResult.bloom_radius_px || 0) : Number(config?.glow_width_px || 72);
+  ctx.fillText("0 px", padL, height - 6);
+  ctx.fillText(`${Math.round(maxPx * 0.5)} px`, padL + plotW * 0.45, height - 6);
+  ctx.fillText(`${Math.round(maxPx)} px`, padL + plotW - 34, height - 6);
+
+  // Legend pills top row
+  const legend = [
+    ["TOTAL", "#f8fafc"],
+    ["STREAK", "#38bdf8"],
+    ["CORE", "#a78bfa"],
+    ["HALATION", "#f97316"]
+  ];
+  let lx = padL;
+  for (const [label, col] of legend) {
+    ctx.fillStyle = col;
+    ctx.fillRect(lx, 8, 8, 3);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.fillText(label, lx + 11, 13);
+    lx += ctx.measureText(label).width + 22;
+  }
+}

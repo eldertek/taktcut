@@ -12030,3 +12030,268 @@ dialog.nle-dialog.fl-studio-dialog {
     width: 100%;
   }
 }
+
+
+/* ============================================================================
+   OPTICAL GLOW, HALATION & ANAMORPHIC LENS FLARE STUDIO (CYCLE #113)
+   ============================================================================ */
+
+dialog.nle-dialog.of-studio-dialog {
+  width: min(1180px, calc(100vw - 24px));
+  max-width: min(1180px, calc(100vw - 24px));
+  max-height: min(92vh, 900px);
+}
+
+.of-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.of-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.of-dialog-body .code-box,
+.of-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.of-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.of-telemetry-pill {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: #38bdf8;
+  color: #bae6fd;
+  font-weight: 700;
+}
+
+.of-preset-strip,
+.of-toolbar-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.of-toolbar-bar {
+  padding: 7px 9px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  justify-content: space-between;
+}
+
+.of-blend-group,
+.of-toggles-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.of-preset-btn.is-active,
+.of-blend-btn.is-active {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+
+.of-tab-btn.is-active {
+  background: rgba(167, 139, 250, 0.22);
+  border-color: #a78bfa;
+  color: #ede9fe;
+}
+
+.of-workstation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.92fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.of-viewport-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.of-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.of-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 224px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.of-falloff-canvas {
+  display: block;
+  width: 100%;
+  height: 178px;
+}
+
+.of-inspector-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.of-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 2px;
+  min-width: 0;
+}
+
+.of-tab-panel[hidden] {
+  display: none;
+}
+
+.of-param-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.of-param-field label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.of-range-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.of-range-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: #38bdf8;
+}
+
+.of-range-pair .input-num {
+  width: 78px;
+}
+
+.of-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: auto;
+  min-width: 0;
+}
+
+.of-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  min-width: 0;
+}
+
+.of-metric-k {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.of-metric-v {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #bae6fd;
+}
+
+.of-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#optical-flare-studio-dialog .btn:focus-visible,
+#optical-flare-studio-dialog .input-control:focus-visible,
+#optical-flare-studio-dialog input[type="range"]:focus-visible,
+.of-studio-btn:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+@media (max-width: 960px) {
+  .of-workstation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  dialog.nle-dialog.of-studio-dialog {
+    width: calc(100vw - 12px);
+    max-width: calc(100vw - 12px);
+    max-height: min(94vh, 780px);
+  }
+  .of-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .of-studio-btn,
+  .of-preset-btn,
+  .of-blend-btn,
+  .of-tab-btn,
+  .of-actions .btn,
+  #btn-of-reset,
+  #btn-close-optical-flare-studio,
+  #optical-flare-studio-dialog .input-control,
+  #optical-flare-studio-dialog .inline-check,
+  #optical-flare-studio-dialog .fg-drawer-summary {
+    min-width: 44px;
+    min-height: 45px;
+  }
+  #optical-flare-studio-dialog input[type="range"] {
+    min-height: 44px;
+  }
+  #optical-flare-studio-dialog .inline-check {
+    display: inline-flex;
+    align-items: center;
+    padding-inline: 6px;
+  }
+  .of-blend-group,
+  .of-toggles-group {
+    width: 100%;
+  }
+}

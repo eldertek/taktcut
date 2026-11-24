@@ -22174,3 +22174,630 @@ export function applyFilmLookToDocumentClient(doc, rawConfig, opts = {}) {
   };
   return nextDoc;
 }
+
+
+// ============================================================================
+// OPTICAL GLOW, HALATION & ANAMORPHIC LENS FLARE STUDIO (CYCLE #113)
+// ============================================================================
+
+export const ALLOWED_OPTICAL_FLARE_PRESETS = [
+  "anamorphic_blue_streak",
+  "warm_cinema_halation",
+  "golden_hour_sun_flare",
+  "neon_cyber_bloom",
+  "subtle_pro_mist_1_4",
+  "custom"
+];
+
+export const ALLOWED_OPTICAL_FLARE_BLEND_MODES = ["screen", "add", "softlight"];
+export const OPTICAL_FLARE_FALLOFF_SAMPLES = 33;
+
+function ofClamp(val, lo, hi) {
+  return Math.min(hi, Math.max(lo, val));
+}
+
+function ofNum(raw, fallback, lo, hi, decimals = 4) {
+  const n = Number(raw);
+  const safe = Number.isFinite(n) ? ofClamp(n, lo, hi) : fallback;
+  const f = 10 ** decimals;
+  return Math.round(safe * f) / f;
+}
+
+function ofInt(raw, fallback, lo, hi) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, Math.round(n)));
+}
+
+export function opticalFlareHsvToRgb255(hueDeg, sat, val) {
+  const h = (((Number(hueDeg) || 0) % 360) + 360) % 360 / 60;
+  const s = ofClamp(Number(sat) || 0, 0, 1);
+  const v = ofClamp(Number(val) || 0, 0, 1);
+  const c = v * s;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  const m = v - c;
+  let r1 = 0;
+  let g1 = 0;
+  let b1 = 0;
+  if (h < 1) [r1, g1, b1] = [c, x, 0];
+  else if (h < 2) [r1, g1, b1] = [x, c, 0];
+  else if (h < 3) [r1, g1, b1] = [0, c, x];
+  else if (h < 4) [r1, g1, b1] = [0, x, c];
+  else if (h < 5) [r1, g1, b1] = [x, 0, c];
+  else [r1, g1, b1] = [c, 0, x];
+  return [
+    Math.round(ofClamp((r1 + m) * 255, 0, 255)),
+    Math.round(ofClamp((g1 + m) * 255, 0, 255)),
+    Math.round(ofClamp((b1 + m) * 255, 0, 255))
+  ];
+}
+
+function ofRgbToHex(rgb) {
+  return `#${rgb.map((ch) => Math.max(0, Math.min(255, Math.round(ch))).toString(16).padStart(2, "0")).join("")}`;
+}
+
+export const OPTICAL_FLARE_PRESETS_CLIENT = [
+  {
+    preset: "anamorphic_blue_streak",
+    label: "Anamorphic Blue Streak",
+    description: "2x scope cyan-blue horizontal streak with crisp coaxial iris ghosts.",
+    default_config: {
+      enabled: true,
+      preset: "anamorphic_blue_streak",
+      threshold_luma: 0.72,
+      glow_brightness: 1.35,
+      glow_width_px: 72.0,
+      anamorphic_stretch_x: 3.8,
+      color_tint_hue: 205.0,
+      halation_spread_px: 26.0,
+      flare_origin_x: 0.72,
+      flare_origin_y: 0.28,
+      flare_elements_count: 7,
+      ghost_intensity_pct: 62.0,
+      aberration_px: 3.2,
+      blend_mode: "screen",
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "warm_cinema_halation",
+    label: "Warm Cinema Halation",
+    description: "35mm tungsten emulsion red-orange halation scatter with soft spherical bloom.",
+    default_config: {
+      enabled: true,
+      preset: "warm_cinema_halation",
+      threshold_luma: 0.66,
+      glow_brightness: 1.05,
+      glow_width_px: 54.0,
+      anamorphic_stretch_x: 1.15,
+      color_tint_hue: 18.0,
+      halation_spread_px: 58.0,
+      flare_origin_x: 0.64,
+      flare_origin_y: 0.34,
+      flare_elements_count: 3,
+      ghost_intensity_pct: 34.0,
+      aberration_px: 1.6,
+      blend_mode: "screen",
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "golden_hour_sun_flare",
+    label: "Golden Hour Sun Flare",
+    description: "Warm backlit amber sun flare with 10 polygonal aperture ghosts and wide bloom.",
+    default_config: {
+      enabled: true,
+      preset: "golden_hour_sun_flare",
+      threshold_luma: 0.62,
+      glow_brightness: 1.75,
+      glow_width_px: 118.0,
+      anamorphic_stretch_x: 1.85,
+      color_tint_hue: 38.0,
+      halation_spread_px: 44.0,
+      flare_origin_x: 0.78,
+      flare_origin_y: 0.22,
+      flare_elements_count: 10,
+      ghost_intensity_pct: 78.0,
+      aberration_px: 4.4,
+      blend_mode: "add",
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "neon_cyber_bloom",
+    label: "Neon Cyber Bloom",
+    description: "Low-threshold magenta/cyan neon specular bloom with stretched anamorphic streaks.",
+    default_config: {
+      enabled: true,
+      preset: "neon_cyber_bloom",
+      threshold_luma: 0.44,
+      glow_brightness: 1.95,
+      glow_width_px: 96.0,
+      anamorphic_stretch_x: 2.65,
+      color_tint_hue: 315.0,
+      halation_spread_px: 38.0,
+      flare_origin_x: 0.28,
+      flare_origin_y: 0.32,
+      flare_elements_count: 8,
+      ghost_intensity_pct: 68.0,
+      aberration_px: 5.8,
+      blend_mode: "add",
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "subtle_pro_mist_1_4",
+    label: "Subtle Pro-Mist 1/4",
+    description: "Restrained optical diffusion filter halation preserving highlight roll-off.",
+    default_config: {
+      enabled: true,
+      preset: "subtle_pro_mist_1_4",
+      threshold_luma: 0.76,
+      glow_brightness: 0.68,
+      glow_width_px: 42.0,
+      anamorphic_stretch_x: 1.0,
+      color_tint_hue: 34.0,
+      halation_spread_px: 32.0,
+      flare_origin_x: 0.58,
+      flare_origin_y: 0.38,
+      flare_elements_count: 2,
+      ghost_intensity_pct: 18.0,
+      aberration_px: 0.6,
+      blend_mode: "softlight",
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  },
+  {
+    preset: "custom",
+    label: "Custom Optical Rig",
+    description: "Balanced custom starting point for Sapphire S_Glow and Lens Reflections.",
+    default_config: {
+      enabled: true,
+      preset: "custom",
+      threshold_luma: 0.7,
+      glow_brightness: 1.1,
+      glow_width_px: 64.0,
+      anamorphic_stretch_x: 2.0,
+      color_tint_hue: 195.0,
+      halation_spread_px: 24.0,
+      flare_origin_x: 0.68,
+      flare_origin_y: 0.32,
+      flare_elements_count: 5,
+      ghost_intensity_pct: 48.0,
+      aberration_px: 2.0,
+      blend_mode: "screen",
+      compare_split: true,
+      split_position: 0.5,
+      width: 1920,
+      height: 1080,
+      fps: 24.0
+    }
+  }
+];
+
+export function listOpticalFlarePresetsClient() {
+  return OPTICAL_FLARE_PRESETS_CLIENT.map((p) => ({
+    ...p,
+    default_config: { ...p.default_config }
+  }));
+}
+
+export function createDefaultOpticalFlareConfigClient() {
+  return { ...OPTICAL_FLARE_PRESETS_CLIENT[0].default_config };
+}
+
+export function normalizeOpticalFlareConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const presetRaw = String(src.preset || "anamorphic_blue_streak").trim().toLowerCase();
+  const preset = ALLOWED_OPTICAL_FLARE_PRESETS.includes(presetRaw)
+    ? presetRaw
+    : "anamorphic_blue_streak";
+  const found =
+    OPTICAL_FLARE_PRESETS_CLIENT.find((p) => p.preset === preset) || OPTICAL_FLARE_PRESETS_CLIENT[0];
+  const base = { ...found.default_config };
+  const merged = { ...base, ...src, preset };
+  const blendRaw = String(merged.blend_mode || "screen").trim().toLowerCase();
+  const blend_mode = ALLOWED_OPTICAL_FLARE_BLEND_MODES.includes(blendRaw) ? blendRaw : "screen";
+  return {
+    enabled: merged.enabled !== false,
+    preset,
+    threshold_luma: ofNum(merged.threshold_luma, base.threshold_luma, 0.1, 0.98, 4),
+    glow_brightness: ofNum(merged.glow_brightness, base.glow_brightness, 0.0, 3.0, 3),
+    glow_width_px: ofNum(merged.glow_width_px, base.glow_width_px, 4.0, 240.0, 2),
+    anamorphic_stretch_x: ofNum(merged.anamorphic_stretch_x, base.anamorphic_stretch_x, 1.0, 6.0, 3),
+    color_tint_hue: ofNum(merged.color_tint_hue, base.color_tint_hue, 0.0, 360.0, 2),
+    halation_spread_px: ofNum(merged.halation_spread_px, base.halation_spread_px, 0.0, 120.0, 2),
+    flare_origin_x: ofNum(merged.flare_origin_x, base.flare_origin_x, 0.0, 1.0, 4),
+    flare_origin_y: ofNum(merged.flare_origin_y, base.flare_origin_y, 0.0, 1.0, 4),
+    flare_elements_count: ofInt(merged.flare_elements_count, base.flare_elements_count, 0, 12),
+    ghost_intensity_pct: ofNum(merged.ghost_intensity_pct, base.ghost_intensity_pct, 0.0, 100.0, 2),
+    aberration_px: ofNum(merged.aberration_px, base.aberration_px, 0.0, 12.0, 2),
+    blend_mode,
+    compare_split: merged.compare_split !== false,
+    split_position: ofNum(merged.split_position, 0.5, 0.0, 1.0, 4),
+    width: ofInt(merged.width, 1920, 320, 7680),
+    height: ofInt(merged.height, 1080, 240, 4320),
+    fps: ofNum(merged.fps, 24.0, 1.0, 120.0, 3)
+  };
+}
+
+function generateOpticalFlareGhostsClient(cfg) {
+  if (!cfg.enabled || cfg.flare_elements_count <= 0 || cfg.ghost_intensity_pct <= 0) {
+    return [];
+  }
+  const ox = cfg.flare_origin_x;
+  const oy = cfg.flare_origin_y;
+  const vx = 0.5 - ox;
+  const vy = 0.5 - oy;
+  const count = cfg.flare_elements_count;
+  const intensityScale =
+    (cfg.ghost_intensity_pct / 100.0) * ofClamp(0.35 + cfg.glow_brightness * 0.45, 0.1, 1.0);
+  const kinds = ["halo", "hex", "ring", "orb"];
+  const elements = [];
+  for (let idx = 0; idx < count; idx += 1) {
+    const frac = (idx + 0.5) / count;
+    const tAxis = Math.round((0.32 + frac * 1.88) * 10000) / 10000;
+    const gx = Math.round(ofClamp(ox + vx * tAxis, -0.15, 1.15) * 10000) / 10000;
+    const gy = Math.round(ofClamp(oy + vy * tAxis, -0.15, 1.15) * 10000) / 10000;
+    const wave = 0.5 + 0.5 * Math.sin((idx + 1) * 1.73 + 0.4);
+    const baseRad = 0.022 + wave * 0.068 + (cfg.glow_width_px / 240.0) * 0.028;
+    const radiusNorm = Math.round(ofClamp(baseRad, 0.015, 0.14) * 10000) / 10000;
+    const distFromCenter = Math.abs(tAxis - 1.15);
+    const opFalloff = Math.max(0.25, 1.0 - distFromCenter * 0.42);
+    const opacity =
+      Math.round(ofClamp(intensityScale * opFalloff * (0.45 + 0.4 * wave), 0.04, 0.92) * 10000) /
+      10000;
+    const hueShift = (idx - count * 0.45) * (8.5 + cfg.aberration_px * 3.2);
+    const ghostHue = Math.round(((((cfg.color_tint_hue + hueShift) % 360) + 360) % 360) * 100) / 100;
+    const rgb = opticalFlareHsvToRgb255(ghostHue, 0.78, 0.96);
+    elements.push({
+      index: idx,
+      t_axis: tAxis,
+      x_norm: gx,
+      y_norm: gy,
+      radius_norm: radiusNorm,
+      opacity,
+      kind: kinds[idx % kinds.length],
+      hue_deg: ghostHue,
+      color_hex: ofRgbToHex(rgb)
+    });
+  }
+  return elements;
+}
+
+export function evaluateOpticalFlareStudioClient(rawConfig, opts = {}) {
+  const cfg = normalizeOpticalFlareConfigClient(rawConfig);
+  const n = Math.max(9, Math.min(129, Math.round(Number(opts.sample_count || 33))));
+  const tintRgb = opticalFlareHsvToRgb255(cfg.color_tint_hue, 0.76, 0.98);
+  const axisAngleDeg =
+    Math.round(((Math.atan2(0.5 - cfg.flare_origin_y, 0.5 - cfg.flare_origin_x) * 180) / Math.PI) * 100) /
+    100;
+
+  if (!cfg.enabled) {
+    const zeroSamples = [];
+    for (let i = 0; i < n; i += 1) {
+      const rNorm = i / (n - 1);
+      zeroSamples.push({
+        radius_norm: Math.round(rNorm * 10000) / 10000,
+        radius_px: Math.round(rNorm * cfg.glow_width_px * 100) / 100,
+        core_bloom: 0,
+        anamorphic_streak: 0,
+        halation_red: 0,
+        total_energy: 0
+      });
+    }
+    return {
+      enabled: false,
+      preset: cfg.preset,
+      blend_mode: cfg.blend_mode,
+      peak_luminance_headroom_pct: 100.0,
+      anamorphic_streak_aspect: 1.0,
+      halation_energy_pct: 0.0,
+      bloom_radius_px: 0.0,
+      ghost_axis_angle_deg: axisAngleDeg,
+      ghost_count: 0,
+      chromatic_fringe_px: 0.0,
+      tint_rgb: tintRgb,
+      falloff_samples: zeroSamples,
+      ghost_elements: []
+    };
+  }
+
+  const thresholdDrive = ofClamp((1.05 - cfg.threshold_luma) / 0.95, 0.1, 1.0);
+  const blendGain = { screen: 0.88, add: 1.18, softlight: 0.64 }[cfg.blend_mode] || 0.88;
+  const bloomAmp = ofClamp(
+    (cfg.glow_brightness / 3.0) * blendGain * (0.55 + 0.45 * thresholdDrive),
+    0.0,
+    1.4
+  );
+  const maxRadiusPx = Math.max(
+    8.0,
+    cfg.glow_width_px * (1.0 + (cfg.anamorphic_stretch_x - 1.0) * 0.42)
+  );
+  const sigmaCore = Math.max(2.0, cfg.glow_width_px * 0.28);
+  const sigmaStreak = Math.max(4.0, cfg.glow_width_px * cfg.anamorphic_stretch_x * 0.36);
+  const sigmaHal = cfg.halation_spread_px > 0 ? Math.max(1.0, cfg.halation_spread_px * 0.48) : 1.0;
+  const halAmp =
+    cfg.halation_spread_px > 0
+      ? ofClamp((cfg.halation_spread_px / 120.0) * (0.42 + 0.32 * thresholdDrive), 0.0, 0.95)
+      : 0.0;
+  const streakAmp = ofClamp(
+    bloomAmp * (0.28 + 0.16 * (cfg.anamorphic_stretch_x - 1.0)),
+    0.0,
+    1.2
+  );
+
+  const samples = [];
+  let halationIntegral = 0;
+  let peakTotal = 0;
+  for (let i = 0; i < n; i += 1) {
+    const rNorm = i / (n - 1);
+    const rPx = rNorm * maxRadiusPx;
+    const core =
+      bloomAmp *
+      (0.68 * Math.exp(-0.5 * (rPx / sigmaCore) ** 2) +
+        0.32 * Math.exp(-rPx / (sigmaCore * 1.9)));
+    const streak =
+      cfg.anamorphic_stretch_x > 1.02 ? streakAmp * Math.exp(-rPx / sigmaStreak) : core * 0.35;
+    const halation =
+      cfg.halation_spread_px > 0
+        ? halAmp *
+          Math.exp(-rPx / sigmaHal) *
+          (0.35 + 0.65 * Math.exp(-0.25 * (rPx / sigmaHal) ** 2))
+        : 0.0;
+    const total = ofClamp(core + streak * 0.55 + halation * 0.45, 0.0, 1.5);
+    peakTotal = Math.max(peakTotal, total);
+    halationIntegral += halation;
+    samples.push({
+      radius_norm: Math.round(rNorm * 10000) / 10000,
+      radius_px: Math.round(rPx * 100) / 100,
+      core_bloom: Math.round(core * 10000) / 10000,
+      anamorphic_streak: Math.round(streak * 10000) / 10000,
+      halation_red: Math.round(halation * 10000) / 10000,
+      total_energy: Math.round(total * 10000) / 10000
+    });
+  }
+
+  const ghosts = generateOpticalFlareGhostsClient(cfg);
+  return {
+    enabled: true,
+    preset: cfg.preset,
+    blend_mode: cfg.blend_mode,
+    peak_luminance_headroom_pct: Math.round(ofClamp(100.0 - peakTotal * 62.0, 0.0, 100.0) * 100) / 100,
+    anamorphic_streak_aspect: Math.round(cfg.anamorphic_stretch_x * 100) / 100,
+    halation_energy_pct: Math.round(ofClamp((halationIntegral / n) * 185.0, 0.0, 100.0) * 100) / 100,
+    bloom_radius_px: Math.round(maxRadiusPx * 10) / 10,
+    ghost_axis_angle_deg: axisAngleDeg,
+    ghost_count: ghosts.length,
+    chromatic_fringe_px: Math.round(cfg.aberration_px * 100) / 100,
+    tint_rgb: tintRgb,
+    falloff_samples: samples,
+    ghost_elements: ghosts
+  };
+}
+
+export function compileOpticalFlareFiltergraphClient(rawConfig) {
+  const cfg = normalizeOpticalFlareConfigClient(rawConfig);
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      preset: cfg.preset,
+      blend_mode: cfg.blend_mode,
+      threshold_vf: "null",
+      bloom_blur_vf: "null",
+      halation_vf: "null",
+      aberration_vf: "null",
+      blend_vf: "null",
+      filter_complex: "[0:v]null[vout]",
+      vf_chain: "null",
+      ffmpeg_command: 'ffmpeg -i input.mp4 -vf "null" -c:a copy output.mp4',
+      warnings: []
+    };
+  }
+
+  const t0 = ofClamp(cfg.threshold_luma - 0.06, 0.04, 0.92).toFixed(3);
+  const t1 = ofClamp(cfg.threshold_luma, 0.1, 0.98).toFixed(3);
+  const peakGain = ofClamp(0.45 + cfg.glow_brightness * 0.22, 0.1, 1.0).toFixed(3);
+  const thresholdVf = `curves=all='0/0 ${t0}/0 ${t1}/0.12 1/${peakGain}'`;
+
+  const sigmaV = ofClamp(cfg.glow_width_px * 0.22, 1.0, 60.0);
+  const sigmaH = ofClamp(sigmaV * cfg.anamorphic_stretch_x, 1.0, 220.0);
+  const [tr, tg, tb] = opticalFlareHsvToRgb255(cfg.color_tint_hue, 0.65, 1.0);
+  const rs = ((tr / 255.0 - 0.5) * 0.45).toFixed(3);
+  const gs = ((tg / 255.0 - 0.5) * 0.45).toFixed(3);
+  const bs = ((tb / 255.0 - 0.5) * 0.45).toFixed(3);
+  const bloomBlurVf = `gblur=sigma=${sigmaH.toFixed(2)}:sigmaV=${sigmaV.toFixed(2)},colorbalance=rh=${rs}:gh=${gs}:bh=${bs}`;
+
+  let halationVf = "null";
+  if (cfg.halation_spread_px > 0.5) {
+    const halSigma = ofClamp(cfg.halation_spread_px * 0.35, 1.0, 48.0).toFixed(2);
+    const halRed = ofClamp((cfg.halation_spread_px / 120.0) * 0.42, 0.04, 0.42);
+    halationVf = `gblur=sigma=${halSigma},colorbalance=rm=${halRed.toFixed(3)}:gm=${(halRed * 0.22).toFixed(3)}:bm=${(-halRed * 0.35).toFixed(3)}`;
+  }
+
+  let aberrationVf = "null";
+  if (cfg.aberration_px >= 0.5) {
+    const shiftPx = Math.max(1, Math.round(cfg.aberration_px));
+    aberrationVf = `rgbashift=rh=${shiftPx}:bh=${-shiftPx}:edge=smear`;
+  }
+
+  const ffBlend = { screen: "screen", add: "addition", softlight: "softlight" }[cfg.blend_mode] || "screen";
+  const blendOp = ofClamp(cfg.glow_brightness / 2.2, 0.08, 1.0).toFixed(3);
+  const blendVf = `blend=all_mode=${ffBlend}:all_opacity=${blendOp}`;
+
+  const glowParts = [thresholdVf, bloomBlurVf];
+  if (halationVf !== "null") glowParts.push(halationVf);
+  if (aberrationVf !== "null") glowParts.push(aberrationVf);
+  const filterComplex = `[0:v]split=2[base][hi];[hi]${glowParts.join(",")}[bloom];[base][bloom]${blendVf}[vout]`;
+  const vfChain =
+    aberrationVf !== "null"
+      ? `${thresholdVf},${bloomBlurVf},${aberrationVf}`
+      : `${thresholdVf},${bloomBlurVf}`;
+
+  const warnings = [];
+  if (cfg.glow_brightness >= 2.2 && cfg.blend_mode === "add") {
+    warnings.push("Additive blend with glow_brightness >= 2.2 may clip peak specular highlights.");
+  }
+  if (cfg.anamorphic_stretch_x >= 5.0) {
+    warnings.push("Extreme anamorphic stretch (>= 5.0x) spans across wide horizontal frame regions.");
+  }
+  if (cfg.aberration_px >= 8.0) {
+    warnings.push("Heavy chromatic aberration (>= 8.0 px) introduces strong red/blue edge fringing.");
+  }
+
+  return {
+    enabled: true,
+    preset: cfg.preset,
+    blend_mode: cfg.blend_mode,
+    threshold_vf: thresholdVf,
+    bloom_blur_vf: bloomBlurVf,
+    halation_vf: halationVf,
+    aberration_vf: aberrationVf,
+    blend_vf: blendVf,
+    filter_complex: filterComplex,
+    vf_chain: vfChain,
+    ffmpeg_command: `ffmpeg -i input.mp4 -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:a copy output.mp4`,
+    warnings
+  };
+}
+
+export function exportOpticalFlareJsonClient(rawConfig, opts = {}) {
+  const cfg = normalizeOpticalFlareConfigClient(rawConfig);
+  const cleanedTitle =
+    String(opts.title || "TAKTCUT_OPTICAL_FLARE_STUDIO")
+      .trim()
+      .replace(/[^A-Za-z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "TAKTCUT_OPTICAL_FLARE_STUDIO";
+  const evalRes = evaluateOpticalFlareStudioClient(cfg, { sample_count: OPTICAL_FLARE_FALLOFF_SAMPLES });
+  const compiled = compileOpticalFlareFiltergraphClient(cfg);
+  const hosts = [
+    "Boris FX Sapphire S_Glow / S_LensFlare",
+    "DaVinci ResolveFX Lens Reflections & Halation",
+    "Red Giant Knoll Light Factory",
+    "FFmpeg Anisotropic Optical Bloom Pipeline"
+  ];
+  const payload = {
+    schema_version: "taktcut.optical_flare_studio.v1",
+    title: cleanedTitle,
+    preset: cfg.preset,
+    compatible_hosts: hosts,
+    optical_flare: {
+      enabled: cfg.enabled,
+      preset: cfg.preset,
+      threshold_luma: cfg.threshold_luma,
+      glow_brightness: cfg.glow_brightness,
+      glow_width_px: cfg.glow_width_px,
+      anamorphic_stretch_x: cfg.anamorphic_stretch_x,
+      color_tint_hue: cfg.color_tint_hue,
+      halation_spread_px: cfg.halation_spread_px,
+      flare_origin_x: cfg.flare_origin_x,
+      flare_origin_y: cfg.flare_origin_y,
+      flare_elements_count: cfg.flare_elements_count,
+      ghost_intensity_pct: cfg.ghost_intensity_pct,
+      aberration_px: cfg.aberration_px,
+      blend_mode: cfg.blend_mode
+    },
+    metrics: {
+      peak_luminance_headroom_pct: evalRes.peak_luminance_headroom_pct,
+      anamorphic_streak_aspect: evalRes.anamorphic_streak_aspect,
+      halation_energy_pct: evalRes.halation_energy_pct,
+      bloom_radius_px: evalRes.bloom_radius_px,
+      ghost_axis_angle_deg: evalRes.ghost_axis_angle_deg,
+      ghost_count: evalRes.ghost_count,
+      chromatic_fringe_px: evalRes.chromatic_fringe_px,
+      tint_rgb: evalRes.tint_rgb
+    },
+    falloff_samples: evalRes.falloff_samples,
+    ghost_elements: evalRes.ghost_elements,
+    ffmpeg: {
+      threshold_vf: compiled.threshold_vf,
+      bloom_blur_vf: compiled.bloom_blur_vf,
+      halation_vf: compiled.halation_vf,
+      aberration_vf: compiled.aberration_vf,
+      blend_vf: compiled.blend_vf,
+      filter_complex: compiled.filter_complex,
+      vf_chain: compiled.vf_chain
+    }
+  };
+  return {
+    schema_version: "taktcut.optical_flare_studio.v1",
+    title: cleanedTitle,
+    preset: cfg.preset,
+    compatible_hosts: hosts,
+    json_text: JSON.stringify(payload, null, 2),
+    filename: `${cleanedTitle.toLowerCase()}_${cfg.preset}_optical_flare_studio.json`,
+    saved_path: null
+  };
+}
+
+export function applyOpticalFlareToDocumentClient(doc, rawConfig, opts = {}) {
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const videoTracks = (nextDoc.tracks || []).filter((t) => t.kind === "video");
+  const trackIndex = Number(opts.track_index ?? 1);
+  const clipIndex = Number(opts.clip_index ?? 0);
+  let trk = videoTracks.find((t) => Number(t.index) === trackIndex) || videoTracks[0];
+  if (!trk || !Array.isArray(trk.clips) || trk.clips.length === 0) {
+    throw new Error("No video clip available in timeline document.");
+  }
+  const safeIdx = Math.max(0, Math.min(trk.clips.length - 1, clipIndex));
+  const clip = trk.clips[safeIdx];
+  const docFps =
+    nextDoc.fps && Number(nextDoc.fps.num) > 0 && Number(nextDoc.fps.den) > 0
+      ? Number(nextDoc.fps.num) / Number(nextDoc.fps.den)
+      : 24.0;
+  const scopedCfg = normalizeOpticalFlareConfigClient({
+    ...(rawConfig || {}),
+    width: Number(nextDoc.width || 1920),
+    height: Number(nextDoc.height || 1080),
+    fps: Math.round(docFps * 1000) / 1000
+  });
+  const evalRes = evaluateOpticalFlareStudioClient(scopedCfg, {
+    sample_count: OPTICAL_FLARE_FALLOFF_SAMPLES
+  });
+  const compiled = compileOpticalFlareFiltergraphClient(scopedCfg);
+
+  trk.clips[safeIdx] = {
+    ...clip,
+    optical_flare: {
+      enabled: scopedCfg.enabled,
+      preset: scopedCfg.preset,
+      threshold_luma: scopedCfg.threshold_luma,
+      glow_brightness: scopedCfg.glow_brightness,
+      glow_width_px: scopedCfg.glow_width_px,
+      anamorphic_stretch_x: scopedCfg.anamorphic_stretch_x,
+      color_tint_hue: scopedCfg.color_tint_hue,
+      halation_spread_px: scopedCfg.halation_spread_px,
+      flare_origin_x: scopedCfg.flare_origin_x,
+      flare_origin_y: scopedCfg.flare_origin_y,
+      flare_elements_count: scopedCfg.flare_elements_count,
+      ghost_intensity_pct: scopedCfg.ghost_intensity_pct,
+      aberration_px: scopedCfg.aberration_px,
+      blend_mode: scopedCfg.blend_mode,
+      peak_luminance_headroom_pct: evalRes.peak_luminance_headroom_pct,
+      anamorphic_streak_aspect: evalRes.anamorphic_streak_aspect,
+      halation_energy_pct: evalRes.halation_energy_pct,
+      ffmpeg_vf: compiled.filter_complex.slice(0, 16384)
+    }
+  };
+  return nextDoc;
+}

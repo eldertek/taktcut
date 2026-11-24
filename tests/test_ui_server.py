@@ -15611,3 +15611,269 @@ def test_ui_playwright_film_look_studio_desktop_and_mobile(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+
+def test_ui_optical_flare_studio_endpoints_security_and_demo_parity(
+    ui_server: tuple[str, Path],
+) -> None:
+    base_url, workspace = ui_server
+
+    g_status, _, g_raw = _http_call(f"{base_url}/api/fx/optical-flare/presets")
+    assert g_status == 200
+    meta = json.loads(g_raw.decode("utf-8"))
+    assert len(meta["presets"]) == 6
+    assert "anamorphic_blue_streak" in meta["preset_ids"]
+    assert "warm_cinema_halation" in meta["preset_ids"]
+    assert meta["blend_modes"] == ["screen", "add", "softlight"]
+
+    ev_status, _, ev_raw = _http_call(
+        f"{base_url}/api/fx/optical-flare/evaluate",
+        method="POST",
+        payload={
+            "config": {
+                "preset": "anamorphic_blue_streak",
+                "anamorphic_stretch_x": 4.2,
+                "flare_elements_count": 8,
+            }
+        },
+    )
+    assert ev_status == 200
+    ev_payload = json.loads(ev_raw.decode("utf-8"))
+    assert len(ev_payload["falloff_samples"]) == 33
+    assert ev_payload["ghost_count"] == 8
+    assert ev_payload["anamorphic_streak_aspect"] == 4.2
+
+    c_status, _, c_raw = _http_call(
+        f"{base_url}/api/fx/optical-flare/compile",
+        method="POST",
+        payload={
+            "config": {
+                "preset": "golden_hour_sun_flare",
+                "blend_mode": "add",
+                "aberration_px": 4.0,
+            }
+        },
+    )
+    assert c_status == 200
+    compiled = json.loads(c_raw.decode("utf-8"))
+    assert "curves=" in compiled["threshold_vf"]
+    assert "gblur=" in compiled["bloom_blur_vf"]
+    assert "rgbashift=" in compiled["aberration_vf"]
+    assert "all_mode=addition" in compiled["blend_vf"]
+    assert "split=2[base][hi]" in compiled["filter_complex"]
+
+    ex_status, _, ex_raw = _http_call(
+        f"{base_url}/api/fx/optical-flare/export-json",
+        method="POST",
+        payload={
+            "config": {"preset": "neon_cyber_bloom", "blend_mode": "add"},
+            "title": "Neon Anamorphic Lab",
+            "out_path": "exports/neon_optical_flare.json",
+        },
+    )
+    assert ex_status == 200
+    exported = json.loads(ex_raw.decode("utf-8"))
+    assert exported["saved_path"] == "exports/neon_optical_flare.json"
+    assert (workspace / "exports" / "neon_optical_flare.json").is_file()
+    assert exported["schema_version"] == "taktcut.optical_flare_studio.v1"
+
+    # Path traversal blocked with 403
+    trav_status, _, _ = _http_call(
+        f"{base_url}/api/fx/optical-flare/export-json",
+        method="POST",
+        payload={
+            "config": {"preset": "anamorphic_blue_streak"},
+            "out_path": "../escape_flare.json",
+        },
+    )
+    assert trav_status == 403
+
+    # Download with traversal filename sanitized
+    dl_status, dl_headers, dl_raw = _http_call(
+        f"{base_url}/api/fx/optical-flare/download",
+        method="POST",
+        payload={
+            "config": {"preset": "warm_cinema_halation"},
+            "title": "Halation DL",
+            "filename": "../../evil_flare.json",
+        },
+    )
+    assert dl_status == 200
+    disp = dl_headers.get("content-disposition", "")
+    assert "attachment;" in disp
+    assert ".." not in disp
+    assert "taktcut.optical_flare_studio.v1" in dl_raw.decode("utf-8")
+
+    # Apply to Timeline document
+    from taktcut.ui.samples import build_sample_timeline
+
+    doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+    ap_status, _, ap_raw = _http_call(
+        f"{base_url}/api/fx/optical-flare/apply",
+        method="POST",
+        payload={
+            "document": doc_payload,
+            "config": {
+                "preset": "golden_hour_sun_flare",
+                "anamorphic_stretch_x": 2.8,
+                "blend_mode": "add",
+            },
+            "track_index": 1,
+            "clip_index": 0,
+        },
+    )
+    assert ap_status == 200
+    applied = json.loads(ap_raw.decode("utf-8"))
+    assert applied["changed"] is True
+    assert applied["validation"]["valid"] is True
+    v1 = next(t for t in applied["document"]["tracks"] if t["kind"] == "video")
+    of_track = v1["clips"][0]["optical_flare"]
+    assert of_track["preset"] == "golden_hour_sun_flare"
+    assert of_track["anamorphic_stretch_x"] == 2.8
+    assert of_track["blend_mode"] == "add"
+
+    # Verify static-demo JS parity via Node
+    ops_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "taktcut"
+        / "ui"
+        / "assets"
+        / "timeline_ops.js"
+    )
+    node_script = (
+        f"import * as ops from '{ops_path.as_uri()}';"
+        "const presets = ops.listOpticalFlarePresetsClient();"
+        "if (presets.length !== 6) throw new Error('Expected 6 presets');"
+        "const cfg = ops.normalizeOpticalFlareConfigClient("
+        "{ preset: 'golden_hour_sun_flare', blend_mode: 'add' });"
+        "const ev = ops.evaluateOpticalFlareStudioClient(cfg);"
+        "if (ev.falloff_samples.length !== 33 || ev.ghost_count !== 10)"
+        " throw new Error('Eval mismatch');"
+        "const comp = ops.compileOpticalFlareFiltergraphClient(cfg);"
+        "if (!comp.filter_complex.includes('split=2[base][hi]'))"
+        " throw new Error('Compile mismatch');"
+        "const exp = ops.exportOpticalFlareJsonClient(cfg, { title: 'DemoFlare' });"
+        "if (exp.schema_version !== 'taktcut.optical_flare_studio.v1')"
+        " throw new Error('Schema mismatch');"
+        "console.log('OK_OPTICAL_FLARE_DEMO');"
+    )
+    res = subprocess.run(
+        ["node", "--input-type=module", "-e", node_script],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "OK_OPTICAL_FLARE_DEMO" in res.stdout
+
+
+def test_ui_playwright_optical_flare_studio_desktop_and_mobile(
+    ui_server: tuple[str, Path],
+) -> None:
+    pw = pytest.importorskip("playwright.sync_api")
+    base_url, _ = ui_server
+
+    with pw.sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#btn-timeline-optical-flare-studio")
+
+            # Open via Shift+U shortcut
+            page.keyboard.press("Shift+U")
+            page.wait_for_selector("#optical-flare-studio-dialog[open]")
+
+            # Switch preset to Golden Hour Sun Flare and verify live telemetry update
+            page.click('.of-preset-btn[data-of-preset="golden_hour_sun_flare"]')
+            assert page.locator("#of-metric-ghosts").inner_text().strip() == "10"
+
+            # Switch blend mode to Soft Light
+            page.click('.of-blend-btn[data-of-blend="softlight"]')
+            assert (
+                page.locator('.of-blend-btn[data-of-blend="softlight"]').get_attribute(
+                    "aria-pressed"
+                )
+                == "true"
+            )
+
+            # Drag flare origin reticle on preview canvas
+            canvas = page.locator("#of-preview-canvas")
+            box = canvas.bounding_box()
+            assert box is not None
+            page.mouse.move(box["x"] + box["width"] * 0.25, box["y"] + box["height"] * 0.35)
+            page.mouse.down()
+            page.mouse.move(box["x"] + box["width"] * 0.22, box["y"] + box["height"] * 0.42)
+            page.mouse.up()
+            origin_txt = page.locator("#of-origin-readout").inner_text()
+            assert "X 0.2" in origin_txt
+
+            # Switch tabs and check controls
+            page.click("#btn-of-tab-ghosts")
+            assert page.locator("#of-panel-ghosts").is_visible()
+            page.click("#btn-of-tab-rig")
+            assert page.locator("#of-panel-rig").is_visible()
+
+            # Export JSON & Apply to Timeline
+            page.click("#btn-of-export-json")
+            page.wait_for_selector("#of-fg-drawer[open]")
+            assert "taktcut.optical_flare_studio.v1" in (
+                page.locator("#of-json-preview").text_content() or ""
+            )
+            page.click("#btn-of-apply-timeline")
+            page.wait_for_function(
+                "() => document.getElementById('of-status-note').textContent"
+                ".includes('Applied Optical Flare')"
+            )
+
+            # Verify FR i18n parity and zero en/em-dashes
+            page.click("#btn-close-optical-flare-studio")
+            page.click("#lang-fr")
+            page.click("#btn-timeline-optical-flare-studio")
+            page.wait_for_selector("#optical-flare-studio-dialog[open]")
+            fr_txt = page.locator("#optical-flare-studio-dialog").text_content() or ""
+            assert "Anamorphique" in fr_txt
+            assert "\u2013" not in fr_txt and "\u2014" not in fr_txt
+            page.click("#btn-close-optical-flare-studio")
+            page.click("#lang-en")
+            page.click("#btn-timeline-optical-flare-studio")
+            page.wait_for_selector("#optical-flare-studio-dialog[open]")
+
+            # Desktop zero horizontal overflow
+            overflow_desktop = page.evaluate(
+                "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+            )
+            assert overflow_desktop <= 0
+
+            # Mobile 375x812 check
+            page.set_viewport_size({"width": 375, "height": 812})
+            overflow_mobile = page.evaluate(
+                "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+            )
+            assert overflow_mobile <= 0
+
+            dlg_overflow = page.evaluate(
+                """() => {
+                    const sel = '#optical-flare-studio-dialog .of-dialog-body';
+                    const body = document.querySelector(sel);
+                    return body ? (body.scrollWidth - body.clientWidth) : 0;
+                }"""
+            )
+            assert dlg_overflow <= 0
+
+            # Verify >= 44px mobile touch target on close button
+            close_box = page.locator("#btn-close-optical-flare-studio").bounding_box()
+            assert close_box is not None and close_box["height"] >= 44
+
+            page.click("#btn-close-optical-flare-studio")
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

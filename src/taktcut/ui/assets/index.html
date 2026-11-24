@@ -1563,6 +1563,15 @@
                   <span data-i18n="flStudio.btn.toolbar">Film Look</span>
                   <span class="kbd-chip mono">Shift+N</span>
                 </button>
+                <button type="button" id="btn-timeline-optical-flare-studio" class="btn btn-mini tl-of-studio-btn of-studio-btn" title="Open Optical Glow, Halation &amp; Anamorphic Lens Flare Studio (Shift+U)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <line x1="1" y1="8" x2="15" y2="8" stroke="#38bdf8" stroke-width="1.3"/>
+                    <circle cx="8" cy="8" r="3" stroke="#bae6fd" stroke-width="1.2" fill="none"/>
+                    <circle cx="8" cy="8" r="1.2" fill="#f8fafc"/>
+                  </svg>
+                  <span data-i18n="ofStudio.btn.timeline">Lens Flare</span>
+                  <span class="kbd-chip mono">Shift+U</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -1791,6 +1800,10 @@
                 <button type="button" id="btn-fx-film-look-studio" class="btn btn-secondary fl-studio-btn" title="Open 35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio (Shift+N)">
                   <span data-i18n="flStudio.btn.fx">Film Look 35mm</span>
                   <span class="kbd-chip mono">Shift+N</span>
+                </button>
+                <button type="button" id="btn-fx-optical-flare-studio" class="btn btn-secondary of-studio-btn" title="Open Optical Glow, Halation &amp; Anamorphic Lens Flare Studio (Shift+U)">
+                  <span data-i18n="ofStudio.btn.fx">Optical Flare</span>
+                  <span class="kbd-chip mono">Shift+U</span>
                 </button>
                 <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
                   <span data-i18n="stills.btn.grab">Grab Still</span>
@@ -2624,6 +2637,9 @@
                 <span class="broadcast-quick-sep" aria-hidden="true"></span>
                 <button type="button" id="btn-color-film-look-studio" class="btn btn-chip fl-studio-btn" data-i18n="flStudio.btn.color" title="Open 35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio (Shift+N)">Film Look 35mm</button>
                 <span id="color-fl-badge" class="nle-tag mono" aria-live="polite">FILM OFF</span>
+                <span class="broadcast-quick-sep" aria-hidden="true"></span>
+                <button type="button" id="btn-color-optical-flare-studio" class="btn btn-chip of-studio-btn" data-i18n="ofStudio.btn.color" title="Open Optical Glow, Halation &amp; Anamorphic Lens Flare Studio (Shift+U)">Optical Flare</button>
+                <span id="color-of-badge" class="nle-tag mono" aria-live="polite">FLARE OFF</span>
               </div>
               <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
@@ -6246,6 +6262,203 @@
         <div class="fg-drawer-body">
           <pre id="fl-fg-output" class="code-box mono" aria-live="polite"></pre>
           <pre id="fl-json-preview" class="code-box mono" aria-live="polite"></pre>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog id="optical-flare-studio-dialog" class="nle-dialog of-studio-dialog" aria-labelledby="optical-flare-studio-title">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-wrap">
+        <span class="nle-pane-title" id="optical-flare-studio-title" data-i18n="ofStudio.title">Optical Glow, Halation &amp; Anamorphic Lens Flare Studio</span>
+        <span class="kbd-chip mono">Shift+U</span>
+      </div>
+      <div class="of-header-actions">
+        <span id="of-telemetry-badge" class="nle-tag mono of-telemetry-pill">HR 0% | 3.8x</span>
+        <button type="button" id="btn-close-optical-flare-studio" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+    <div class="nle-dialog-body of-dialog-body">
+      <div class="of-preset-strip" role="group" aria-label="Optical Flare Presets">
+        <span class="sub-label" data-i18n="ofStudio.preset.label">Optical Preset</span>
+        <button type="button" class="btn btn-mini of-preset-btn is-active" data-of-preset="anamorphic_blue_streak" aria-pressed="true" data-i18n="ofStudio.preset.anamorphic_blue_streak">Anamorphic Blue</button>
+        <button type="button" class="btn btn-mini of-preset-btn" data-of-preset="warm_cinema_halation" aria-pressed="false" data-i18n="ofStudio.preset.warm_cinema_halation">Cinema Halation</button>
+        <button type="button" class="btn btn-mini of-preset-btn" data-of-preset="golden_hour_sun_flare" aria-pressed="false" data-i18n="ofStudio.preset.golden_hour_sun_flare">Golden Sun Flare</button>
+        <button type="button" class="btn btn-mini of-preset-btn" data-of-preset="neon_cyber_bloom" aria-pressed="false" data-i18n="ofStudio.preset.neon_cyber_bloom">Neon Cyber Bloom</button>
+        <button type="button" class="btn btn-mini of-preset-btn" data-of-preset="subtle_pro_mist_1_4" aria-pressed="false" data-i18n="ofStudio.preset.subtle_pro_mist_1_4">Pro-Mist 1/4</button>
+        <button type="button" class="btn btn-mini of-preset-btn" data-of-preset="custom" aria-pressed="false" data-i18n="ofStudio.preset.custom">Custom Rig</button>
+      </div>
+
+      <div class="of-toolbar-bar">
+        <div class="of-blend-group" role="group" aria-label="Optical Blend Mode">
+          <span class="sub-label" data-i18n="ofStudio.blend.label">Blend Mode</span>
+          <button type="button" class="btn btn-mini of-blend-btn is-active" data-of-blend="screen" aria-pressed="true" data-i18n="ofStudio.blend.screen">Screen</button>
+          <button type="button" class="btn btn-mini of-blend-btn" data-of-blend="add" aria-pressed="false" data-i18n="ofStudio.blend.add">Add</button>
+          <button type="button" class="btn btn-mini of-blend-btn" data-of-blend="softlight" aria-pressed="false" data-i18n="ofStudio.blend.softlight">Soft Light</button>
+        </div>
+        <div class="of-toggles-group">
+          <label class="inline-check">
+            <input type="checkbox" id="of-enabled" checked>
+            <span data-i18n="ofStudio.toggle.enabled">Optical Pass Active</span>
+          </label>
+          <label class="inline-check">
+            <input type="checkbox" id="of-compare-split" checked>
+            <span data-i18n="ofStudio.toggle.split">Before/After Wipe</span>
+          </label>
+          <button type="button" id="btn-of-reset" class="btn btn-mini" data-i18n="ofStudio.btn.reset">Reset</button>
+        </div>
+      </div>
+
+      <div class="of-workstation-grid">
+        <div class="of-viewport-col">
+          <div class="of-card">
+            <div class="scope-card-head">
+              <span class="sub-label" data-i18n="ofStudio.viewport.preview">Before / After Optical Monitor (Drag Flare Origin or Wipe)</span>
+              <span id="of-origin-readout" class="nle-tag mono">X 0.72 | Y 0.28</span>
+            </div>
+            <canvas id="of-preview-canvas" class="preview-canvas of-preview-canvas" width="600" height="224" aria-label="Optical flare before and after monitor with draggable origin reticle"></canvas>
+          </div>
+          <div class="of-card">
+            <div class="scope-card-head">
+              <span class="sub-label" data-i18n="ofStudio.viewport.curve">Radial Bloom, Streak &amp; Halation PSF Falloff</span>
+              <span id="of-falloff-readout" class="nle-tag mono">R 157 px | 7 ghosts</span>
+            </div>
+            <canvas id="of-falloff-canvas" class="preview-canvas of-falloff-canvas" width="600" height="178" aria-label="Radial optical bloom and halation falloff response curve"></canvas>
+          </div>
+        </div>
+
+        <div class="of-card of-inspector-col">
+          <div class="of-inspector-tabs" role="tablist" aria-label="Optical Flare Inspector Tabs">
+            <button type="button" id="btn-of-tab-bloom" class="btn btn-mini of-tab-btn is-active" role="tab" aria-selected="true" aria-controls="of-panel-bloom" data-of-tab="bloom" data-i18n="ofStudio.tab.bloom">Bloom &amp; Streak</button>
+            <button type="button" id="btn-of-tab-ghosts" class="btn btn-mini of-tab-btn" role="tab" aria-selected="false" aria-controls="of-panel-ghosts" data-of-tab="ghosts" data-i18n="ofStudio.tab.ghosts">Halation &amp; Ghosts</button>
+            <button type="button" id="btn-of-tab-rig" class="btn btn-mini of-tab-btn" role="tab" aria-selected="false" aria-controls="of-panel-rig" data-of-tab="rig" data-i18n="ofStudio.tab.rig">Optical Rig</button>
+          </div>
+
+          <div id="of-panel-bloom" class="of-tab-panel" role="tabpanel" aria-labelledby="btn-of-tab-bloom">
+            <div class="of-param-field">
+              <label for="of-threshold-luma-num" data-i18n="ofStudio.param.thresholdLuma">Highlight Threshold (Luma 0.10..0.98)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-threshold-luma" min="0.1" max="0.98" step="0.01" value="0.72" aria-label="Threshold luma slider">
+                <input type="number" id="of-threshold-luma-num" class="input-control input-num mono" min="0.1" max="0.98" step="0.01" value="0.72">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-glow-brightness-num" data-i18n="ofStudio.param.glowBrightness">Glow Brightness (0..3.0)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-glow-brightness" min="0" max="3" step="0.05" value="1.35" aria-label="Glow brightness slider">
+                <input type="number" id="of-glow-brightness-num" class="input-control input-num mono" min="0" max="3" step="0.05" value="1.35">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-glow-width-num" data-i18n="ofStudio.param.glowWidth">Glow Width (px, 4..240)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-glow-width" min="4" max="240" step="1" value="72" aria-label="Glow width slider">
+                <input type="number" id="of-glow-width-num" class="input-control input-num mono" min="4" max="240" step="1" value="72">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-anamorphic-stretch-num" data-i18n="ofStudio.param.anamorphicStretch">Anamorphic Stretch X (1.0..6.0x)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-anamorphic-stretch" min="1" max="6" step="0.05" value="3.8" aria-label="Anamorphic stretch slider">
+                <input type="number" id="of-anamorphic-stretch-num" class="input-control input-num mono" min="1" max="6" step="0.05" value="3.8">
+              </div>
+            </div>
+          </div>
+
+          <div id="of-panel-ghosts" class="of-tab-panel" role="tabpanel" aria-labelledby="btn-of-tab-ghosts" hidden>
+            <div class="of-param-field">
+              <label for="of-color-tint-hue-num" data-i18n="ofStudio.param.colorTintHue">Optical Tint Hue (deg, 0..360)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-color-tint-hue" min="0" max="360" step="1" value="205" aria-label="Color tint hue slider">
+                <input type="number" id="of-color-tint-hue-num" class="input-control input-num mono" min="0" max="360" step="1" value="205">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-halation-spread-num" data-i18n="ofStudio.param.halationSpread">Red Halation Spread (px, 0..120)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-halation-spread" min="0" max="120" step="1" value="26" aria-label="Halation spread slider">
+                <input type="number" id="of-halation-spread-num" class="input-control input-num mono" min="0" max="120" step="1" value="26">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-elements-count-num" data-i18n="ofStudio.param.elementsCount">Coaxial Ghost Elements (0..12)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-elements-count" min="0" max="12" step="1" value="7" aria-label="Flare elements count slider">
+                <input type="number" id="of-elements-count-num" class="input-control input-num mono" min="0" max="12" step="1" value="7">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-ghost-intensity-num" data-i18n="ofStudio.param.ghostIntensity">Ghost Reflection Intensity (%)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-ghost-intensity" min="0" max="100" step="1" value="62" aria-label="Ghost intensity slider">
+                <input type="number" id="of-ghost-intensity-num" class="input-control input-num mono" min="0" max="100" step="1" value="62">
+              </div>
+            </div>
+          </div>
+
+          <div id="of-panel-rig" class="of-tab-panel" role="tabpanel" aria-labelledby="btn-of-tab-rig" hidden>
+            <div class="of-param-field">
+              <label for="of-origin-x-num" data-i18n="ofStudio.param.originX">Flare Origin X (0..1)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-origin-x" min="0" max="1" step="0.01" value="0.72" aria-label="Flare origin X slider">
+                <input type="number" id="of-origin-x-num" class="input-control input-num mono" min="0" max="1" step="0.01" value="0.72">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-origin-y-num" data-i18n="ofStudio.param.originY">Flare Origin Y (0..1)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-origin-y" min="0" max="1" step="0.01" value="0.28" aria-label="Flare origin Y slider">
+                <input type="number" id="of-origin-y-num" class="input-control input-num mono" min="0" max="1" step="0.01" value="0.28">
+              </div>
+            </div>
+            <div class="of-param-field">
+              <label for="of-aberration-px-num" data-i18n="ofStudio.param.aberrationPx">Chromatic Aberration Fringe (px, 0..12)</label>
+              <div class="of-range-pair">
+                <input type="range" id="of-aberration-px" min="0" max="12" step="0.1" value="3.2" aria-label="Chromatic aberration slider">
+                <input type="number" id="of-aberration-px-num" class="input-control input-num mono" min="0" max="12" step="0.1" value="3.2">
+              </div>
+            </div>
+          </div>
+
+          <div class="of-metrics-grid">
+            <div class="of-metric-card">
+              <span class="of-metric-k" data-i18n="ofStudio.metric.headroom">Peak Headroom</span>
+              <span id="of-metric-headroom" class="of-metric-v mono">0.0%</span>
+            </div>
+            <div class="of-metric-card">
+              <span class="of-metric-k" data-i18n="ofStudio.metric.aspect">Streak Aspect</span>
+              <span id="of-metric-aspect" class="of-metric-v mono">3.8x</span>
+            </div>
+            <div class="of-metric-card">
+              <span class="of-metric-k" data-i18n="ofStudio.metric.halation">Halation Energy</span>
+              <span id="of-metric-halation" class="of-metric-v mono">0.0%</span>
+            </div>
+            <div class="of-metric-card">
+              <span class="of-metric-k" data-i18n="ofStudio.metric.ghosts">Lens Ghosts</span>
+              <span id="of-metric-ghosts" class="of-metric-v mono">7</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="of-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="ofStudio.status.idle">Drag the flare origin reticle or split wipe handle on the monitor, or switch optical presets.</div>
+
+      <div class="btn-row of-actions">
+        <button type="button" id="btn-of-apply-timeline" class="btn btn-primary" data-i18n="ofStudio.btn.applyTimeline">Apply to Timeline</button>
+        <button type="button" id="btn-of-send-deliver" class="btn btn-secondary" data-i18n="ofStudio.btn.sendDeliver">Use in Deliver</button>
+        <button type="button" id="btn-of-export-json" class="btn btn-secondary" data-i18n="ofStudio.btn.exportJson">Export JSON</button>
+        <button type="button" id="btn-of-download-json" class="btn btn-secondary" data-i18n="ofStudio.btn.downloadJson">Download .json</button>
+        <button type="button" id="btn-of-copy-fg" class="btn btn-mini" data-i18n="ofStudio.btn.copyFg">Copy FFmpeg</button>
+      </div>
+
+      <details id="of-fg-drawer" class="fg-drawer">
+        <summary class="fg-drawer-summary">
+          <span class="fg-drawer-label" data-i18n="ofStudio.drawerTitle">FFmpeg Anisotropic Optical Bloom &amp; Halation Filtergraph (curves / gblur / colorbalance / rgbashift / blend) &amp; JSON</span>
+          <span class="fg-drawer-hint mono" data-i18n="common.detailsToggle">Inspect</span>
+        </summary>
+        <div class="fg-drawer-body">
+          <pre id="of-fg-output" class="code-box mono" aria-live="polite"></pre>
+          <pre id="of-json-preview" class="code-box mono" aria-live="polite"></pre>
         </div>
       </details>
     </div>

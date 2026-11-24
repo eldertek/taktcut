@@ -1503,6 +1503,38 @@ class ClipFilmLookTrack(BaseModel):
     ffmpeg_vf: str = Field(default="", max_length=16384)
 
 
+class ClipOpticalFlareTrack(BaseModel):
+    """Non-destructive Optical Glow, Halation & Anamorphic Lens Flare track."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    preset: Literal[
+        "anamorphic_blue_streak",
+        "warm_cinema_halation",
+        "golden_hour_sun_flare",
+        "neon_cyber_bloom",
+        "subtle_pro_mist_1_4",
+        "custom",
+    ] = "anamorphic_blue_streak"
+    threshold_luma: float = Field(default=0.72, ge=0.1, le=0.98)
+    glow_brightness: float = Field(default=1.35, ge=0.0, le=3.0)
+    glow_width_px: float = Field(default=72.0, ge=4.0, le=240.0)
+    anamorphic_stretch_x: float = Field(default=3.8, ge=1.0, le=6.0)
+    color_tint_hue: float = Field(default=205.0, ge=0.0, le=360.0)
+    halation_spread_px: float = Field(default=26.0, ge=0.0, le=120.0)
+    flare_origin_x: float = Field(default=0.72, ge=0.0, le=1.0)
+    flare_origin_y: float = Field(default=0.28, ge=0.0, le=1.0)
+    flare_elements_count: int = Field(default=7, ge=0, le=12)
+    ghost_intensity_pct: float = Field(default=62.0, ge=0.0, le=100.0)
+    aberration_px: float = Field(default=3.2, ge=0.0, le=12.0)
+    blend_mode: Literal["screen", "add", "softlight"] = "screen"
+    peak_luminance_headroom_pct: float = Field(default=84.0, ge=0.0, le=100.0)
+    anamorphic_streak_aspect: float = Field(default=3.8, ge=1.0, le=12.0)
+    halation_energy_pct: float = Field(default=22.0, ge=0.0, le=100.0)
+    ffmpeg_vf: str = Field(default="", max_length=16384)
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1536,6 +1568,7 @@ class TimelineClip(BaseModel):
     retime_studio: ClipRetimeStudioTrack | None = None
     stabilization_studio: ClipStabilizationStudioTrack | None = None
     film_look: ClipFilmLookTrack | None = None
+    optical_flare: ClipOpticalFlareTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

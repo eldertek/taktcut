@@ -4,6 +4,8 @@ import {
   ALLOWED_CST_TONE_MAPPING_MODES,
   ALLOWED_FILM_LOOK_GRAIN_GAUGES,
   ALLOWED_FILM_LOOK_PRINT_STOCKS,
+  ALLOWED_OPTICAL_FLARE_BLEND_MODES,
+  ALLOWED_OPTICAL_FLARE_PRESETS,
   ALLOWED_MOTION_SPLINE_CHANNELS,
   ALLOWED_MOTION_SPLINE_HANDLE_MODES,
   ALLOWED_MOTION_SPLINE_PRESET_IDS,
@@ -90,6 +92,7 @@ import {
   applyFilmLookToDocumentClient,
   applyMotionSplineToDocumentClient,
   applyMulticamStudioToDocumentClient,
+  applyOpticalFlareToDocumentClient,
   applyOpticalGlowToDocumentClient,
   applyPowerWindowToDocumentClient,
   applyRetimeStudioToDocumentClient,
@@ -115,6 +118,7 @@ import {
   compileCstFiltergraphClient,
   compileFilmLookFiltergraphClient,
   compileMulticamStudioFiltergraphClient,
+  compileOpticalFlareFiltergraphClient,
   compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
@@ -146,6 +150,7 @@ import {
   createDefaultFilmLookConfigClient,
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
+  createDefaultOpticalFlareConfigClient,
   createDefaultOpticalGlowConfigClient,
   createDefaultPowerWindowConfigClient,
   createDefaultQualifierKeyerConfigClient,
@@ -159,12 +164,14 @@ import {
   estimateRenderFileSize,
   evaluateFilmLookStudioClient,
   evaluateMotionSplineStudioClient,
+  evaluateOpticalFlareStudioClient,
   evaluatePowerWindowSamplesClient,
   evaluateRetimeStudioCurveClient,
   evaluateStabilizationStudioClient,
   evaluateTitleMotionState,
   exportFilmLookJsonClient,
   exportMotionSplineJsonClient,
+  exportOpticalFlareJsonClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
   exportRetimeStudioJsonClient,
@@ -176,12 +183,14 @@ import {
   getDeliveryPresetClient,
   linkAvClipsInDocument,
   listFilmLookPresetsClient,
+  listOpticalFlarePresetsClient,
   listStudioLutPresetsClient,
   normalizeBroadcastConfigClient,
   normalizeFairlightAudioParams,
   normalizeFilmLookConfigClient,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
+  normalizeOpticalFlareConfigClient,
   normalizeOpticalGlowConfigClient,
   normalizePowerWindowConfigClient,
   normalizeRetimeProcess,
@@ -4758,6 +4767,84 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/film-look/apply", { method: "POST", body: payload });
+    },
+    async getOpticalFlarePresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          presets: listOpticalFlarePresetsClient(),
+          preset_ids: ALLOWED_OPTICAL_FLARE_PRESETS,
+          blend_modes: ALLOWED_OPTICAL_FLARE_BLEND_MODES,
+          default_config: createDefaultOpticalFlareConfigClient()
+        };
+      }
+      return requestJson("/api/fx/optical-flare/presets");
+    },
+    async evaluateOpticalFlare(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalFlareConfigClient(p.config ? p.config : p);
+        return evaluateOpticalFlareStudioClient(cfg, {
+          sample_count: p.sample_count !== undefined ? Number(p.sample_count) : 33
+        });
+      }
+      return requestJson("/api/fx/optical-flare/evaluate", { method: "POST", body: payload });
+    },
+    async compileOpticalFlare(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalFlareConfigClient(p.config ? p.config : p);
+        return compileOpticalFlareFiltergraphClient(cfg);
+      }
+      return requestJson("/api/fx/optical-flare/compile", { method: "POST", body: payload });
+    },
+    async exportOpticalFlareJson(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalFlareConfigClient(p.config ? p.config : p);
+        return exportOpticalFlareJsonClient(cfg, {
+          title: p.title || "TAKTCUT_OPTICAL_FLARE_STUDIO"
+        });
+      }
+      return requestJson("/api/fx/optical-flare/export-json", { method: "POST", body: payload });
+    },
+    async downloadOpticalFlareBlob(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const cfg = normalizeOpticalFlareConfigClient(p.config ? p.config : p);
+        const exp = exportOpticalFlareJsonClient(cfg, {
+          title: p.title || "TAKTCUT_OPTICAL_FLARE_STUDIO"
+        });
+        return new Blob([exp.json_text], { type: "application/json; charset=utf-8" });
+      }
+      const resp = await fetch(`${apiBase}/api/fx/optical-flare/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {})
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      return resp.blob();
+    },
+    async applyOpticalFlare(payload) {
+      if (resolvedMode === "static-demo") {
+        const p = payload || {};
+        const doc = p.document;
+        if (!doc) throw new Error("Timeline document is required.");
+        const nextDoc = applyOpticalFlareToDocumentClient(doc, p.config, {
+          track_index: p.track_index || 1,
+          clip_index: p.clip_index || 0
+        });
+        const compiled = compileOpticalFlareFiltergraphClient(p.config);
+        return {
+          changed: true,
+          document: nextDoc,
+          validation: validateTimelineClient(nextDoc),
+          compiled
+        };
+      }
+      return requestJson("/api/fx/optical-flare/apply", { method: "POST", body: payload });
     }
   };
 }

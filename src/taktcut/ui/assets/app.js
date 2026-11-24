@@ -15,6 +15,8 @@ import {
   drawCstToneCurveCanvas,
   drawFilmLookCurveCanvas,
   drawFilmLookPreviewCanvas,
+  drawOpticalFlareFalloffCanvas,
+  drawOpticalFlarePreviewCanvas,
   drawFramesCanvas,
   drawHslCurvesCanvas,
   drawKeyframeCurveCanvas,
@@ -209,6 +211,7 @@ import {
   compileCompoundFiltergraphClient,
   compileCstFiltergraphClient,
   compileFilmLookFiltergraphClient,
+  compileOpticalFlareFiltergraphClient,
   compileQualifierFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
@@ -246,6 +249,7 @@ import {
   createDefaultColorWarper,
   createDefaultCstConfigClient,
   createDefaultFilmLookConfigClient,
+  createDefaultOpticalFlareConfigClient,
   createDefaultHslCurves,
   createDefaultMotionSplineConfigClient,
   createDefaultMulticamStudioConfigClient,
@@ -272,6 +276,7 @@ import {
   evaluateCurvePchipClient,
   evaluateFilmLookStudioClient,
   evaluateMotionSplineStudioClient,
+  evaluateOpticalFlareStudioClient,
   evaluatePowerWindowMask,
   evaluatePowerWindowSamplesClient,
   evaluateRetimeSpeedAt,
@@ -285,6 +290,7 @@ import {
   exportFilmLookJsonClient,
   exportMotionSplineJsonClient,
   exportMulticamEdlClient,
+  exportOpticalFlareJsonClient,
   exportOpticalGlowJsonClient,
   exportPowerWindowJsonClient,
   exportRetimeStudioJsonClient,
@@ -292,9 +298,11 @@ import {
   exportTranscriptSrtClient,
   filterMediaPoolEntries,
   interpolatePowerWindowAtTimeClient,
+  listOpticalFlarePresetsClient,
   normalizeFilmLookConfigClient,
   normalizeMotionSplineConfigClient,
   normalizeMulticamStudioConfigClient,
+  normalizeOpticalFlareConfigClient,
   normalizeOpticalGlowConfigClient,
   normalizePowerWindowConfigClient,
   normalizeRetimeStudioConfigClient,
@@ -806,6 +814,17 @@ const state = {
     evalResult: null,
     compiled: null,
     exportedJson: null,
+    dragState: null,
+    syncSeq: 0
+  },
+  ofStudio: {
+    isOpen: false,
+    activeTab: "bloom",
+    config: createDefaultOpticalFlareConfigClient(),
+    evalResult: null,
+    compiled: null,
+    exportedJson: null,
+    lastGeom: null,
     dragState: null,
     syncSeq: 0
   },
@@ -13335,6 +13354,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+Y", descKey: "shortcuts.key.retimeStudio" },
       { kbd: "Shift+X", descKey: "shortcuts.key.stabilizationStudio" },
       { kbd: "Shift+N", descKey: "shortcuts.key.filmLookStudio" },
+      { kbd: "Shift+U", descKey: "shortcuts.key.opticalFlareStudio" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13470,6 +13490,15 @@ function handleTransportKeydown(ev) {
     if (ev.key === "Escape") {
       ev.preventDefault();
       closeFilmLookStudioDialog();
+    }
+    return;
+  }
+
+  const ofStudioDlg = byId("optical-flare-studio-dialog");
+  if (ofStudioDlg && ofStudioDlg.open) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeOpticalFlareStudioDialog();
     }
     return;
   }
@@ -13680,6 +13709,11 @@ function handleTransportKeydown(ev) {
     if (lower === "n") {
       ev.preventDefault();
       openFilmLookStudioDialog();
+      return;
+    }
+    if (lower === "u") {
+      ev.preventDefault();
+      openOpticalFlareStudioDialog();
       return;
     }
   }
@@ -20368,6 +20402,7 @@ function wireEvents() {
   wireRetimeStudioEvents();
   wireStabilizationStudioEvents();
   wireFilmLookStudioEvents();
+  wireOpticalFlareStudioEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -29740,5 +29775,476 @@ function wireFilmLookStudioEvents() {
       }
     }
     setFilmLookStatus(t("flStudio.status.copied"));
+  });
+}
+
+
+// ============================================================================
+// Optical Glow, Halation & Anamorphic Lens Flare Studio (Cycle #113)
+// ============================================================================
+
+function setOpticalFlareStatus(text) {
+  const el = byId("of-status-note");
+  if (el) el.textContent = String(text || "");
+}
+
+function setOpticalFlareInspectorTab(tabId) {
+  const validTab = ["bloom", "ghosts", "rig"].includes(tabId) ? tabId : "bloom";
+  state.ofStudio.activeTab = validTab;
+  for (const btn of document.querySelectorAll(".of-tab-btn[data-of-tab]")) {
+    const active = btn.getAttribute("data-of-tab") === validTab;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  const panels = {
+    bloom: byId("of-panel-bloom"),
+    ghosts: byId("of-panel-ghosts"),
+    rig: byId("of-panel-rig")
+  };
+  for (const [key, panel] of Object.entries(panels)) {
+    if (!panel) continue;
+    panel.hidden = key !== validTab;
+  }
+}
+
+function refreshOpticalFlareLocalDerived() {
+  const st = state.ofStudio;
+  st.config = normalizeOpticalFlareConfigClient(st.config);
+  st.evalResult = evaluateOpticalFlareStudioClient(st.config, { sample_count: 33 });
+  st.compiled = compileOpticalFlareFiltergraphClient(st.config);
+}
+
+function syncOpticalFlareStudioUI(opts = {}) {
+  const st = state.ofStudio;
+  if (!st.evalResult || !st.compiled) {
+    refreshOpticalFlareLocalDerived();
+  }
+  const cfg = st.config;
+  const ev = st.evalResult;
+  const compiled = st.compiled;
+  const skipNumId = opts && opts.skipNumId ? String(opts.skipNumId) : "";
+
+  for (const btn of document.querySelectorAll(".of-preset-btn[data-of-preset]")) {
+    const active = btn.getAttribute("data-of-preset") === cfg.preset;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  for (const btn of document.querySelectorAll(".of-blend-btn[data-of-blend]")) {
+    const active = btn.getAttribute("data-of-blend") === cfg.blend_mode;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const enEl = byId("of-enabled");
+  if (enEl) enEl.checked = cfg.enabled !== false;
+  const spEl = byId("of-compare-split");
+  if (spEl) spEl.checked = cfg.compare_split !== false;
+
+  const pairs = [
+    ["of-threshold-luma", "of-threshold-luma-num", cfg.threshold_luma, 2],
+    ["of-glow-brightness", "of-glow-brightness-num", cfg.glow_brightness, 2],
+    ["of-glow-width", "of-glow-width-num", cfg.glow_width_px, 0],
+    ["of-anamorphic-stretch", "of-anamorphic-stretch-num", cfg.anamorphic_stretch_x, 2],
+    ["of-color-tint-hue", "of-color-tint-hue-num", cfg.color_tint_hue, 0],
+    ["of-halation-spread", "of-halation-spread-num", cfg.halation_spread_px, 0],
+    ["of-elements-count", "of-elements-count-num", cfg.flare_elements_count, 0],
+    ["of-ghost-intensity", "of-ghost-intensity-num", cfg.ghost_intensity_pct, 0],
+    ["of-origin-x", "of-origin-x-num", cfg.flare_origin_x, 2],
+    ["of-origin-y", "of-origin-y-num", cfg.flare_origin_y, 2],
+    ["of-aberration-px", "of-aberration-px-num", cfg.aberration_px, 1]
+  ];
+  for (const [rId, nId, val, dec] of pairs) {
+    const rEl = byId(rId);
+    const nEl = byId(nId);
+    const formatted = dec > 0 ? Number(val).toFixed(dec) : String(Math.round(Number(val)));
+    if (rEl) rEl.value = String(val);
+    if (nEl && nId !== skipNumId && document.activeElement !== nEl) {
+      nEl.value = formatted;
+    }
+  }
+
+  const badge = byId("of-telemetry-badge");
+  if (badge && ev) {
+    badge.textContent = ev.enabled
+      ? `HR ${ev.peak_luminance_headroom_pct.toFixed(0)}% | ${ev.anamorphic_streak_aspect.toFixed(1)}x`
+      : "OPTICAL BYPASS";
+  }
+  const colorBadge = byId("color-of-badge");
+  if (colorBadge && ev) {
+    colorBadge.textContent = ev.enabled
+      ? `FLARE ${ev.anamorphic_streak_aspect.toFixed(1)}x`
+      : "FLARE OFF";
+  }
+
+  const originReadout = byId("of-origin-readout");
+  if (originReadout) {
+    originReadout.textContent = `X ${Number(cfg.flare_origin_x).toFixed(2)} | Y ${Number(cfg.flare_origin_y).toFixed(2)}`;
+  }
+  const falloffReadout = byId("of-falloff-readout");
+  if (falloffReadout && ev) {
+    falloffReadout.textContent = `R ${Math.round(ev.bloom_radius_px)} px | ${ev.ghost_count} ghosts`;
+  }
+
+  const mHr = byId("of-metric-headroom");
+  if (mHr && ev) mHr.textContent = `${ev.peak_luminance_headroom_pct.toFixed(1)}%`;
+  const mAsp = byId("of-metric-aspect");
+  if (mAsp && ev) mAsp.textContent = `${ev.anamorphic_streak_aspect.toFixed(2)}x`;
+  const mHal = byId("of-metric-halation");
+  if (mHal && ev) mHal.textContent = `${ev.halation_energy_pct.toFixed(1)}%`;
+  const mGh = byId("of-metric-ghosts");
+  if (mGh && ev) mGh.textContent = String(ev.ghost_count);
+
+  const fgEl = byId("of-fg-output");
+  if (fgEl && compiled) {
+    fgEl.textContent = compiled.ffmpeg_command || compiled.filter_complex || "";
+  }
+  const jsonEl = byId("of-json-preview");
+  if (jsonEl) {
+    jsonEl.textContent = st.exportedJson
+      ? st.exportedJson.json_text
+      : exportOpticalFlareJsonClient(cfg).json_text;
+  }
+
+  st.lastGeom = drawOpticalFlarePreviewCanvas(byId("of-preview-canvas"), cfg, ev);
+  drawOpticalFlareFalloffCanvas(byId("of-falloff-canvas"), cfg, ev);
+}
+
+async function scheduleOpticalFlareServerSync(opts = {}) {
+  refreshOpticalFlareLocalDerived();
+  syncOpticalFlareStudioUI(opts);
+  const seq = ++state.ofStudio.syncSeq;
+  try {
+    const [evalRes, compiled] = await Promise.all([
+      api.evaluateOpticalFlare({ config: state.ofStudio.config, sample_count: 33 }),
+      api.compileOpticalFlare({ config: state.ofStudio.config })
+    ]);
+    if (seq !== state.ofStudio.syncSeq) return;
+    state.ofStudio.evalResult = evalRes;
+    state.ofStudio.compiled = compiled;
+    syncOpticalFlareStudioUI(opts);
+  } catch {
+    // Local deterministic evaluation already rendered cleanly
+  }
+}
+
+function openOpticalFlareStudioDialog() {
+  const dlg = byId("optical-flare-studio-dialog");
+  if (!dlg) return;
+  const doc = state.timelineDoc;
+  if (doc && Array.isArray(doc.tracks)) {
+    const vTrack = doc.tracks.find((tr) => tr.kind === "video");
+    const clip = vTrack && Array.isArray(vTrack.clips) ? vTrack.clips[0] : null;
+    if (clip && clip.optical_flare) {
+      state.ofStudio.config = normalizeOpticalFlareConfigClient({
+        ...state.ofStudio.config,
+        ...clip.optical_flare
+      });
+    }
+  }
+  state.ofStudio.isOpen = true;
+  setOpticalFlareInspectorTab(state.ofStudio.activeTab || "bloom");
+  if (typeof dlg.showModal === "function" && !dlg.open) {
+    dlg.showModal();
+  } else {
+    dlg.setAttribute("open", "");
+  }
+  refreshOpticalFlareLocalDerived();
+  syncOpticalFlareStudioUI();
+  scheduleOpticalFlareServerSync();
+}
+
+function closeOpticalFlareStudioDialog() {
+  const dlg = byId("optical-flare-studio-dialog");
+  state.ofStudio.isOpen = false;
+  state.ofStudio.dragState = null;
+  if (!dlg) return;
+  if (typeof dlg.close === "function" && dlg.open) {
+    dlg.close();
+  } else {
+    dlg.removeAttribute("open");
+  }
+}
+
+async function applyOpticalFlareToTimelineAction() {
+  if (!state.timelineDoc) {
+    setOpticalFlareStatus("No active timeline loaded.");
+    return;
+  }
+  const selInfo = getSelectedClipTrack();
+  const trackIndex =
+    selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.track.index : 1;
+  const clipIndex =
+    selInfo && selInfo.track && selInfo.track.kind === "video" ? selInfo.clipIndex : 0;
+  try {
+    const res = await api.applyOpticalFlare({
+      document: state.timelineDoc,
+      config: state.ofStudio.config,
+      track_index: trackIndex,
+      clip_index: clipIndex
+    });
+    if (res && res.document) {
+      commitTimelineMutation(res.document, state.timelineSelected);
+      if (res.compiled) state.ofStudio.compiled = res.compiled;
+      syncOpticalFlareStudioUI();
+      setOpticalFlareStatus(
+        `Applied Optical Flare (${state.ofStudio.config.preset}) non-destructively to V${trackIndex} clip.`
+      );
+    }
+  } catch (err) {
+    setOpticalFlareStatus(`Apply failed: ${err && err.message ? err.message : String(err)}`);
+  }
+}
+
+function sendOpticalFlareToDeliverAction() {
+  refreshOpticalFlareLocalDerived();
+  const compiled = state.ofStudio.compiled;
+  if (compiled && compiled.filter_complex) {
+    state.deliverOpticalFlareVf = compiled.filter_complex;
+  }
+  setOpticalFlareStatus("Optical Flare filtergraph staged for Deliver export.");
+  closeOpticalFlareStudioDialog();
+  if (typeof setActiveWorkspaceTab === "function") {
+    setActiveWorkspaceTab("deliver");
+  }
+}
+
+async function exportOpticalFlareJsonAction() {
+  try {
+    const exp = await api.exportOpticalFlareJson({
+      config: state.ofStudio.config,
+      title: "TAKTCUT_OPTICAL_FLARE_STUDIO"
+    });
+    state.ofStudio.exportedJson = exp;
+    const drawer = byId("of-fg-drawer");
+    if (drawer) drawer.open = true;
+    syncOpticalFlareStudioUI();
+    setOpticalFlareStatus(`Exported ${exp.schema_version} (${exp.filename}).`);
+  } catch (err) {
+    setOpticalFlareStatus(`Export failed: ${err && err.message ? err.message : String(err)}`);
+  }
+}
+
+async function downloadOpticalFlareJsonAction() {
+  try {
+    const blob = await api.downloadOpticalFlareBlob({
+      config: state.ofStudio.config,
+      title: "TAKTCUT_OPTICAL_FLARE_STUDIO"
+    });
+    const exp = exportOpticalFlareJsonClient(state.ofStudio.config, {
+      title: "TAKTCUT_OPTICAL_FLARE_STUDIO"
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = exp.filename || "taktcut_optical_flare_studio.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setOpticalFlareStatus(`Downloaded ${exp.filename}.`);
+  } catch (err) {
+    setOpticalFlareStatus(`Download failed: ${err && err.message ? err.message : String(err)}`);
+  }
+}
+
+function wireOpticalFlareStudioEvents() {
+  byId("btn-timeline-optical-flare-studio")?.addEventListener("click", openOpticalFlareStudioDialog);
+  byId("btn-fx-optical-flare-studio")?.addEventListener("click", openOpticalFlareStudioDialog);
+  byId("btn-color-optical-flare-studio")?.addEventListener("click", openOpticalFlareStudioDialog);
+  byId("btn-close-optical-flare-studio")?.addEventListener("click", closeOpticalFlareStudioDialog);
+
+  const dlg = byId("optical-flare-studio-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeOpticalFlareStudioDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeOpticalFlareStudioDialog();
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".of-preset-btn[data-of-preset]")) {
+    btn.addEventListener("click", () => {
+      const pid = btn.getAttribute("data-of-preset") || "anamorphic_blue_streak";
+      const presets = listOpticalFlarePresetsClient();
+      const found = presets.find((p) => p.preset === pid);
+      if (found) {
+        state.ofStudio.config = normalizeOpticalFlareConfigClient({
+          ...found.default_config,
+          compare_split: state.ofStudio.config.compare_split,
+          split_position: state.ofStudio.config.split_position
+        });
+      }
+      state.ofStudio.exportedJson = null;
+      scheduleOpticalFlareServerSync();
+      setOpticalFlareStatus(`Preset: ${found ? found.label : pid}`);
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".of-blend-btn[data-of-blend]")) {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-of-blend") || "screen";
+      state.ofStudio.config = normalizeOpticalFlareConfigClient({
+        ...state.ofStudio.config,
+        blend_mode: mode
+      });
+      state.ofStudio.exportedJson = null;
+      scheduleOpticalFlareServerSync();
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".of-tab-btn[data-of-tab]")) {
+    btn.addEventListener("click", () => {
+      setOpticalFlareInspectorTab(btn.getAttribute("data-of-tab") || "bloom");
+    });
+  }
+
+  byId("of-enabled")?.addEventListener("change", (ev) => {
+    state.ofStudio.config.enabled = Boolean(ev.target.checked);
+    scheduleOpticalFlareServerSync();
+  });
+  byId("of-compare-split")?.addEventListener("change", (ev) => {
+    state.ofStudio.config.compare_split = Boolean(ev.target.checked);
+    refreshOpticalFlareLocalDerived();
+    syncOpticalFlareStudioUI();
+  });
+  byId("btn-of-reset")?.addEventListener("click", () => {
+    state.ofStudio.config = createDefaultOpticalFlareConfigClient();
+    state.ofStudio.exportedJson = null;
+    scheduleOpticalFlareServerSync();
+    setOpticalFlareStatus("Optical Flare Studio reset to Anamorphic Blue Streak defaults.");
+  });
+
+  const bindRangePair = (rangeId, numId, field, minVal, maxVal) => {
+    const rEl = byId(rangeId);
+    const nEl = byId(numId);
+    if (rEl) {
+      rEl.addEventListener("input", () => {
+        const val = Number(rEl.value);
+        if (!Number.isFinite(val)) return;
+        state.ofStudio.config[field] = Math.min(maxVal, Math.max(minVal, val));
+        state.ofStudio.exportedJson = null;
+        scheduleOpticalFlareServerSync();
+      });
+    }
+    if (nEl) {
+      nEl.addEventListener("input", () => {
+        const raw = nEl.value.trim();
+        if (raw === "" || raw === "-" || raw === ".") return;
+        const val = Number(raw);
+        if (!Number.isFinite(val)) return;
+        if (val >= minVal && val <= maxVal) {
+          state.ofStudio.config[field] = val;
+          state.ofStudio.exportedJson = null;
+          scheduleOpticalFlareServerSync({ skipNumId: numId });
+        }
+      });
+      nEl.addEventListener("change", () => {
+        const val = Number(nEl.value);
+        if (Number.isFinite(val)) {
+          state.ofStudio.config[field] = Math.min(maxVal, Math.max(minVal, val));
+        }
+        state.ofStudio.exportedJson = null;
+        scheduleOpticalFlareServerSync();
+      });
+    }
+  };
+
+  bindRangePair("of-threshold-luma", "of-threshold-luma-num", "threshold_luma", 0.1, 0.98);
+  bindRangePair("of-glow-brightness", "of-glow-brightness-num", "glow_brightness", 0.0, 3.0);
+  bindRangePair("of-glow-width", "of-glow-width-num", "glow_width_px", 4.0, 240.0);
+  bindRangePair("of-anamorphic-stretch", "of-anamorphic-stretch-num", "anamorphic_stretch_x", 1.0, 6.0);
+  bindRangePair("of-color-tint-hue", "of-color-tint-hue-num", "color_tint_hue", 0.0, 360.0);
+  bindRangePair("of-halation-spread", "of-halation-spread-num", "halation_spread_px", 0.0, 120.0);
+  bindRangePair("of-elements-count", "of-elements-count-num", "flare_elements_count", 0, 12);
+  bindRangePair("of-ghost-intensity", "of-ghost-intensity-num", "ghost_intensity_pct", 0.0, 100.0);
+  bindRangePair("of-origin-x", "of-origin-x-num", "flare_origin_x", 0.0, 1.0);
+  bindRangePair("of-origin-y", "of-origin-y-num", "flare_origin_y", 0.0, 1.0);
+  bindRangePair("of-aberration-px", "of-aberration-px-num", "aberration_px", 0.0, 12.0);
+
+  // Interactive Before/After canvas: drag either the flare origin reticle OR the split wipe bar
+  const previewCanvas = byId("of-preview-canvas");
+  if (previewCanvas) {
+    const getCanvasPos = (ev) => {
+      const rect = previewCanvas.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+      const y = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
+      return {
+        x,
+        y,
+        u: rect.width > 0 ? Math.max(0, Math.min(1, x / rect.width)) : 0.5,
+        v: rect.height > 0 ? Math.max(0, Math.min(1, y / rect.height)) : 0.5,
+        w: rect.width,
+        h: rect.height
+      };
+    };
+
+    previewCanvas.addEventListener("pointerdown", (ev) => {
+      const pos = getCanvasPos(ev);
+      const cfg = state.ofStudio.config;
+      const originPxX = Number(cfg.flare_origin_x ?? 0.72) * pos.w;
+      const originPxY = Number(cfg.flare_origin_y ?? 0.28) * pos.h;
+      const splitPxX = Number(cfg.split_position ?? 0.5) * pos.w;
+      const distOrigin = Math.hypot(pos.x - originPxX, pos.y - originPxY);
+      const distSplit = Math.abs(pos.x - splitPxX);
+
+      let mode = "origin";
+      if (cfg.compare_split && distSplit <= 16 && distOrigin > 20) {
+        mode = "wipe";
+      }
+      state.ofStudio.dragState = { mode };
+      if (typeof previewCanvas.setPointerCapture === "function") {
+        try {
+          previewCanvas.setPointerCapture(ev.pointerId);
+        } catch {
+          // Synthetic pointer events may not support capture
+        }
+      }
+      if (mode === "wipe") {
+        state.ofStudio.config.split_position = Math.round(Math.max(0.02, Math.min(0.98, pos.u)) * 1000) / 1000;
+      } else {
+        state.ofStudio.config.flare_origin_x = Math.round(pos.u * 1000) / 1000;
+        state.ofStudio.config.flare_origin_y = Math.round(pos.v * 1000) / 1000;
+      }
+      refreshOpticalFlareLocalDerived();
+      syncOpticalFlareStudioUI();
+    });
+
+    previewCanvas.addEventListener("pointermove", (ev) => {
+      if (!state.ofStudio.dragState) return;
+      const pos = getCanvasPos(ev);
+      if (state.ofStudio.dragState.mode === "wipe") {
+        state.ofStudio.config.split_position = Math.round(Math.max(0.02, Math.min(0.98, pos.u)) * 1000) / 1000;
+      } else {
+        state.ofStudio.config.flare_origin_x = Math.round(pos.u * 1000) / 1000;
+        state.ofStudio.config.flare_origin_y = Math.round(pos.v * 1000) / 1000;
+      }
+      refreshOpticalFlareLocalDerived();
+      syncOpticalFlareStudioUI();
+    });
+
+    const endDrag = () => {
+      if (!state.ofStudio.dragState) return;
+      state.ofStudio.dragState = null;
+      scheduleOpticalFlareServerSync();
+    };
+    previewCanvas.addEventListener("pointerup", endDrag);
+    previewCanvas.addEventListener("pointercancel", endDrag);
+  }
+
+  byId("btn-of-apply-timeline")?.addEventListener("click", applyOpticalFlareToTimelineAction);
+  byId("btn-of-send-deliver")?.addEventListener("click", sendOpticalFlareToDeliverAction);
+  byId("btn-of-export-json")?.addEventListener("click", exportOpticalFlareJsonAction);
+  byId("btn-of-download-json")?.addEventListener("click", downloadOpticalFlareJsonAction);
+  byId("btn-of-copy-fg")?.addEventListener("click", async () => {
+    const compiled =
+      state.ofStudio.compiled || compileOpticalFlareFiltergraphClient(state.ofStudio.config);
+    try {
+      await navigator.clipboard.writeText(compiled.filter_complex || compiled.vf_chain || "");
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    setOpticalFlareStatus("Copied FFmpeg optical flare filtergraph to clipboard.");
   });
 }

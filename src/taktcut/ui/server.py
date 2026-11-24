@@ -242,6 +242,17 @@ from taktcut.multicam_studio import (
     normalize_multicam_studio_config,
     sync_multicam_studio_angles,
 )
+from taktcut.optical_flare_studio import (
+    ALLOWED_OPTICAL_FLARE_BLEND_MODES,
+    ALLOWED_OPTICAL_FLARE_PRESETS,
+    OpticalFlareStudioConfig,
+    apply_optical_flare_to_document,
+    compile_optical_flare_filtergraph,
+    evaluate_optical_flare_studio,
+    export_optical_flare_json,
+    list_optical_flare_presets,
+    normalize_optical_flare_config,
+)
 from taktcut.optical_glow_studio import (
     ALLOWED_OPTICAL_GLOW_BLEND_MODES,
     ALLOWED_OPTICAL_GLOW_PRESET_IDS,
@@ -2007,6 +2018,18 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "print_stocks": list(ALLOWED_FILM_LOOK_PRINT_STOCKS),
                     "grain_gauges_mm": list(ALLOWED_FILM_LOOK_GRAIN_GAUGES),
                     "default_config": FilmLookStudioConfig().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/optical-flare/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "presets": [p.model_dump(mode="json") for p in list_optical_flare_presets()],
+                    "preset_ids": list(ALLOWED_OPTICAL_FLARE_PRESETS),
+                    "blend_modes": list(ALLOWED_OPTICAL_FLARE_BLEND_MODES),
+                    "default_config": OpticalFlareStudioConfig().model_dump(mode="json"),
                 },
             )
             return
@@ -5478,6 +5501,103 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "document": updated_fl_doc.model_dump(mode="json"),
                     "validation": fl_val.model_dump(mode="json"),
                     "compiled": fl_compiled_apply.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/fx/optical-flare/evaluate":
+            of_cfg = normalize_optical_flare_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            raw_of_samples = payload.get("sample_count", 33)
+            of_sample_count = (
+                int(raw_of_samples)
+                if isinstance(raw_of_samples, int) and not isinstance(raw_of_samples, bool)
+                else 33
+            )
+            of_eval = evaluate_optical_flare_studio(of_cfg, sample_count=of_sample_count)
+            self._send_json(HTTPStatus.OK, of_eval.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/optical-flare/compile":
+            of_cfg = normalize_optical_flare_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            of_compiled = compile_optical_flare_filtergraph(of_cfg)
+            self._send_json(HTTPStatus.OK, of_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/fx/optical-flare/export-json":
+            of_cfg = normalize_optical_flare_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            of_title = str(payload.get("title", "TAKTCUT_OPTICAL_FLARE_STUDIO")).strip() or (
+                "TAKTCUT_OPTICAL_FLARE_STUDIO"
+            )
+            of_exported = export_optical_flare_json(of_cfg, title=of_title)
+            raw_of_out = payload.get("out_path")
+            of_saved_rel: str | None = None
+            if raw_of_out is not None and str(raw_of_out).strip():
+                out_file = confine_workspace_path(
+                    self.app_state.workspace_root,
+                    str(raw_of_out),
+                    must_exist=False,
+                    allowed_suffixes=frozenset({".json"}),
+                )
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                out_file.write_text(of_exported.json_text, encoding="utf-8")
+                of_saved_rel = out_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                of_exported.model_copy(update={"saved_path": of_saved_rel}).model_dump(
+                    mode="json"
+                ),
+            )
+            return
+
+        if route == "/api/fx/optical-flare/download":
+            of_cfg = normalize_optical_flare_config(
+                payload.get("config") if "config" in payload else payload
+            )
+            of_title = str(payload.get("title", "TAKTCUT_OPTICAL_FLARE_STUDIO")).strip() or (
+                "TAKTCUT_OPTICAL_FLARE_STUDIO"
+            )
+            of_exported_dl = export_optical_flare_json(of_cfg, title=of_title)
+            of_dl_filename = sanitize_download_filename(
+                str(payload.get("filename") or of_exported_dl.filename),
+                "taktcut_optical_flare_studio",
+                ".json",
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                "application/json; charset=utf-8",
+                of_exported_dl.json_text.encode("utf-8"),
+                extra_headers={
+                    "Content-Disposition": f'attachment; filename="{of_dl_filename}"'
+                },
+            )
+            return
+
+        if route == "/api/fx/optical-flare/apply":
+            of_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            of_cfg = normalize_optical_flare_config(payload.get("config"))
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            updated_of_doc = apply_optical_flare_to_document(
+                of_doc,
+                of_cfg,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            of_compiled_apply = compile_optical_flare_filtergraph(of_cfg)
+            of_val = validate_timeline(updated_of_doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "document": updated_of_doc.model_dump(mode="json"),
+                    "validation": of_val.model_dump(mode="json"),
+                    "compiled": of_compiled_apply.model_dump(mode="json"),
                 },
             )
             return
