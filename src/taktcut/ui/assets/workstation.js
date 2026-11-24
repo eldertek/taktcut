@@ -94,6 +94,7 @@ export function createWorkstationController(ctx) {
     mediaSlate: {},
     cutBinTab: "pool",
     cutViewerMode: "timeline",
+    cutSelectedClipIdx: 0,
     fusionNodes: FUSION_DEFAULT_NODES.map((n) => ({ ...n })),
     selectedFusionNodeId: "deltakeyer1",
     fairlightStrips: FAIRLIGHT_STRIPS.map((s) => ({ ...s })),
@@ -101,8 +102,33 @@ export function createWorkstationController(ctx) {
     fairlightMute: false,
     fairlightTargetStd: "ebu_r128",
     projectLibraryTab: "local",
+    projectSearchQuery: "",
     projectSettingsTab: "master"
   };
+
+  function svgEl(tag, attrs = {}) {
+    const ns = "http://www.w3.org/2000/svg";
+    const node = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      node.setAttribute(k, String(v));
+    }
+    return node;
+  }
+
+  function makeResolveThreeDotEmblem(withPlus = false) {
+    const svg = svgEl("svg", { viewBox: "0 0 48 48", width: "42", height: "42", class: "pm-emblem-svg", "aria-hidden": "true" });
+    if (withPlus) {
+      svg.appendChild(svgEl("rect", { x: "6", y: "6", width: "36", height: "36", rx: "9", fill: "#38383f" }));
+    }
+    svg.appendChild(svgEl("circle", { cx: "24", cy: "16.5", r: "4.6", fill: "#7d7d86" }));
+    svg.appendChild(svgEl("circle", { cx: "17.2", cy: "28.2", r: "4.6", fill: "#7d7d86" }));
+    svg.appendChild(svgEl("circle", { cx: "30.8", cy: "28.2", r: "4.6", fill: "#7d7d86" }));
+    if (withPlus) {
+      svg.appendChild(svgEl("circle", { cx: "34.5", cy: "34.5", r: "6.5", fill: "#8b8b95", stroke: "#2b2b30", "stroke-width": "1.6" }));
+      svg.appendChild(svgEl("path", { d: "M34.5 31.2v6.6M31.2 34.5h6.6", stroke: "#232328", "stroke-width": "1.8", "stroke-linecap": "round" }));
+    }
+    return svg;
+  }
 
   function getTimelineClipsFlat() {
     const out = [];
@@ -532,52 +558,106 @@ export function createWorkstationController(ctx) {
     if (!grid) return;
     grid.replaceChildren();
     const curName = (state.timelineDoc && state.timelineDoc.name) || "Eclipse_Showreel_Master_25p";
+    const q = (ws.projectSearchQuery || "").trim().toLowerCase();
+
+    // Tile 0: Signature DaVinci Resolve 21 "New Project" tile with coral-red outline + emblem
+    if (!q || "new project".includes(q)) {
+      const newCard = el("button", "pm-project-card pm-new-project-card");
+      newCard.type = "button";
+      const newThumb = el("div", "pm-project-thumb pm-new-thumb");
+      newThumb.appendChild(makeResolveThreeDotEmblem(true));
+      newCard.appendChild(newThumb);
+      newCard.appendChild(el("div", "pm-project-title is-bright", "New Project"));
+      newCard.addEventListener("click", () => {
+        loadSampleTimeline("clean");
+        const dlg = byId("project-manager-dialog");
+        if (dlg && dlg.open) dlg.close();
+        showBanner("Created new clean 25p project.", "success");
+      });
+      grid.appendChild(newCard);
+    }
+
     const projects = [
       {
         name: curName,
-        meta: "1920x1080 | 25 fps | Active Session",
-        badge: "ACTIVE",
+        isFolder: false,
+        hasPreview: true,
         lib: "local",
         run: () => {}
       },
       {
-        name: "Eclipse_Showreel_Master_25p",
-        meta: "1920x1080 | 25 fps | Rec.709 Clean Master",
-        badge: "25P NLE",
-        lib: "local",
-        run: () => loadSampleTimeline("clean")
-      },
-      {
         name: "Broadcast_Conform_Diagnostics",
-        meta: "1920x1080 | Gap / Overlap / Cadence Audit",
-        badge: "QC DIAG",
+        isFolder: false,
+        hasPreview: false,
         lib: "local",
         run: () => loadSampleTimeline("issues")
       },
       {
+        name: "Commercial_Master_Rec709",
+        isFolder: false,
+        hasPreview: false,
+        lib: "local",
+        run: () => loadSampleTimeline("clean")
+      },
+      {
+        name: "Social_Reels_9x16_Pack",
+        isFolder: true,
+        hasPreview: false,
+        lib: "local",
+        run: () => loadSampleTimeline("clean")
+      },
+      {
+        name: "Documentary_Fairlight_Mix",
+        isFolder: false,
+        hasPreview: false,
+        lib: "local",
+        run: () => loadSampleTimeline("clean")
+      },
+      {
         name: "Studio_Collab_Main_Server",
-        meta: "PostgreSQL Project Server | Multi-UserBins",
-        badge: "NETWORK",
+        isFolder: false,
+        hasPreview: false,
         lib: "network",
         run: () => loadSampleTimeline("clean")
       },
       {
         name: "Cloud_Remote_Grade_Reel",
-        meta: "DaVinci YRGB | Proxies Synced",
-        badge: "CLOUD",
+        isFolder: false,
+        hasPreview: false,
         lib: "cloud",
         run: () => loadSampleTimeline("clean")
       }
-    ].filter((p) => ws.projectLibraryTab === "local" ? p.lib === "local" : p.lib === ws.projectLibraryTab);
+    ].filter((p) => {
+      const matchLib = ws.projectLibraryTab === "local" ? p.lib === "local" : p.lib === ws.projectLibraryTab;
+      const matchQ = !q || p.name.toLowerCase().includes(q);
+      return matchLib && matchQ;
+    });
 
     for (const proj of projects) {
       const card = el("button", "pm-project-card");
       card.type = "button";
-      const thumb = el("div", "pm-project-thumb");
-      thumb.appendChild(el("span", "nle-tag mono", proj.badge));
+      const thumb = el(
+        "div",
+        proj.hasPreview
+          ? "pm-project-thumb is-preview"
+          : proj.isFolder
+            ? "pm-project-thumb is-folder"
+            : "pm-project-thumb"
+      );
+      if (proj.isFolder) {
+        const fSvg = svgEl("svg", { viewBox: "0 0 64 48", width: "68", height: "50", "aria-hidden": "true" });
+        fSvg.appendChild(svgEl("path", { d: "M6 10h18l5 5h29v25H6z", fill: "#6b6b73", stroke: "#18181c", "stroke-width": "1.5" }));
+        fSvg.appendChild(svgEl("rect", { x: "9", y: "13", width: "46", height: "3", fill: "#b8b8c2" }));
+        fSvg.appendChild(svgEl("rect", { x: "6", y: "16", width: "52", height: "24", rx: "1.5", fill: "#76767f" }));
+        thumb.appendChild(fSvg);
+      } else if (!proj.hasPreview) {
+        thumb.appendChild(makeResolveThreeDotEmblem(false));
+      } else {
+        const slateBadge = el("span", "pm-active-slate mono", "25p REC.709");
+        thumb.appendChild(slateBadge);
+      }
       card.appendChild(thumb);
       card.appendChild(el("div", "pm-project-title", proj.name));
-      card.appendChild(el("div", "pm-project-meta mono", proj.meta));
       card.addEventListener("click", () => {
         proj.run();
         const dlg = byId("project-manager-dialog");
@@ -725,19 +805,28 @@ export function createWorkstationController(ctx) {
     const clips = getTimelineClipsFlat();
 
     if (ws.cutBinTab === "pool" || ws.cutBinTab === "sync") {
-      for (const c of clips) {
-        const card = el("button", "cut-clip-pill");
+      clips.forEach((c) => {
+        const isSel = c.idx === ws.cutSelectedClipIdx;
+        const card = el("button", isSel ? "cut-clip-tile is-selected" : "cut-clip-tile");
         card.type = "button";
-        const top = el("div", "cut-clip-pill-top");
-        top.appendChild(el("span", "nle-tag mono", ws.cutBinTab === "sync" ? `CAM ${c.trackIndex + 1}` : c.trackName));
-        top.appendChild(el("span", "mono", formatTc(c.startFrame)));
-        card.appendChild(top);
-        card.appendChild(el("div", "cut-clip-pill-name", c.name));
+        const frame = el("div", `cut-clip-frame is-${c.trackKind}`);
+        if (isSel) {
+          const checkCorner = el("span", "cut-clip-corner-check", "\u2713");
+          frame.appendChild(checkCorner);
+        }
+        const badge = el("span", "cut-clip-badge mono", ws.cutBinTab === "sync" ? `CAM ${c.trackIndex + 1}` : c.trackName);
+        frame.appendChild(badge);
+        const tcTag = el("span", "cut-clip-tc mono", formatTc(c.startFrame));
+        frame.appendChild(tcTag);
+        card.appendChild(frame);
+        card.appendChild(el("div", "cut-clip-label", c.name));
         card.addEventListener("click", () => {
+          ws.cutSelectedClipIdx = c.idx;
           setPlayhead(c.startFrame);
+          renderCutPageBin();
         });
         host.appendChild(card);
-      }
+      });
     } else if (ws.cutBinTab === "transitions") {
       const trans = [
         ["Cross Dissolve", "fade"],
@@ -886,9 +975,35 @@ export function createWorkstationController(ctx) {
       g.lineWidth = isSel ? 2 : 1;
       g.strokeRect(n.px + 0.5, n.py + 0.5, n.pw - 1, n.ph - 1);
 
-      // Input / output port triangles/squares
+      // DaVinci Fusion triangular input ports + square output port
+      // Yellow background input triangle on left
       g.fillStyle = "#eab308";
-      g.fillRect(n.px - 3, n.py + n.ph / 2 - 3, 6, 6);
+      g.beginPath();
+      g.moveTo(n.px - 4, n.py + n.ph / 2 - 4);
+      g.lineTo(n.px + 2, n.py + n.ph / 2);
+      g.lineTo(n.px - 4, n.py + n.ph / 2 + 4);
+      g.closePath();
+      g.fill();
+
+      // Green foreground triangle on top (Merge / Keyer) & Cyan effect-mask triangle on bottom
+      if (n.kind === "merge" || n.kind === "matte") {
+        g.fillStyle = "#22c55e";
+        g.beginPath();
+        g.moveTo(n.px + n.pw * 0.5 - 4, n.py - 4);
+        g.lineTo(n.px + n.pw * 0.5 + 4, n.py - 4);
+        g.lineTo(n.px + n.pw * 0.5, n.py + 2);
+        g.closePath();
+        g.fill();
+      }
+      g.fillStyle = "#38bdf8";
+      g.beginPath();
+      g.moveTo(n.px + n.pw * 0.72 - 3.5, n.py + n.ph + 3.5);
+      g.lineTo(n.px + n.pw * 0.72 + 3.5, n.py + n.ph + 3.5);
+      g.lineTo(n.px + n.pw * 0.72, n.py + n.ph - 1.5);
+      g.closePath();
+      g.fill();
+
+      // Grey square output port on right
       g.fillStyle = "#cbd5e1";
       g.fillRect(n.px + n.pw - 3, n.py + n.ph / 2 - 3, 6, 6);
 
@@ -974,18 +1089,20 @@ export function createWorkstationController(ctx) {
 
     for (const strip of ws.fairlightStrips) {
       const col = el("div", strip.id === "bus1" ? "fl-channel-strip is-master" : "fl-channel-strip");
-      col.appendChild(el("div", "fl-strip-code mono", strip.code));
-      col.appendChild(el("div", "fl-strip-name", strip.name));
-      col.appendChild(el("div", "fl-strip-io mono", `In -> ${strip.bus}`));
+      const topSlot = el("div", "fl-strip-top");
+      topSlot.appendChild(el("span", "fl-strip-code mono", strip.code));
+      topSlot.appendChild(el("span", "fl-strip-bus mono", strip.bus));
+      col.appendChild(topSlot);
+      col.appendChild(el("div", "fl-strip-io mono", "Input"));
 
       const inserts = el("div", "fl-strip-inserts");
-      const eqBtn = el("button", strip.eq ? "fl-insert-pill is-on" : "fl-insert-pill", "EQ 6-Band");
+      const eqBtn = el("button", strip.eq ? "fl-insert-pill is-on" : "fl-insert-pill", "EQ");
       eqBtn.type = "button";
       eqBtn.addEventListener("click", () => {
         strip.eq = !strip.eq;
         renderFairlightMixerConsole();
       });
-      const dynBtn = el("button", strip.dyn ? "fl-insert-pill is-on" : "fl-insert-pill", "Dynamics");
+      const dynBtn = el("button", strip.dyn ? "fl-insert-pill is-on" : "fl-insert-pill", "DYN");
       dynBtn.type = "button";
       dynBtn.addEventListener("click", () => {
         strip.dyn = !strip.dyn;
@@ -995,7 +1112,7 @@ export function createWorkstationController(ctx) {
       inserts.appendChild(dynBtn);
       col.appendChild(inserts);
 
-      // Pan slider
+      // Pan readout + precision micro-slider
       const panWrap = el("div", "fl-pan-wrap");
       const panLbl = el("span", "fl-pan-label mono", strip.pan === 0 ? "C" : strip.pan < 0 ? `L${Math.abs(strip.pan)}` : `R${strip.pan}`);
       const panInp = el("input", "fl-pan-slider");
@@ -1012,7 +1129,7 @@ export function createWorkstationController(ctx) {
       panWrap.appendChild(panInp);
       col.appendChild(panWrap);
 
-      // Mute / Solo row
+      // R / S / M square hardware buttons
       const msRow = el("div", "fl-ms-row");
       const rBtn = el("button", strip.rec ? "fl-ms-btn is-rec" : "fl-ms-btn", "R");
       rBtn.type = "button";
@@ -1028,8 +1145,18 @@ export function createWorkstationController(ctx) {
       msRow.appendChild(mBtn);
       col.appendChild(msRow);
 
-      // Fader + readout
-      const dbReadout = el("div", "fl-fader-db mono", `${strip.faderDb >= 0 ? "+" : ""}${strip.faderDb.toFixed(1)} dB`);
+      // Vertical DAW Fader Well + Dual Segmented LED Meter + Scale
+      const faderBay = el("div", "fl-fader-bay");
+      const faderWell = el("div", "fl-fader-well");
+      const faderCap = el("div", "fl-fader-cap");
+      const updateCapPos = () => {
+        const norm = (strip.faderDb - (-48)) / 60;
+        const pct = Math.max(4, Math.min(94, Math.round((1 - norm) * 100)));
+        faderCap.style.setProperty("--cap-top", `${pct}%`);
+      };
+      updateCapPos();
+      faderWell.appendChild(faderCap);
+
       const faderInp = el("input", "fl-fader-range");
       faderInp.type = "range";
       faderInp.min = "-48";
@@ -1037,13 +1164,47 @@ export function createWorkstationController(ctx) {
       faderInp.step = "0.5";
       faderInp.value = String(strip.faderDb);
       faderInp.setAttribute("aria-label", `${strip.name} Fader dB`);
+      faderWell.appendChild(faderInp);
+
+      // Dual L/R LED bargraph
+      const meterPair = el("div", "fl-strip-meters");
+      const meterL = el("div", "fl-meter-bar");
+      const meterR = el("div", "fl-meter-bar");
+      const fillL = el("div", "fl-meter-fill");
+      const fillR = el("div", "fl-meter-fill");
+      const syncMeterHeight = () => {
+        const activePct = strip.mute || ws.fairlightMute
+          ? 2
+          : Math.max(8, Math.min(96, Math.round(((strip.faderDb + 44) / 56) * 86)));
+        fillL.style.setProperty("--meter-pct", `${activePct}%`);
+        fillR.style.setProperty("--meter-pct", `${Math.max(4, activePct - 5)}%`);
+      };
+      syncMeterHeight();
+      meterL.appendChild(fillL);
+      meterR.appendChild(fillR);
+      meterPair.appendChild(meterL);
+      meterPair.appendChild(meterR);
+
+      const scaleCol = el("div", "fl-db-scale mono");
+      for (const tick of ["+10", "0", "-10", "-20", "-40"]) {
+        scaleCol.appendChild(el("span", "", tick));
+      }
+
+      faderBay.appendChild(faderWell);
+      faderBay.appendChild(scaleCol);
+      faderBay.appendChild(meterPair);
+      col.appendChild(faderBay);
+
+      const dbReadout = el("div", "fl-fader-db mono", `${strip.faderDb >= 0 ? "+" : ""}${strip.faderDb.toFixed(1)}`);
       faderInp.addEventListener("input", () => {
         strip.faderDb = Number(faderInp.value);
-        dbReadout.textContent = `${strip.faderDb >= 0 ? "+" : ""}${strip.faderDb.toFixed(1)} dB`;
+        dbReadout.textContent = `${strip.faderDb >= 0 ? "+" : ""}${strip.faderDb.toFixed(1)}`;
+        updateCapPos();
+        syncMeterHeight();
         redrawWorkstationCanvases();
       });
-      col.appendChild(faderInp);
       col.appendChild(dbReadout);
+      col.appendChild(el("div", "fl-strip-name", strip.name));
       host.appendChild(col);
     }
   }
@@ -1380,6 +1541,27 @@ export function createWorkstationController(ctx) {
       btnPmNew.addEventListener("click", () => {
         loadSampleTimeline("clean");
         byId("project-manager-dialog").close();
+      });
+    }
+    const pmSearch = byId("pm-search-input");
+    if (pmSearch) {
+      pmSearch.addEventListener("input", () => {
+        ws.projectSearchQuery = pmSearch.value;
+        renderProjectManagerCards();
+      });
+    }
+    const btnPmExport = byId("btn-pm-export");
+    if (btnPmExport) {
+      btnPmExport.addEventListener("click", () => {
+        byId("project-manager-dialog").close();
+        clickIfPresent(byId, "btn-save-project");
+      });
+    }
+    const btnPmImport = byId("btn-pm-import");
+    if (btnPmImport) {
+      btnPmImport.addEventListener("click", () => {
+        byId("project-manager-dialog").close();
+        clickIfPresent(byId, "btn-open-project");
       });
     }
 

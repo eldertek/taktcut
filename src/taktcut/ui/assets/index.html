@@ -36,9 +36,16 @@
     <header class="nle-menubar">
       <div class="menubar-left">
         <div class="nle-panel-toggles" role="group" aria-label="Workspace Panel Visibility">
-          <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="media-pool-section" title="Toggle Media Pool">Media Pool</button>
-          <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="timeline-index-panel" title="Toggle Edit Index">Edit Index</button>
+          <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="media-pool-section" title="Toggle Media Pool">
+            <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M1.8 4.2h4.2l1.4 1.6h6.8v6.5H1.8z"/></svg>
+            <span>Media Pool</span>
+          </button>
+          <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="timeline-index-panel" title="Toggle Edit Index">
+            <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M2.5 4h11M2.5 8h11M2.5 12h7.5"/></svg>
+            <span>Edit Index</span>
+          </button>
           <button type="button" role="tab" id="tab-titles" class="nle-panel-toggle page-tab" data-tab="titles" aria-selected="false" aria-controls="panel-titles" title="Titles &amp; Subtitles Workspace">
+            <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path fill="none" stroke="currentColor" stroke-width="1.4" d="M5.2 5.5h5.6M8 5.5v5.5"/></svg>
             <span data-i18n="tabs.titles">Titles</span>
           </button>
         </div>
@@ -47,23 +54,30 @@
       <div class="menubar-center">
         <h1 class="brand-name">taktcut</h1>
         <span class="menubar-sep">/</span>
-        <button type="button" id="topbar-project-name" class="menubar-proj mono" title="Open Project Manager (Shift+1)">Eclipse_Showreel_Master_25p</button>
+        <button type="button" id="topbar-project-name" class="menubar-proj" title="Open Project Manager (Shift+1)">Eclipse_Showreel_Master_25p</button>
         <span id="topbar-seq-meta" class="nle-tag mono">25/1 | 1920x1080</span>
       </div>
 
       <div class="menubar-right">
         <div class="project-action-group" role="group" aria-label="Project file actions">
           <button type="button" id="btn-open-project" class="btn btn-mini btn-project-action" title="Open Project (.taktcut.json)">
+            <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M2 4.5h4l1.4 1.5H14v6H2z"/></svg>
             <span data-i18n="topbar.btn.openProject">Open Project</span>
           </button>
           <button type="button" id="btn-save-project" class="btn btn-mini btn-project-primary" title="Save Project (.taktcut.json, Ctrl+S)">
+            <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M8 2.5v7.5M5.2 5.2L8 2.4l2.8 2.8M3 10.5v2.8h10v-2.8"/></svg>
             <span data-i18n="topbar.btn.saveProject">Save Project</span>
             <span class="kbd-chip mono">Ctrl+S</span>
           </button>
           <input type="file" id="project-file-input" class="is-hidden" accept=".taktcut.json,.json,application/json">
         </div>
         <button type="button" role="tab" id="tab-qa" class="btn btn-mini page-tab" data-tab="qa" aria-selected="false" aria-controls="panel-qa" title="Broadcast QA Compliance Gate">
+          <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M8 2l5 2v4c0 3.2-2.2 5.2-5 6-2.8-.8-5-2.8-5-6V4zM5.6 8.2l1.7 1.7 3.2-3.4"/></svg>
           <span data-i18n="tabs.qa">Broadcast QA</span>
+        </button>
+        <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="timeline-right-inspector" title="Toggle Inspector">
+          <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M3 4.5h10M3 8h10M3 11.5h10"/><circle cx="6" cy="4.5" r="1.4" fill="#28282c" stroke="currentColor" stroke-width="1.3"/><circle cx="10.5" cy="8" r="1.4" fill="#28282c" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="11.5" r="1.4" fill="#28282c" stroke="currentColor" stroke-width="1.3"/></svg>
+          <span>Inspector</span>
         </button>
         <button type="button" id="update-banner-btn" class="btn-update mono is-hidden" aria-live="polite"></button>
         <div class="workspace-pill" id="workspace-pill" title="">
@@ -215,62 +229,109 @@
       <!-- PAGE 02: CUT PAGE (FirstCut: Source Tape + Quick Tools + Dual Stacked Timeline) -->
       <section id="panel-cut" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-cut">
         <div class="resolve-cut-top">
-          <aside class="nle-pane">
-            <div class="pane-header">
+          <aside class="nle-pane resolve-cut-bin-pane">
+            <div class="pane-header cut-bin-header">
               <div class="cut-bin-tabs" role="tablist" aria-label="Cut Page Bins">
-                <button type="button" class="btn btn-mini is-active" data-cut-tab="pool">Media Pool</button>
-                <button type="button" class="btn btn-mini" data-cut-tab="sync">Sync Bin</button>
-                <button type="button" class="btn btn-mini" data-cut-tab="transitions">Transitions</button>
-                <button type="button" class="btn btn-mini" data-cut-tab="titles">Titles</button>
-                <button type="button" class="btn btn-mini" data-cut-tab="effects">Effects</button>
+                <button type="button" class="btn btn-mini is-active" data-cut-tab="pool">
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M1.8 4.2h4l1.4 1.6h7v6.4H1.8z"/></svg>
+                  <span>Media Pool</span>
+                </button>
+                <button type="button" class="btn btn-mini" data-cut-tab="sync">
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="3" width="5" height="4" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="3" width="5" height="4" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="9" width="5" height="4" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="9" width="5" height="4" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+                  <span>Sync Bin</span>
+                </button>
+                <button type="button" class="btn btn-mini" data-cut-tab="transitions">
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.2" d="M2 3.5l12 9M14 3.5l-12 9"/></svg>
+                  <span>Transitions</span>
+                </button>
+                <button type="button" class="btn btn-mini" data-cut-tab="titles">
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.3" d="M5.2 5.8h5.6M8 5.8v5"/></svg>
+                  <span>Titles</span>
+                </button>
+                <button type="button" class="btn btn-mini" data-cut-tab="effects">
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M3 13L11.5 4.5M9.5 2.5v2M13.5 6.5h-2M12.5 3.5l-1.2 1.2"/></svg>
+                  <span>Effects</span>
+                </button>
               </div>
             </div>
-            <div class="pane-body">
+            <div class="cut-bin-subbar">
+              <span class="cut-master-crumb">Master</span>
+            </div>
+            <div class="pane-body cut-bin-body">
               <div id="cut-bin-content" class="cut-bin-grid"></div>
             </div>
           </aside>
 
-          <section class="nle-pane">
-            <div class="pane-header">
+          <section class="nle-pane resolve-cut-viewer-pane">
+            <div class="pane-header cut-viewer-header">
               <div class="viewer-controls">
                 <button type="button" class="btn btn-mini" data-cut-vmode="source">Source Clip</button>
                 <button type="button" class="btn btn-mini" data-cut-vmode="tape">Source Tape</button>
                 <button type="button" class="btn btn-mini is-active" data-cut-vmode="timeline">Timeline</button>
               </div>
+              <span class="cut-timeline-title">Timeline 1</span>
               <div class="viewer-controls">
                 <span id="cut-page-tc" class="tc-readout mono">00:00:00:00</span>
-                <button type="button" id="btn-cut-play" class="btn btn-mini mono">Play / Pause</button>
-                <button type="button" id="btn-cut-split" class="btn btn-mini mono">Split</button>
               </div>
             </div>
-            <div class="pane-body">
-              <div class="viewer-well">
-                <canvas id="cut-viewer-canvas" class="studio-canvas" aria-label="Cut Page Multifunction Viewer"></canvas>
+            <div class="pane-body cut-viewer-body">
+              <div class="cut-viewer-stage-row">
+                <div class="viewer-well cut-viewer-well">
+                  <canvas id="cut-viewer-canvas" class="studio-canvas" aria-label="Cut Page Multifunction Viewer"></canvas>
+                </div>
+                <div class="cut-meter-well">
+                  <canvas id="cut-vu-canvas" class="studio-canvas cut-vu-canvas" aria-label="Cut Stereo Audio Meter"></canvas>
+                </div>
               </div>
-              <div class="cut-quick-tools-bar" role="toolbar" aria-label="Cut Viewer Tools">
-                <button type="button" id="btn-cut-tool-crop" class="btn btn-mini">Transform / Crop</button>
-                <button type="button" id="btn-cut-tool-dzoom" class="btn btn-mini">Dynamic Zoom</button>
-                <button type="button" id="btn-cut-tool-stab" class="btn btn-mini">Stabilize</button>
-                <button type="button" id="btn-cut-tool-speed" class="btn btn-mini">Speed Ramp</button>
-                <button type="button" id="btn-cut-tool-audio" class="btn btn-mini">Audio Mix</button>
-              </div>
-              <div class="cut-assembly-bar" role="group" aria-label="Cut Assembly Edit Actions">
-                <button type="button" id="btn-cut-smart-insert" class="btn btn-primary btn-mini">Smart Insert</button>
-                <button type="button" id="btn-cut-append" class="btn btn-secondary btn-mini">Append</button>
-                <button type="button" id="btn-cut-ripple-ow" class="btn btn-secondary btn-mini">Ripple Overwrite</button>
-                <button type="button" id="btn-cut-closeup" class="btn btn-secondary btn-mini">Close Up</button>
-                <button type="button" id="btn-cut-place-top" class="btn btn-secondary btn-mini">Place on Top</button>
-                <button type="button" id="btn-cut-src-ow" class="btn btn-secondary btn-mini">Source Overwrite</button>
+              <div class="cut-transport-deck">
+                <div class="cut-quick-tools-bar" role="toolbar" aria-label="Cut Viewer Tools">
+                  <button type="button" id="btn-cut-tool-crop" class="btn btn-mini">Transform</button>
+                  <button type="button" id="btn-cut-tool-dzoom" class="btn btn-mini">Dynamic Zoom</button>
+                  <button type="button" id="btn-cut-tool-stab" class="btn btn-mini">Stabilize</button>
+                  <button type="button" id="btn-cut-tool-speed" class="btn btn-mini">Speed</button>
+                  <button type="button" id="btn-cut-tool-audio" class="btn btn-mini">Audio</button>
+                </div>
+                <div class="cut-transport-btns">
+                  <button type="button" id="btn-cut-play" class="btn btn-mini mono">Play / Pause</button>
+                  <button type="button" id="btn-cut-split" class="btn btn-mini mono">Split</button>
+                </div>
+                <span class="cut-tcg-readout mono">TCG 01:00:00:00</span>
               </div>
             </div>
           </section>
         </div>
 
-        <section class="nle-pane resolve-cut-dual-timeline">
-          <div class="pane-header">
-            <h2>Dual Timeline (Full Sequence Bar + Detailed Playhead Zoom)</h2>
-            <span class="nle-tag mono">SMART INDICATOR</span>
+        <div class="cut-seam-toolbar">
+          <div class="cut-assembly-bar" role="group" aria-label="Cut Assembly Edit Actions">
+            <button type="button" id="btn-cut-smart-insert" class="btn btn-mini is-active">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="1.5" y="7" width="4.5" height="5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="10" y="7" width="4.5" height="5" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.3" d="M8 2.5v6M6 6.5l2 2 2-2"/></svg>
+              <span>Smart Insert</span>
+            </button>
+            <button type="button" id="btn-cut-append" class="btn btn-mini">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="6" width="6" height="5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.5" y="6" width="4.5" height="5" fill="currentColor" opacity="0.75"/></svg>
+              <span>Append</span>
+            </button>
+            <button type="button" id="btn-cut-ripple-ow" class="btn btn-mini">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="6.5" width="4" height="4.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="6.5" y="5" width="5" height="6" fill="currentColor" opacity="0.7"/><path fill="none" stroke="currentColor" stroke-width="1.2" d="M12.5 8h2"/></svg>
+              <span>Ripple Overwrite</span>
+            </button>
+            <button type="button" id="btn-cut-closeup" class="btn btn-mini">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="5" y="5.5" width="6" height="5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+              <span>Close Up</span>
+            </button>
+            <button type="button" id="btn-cut-place-top" class="btn btn-mini">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="9" width="12" height="4" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="5" y="3.5" width="6" height="4" fill="currentColor" opacity="0.75"/></svg>
+              <span>Place on Top</span>
+            </button>
+            <button type="button" id="btn-cut-src-ow" class="btn btn-mini">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M2 11.5h12M4.5 7.5h7v4h-7zM8 3v3.5"/></svg>
+              <span>Source Overwrite</span>
+            </button>
           </div>
+          <span class="cut-smart-badge mono">Smart Indicator</span>
+        </div>
+
+        <section class="nle-pane resolve-cut-dual-timeline">
           <div class="cut-dual-tl-body">
             <div class="cut-tl-stack">
               <div class="cut-upper-ruler-wrap">
@@ -279,9 +340,6 @@
               <div class="cut-lower-detail-wrap">
                 <canvas id="cut-detail-canvas" class="studio-canvas cut-detail-canvas" aria-label="Cut Detailed Zoomed Timeline"></canvas>
               </div>
-            </div>
-            <div class="cut-meter-well">
-              <canvas id="cut-vu-canvas" class="studio-canvas cut-vu-canvas" aria-label="Cut Stereo Audio Meter"></canvas>
             </div>
           </div>
         </section>
@@ -674,7 +732,7 @@
           </section>
 
           <!-- RIGHT DOCK: DAVINCI CLIP INSPECTOR & CONTINUITY -->
-          <aside class="nle-pane nle-right-inspector">
+          <aside id="timeline-right-inspector" class="nle-pane nle-right-inspector">
             <div class="pane-header">
               <h2 data-i18n="timeline.inspector.title">Inspector &amp; Markers</h2>
               <div class="viewer-controls">
@@ -2990,6 +3048,89 @@
                     <button type="button" id="btn-color-node-clear-lut" class="btn btn-mini" disabled data-i18n="color.nodes.clearLut">Clear LUT</button>
                   </div>
                 </div>
+              </div>
+
+              <div class="wheels-grid">
+                <!-- LIFT (SHADOWS) WHEEL -->
+                <div class="wheel-dock">
+                  <div class="wheel-head">
+                    <span class="wheel-title" data-i18n="color.group.lift">Lift</span>
+                    <button type="button" id="btn-reset-lift" class="btn btn-mini" aria-label="Reset Lift">Rst</button>
+                  </div>
+                  <canvas id="wheel-lift" class="wheel-canvas" aria-label="Lift Shadows Color Wheel"></canvas>
+                  <div class="wheel-bars mono">
+                    <div class="cdl-slider-row">
+                      <label class="ch-r" for="lift-r-range">R</label>
+                      <input type="range" id="lift-r-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="lift-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Red">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-g" for="lift-g-range">G</label>
+                      <input type="range" id="lift-g-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="lift-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Green">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-b" for="lift-b-range">B</label>
+                      <input type="range" id="lift-b-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="lift-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Blue">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- GAMMA (MIDTONES) WHEEL -->
+                <div class="wheel-dock">
+                  <div class="wheel-head">
+                    <span class="wheel-title" data-i18n="color.group.gamma">Gamma</span>
+                    <button type="button" id="btn-reset-gamma" class="btn btn-mini" aria-label="Reset Gamma">Rst</button>
+                  </div>
+                  <canvas id="wheel-gamma" class="wheel-canvas" aria-label="Gamma Midtones Color Wheel"></canvas>
+                  <div class="wheel-bars mono">
+                    <div class="cdl-slider-row">
+                      <label class="ch-r" for="gamma-r-range">R</label>
+                      <input type="range" id="gamma-r-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gamma-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Red">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-g" for="gamma-g-range">G</label>
+                      <input type="range" id="gamma-g-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gamma-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Green">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-b" for="gamma-b-range">B</label>
+                      <input type="range" id="gamma-b-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gamma-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Blue">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- GAIN (HIGHLIGHTS) WHEEL -->
+                <div class="wheel-dock">
+                  <div class="wheel-head">
+                    <span class="wheel-title" data-i18n="color.group.gain">Gain</span>
+                    <button type="button" id="btn-reset-gain" class="btn btn-mini" aria-label="Reset Gain">Rst</button>
+                  </div>
+                  <canvas id="wheel-gain" class="wheel-canvas" aria-label="Gain Highlights Color Wheel"></canvas>
+                  <div class="wheel-bars mono">
+                    <div class="cdl-slider-row">
+                      <label class="ch-r" for="gain-r-range">R</label>
+                      <input type="range" id="gain-r-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gain-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Red">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-g" for="gain-g-range">G</label>
+                      <input type="range" id="gain-g-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gain-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Green">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-b" for="gain-b-range">B</label>
+                      <input type="range" id="gain-b-range" min="-1" max="1" step="0.01" value="0.00">
+                      <input type="number" id="gain-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Blue">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="color-secondary-tools-stack">
                 <div id="color-lut-browser-dock" class="color-lut-browser-dock" role="region" aria-label="3D LUT Look Library">
                   <div class="lut-browser-toolbar">
                     <div class="lut-browser-title-group">
@@ -3135,85 +3276,6 @@
                       <label for="qual-blur-range" data-i18n="color.qual.blur">Matte Blur (px)</label>
                       <input type="range" id="qual-blur-range" min="0" max="8" step="0.5" value="0" disabled>
                       <input type="number" id="qual-blur-num" class="input-num" min="0" max="8" step="0.5" value="0" aria-label="Qualifier matte blur radius" disabled>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="wheels-grid">
-                <!-- LIFT (SHADOWS) WHEEL -->
-                <div class="wheel-dock">
-                  <div class="wheel-head">
-                    <span class="wheel-title mono" data-i18n="color.group.lift">LIFT (SHADOWS)</span>
-                    <button type="button" id="btn-reset-lift" class="btn btn-mini" aria-label="Reset Lift">Rst</button>
-                  </div>
-                  <canvas id="wheel-lift" class="wheel-canvas" aria-label="Lift Shadows Color Wheel"></canvas>
-                  <div class="wheel-bars mono">
-                    <div class="cdl-slider-row">
-                      <label class="ch-r" for="lift-r-range">R</label>
-                      <input type="range" id="lift-r-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="lift-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Red">
-                    </div>
-                    <div class="cdl-slider-row">
-                      <label class="ch-g" for="lift-g-range">G</label>
-                      <input type="range" id="lift-g-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="lift-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Green">
-                    </div>
-                    <div class="cdl-slider-row">
-                      <label class="ch-b" for="lift-b-range">B</label>
-                      <input type="range" id="lift-b-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="lift-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Lift Blue">
-                    </div>
-                  </div>
-                </div>
-
-                <!-- GAMMA (MIDTONES) WHEEL -->
-                <div class="wheel-dock">
-                  <div class="wheel-head">
-                    <span class="wheel-title mono" data-i18n="color.group.gamma">GAMMA (MIDTONES)</span>
-                    <button type="button" id="btn-reset-gamma" class="btn btn-mini" aria-label="Reset Gamma">Rst</button>
-                  </div>
-                  <canvas id="wheel-gamma" class="wheel-canvas" aria-label="Gamma Midtones Color Wheel"></canvas>
-                  <div class="wheel-bars mono">
-                    <div class="cdl-slider-row">
-                      <label class="ch-r" for="gamma-r-range">R</label>
-                      <input type="range" id="gamma-r-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="gamma-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Red">
-                    </div>
-                    <div class="cdl-slider-row">
-                      <label class="ch-g" for="gamma-g-range">G</label>
-                      <input type="range" id="gamma-g-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="gamma-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Green">
-                    </div>
-                    <div class="cdl-slider-row">
-                      <label class="ch-b" for="gamma-b-range">B</label>
-                      <input type="range" id="gamma-b-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="gamma-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gamma Blue">
-                    </div>
-                  </div>
-                </div>
-
-                <!-- GAIN (HIGHLIGHTS) WHEEL -->
-                <div class="wheel-dock">
-                  <div class="wheel-head">
-                    <span class="wheel-title mono" data-i18n="color.group.gain">GAIN (HIGHLIGHTS)</span>
-                    <button type="button" id="btn-reset-gain" class="btn btn-mini" aria-label="Reset Gain">Rst</button>
-                  </div>
-                  <canvas id="wheel-gain" class="wheel-canvas" aria-label="Gain Highlights Color Wheel"></canvas>
-                  <div class="wheel-bars mono">
-                    <div class="cdl-slider-row">
-                      <label class="ch-r" for="gain-r-range">R</label>
-                      <input type="range" id="gain-r-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="gain-r-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Red">
-                    </div>
-                    <div class="cdl-slider-row">
-                      <label class="ch-g" for="gain-g-range">G</label>
-                      <input type="range" id="gain-g-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="gain-g-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Green">
-                    </div>
-                    <div class="cdl-slider-row">
-                      <label class="ch-b" for="gain-b-range">B</label>
-                      <input type="range" id="gain-b-range" min="-1" max="1" step="0.01" value="0.00">
-                      <input type="number" id="gain-b-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Gain Blue">
                     </div>
                   </div>
                 </div>
@@ -4314,8 +4376,9 @@
 
     <!-- BOTTOM DAVINCI 7-PAGE SWITCHER DOCK (UiPageSwitcher) -->
     <nav class="nle-pagedock" role="tablist" aria-label="Studio Pages">
-      <div class="pagedock-side pagedock-left mono">
-        <span class="pagedock-ws-hint">Shift+2..8</span>
+      <div class="pagedock-side pagedock-left">
+        <img class="pagedock-logo" src="./favicon.svg" alt="" width="14" height="14">
+        <span class="pagedock-brand">taktcut Studio 21</span>
       </div>
       <div class="pagedock-center">
         <button type="button" role="tab" id="tab-media" class="page-tab" data-tab="media" aria-selected="false" aria-controls="panel-media" title="Media Page (Shift+2)">
@@ -7060,25 +7123,52 @@
     </div>
   </dialog>
 
-  <!-- PROJECT MANAGER DIALOG (UiProjectManagerDialogImp) -->
+  <!-- PROJECT MANAGER DIALOG (UiProjectManagerDialogImp - 1:1 DaVinci Resolve 21) -->
   <dialog id="project-manager-dialog" class="nle-dialog project-manager-dialog" aria-labelledby="project-manager-title">
-    <div class="nle-dialog-header">
-      <div class="nle-dialog-title-group">
-        <h2 id="project-manager-title">Project Manager</h2>
-        <p class="nle-dialog-subtitle">Local Database, Project Server &amp; Cloud Project Libraries</p>
+    <div class="pm-topbar">
+      <div class="pm-topbar-left">
+        <button type="button" id="btn-close-project-manager" class="pm-close-x" aria-label="Close Project Manager" title="Close (Esc)">&times;</button>
+        <div class="pm-lib-tabs" role="tablist" aria-label="Project Libraries">
+          <button type="button" class="pm-lib-tab is-active" data-pm-lib="local">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path fill="none" stroke="currentColor" stroke-width="1.3" d="M2 9.5h12"/><circle cx="11.5" cy="11" r="0.8" fill="currentColor"/></svg>
+            <span>Local</span>
+          </button>
+          <button type="button" class="pm-lib-tab" data-pm-lib="network">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5.5" y="2" width="5" height="3.2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.5" y="10.8" width="4.8" height="3.2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.7" y="10.8" width="4.8" height="3.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.2" d="M8 5.2v2.8M3.9 8h8.2M3.9 8v2.8M12.1 8v2.8"/></svg>
+            <span>Network</span>
+          </button>
+          <button type="button" class="pm-lib-tab" data-pm-lib="cloud">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M4.5 12.2h7.2a2.6 2.6 0 00.4-5.2 3.8 3.8 0 00-7.3-.8A2.8 2.8 0 004.5 12.2z"/></svg>
+            <span>Cloud</span>
+          </button>
+        </div>
       </div>
-      <div class="viewer-controls">
-        <button type="button" class="btn btn-mini is-active" data-pm-lib="local">Local</button>
-        <button type="button" class="btn btn-mini" data-pm-lib="network">Network</button>
-        <button type="button" class="btn btn-mini" data-pm-lib="cloud">Cloud</button>
-        <button type="button" id="btn-close-project-manager" class="btn btn-mini">Close</button>
+      <div class="pm-topbar-center">
+        <img src="./favicon.svg" alt="" width="14" height="14">
+        <h2 id="project-manager-title">taktcut Studio 21</h2>
+      </div>
+      <div class="pm-topbar-right"></div>
+    </div>
+    <div class="pm-subbar">
+      <div class="pm-subbar-left">
+        <span class="pm-crumb-icon" aria-hidden="true"></span>
+        <span class="pm-crumb-label">Projects</span>
+      </div>
+      <div class="pm-subbar-right">
+        <input type="search" id="pm-search-input" class="pm-search-input" placeholder="Search projects..." aria-label="Search projects">
       </div>
     </div>
-    <div class="nle-dialog-body">
+    <div class="nle-dialog-body pm-dialog-body">
       <div id="pm-projects-grid" class="pm-projects-grid"></div>
-      <div class="btn-row">
-        <button type="button" id="btn-pm-new-project" class="btn btn-primary">New Clean Project (25p)</button>
-        <button type="button" id="btn-pm-open-json" class="btn btn-secondary">Open Project File (.taktcut.json)</button>
+    </div>
+    <div class="pm-footer">
+      <div class="pm-footer-group">
+        <button type="button" id="btn-pm-export" class="pm-pill-btn">Export</button>
+        <button type="button" id="btn-pm-import" class="pm-pill-btn">Import</button>
+      </div>
+      <div class="pm-footer-group">
+        <button type="button" id="btn-pm-new-project" class="pm-pill-btn">New Project</button>
+        <button type="button" id="btn-pm-open-json" class="pm-pill-btn pm-pill-open">Open</button>
       </div>
     </div>
   </dialog>

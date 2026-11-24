@@ -5139,7 +5139,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   const { ctx, width, height } = setupCanvas(canvas, totalHeight);
   const hitboxes = [];
 
-  ctx.fillStyle = "#1a1a1d";
+  ctx.fillStyle = "#161619";
   ctx.fillRect(0, 0, width, height);
 
   if (!doc) {
@@ -5197,9 +5197,9 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     Math.max(startFrame, Math.min(maxFrame, Math.round(xToRawFrame(x))));
 
   // Ruler header background
-  ctx.fillStyle = "#252529";
+  ctx.fillStyle = "#1e1e22";
   ctx.fillRect(0, 0, width, rulerHeight);
-  ctx.strokeStyle = "#111114";
+  ctx.strokeStyle = "#101013";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, rulerHeight);
@@ -6359,20 +6359,20 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   const playheadFrame = opts && typeof opts.playheadFrame === "number" ? opts.playheadFrame : startFrame;
   const phX = frameToX(playheadFrame);
   if (phX >= timelineX && phX <= timelineX + timelineW) {
-    ctx.strokeStyle = "#e68442";
+    ctx.strokeStyle = "#e64b38";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(phX, 20);
     ctx.lineTo(phX, height);
     ctx.stroke();
 
-    ctx.fillStyle = "#e68442";
+    ctx.fillStyle = "#e64b38";
     ctx.beginPath();
-    ctx.moveTo(phX - 6, 20);
-    ctx.lineTo(phX + 6, 20);
-    ctx.lineTo(phX + 6, 28);
-    ctx.lineTo(phX, 35);
-    ctx.lineTo(phX - 6, 28);
+    ctx.moveTo(phX - 5.5, 20);
+    ctx.lineTo(phX + 5.5, 20);
+    ctx.lineTo(phX + 5.5, 26);
+    ctx.lineTo(phX, 34);
+    ctx.lineTo(phX - 5.5, 26);
     ctx.closePath();
     ctx.fill();
   }
@@ -6517,7 +6517,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
   const totalHeight = 28;
   const { ctx, width, height } = setupCanvas(canvas, totalHeight);
-  ctx.fillStyle = "#18181c";
+  ctx.fillStyle = "#151518";
   ctx.fillRect(0, 0, width, height);
 
   if (!doc) {
@@ -6659,24 +6659,31 @@ export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
     if (vx1 < timelineX + timelineW) {
       ctx.fillRect(vx1, 1, timelineX + timelineW - vx1, height - 2);
     }
-    ctx.strokeStyle = "#e68442";
+    ctx.strokeStyle = "#e64b38";
     ctx.lineWidth = 1.5;
     ctx.strokeRect(vx0 + 0.5, 1.5, vw - 1, height - 3);
   } else {
-    ctx.strokeStyle = "rgba(230, 132, 66, 0.42)";
+    ctx.strokeStyle = "rgba(230, 75, 56, 0.34)";
     ctx.lineWidth = 1;
     ctx.strokeRect(timelineX + 0.5, 1.5, timelineW - 1, height - 3);
   }
 
-  // Playhead needle
+  // Playhead needle + DaVinci red cap
   const ph = opts && typeof opts.playheadFrame === "number" ? opts.playheadFrame : startFrame;
   const px = Math.round(Math.max(timelineX, Math.min(timelineX + timelineW, frameToX(ph)))) + 0.5;
-  ctx.strokeStyle = "#f4a46b";
+  ctx.strokeStyle = "#e64b38";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(px, 0);
   ctx.lineTo(px, height);
   ctx.stroke();
+  ctx.fillStyle = "#e64b38";
+  ctx.beginPath();
+  ctx.moveTo(px - 4.5, 0);
+  ctx.lineTo(px + 4.5, 0);
+  ctx.lineTo(px, 6);
+  ctx.closePath();
+  ctx.fill();
 
   return {
     startFrame,
