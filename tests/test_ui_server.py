@@ -11772,3 +11772,213 @@ def test_ui_media_pool_pro_proxy_relink_av_sync_e2e(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_scene_cut_detection_parity_and_playwright(tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    from taktcut.ui.samples import build_sample_timeline
+    from taktcut.ui.server import ASSETS_DIR
+
+    sample_doc = build_sample_timeline("clean").model_dump(mode="json")
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        # 1. Server API /api/timeline/scene-cut/analyze + /split + 400 validation
+        st_ana, _, raw_ana = _http_call(
+            f"{base_url}/api/timeline/scene-cut/analyze",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "track_index": 1,
+                "clip_index": 0,
+                "threshold": 0.30,
+                "min_shot_frames": 6,
+                "method": "hybrid",
+            },
+        )
+        assert st_ana == 200
+        ana_res = json.loads(raw_ana.decode("utf-8"))
+        assert "scdet=threshold=" in ana_res["filtergraph"]
+        assert ana_res["active_cut_count"] >= 1
+        cut_offsets = [c["frame_offset"] for c in ana_res["candidates"]]
+
+        st_split, _, raw_split = _http_call(
+            f"{base_url}/api/timeline/scene-cut/split",
+            method="POST",
+            payload={
+                "document": sample_doc,
+                "track_index": 1,
+                "clip_index": 0,
+                "cut_offsets": cut_offsets,
+                "split_mode": "split_and_markers",
+                "split_linked_audio": True,
+                "marker_color": "Cyan",
+            },
+        )
+        assert st_split == 200
+        split_res = json.loads(raw_split.decode("utf-8"))
+        assert split_res["changed"] is True
+        assert split_res["cut_count"] == len(cut_offsets)
+        assert len(split_res["created_clip_names"]) == len(cut_offsets) + 1
+        assert split_res["validation"]["valid"] is True
+
+        bad_st, _, _ = _http_call(
+            f"{base_url}/api/timeline/scene-cut/analyze",
+            method="POST",
+            payload={"document": sample_doc, "threshold": 5.0},
+        )
+        assert bad_st == 400
+
+        # 2. Node.js parity for timeline_ops.js + demo_adapter.js static-demo
+        if shutil.which("node"):
+            demo_url = (ASSETS_DIR / "demo_adapter.js").as_uri()
+            ops_url = (ASSETS_DIR / "timeline_ops.js").as_uri()
+            node_script = (
+                "import assert from 'node:assert/strict';\n"
+                f"import {{ createApiClient }} from '{demo_url}';\n"
+                "import {\n"
+                "  compileSceneCutFiltergraphClient,\n"
+                "  detectSceneCutsFromLumaSeriesClient\n"
+                f"}} from '{ops_url}';\n"
+                f"const doc = {json.dumps(sample_doc)};\n"
+                "const fg = compileSceneCutFiltergraphClient(0.35, false, true);\n"
+                "assert.ok(fg.includes('scdet=threshold=18.80:sc_pass=0'));\n"
+                "const det = detectSceneCutsFromLumaSeriesClient(\n"
+                "  [0.15,0.15,0.15,0.15,0.15,0.15,0.85,0.85,0.85,0.85,0.85,0.85,0.85],\n"
+                "  { threshold: 0.35, min_shot_frames: 4, method: 'hybrid' }\n"
+                ");\n"
+                "assert.equal(det.cuts.length, 1);\n"
+                "assert.equal(det.cuts[0].frame_offset, 6);\n"
+                "globalThis.window = { __TAKTCUT_CONFIG__: { mode: 'static-demo' } };\n"
+                "const api = createApiClient();\n"
+                "const aRes = await api.analyzeSceneCuts({\n"
+                "  document: doc, track_index: 1, clip_index: 0,\n"
+                "  threshold: 0.30, min_shot_frames: 6\n"
+                "});\n"
+                "assert.ok(aRes.candidates.length >= 1);\n"
+                "const sRes = await api.splitSceneCuts({\n"
+                "  document: doc, track_index: 1, clip_index: 0,\n"
+                "  cut_offsets: aRes.candidates.map((c) => c.frame_offset),\n"
+                "  split_mode: 'split_and_markers', split_linked_audio: true\n"
+                "});\n"
+                "assert.equal(sRes.changed, true);\n"
+                "assert.equal(sRes.validation.valid, true);\n"
+            )
+            proc = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert proc.returncode == 0, f"Node parity failed: {proc.stderr}"
+
+        # 3. Live Playwright E2E check at 1440x900 & 375x812
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#btn-timeline-scene-cut")
+
+                # Open Scene Cut Detector dialog
+                page.click("#btn-timeline-scene-cut")
+                page.wait_for_selector("#scene-cut-dialog[open]")
+                page.wait_for_selector("#scene-cut-list .scene-cut-row")
+
+                assert "scdet=threshold=" in (
+                    page.locator("#scene-cut-fg-preview").text_content() or ""
+                )
+
+                # Test Next Cut navigation & Keep/Skip toggle
+                page.click("#btn-scene-cut-next")
+                first_toggle = page.locator(
+                    "#scene-cut-list .scene-cut-row button[aria-pressed]"
+                ).first
+                first_toggle.click()
+                assert first_toggle.get_attribute("aria-pressed") == "false"
+                first_toggle.click()
+                assert first_toggle.get_attribute("aria-pressed") == "true"
+
+                # Check EN/FR i18n parity without U+2013/U+2014
+                page.click("#btn-close-scene-cut")
+                page.click("#lang-fr")
+                sc_btn_txt = (
+                    page.locator("#btn-timeline-scene-cut span").text_content() or ""
+                ).strip()
+                assert sc_btn_txt == "Détection Coupes"
+                page.click("#btn-timeline-scene-cut")
+                page.wait_for_selector("#scene-cut-dialog[open]")
+                fr_text = page.locator("#scene-cut-dialog").text_content() or ""
+                assert "Détection de Coupes" in fr_text
+                assert "\u2013" not in fr_text and "\u2014" not in fr_text
+
+                # Execute Auto-Split and verify timeline clip count increases cleanly
+                initial_rows = page.locator("#timeline-index-list .timeline-index-row").count()
+                page.click("#btn-scene-cut-apply")
+                page.wait_for_function("() => !document.getElementById('scene-cut-dialog')?.open")
+                after_rows = page.locator("#timeline-index-list .timeline-index-row").count()
+                assert after_rows > initial_rows
+
+                page.click("#lang-en")
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                page.click("#btn-timeline-scene-cut")
+                page.wait_for_selector("#scene-cut-dialog[open]")
+                overflow_mobile_dlg = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+                dlg_w = page.evaluate(
+                    "() => document.getElementById('scene-cut-dialog')"
+                    ".getBoundingClientRect().width"
+                )
+                assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+                for ctrl_id in (
+                    "btn-timeline-scene-cut",
+                    "btn-scene-cut-analyze",
+                    "btn-scene-cut-apply",
+                    "btn-close-scene-cut",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+                page.click("#btn-close-scene-cut")
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

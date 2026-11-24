@@ -8944,3 +8944,150 @@ input[type="range"] {
     min-height: 45px;
   }
 }
+
+.tl-scenecut-btn {
+  border-color: rgba(45, 212, 191, 0.55);
+  color: #99f6e4;
+}
+
+.tl-scenecut-btn:hover {
+  border-color: #2dd4bf;
+  background: rgba(45, 212, 191, 0.14);
+}
+
+.scene-cut-dialog {
+  max-width: min(780px, calc(100vw - 16px));
+  width: min(780px, calc(100vw - 16px));
+}
+
+.scene-cut-body .form-row,
+.scene-cut-body .code-box,
+.scene-cut-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.scene-cut-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(76vh, 680px);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.scene-cut-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.scene-cut-threshold-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scene-cut-threshold-pair input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.scene-cut-threshold-pair .input-num {
+  width: 68px;
+  flex: 0 0 auto;
+}
+
+.scene-cut-audio-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.scene-cut-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scene-cut-canvas-well {
+  min-height: 176px;
+}
+
+#scene-cut-canvas {
+  cursor: crosshair;
+}
+
+.scene-cut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 185px;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.scene-cut-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+}
+
+.scene-cut-row.is-selected {
+  border-color: #2dd4bf;
+  background: rgba(45, 212, 191, 0.1);
+}
+
+.scene-cut-row.is-skipped {
+  opacity: 0.58;
+}
+
+.scene-cut-row-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.scene-cut-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.scene-cut-badge-manual {
+  border-color: #38bdf8;
+  color: #bae6fd;
+}
+
+.scene-cut-badge-kept {
+  border-color: #2dd4bf;
+  color: #99f6e4;
+}
+
+@media (max-width: 760px) {
+  .scene-cut-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tl-scenecut-btn,
+  .scene-cut-actions .btn,
+  .scene-cut-row-actions .btn,
+  #scene-cut-dialog .input-control,
+  #btn-close-scene-cut {
+    min-height: 45px;
+  }
+}

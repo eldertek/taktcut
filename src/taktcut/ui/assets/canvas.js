@@ -9697,3 +9697,171 @@ export function drawAvSyncWaveformCanvas(canvas, analysis, labels = {}) {
 
   return { width, height };
 }
+
+export function drawSceneCutConfidenceCanvas(canvas, analysis, opts = {}) {
+  if (!canvas) return null;
+  const { ctx, width, height } = setupCanvas(canvas, 176);
+  ctx.fillStyle = "#121317";
+  ctx.fillRect(0, 0, width, height);
+
+  const scores =
+    analysis && Array.isArray(analysis.frame_scores) ? analysis.frame_scores : [];
+  if (scores.length === 0) {
+    ctx.fillStyle = "#7a7b88";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      opts.emptyLabel || "Select a video clip and click Analyze Cuts",
+      width * 0.5,
+      height * 0.5
+    );
+    return { width, height, plotRect: null, totalFrames: 0 };
+  }
+
+  const padL = 34;
+  const padR = 12;
+  const padT = 22;
+  const padB = 22;
+  const plotW = Math.max(40, width - padL - padR);
+  const plotH = Math.max(40, height - padT - padB);
+  const totalFrames = Math.max(1, Number(analysis.clip_duration_frames) || scores.length);
+
+  ctx.fillStyle = "#171920";
+  ctx.fillRect(padL, padT, plotW, plotH);
+  ctx.strokeStyle = "#272a34";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
+
+  // Percentage gridlines (25%, 50%, 75%)
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (const pct of [0.25, 0.5, 0.75]) {
+    const gy = padT + plotH - pct * plotH;
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.16)";
+    ctx.beginPath();
+    ctx.moveTo(padL, gy);
+    ctx.lineTo(padL + plotW, gy);
+    ctx.stroke();
+    ctx.fillStyle = "#64748b";
+    ctx.fillText(`${Math.round(pct * 100)}`, padL - 5, gy);
+  }
+
+  // Build lookup of candidates by frame_offset for enabled/manual coloring
+  const candMap = new Map();
+  if (Array.isArray(analysis.candidates)) {
+    for (const c of analysis.candidates) {
+      candMap.set(Number(c.frame_offset), c);
+    }
+  }
+
+  const barW = Math.max(1.5, Math.min(4, plotW / Math.max(1, scores.length)));
+  for (let i = 0; i < scores.length; i += 1) {
+    const pt = scores[i];
+    const sc = Math.max(0, Math.min(1, Number(pt.score) || 0));
+    const cand = candMap.get(Number(pt.frame_offset));
+    const x = padL + (pt.frame_offset / Math.max(1, totalFrames - 1)) * plotW;
+    const hBar = Math.max(1, sc * (plotH - 4));
+    const y = padT + plotH - hBar;
+
+    if (cand) {
+      if (cand.enabled === false) {
+        ctx.fillStyle = "rgba(100, 116, 139, 0.55)";
+      } else if (cand.manual) {
+        ctx.fillStyle = "#38bdf8";
+      } else {
+        ctx.fillStyle = "#f59e0b";
+      }
+      ctx.fillRect(x - barW * 0.6, y, Math.max(2.5, barW * 1.2), hBar);
+    } else {
+      ctx.fillStyle = "rgba(100, 116, 139, 0.45)";
+      ctx.fillRect(x - barW * 0.4, y, barW * 0.8, hBar);
+    }
+  }
+
+  // Cut pins along top of plot
+  if (Array.isArray(analysis.candidates)) {
+    for (const cand of analysis.candidates) {
+      const off = Number(cand.frame_offset);
+      const x = padL + (off / Math.max(1, totalFrames - 1)) * plotW;
+      const isSelected = Number(opts.selectedOffset) === off;
+      const color =
+        cand.enabled === false
+          ? "#64748b"
+          : cand.manual
+            ? "#38bdf8"
+            : "#2dd4bf";
+
+      ctx.strokeStyle = isSelected ? "#ffffff" : color;
+      ctx.lineWidth = isSelected ? 1.8 : 1.1;
+      ctx.beginPath();
+      ctx.moveTo(x, padT);
+      ctx.lineTo(x, padT + plotH);
+      ctx.stroke();
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x, padT - 5);
+      ctx.lineTo(x + 4, padT);
+      ctx.lineTo(x, padT + 5);
+      ctx.lineTo(x - 4, padT);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // Threshold dashed bar
+  const thr = Math.max(0.05, Math.min(0.95, Number(analysis.threshold) || 0.35));
+  const thrY = padT + plotH - thr * plotH;
+  ctx.strokeStyle = "#f43f5e";
+  ctx.lineWidth = 1.4;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.moveTo(padL, thrY);
+  ctx.lineTo(padL + plotW, thrY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Playhead cursor inside clip
+  if (Number.isFinite(Number(opts.playheadOffset))) {
+    const phOff = Math.max(0, Math.min(totalFrames - 1, Number(opts.playheadOffset)));
+    const phX = padL + (phOff / Math.max(1, totalFrames - 1)) * plotW;
+    ctx.strokeStyle = "#ff5a36";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(phX, padT - 2);
+    ctx.lineTo(phX, padT + plotH + 2);
+    ctx.stroke();
+  }
+
+  // Header & Footer labels
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.fillText(
+    `${analysis.clip_name || "CLIP"} (${totalFrames}f)`,
+    padL,
+    5
+  );
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#fb7185";
+  ctx.fillText(`THR ${Math.round(thr * 100)}%`, padL + plotW, 5);
+
+  ctx.font = "9.5px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("0f", padL, height - 4);
+  ctx.textAlign = "right";
+  ctx.fillText(`${totalFrames}f`, padL + plotW, height - 4);
+
+  return {
+    width,
+    height,
+    plotRect: { x: padL, y: padT, w: plotW, h: plotH },
+    totalFrames
+  };
+}

@@ -36,6 +36,7 @@ import {
   alignAvSplitInDocument,
   analyzeAvSyncClient,
   analyzeAudioSpectrumClient,
+  analyzeClipSceneCutsClient,
   applyAvSyncInDocumentClient,
   applySplitEditJlInDocument,
   auditMediaPoolLinksClient,
@@ -95,6 +96,7 @@ import {
   slideClipInDocument,
   slipClipInDocument,
   solveShotMatchClient,
+  splitClipAtSceneCutsClient,
   switchMulticamAngleInDocument,
   syncMulticamClipInDocument,
   threePointEditInDocument,
@@ -3805,6 +3807,26 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/media-pool/av-sync/apply", { method: "POST", body: payload });
+    },
+    async analyzeSceneCuts(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        return analyzeClipSceneCutsClient(doc, payload || {});
+      }
+      return requestJson("/api/timeline/scene-cut/analyze", { method: "POST", body: payload });
+    },
+    async splitSceneCuts(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const res = splitClipAtSceneCutsClient(doc, payload || {});
+        return {
+          ...res,
+          validation: validateTimelineClient(res.document)
+        };
+      }
+      return requestJson("/api/timeline/scene-cut/split", { method: "POST", body: payload });
     }
   };
 }

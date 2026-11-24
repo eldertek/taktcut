@@ -16,6 +16,7 @@ import {
   drawProgramMonitorCanvas,
   drawQualifierSpectrumCanvas,
   drawRetimeRampEditorCanvas,
+  drawSceneCutConfidenceCanvas,
   drawSourceMonitorCanvas,
   drawStereoVuMeterCanvas,
   drawTimelineCanvas,
@@ -829,6 +830,9 @@ const state = {
   mediaPoolProxyPlans: [],
   mediaPoolAvSyncAnalysis: null,
   mediaPoolStrictAudit: false,
+  sceneCutAnalysis: null,
+  sceneCutSelectedOffset: null,
+  sceneCutLastDraw: null,
   timelineViewStartFrame: 0,
   timelineOverviewDraw: null,
   sourceTapeState: null,
@@ -963,6 +967,7 @@ function setLanguage(lang) {
   renderTimelineUI();
   renderMediaPool();
   if (typeof renderMediaPoolProDialog === "function") renderMediaPoolProDialog();
+  if (typeof renderSceneCutUI === "function") renderSceneCutUI();
   renderFairlightAudioUI();
   renderColorNodeTreeUI();
   renderLutBrowserUI();
@@ -13320,6 +13325,11 @@ function handleTransportKeydown(ev) {
       openMediaPoolProDialog("proxy");
       return;
     }
+    if (lower === "c" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      openSceneCutDialog();
+      return;
+    }
     if (
       state.multicamQuadView &&
       !ev.ctrlKey &&
@@ -19854,6 +19864,7 @@ function wireEvents() {
   wireCompoundInspectorEvents();
   wireMulticamInspectorEvents();
   wireMediaPoolProEvents();
+  wireSceneCutEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -21878,6 +21889,423 @@ function wireMediaPoolProEvents() {
   byId("pool-sync-mode")?.addEventListener("change", () => {
     analyzeMediaPoolAvSyncAction();
   });
+}
+
+function getSceneCutClipOptions() {
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks)) return [];
+  const opts = [];
+  for (const trk of doc.tracks) {
+    if (!trk || trk.kind !== "video" || !Array.isArray(trk.clips)) continue;
+    trk.clips.forEach((clip, cIdx) => {
+      if (!clip || Number(clip.duration_frames) < 2) return;
+      opts.push({
+        key: `${trk.index}:${cIdx}`,
+        trackIndex: Number(trk.index),
+        clipIndex: cIdx,
+        clip
+      });
+    });
+  }
+  return opts;
+}
+
+function populateSceneCutClipSelect() {
+  const sel = byId("scene-cut-clip-select");
+  if (!sel) return [];
+  const prev = sel.value;
+  const opts = getSceneCutClipOptions();
+  while (sel.firstChild) sel.removeChild(sel.firstChild);
+  for (const item of opts) {
+    const optEl = document.createElement("option");
+    optEl.value = item.key;
+    optEl.textContent = `V${item.trackIndex} | ${item.clip.name} (${item.clip.duration_frames}f)`;
+    sel.appendChild(optEl);
+  }
+  if (opts.some((item) => item.key === prev)) {
+    sel.value = prev;
+  } else {
+    const ref = getSelectedClipRef();
+    const selKey =
+      ref && ref.trackKind === "video" ? `${ref.trackIndex}:${ref.clipIndex}` : "";
+    if (opts.some((item) => item.key === selKey)) {
+      sel.value = selKey;
+    } else if (opts.length > 0) {
+      sel.value = opts[0].key;
+    }
+  }
+  return opts;
+}
+
+function parseSelectedSceneCutTarget() {
+  const sel = byId("scene-cut-clip-select");
+  const raw = sel ? String(sel.value || "") : "";
+  const parts = raw.split(":");
+  if (parts.length !== 2) return null;
+  const trackIndex = Number.parseInt(parts[0], 10);
+  const clipIndex = Number.parseInt(parts[1], 10);
+  if (!Number.isInteger(trackIndex) || !Number.isInteger(clipIndex)) return null;
+  return { trackIndex, clipIndex };
+}
+
+function getActiveSceneCutOffsets() {
+  const analysis = state.sceneCutAnalysis;
+  if (!analysis || !Array.isArray(analysis.candidates)) return [];
+  return analysis.candidates
+    .filter((c) => c && c.enabled !== false)
+    .map((c) => Number(c.frame_offset))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+function renderSceneCutUI() {
+  const analysis = state.sceneCutAnalysis;
+  const canvas = byId("scene-cut-canvas");
+  const listEl = byId("scene-cut-list");
+  const statusEl = byId("scene-cut-status");
+  const fgEl = byId("scene-cut-fg-preview");
+  const applyBtn = byId("btn-scene-cut-apply");
+  const prevBtn = byId("btn-scene-cut-prev");
+  const nextBtn = byId("btn-scene-cut-next");
+
+  const playheadOff =
+    analysis &&
+    Number.isFinite(Number(state.playheadFrame)) &&
+    state.playheadFrame >= analysis.clip_start_frame &&
+    state.playheadFrame < analysis.clip_start_frame + analysis.clip_duration_frames
+      ? state.playheadFrame - analysis.clip_start_frame
+      : null;
+
+  if (canvas) {
+    state.sceneCutLastDraw = drawSceneCutConfidenceCanvas(canvas, analysis, {
+      selectedOffset: state.sceneCutSelectedOffset,
+      playheadOffset: playheadOff,
+      emptyLabel: t("sceneCut.canvasEmpty")
+    });
+  }
+
+  if (fgEl) {
+    fgEl.textContent = analysis && analysis.filtergraph ? analysis.filtergraph : "";
+  }
+
+  const activeOffsets = getActiveSceneCutOffsets();
+  if (applyBtn) {
+    applyBtn.disabled = activeOffsets.length === 0;
+    applyBtn.textContent = t("sceneCut.applySplit").replace("{count}", String(activeOffsets.length));
+  }
+
+  const allCands = analysis && Array.isArray(analysis.candidates) ? analysis.candidates : [];
+  if (prevBtn) prevBtn.disabled = allCands.length === 0;
+  if (nextBtn) nextBtn.disabled = allCands.length === 0;
+
+  if (statusEl) {
+    if (!analysis) {
+      statusEl.textContent = t("sceneCut.statsIdle");
+    } else if (allCands.length === 0) {
+      statusEl.textContent = t("sceneCut.noCuts");
+    } else {
+      statusEl.textContent = t("sceneCut.statsSummary")
+        .replace("{count}", String(activeOffsets.length))
+        .replace("{avg}", String(analysis.avg_shot_frames ?? 0))
+        .replace("{mode}", String(analysis.source_mode || "deterministic_synthetic"));
+    }
+  }
+
+  if (!listEl) return;
+  while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+
+  for (const cand of allCands) {
+    const row = document.createElement("div");
+    const isSkipped = cand.enabled === false;
+    const isSelected = Number(state.sceneCutSelectedOffset) === Number(cand.frame_offset);
+    row.className = `scene-cut-row${isSelected ? " is-selected" : ""}${isSkipped ? " is-skipped" : ""}`;
+    row.setAttribute("role", "listitem");
+
+    const info = document.createElement("div");
+    info.className = "scene-cut-row-info mono";
+
+    const badge = document.createElement("span");
+    badge.className = `nle-tag ${cand.manual ? "scene-cut-badge-manual" : "scene-cut-badge-kept"}`;
+    badge.textContent = cand.shot_label || `Cut @ ${cand.frame_offset}f`;
+    info.appendChild(badge);
+
+    const tcSpan = document.createElement("span");
+    tcSpan.textContent = `${cand.timecode} (+${cand.frame_offset}f)`;
+    info.appendChild(tcSpan);
+
+    const scoreSpan = document.createElement("span");
+    scoreSpan.className = "nle-tag";
+    scoreSpan.textContent = `${Math.round((Number(cand.score) || 0) * 100)}%`;
+    info.appendChild(scoreSpan);
+
+    const actions = document.createElement("div");
+    actions.className = "scene-cut-row-actions";
+
+    const seekBtn = document.createElement("button");
+    seekBtn.type = "button";
+    seekBtn.className = "btn btn-mini";
+    seekBtn.textContent = t("sceneCut.jump");
+    seekBtn.addEventListener("click", () => {
+      state.sceneCutSelectedOffset = Number(cand.frame_offset);
+      setPlayhead(Number(cand.timeline_frame));
+      renderSceneCutUI();
+    });
+    actions.appendChild(seekBtn);
+
+    const toggleBtn = document.createElement("button");
+    toggleBtn.type = "button";
+    toggleBtn.className = `btn btn-mini${isSkipped ? "" : " is-active"}`;
+    toggleBtn.setAttribute("aria-pressed", isSkipped ? "false" : "true");
+    toggleBtn.textContent = isSkipped ? t("sceneCut.toggleSkip") : t("sceneCut.toggleKeep");
+    toggleBtn.addEventListener("click", () => {
+      cand.enabled = isSkipped;
+      renderSceneCutUI();
+    });
+    actions.appendChild(toggleBtn);
+
+    row.appendChild(info);
+    row.appendChild(actions);
+    listEl.appendChild(row);
+  }
+}
+
+async function analyzeSceneCutsAction() {
+  const doc = state.timelineDoc;
+  if (!doc) return;
+  const target = parseSelectedSceneCutTarget();
+  const statusEl = byId("scene-cut-status");
+  if (!target) {
+    if (statusEl) statusEl.textContent = t("sceneCut.noVideoClip");
+    return;
+  }
+
+  const thrNum = byId("scene-cut-threshold-num");
+  const thrRange = byId("scene-cut-threshold-range");
+  const parsedThr = Number.parseFloat(thrNum ? thrNum.value : thrRange ? thrRange.value : "0.35");
+  const threshold = Number.isFinite(parsedThr) ? Math.max(0.05, Math.min(0.95, parsedThr)) : 0.35;
+  const minShotInput = byId("scene-cut-min-shot");
+  const parsedGap = Number.parseInt(minShotInput ? minShotInput.value : "6", 10);
+  const minShotFrames = Number.isInteger(parsedGap) ? Math.max(2, Math.min(240, parsedGap)) : 6;
+  const methodEl = byId("scene-cut-method");
+  const method = methodEl ? methodEl.value || "hybrid" : "hybrid";
+
+  try {
+    const res = await api.analyzeSceneCuts({
+      document: doc,
+      track_index: target.trackIndex,
+      clip_index: target.clipIndex,
+      threshold,
+      min_shot_frames: minShotFrames,
+      method,
+      execute_ffmpeg: true
+    });
+    state.sceneCutAnalysis = res;
+    state.sceneCutSelectedOffset =
+      Array.isArray(res.candidates) && res.candidates.length > 0
+        ? Number(res.candidates[0].frame_offset)
+        : null;
+    renderSceneCutUI();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message;
+    showBanner(err.message, "error");
+  }
+}
+
+function jumpSceneCutCandidate(dir) {
+  const analysis = state.sceneCutAnalysis;
+  if (!analysis || !Array.isArray(analysis.candidates) || analysis.candidates.length === 0) return;
+  const cands = analysis.candidates;
+  const curIdx = cands.findIndex(
+    (c) => Number(c.frame_offset) === Number(state.sceneCutSelectedOffset)
+  );
+  let nextIdx = 0;
+  if (curIdx < 0) {
+    nextIdx = dir < 0 ? cands.length - 1 : 0;
+  } else {
+    nextIdx = (curIdx + (dir < 0 ? -1 : 1) + cands.length) % cands.length;
+  }
+  const chosen = cands[nextIdx];
+  state.sceneCutSelectedOffset = Number(chosen.frame_offset);
+  setPlayhead(Number(chosen.timeline_frame));
+  renderSceneCutUI();
+}
+
+function addManualSceneCutAction() {
+  const analysis = state.sceneCutAnalysis;
+  const statusEl = byId("scene-cut-status");
+  if (!analysis) return;
+  const ph = Number(state.playheadFrame) || 0;
+  const off = ph - Number(analysis.clip_start_frame || 0);
+  if (off <= 0 || off >= Number(analysis.clip_duration_frames || 0)) {
+    if (statusEl) statusEl.textContent = t("sceneCut.manualOutRange");
+    return;
+  }
+  if (!Array.isArray(analysis.candidates)) analysis.candidates = [];
+  const existing = analysis.candidates.find((c) => Number(c.frame_offset) === off);
+  if (existing) {
+    existing.enabled = true;
+    state.sceneCutSelectedOffset = off;
+    renderSceneCutUI();
+    return;
+  }
+  const doc = state.timelineDoc;
+  const fpsInt = Math.max(
+    1,
+    Math.round(
+      ((doc && doc.fps && (doc.fps.num || doc.fps.numerator)) || 25) /
+        Math.max(1, (doc && doc.fps && (doc.fps.den || doc.fps.denominator)) || 1)
+    )
+  );
+  analysis.candidates.push({
+    frame_offset: off,
+    timeline_frame: ph,
+    source_frame: off,
+    timecode: framesToSmpte(ph, fpsInt),
+    score: 1.0,
+    luma_delta: 1.0,
+    histogram_delta: 1.0,
+    enabled: true,
+    manual: true,
+    shot_label: `Manual ${off}f`
+  });
+  analysis.candidates.sort((a, b) => Number(a.frame_offset) - Number(b.frame_offset));
+  state.sceneCutSelectedOffset = off;
+  renderSceneCutUI();
+}
+
+async function applySceneCutSplitAction() {
+  const doc = state.timelineDoc;
+  const analysis = state.sceneCutAnalysis;
+  if (!doc || !analysis) return;
+  const cutOffsets = getActiveSceneCutOffsets();
+  if (cutOffsets.length === 0) return;
+
+  const splitModeEl = byId("scene-cut-split-mode");
+  const markerColorEl = byId("scene-cut-marker-color");
+  const splitAudioEl = byId("scene-cut-split-audio");
+
+  try {
+    const res = await api.splitSceneCuts({
+      document: doc,
+      track_index: analysis.track_index,
+      clip_index: analysis.clip_index,
+      cut_offsets: cutOffsets,
+      split_mode: splitModeEl ? splitModeEl.value : "split_and_markers",
+      split_linked_audio: splitAudioEl ? Boolean(splitAudioEl.checked) : true,
+      marker_color: markerColorEl ? markerColorEl.value : "Cyan"
+    });
+    if (res.document) {
+      commitTimelineMutation(res.document, null);
+    }
+    showBanner(res.summary || "Scene cuts applied.", "success");
+    closeSceneCutDialog();
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+function openSceneCutDialog() {
+  const dlg = byId("scene-cut-dialog");
+  if (!dlg) return;
+  const opts = populateSceneCutClipSelect();
+  if (typeof dlg.showModal === "function") {
+    if (!dlg.open) dlg.showModal();
+  } else {
+    dlg.setAttribute("open", "open");
+  }
+  if (opts.length > 0) {
+    analyzeSceneCutsAction();
+  } else {
+    state.sceneCutAnalysis = null;
+    renderSceneCutUI();
+  }
+}
+
+function closeSceneCutDialog() {
+  const dlg = byId("scene-cut-dialog");
+  if (!dlg) return;
+  if (typeof dlg.close === "function") {
+    if (dlg.open) dlg.close();
+  } else {
+    dlg.removeAttribute("open");
+  }
+}
+
+function wireSceneCutEvents() {
+  byId("btn-timeline-scene-cut")?.addEventListener("click", openSceneCutDialog);
+  byId("btn-close-scene-cut")?.addEventListener("click", closeSceneCutDialog);
+
+  const dlg = byId("scene-cut-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeSceneCutDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeSceneCutDialog();
+    });
+  }
+
+  byId("scene-cut-clip-select")?.addEventListener("change", () => analyzeSceneCutsAction());
+  byId("scene-cut-method")?.addEventListener("change", () => analyzeSceneCutsAction());
+  byId("scene-cut-min-shot")?.addEventListener("change", () => analyzeSceneCutsAction());
+
+  const thrRange = byId("scene-cut-threshold-range");
+  const thrNum = byId("scene-cut-threshold-num");
+  if (thrRange && thrNum) {
+    thrRange.addEventListener("input", () => {
+      thrNum.value = Number(thrRange.value).toFixed(2);
+    });
+    thrRange.addEventListener("change", () => analyzeSceneCutsAction());
+    thrNum.addEventListener("input", () => {
+      const parsed = Number.parseFloat(thrNum.value);
+      if (Number.isFinite(parsed) && parsed >= 0.05 && parsed <= 0.95) {
+        thrRange.value = String(parsed);
+      }
+    });
+    thrNum.addEventListener("change", () => {
+      const parsed = Number.parseFloat(thrNum.value);
+      const clamped = Number.isFinite(parsed) ? Math.max(0.05, Math.min(0.95, parsed)) : 0.35;
+      thrNum.value = clamped.toFixed(2);
+      thrRange.value = String(clamped);
+      analyzeSceneCutsAction();
+    });
+  }
+
+  byId("btn-scene-cut-analyze")?.addEventListener("click", analyzeSceneCutsAction);
+  byId("btn-scene-cut-prev")?.addEventListener("click", () => jumpSceneCutCandidate(-1));
+  byId("btn-scene-cut-next")?.addEventListener("click", () => jumpSceneCutCandidate(1));
+  byId("btn-scene-cut-add-manual")?.addEventListener("click", addManualSceneCutAction);
+  byId("btn-scene-cut-apply")?.addEventListener("click", applySceneCutSplitAction);
+
+  const canvas = byId("scene-cut-canvas");
+  if (canvas) {
+    canvas.addEventListener("click", (ev) => {
+      const analysis = state.sceneCutAnalysis;
+      const drawInfo = state.sceneCutLastDraw;
+      if (!analysis || !drawInfo || !drawInfo.plotRect || drawInfo.totalFrames <= 1) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const pr = drawInfo.plotRect;
+      const ratio = Math.max(0, Math.min(1, (x - pr.x) / Math.max(1, pr.w)));
+      const clickedOff = Math.round(ratio * (drawInfo.totalFrames - 1));
+      let nearest = null;
+      let minDist = 4;
+      for (const c of analysis.candidates || []) {
+        const d = Math.abs(Number(c.frame_offset) - clickedOff);
+        if (d < minDist) {
+          minDist = d;
+          nearest = c;
+        }
+      }
+      if (nearest) {
+        state.sceneCutSelectedOffset = Number(nearest.frame_offset);
+        setPlayhead(Number(nearest.timeline_frame));
+      } else {
+        setPlayhead(Number(analysis.clip_start_frame || 0) + clickedOff);
+      }
+      renderSceneCutUI();
+    });
+  }
 }
 
 bootstrap();

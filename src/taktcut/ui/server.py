@@ -243,6 +243,14 @@ from taktcut.render import (
     validate_review_watermark_text,
     validate_timecode_burnin,
 )
+from taktcut.scene_cut import (
+    SCENE_CUT_MIN_SHOT_FRAMES_DEFAULT,
+    SCENE_CUT_THRESHOLD_DEFAULT,
+    analyze_clip_scene_cuts,
+    normalize_scene_cut_method,
+    normalize_scene_cut_split_mode,
+    split_clip_at_scene_cuts,
+)
 from taktcut.subtitles import (
     ALL_CAPTION_STYLE_IDS,
     CAPTION_FONT_SIZE_MAX,
@@ -2916,6 +2924,83 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "offset_frames": offset_frames,
                     "detail": detail,
                     "document": next_doc.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/scene-cut/analyze":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            raw_thr = payload.get("threshold", SCENE_CUT_THRESHOLD_DEFAULT)
+            thr_val = float(raw_thr) if not isinstance(raw_thr, bool) else -1.0
+            raw_gap = payload.get("min_shot_frames", SCENE_CUT_MIN_SHOT_FRAMES_DEFAULT)
+            gap_val = (
+                int(raw_gap)
+                if isinstance(raw_gap, int) and not isinstance(raw_gap, bool)
+                else -1
+            )
+            method_val = normalize_scene_cut_method(payload.get("method", "hybrid"))
+            exec_ffmpeg = bool(payload.get("execute_ffmpeg", False))
+            raw_luma = payload.get("luma_frames")
+            luma_series = (
+                [float(x) for x in raw_luma]
+                if isinstance(raw_luma, list) and len(raw_luma) >= 2
+                else None
+            )
+            sc_analysis = analyze_clip_scene_cuts(
+                doc,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+                threshold=thr_val,
+                min_shot_frames=gap_val,
+                method=method_val,
+                luma_frames=luma_series,
+                workspace_root=self.app_state.workspace_root,
+                execute_ffmpeg=exec_ffmpeg,
+            )
+            self._send_json(HTTPStatus.OK, sc_analysis.model_dump(mode="json"))
+            return
+
+        if route == "/api/timeline/scene-cut/split":
+            doc = _resolve_timeline_from_payload(self.app_state, payload)
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            raw_offsets = payload.get("cut_offsets")
+            if not isinstance(raw_offsets, list):
+                raise ValueError("cut_offsets must be a list of frame offsets")
+            offsets_list = [int(x) for x in raw_offsets if not isinstance(x, bool)]
+            split_mode = normalize_scene_cut_split_mode(
+                payload.get("split_mode", "split_and_markers")
+            )
+            split_audio = bool(payload.get("split_linked_audio", True))
+            marker_color = str(payload.get("marker_color", "Cyan"))
+            shot_prefix = str(payload.get("shot_prefix", ""))[:64]
+            sc_split = split_clip_at_scene_cuts(
+                doc,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+                cut_offsets=offsets_list,
+                split_mode=split_mode,
+                split_linked_audio=split_audio,
+                marker_color=marker_color,
+                shot_prefix=shot_prefix,
+            )
+            val = validate_timeline(sc_split.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": True,
+                    "track_index": sc_split.track_index,
+                    "clip_index": sc_split.clip_index,
+                    "split_mode": sc_split.split_mode,
+                    "created_clip_names": sc_split.created_clip_names,
+                    "created_marker_frames": sc_split.created_marker_frames,
+                    "cut_count": sc_split.cut_count,
+                    "linked_audio_split": sc_split.linked_audio_split,
+                    "summary": sc_split.summary,
+                    "document": sc_split.document.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
                 },
             )

@@ -12941,3 +12941,415 @@ export function applyAvSyncInDocumentClient(doc, opts = {}) {
     document: nextDoc
   };
 }
+
+export const SCENE_CUT_METHODS = ["hybrid", "ffmpeg_scdet", "luma_histogram"];
+export const SCENE_CUT_SPLIT_MODES = ["split_and_markers", "split_clips", "markers_only"];
+export const SCENE_CUT_THRESHOLD_MIN = 0.05;
+export const SCENE_CUT_THRESHOLD_MAX = 0.95;
+export const SCENE_CUT_THRESHOLD_DEFAULT = 0.35;
+export const SCENE_CUT_MIN_SHOT_FRAMES_DEFAULT = 6;
+export const SCENE_CUT_MARKER_COLORS = ["Cyan", "Gold", "Green", "Blue", "Red"];
+
+export function normalizeSceneCutMethodClient(raw) {
+  const cleaned = String(raw || "hybrid").trim().toLowerCase();
+  if (SCENE_CUT_METHODS.includes(cleaned)) return cleaned;
+  throw new Error(`Unsupported scene cut method '${raw}'`);
+}
+
+export function normalizeSceneCutSplitModeClient(raw) {
+  const cleaned = String(raw || "split_and_markers").trim().toLowerCase();
+  if (SCENE_CUT_SPLIT_MODES.includes(cleaned)) return cleaned;
+  throw new Error(`Unsupported scene cut split_mode '${raw}'`);
+}
+
+export function compileSceneCutFiltergraphClient(
+  threshold = SCENE_CUT_THRESHOLD_DEFAULT,
+  scPass = false,
+  includeMetadataPrint = true
+) {
+  const rawT = Number(threshold);
+  if (!Number.isFinite(rawT) || rawT < SCENE_CUT_THRESHOLD_MIN || rawT > SCENE_CUT_THRESHOLD_MAX) {
+    throw new Error(`threshold must be between ${SCENE_CUT_THRESHOLD_MIN} and ${SCENE_CUT_THRESHOLD_MAX}`);
+  }
+  const normT = Number(rawT.toFixed(4));
+  const scdetThresh = Number((2.0 + normT * 48.0).toFixed(2));
+  const passFlag = scPass ? 1 : 0;
+  const base = `scdet=threshold=${scdetThresh.toFixed(2)}:sc_pass=${passFlag}`;
+  return includeMetadataPrint ? `${base},metadata=mode=print:key=lavfi.scd.score` : base;
+}
+
+function buildDeterministicClipLumaSeriesClient(clip) {
+  const dur = Math.max(0, Math.round(Number(clip && clip.duration_frames) || 0));
+  if (dur <= 0) return [];
+  const seedStr = `${clip.name || ""}|${clip.source_path || ""}|${clip.media_ref || ""}|${dur}`;
+  const bytes = new Uint8Array(32);
+  let h = 2166136261;
+  for (let i = 0; i < seedStr.length; i += 1) {
+    h ^= seedStr.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  for (let i = 0; i < 32; i += 1) {
+    h ^= h << 13;
+    h ^= h >>> 17;
+    h ^= h << 5;
+    bytes[i] = (h >>> 0) & 0xff;
+  }
+
+  let shotCount = 1;
+  if (dur >= 16 && dur < 45) shotCount = 2 + (bytes[0] % 2);
+  else if (dur >= 45 && dur < 120) shotCount = 3 + (bytes[0] % 3);
+  else if (dur >= 120) shotCount = 4 + (bytes[0] % 3);
+
+  if (shotCount <= 1) {
+    const baseL = 0.25 + (bytes[1] / 255.0) * 0.5;
+    const out = [];
+    for (let i = 0; i < dur; i += 1) {
+      out.push(Number(clampNum(baseL + 0.015 * Math.sin(i * 0.35), 0.02, 0.98).toFixed(4)));
+    }
+    return out;
+  }
+
+  const minSeg = Math.max(4, Math.floor(dur / (shotCount * 2)));
+  const boundaries = [0];
+  for (let s = 1; s < shotCount; s += 1) {
+    const nominal = Math.round((s * dur) / shotCount);
+    const jitter = (bytes[(s + 2) % 32] % 9) - 4;
+    const cand = Math.max(
+      boundaries[boundaries.length - 1] + minSeg,
+      Math.min(dur - minSeg, nominal + jitter)
+    );
+    if (cand > boundaries[boundaries.length - 1] && cand < dur - 2) {
+      boundaries.push(cand);
+    }
+  }
+  boundaries.push(dur);
+
+  const plateaus = [];
+  for (let s = 0; s < boundaries.length - 1; s += 1) {
+    let rawVal = 0.14 + (bytes[(s * 3 + 5) % 32] / 255.0) * 0.72;
+    if (s > 0 && Math.abs(rawVal - plateaus[s - 1]) < 0.34) {
+      rawVal = 0.85 - plateaus[s - 1] * 0.7;
+    }
+    plateaus.push(clampNum(rawVal, 0.08, 0.92));
+  }
+
+  const series = [];
+  for (let s = 0; s < boundaries.length - 1; s += 1) {
+    const startF = boundaries[s];
+    const endF = boundaries[s + 1];
+    const baseL = plateaus[s];
+    const phase = (bytes[(s + 11) % 32] / 255.0) * Math.PI * 2;
+    for (let f = startF; f < endF; f += 1) {
+      const motion = 0.018 * Math.sin(f * 0.42 + phase);
+      series.push(Number(clampNum(baseL + motion, 0.02, 0.98).toFixed(4)));
+    }
+  }
+  return series;
+}
+
+export function detectSceneCutsFromLumaSeriesClient(lumaFrames, opts = {}) {
+  const threshold = Number.isFinite(Number(opts.threshold))
+    ? clampNum(Number(opts.threshold), SCENE_CUT_THRESHOLD_MIN, SCENE_CUT_THRESHOLD_MAX)
+    : SCENE_CUT_THRESHOLD_DEFAULT;
+  const minGap = Number.isFinite(Number(opts.min_shot_frames))
+    ? Math.max(2, Math.min(240, Math.round(Number(opts.min_shot_frames))))
+    : SCENE_CUT_MIN_SHOT_FRAMES_DEFAULT;
+  const method = normalizeSceneCutMethodClient(opts.method || "hybrid");
+  const maxCuts = Number.isFinite(Number(opts.max_cuts))
+    ? Math.max(1, Math.min(256, Math.round(Number(opts.max_cuts))))
+    : 128;
+
+  const frames = Array.isArray(lumaFrames) ? lumaFrames : [];
+  const n = frames.length;
+  if (n === 0) return { frame_scores: [], cuts: [] };
+  if (n === 1) {
+    return {
+      frame_scores: [{ frame_offset: 0, score: 0, luma_delta: 0, is_cut: false }],
+      cuts: []
+    };
+  }
+
+  const rawMetrics = [{ score: 0, lumaDelta: 0, histDelta: 0 }];
+  for (let i = 1; i < n; i += 1) {
+    const prevL = clampNum(Number(frames[i - 1]) || 0, 0, 1);
+    const currL = clampNum(Number(frames[i]) || 0, 0, 1);
+    const lumaDelta = Math.abs(currL - prevL);
+    const preStart = Math.max(0, i - 3);
+    const postEnd = Math.min(n, i + 3);
+    let preSum = 0;
+    for (let k = preStart; k < i; k += 1) preSum += clampNum(Number(frames[k]) || 0, 0, 1);
+    let postSum = 0;
+    for (let k = i; k < postEnd; k += 1) postSum += clampNum(Number(frames[k]) || 0, 0, 1);
+    const preMean = preSum / Math.max(1, i - preStart);
+    const postMean = postSum / Math.max(1, postEnd - i);
+    const histDelta = Math.min(1, Math.abs(postMean - preMean) * 1.15 + lumaDelta * 0.35);
+
+    let score = 0;
+    if (method === "ffmpeg_scdet") score = Math.min(1, lumaDelta * 1.35);
+    else if (method === "luma_histogram") score = Math.min(1, histDelta * 1.25);
+    else score = Math.min(1, lumaDelta * 0.85 + histDelta * 0.55);
+
+    rawMetrics.push({
+      score: Number(score.toFixed(4)),
+      lumaDelta: Number(lumaDelta.toFixed(4)),
+      histDelta: Number(histDelta.toFixed(4))
+    });
+  }
+
+  const candidates = [];
+  for (let i = 1; i < n - 1; i += 1) {
+    if (rawMetrics[i].score >= threshold) candidates.push(i);
+  }
+  candidates.sort((a, b) => rawMetrics[b].score - rawMetrics[a].score || a - b);
+
+  const accepted = [];
+  for (const idx of candidates) {
+    if (accepted.some((kept) => Math.abs(idx - kept) < minGap)) continue;
+    accepted.push(idx);
+    if (accepted.length >= maxCuts) break;
+  }
+  accepted.sort((a, b) => a - b);
+  const acceptedSet = new Set(accepted);
+
+  const frameScores = [];
+  for (let i = 0; i < n; i += 1) {
+    frameScores.push({
+      frame_offset: i,
+      score: rawMetrics[i].score,
+      luma_delta: rawMetrics[i].lumaDelta,
+      is_cut: acceptedSet.has(i)
+    });
+  }
+  const cuts = accepted.map((idx) => ({
+    frame_offset: idx,
+    score: rawMetrics[idx].score,
+    luma_delta: rawMetrics[idx].lumaDelta,
+    histogram_delta: rawMetrics[idx].histDelta
+  }));
+  return { frame_scores: frameScores, cuts };
+}
+
+export function analyzeClipSceneCutsClient(doc, opts = {}) {
+  if (!doc || !Array.isArray(doc.tracks)) {
+    throw new Error("Timeline document is required.");
+  }
+  const trkIdx = Number.isInteger(opts.track_index) ? opts.track_index : 1;
+  const clpIdx = Number.isInteger(opts.clip_index) ? opts.clip_index : 0;
+  const track = doc.tracks.find((t) => t && t.kind === "video" && Number(t.index) === trkIdx);
+  if (!track || !Array.isArray(track.clips) || clpIdx < 0 || clpIdx >= track.clips.length) {
+    throw new Error(`Video clip not found on V${trkIdx} [${clpIdx}]`);
+  }
+  const clip = track.clips[clpIdx];
+  const threshold = Number.isFinite(Number(opts.threshold))
+    ? clampNum(Number(opts.threshold), SCENE_CUT_THRESHOLD_MIN, SCENE_CUT_THRESHOLD_MAX)
+    : SCENE_CUT_THRESHOLD_DEFAULT;
+  const minGap = Number.isFinite(Number(opts.min_shot_frames))
+    ? Math.max(2, Math.min(240, Math.round(Number(opts.min_shot_frames))))
+    : SCENE_CUT_MIN_SHOT_FRAMES_DEFAULT;
+  const method = normalizeSceneCutMethodClient(opts.method || "hybrid");
+  const fpsNum = Number(doc.fps && (doc.fps.num || doc.fps.numerator)) || 25;
+  const fpsDen = Number(doc.fps && (doc.fps.den || doc.fps.denominator)) || 1;
+  const fpsFloat = Math.max(1, fpsNum / Math.max(1, fpsDen));
+  const dur = Math.max(0, Math.round(Number(clip.duration_frames) || 0));
+
+  const series = Array.isArray(opts.luma_frames)
+    ? opts.luma_frames
+    : buildDeterministicClipLumaSeriesClient(clip);
+  const detected = detectSceneCutsFromLumaSeriesClient(series, {
+    threshold,
+    min_shot_frames: minGap,
+    method
+  });
+  const filtergraph = compileSceneCutFiltergraphClient(threshold, false, true);
+
+  const candidates = detected.cuts.map((c, idx) => {
+    const tlFrame = (Number(clip.start_frame) || 0) + c.frame_offset;
+    const srcIn = Number(clip.source_in_frame) || 0;
+    const srcFrame = clip.reverse
+      ? srcIn + Math.max(0, dur - c.frame_offset)
+      : srcIn + c.frame_offset;
+    return {
+      frame_offset: c.frame_offset,
+      timeline_frame: tlFrame,
+      source_frame: srcFrame,
+      timecode: framesToSmpteTimecode(tlFrame, Math.round(fpsFloat)),
+      score: c.score,
+      luma_delta: c.luma_delta,
+      histogram_delta: c.histogram_delta,
+      enabled: true,
+      manual: false,
+      shot_label: `Shot ${String(idx + 1).padStart(2, "0")}`
+    };
+  });
+
+  const shotCount = candidates.length + 1;
+  const avgShot = dur > 0 ? Number((dur / Math.max(1, shotCount)).toFixed(2)) : 0;
+  return {
+    clip_name: clip.name || "",
+    track_index: trkIdx,
+    clip_index: clpIdx,
+    clip_start_frame: Number(clip.start_frame) || 0,
+    clip_duration_frames: dur,
+    fps_num: fpsNum,
+    fps_den: fpsDen,
+    method,
+    source_mode: "deterministic_synthetic",
+    threshold: Number(threshold.toFixed(4)),
+    min_shot_frames: minGap,
+    filtergraph,
+    frame_scores: detected.frame_scores,
+    candidates,
+    active_cut_count: candidates.length,
+    avg_shot_frames: avgShot
+  };
+}
+
+function splitClipSegmentsClient(clip, sortedOffsets, shotPrefix = "", newLinkGroups = null) {
+  const dur = Math.max(0, Math.round(Number(clip.duration_frames) || 0));
+  const boundaries = [0, ...sortedOffsets, dur];
+  const baseName = String(shotPrefix || clip.name || "Shot").trim() || "Shot";
+  const segments = [];
+  const totalSegs = boundaries.length - 1;
+
+  for (let i = 0; i < totalSegs; i += 1) {
+    const segStart = boundaries[i];
+    const segEnd = boundaries[i + 1];
+    const segDur = segEnd - segStart;
+    if (segDur <= 0) continue;
+
+    const seg = JSON.parse(JSON.stringify(clip));
+    seg.name = `${baseName}_S${String(i + 1).padStart(2, "0")}`;
+    seg.start_frame = (Number(clip.start_frame) || 0) + segStart;
+    seg.duration_frames = segDur;
+    const origSrcIn = Number(clip.source_in_frame) || 0;
+    seg.source_in_frame = clip.reverse
+      ? origSrcIn + Math.max(0, dur - segEnd)
+      : origSrcIn + segStart;
+    if (i > 0) seg.fade_in_s = 0;
+    if (i < totalSegs - 1) {
+      seg.fade_out_s = 0;
+      seg.transition_out = null;
+    }
+    if (Array.isArray(newLinkGroups) && i < newLinkGroups.length) {
+      seg.link_group_id = newLinkGroups[i];
+    }
+    segments.push(seg);
+  }
+  return segments;
+}
+
+export function splitClipAtSceneCutsClient(doc, opts = {}) {
+  const nextDoc = JSON.parse(JSON.stringify(doc));
+  const trkIdx = Number.isInteger(opts.track_index) ? opts.track_index : 1;
+  const clpIdx = Number.isInteger(opts.clip_index) ? opts.clip_index : 0;
+  const splitMode = normalizeSceneCutSplitModeClient(opts.split_mode || "split_and_markers");
+  const splitLinkedAudio = opts.split_linked_audio !== false;
+  const colorRaw = String(opts.marker_color || "Cyan").trim();
+  const markerColor = SCENE_CUT_MARKER_COLORS.includes(colorRaw) ? colorRaw : "Cyan";
+  const shotPrefix = String(opts.shot_prefix || "").trim().slice(0, 64);
+
+  const track = nextDoc.tracks.find((t) => t && t.kind === "video" && Number(t.index) === trkIdx);
+  if (!track || !Array.isArray(track.clips) || clpIdx < 0 || clpIdx >= track.clips.length) {
+    throw new Error(`Video clip not found on V${trkIdx} [${clpIdx}]`);
+  }
+  const clip = track.clips[clpIdx];
+  const dur = Math.max(0, Math.round(Number(clip.duration_frames) || 0));
+  if (dur < 2) {
+    throw new Error(`Clip '${clip.name}' is too short to split.`);
+  }
+
+  const rawOffsets = Array.isArray(opts.cut_offsets) ? opts.cut_offsets : [];
+  const cleanSet = new Set();
+  for (const off of rawOffsets) {
+    const val = Math.round(Number(off));
+    if (Number.isInteger(val) && val > 0 && val < dur) cleanSet.add(val);
+  }
+  const sortedOffsets = [...cleanSet].sort((a, b) => a - b);
+  if (sortedOffsets.length === 0) {
+    throw new Error("No valid cut offsets within clip duration bounds.");
+  }
+
+  const fpsNum = Number(nextDoc.fps && (nextDoc.fps.num || nextDoc.fps.numerator)) || 25;
+  const fpsDen = Number(nextDoc.fps && (nextDoc.fps.den || nextDoc.fps.denominator)) || 1;
+  const fpsInt = Math.max(1, Math.round(fpsNum / Math.max(1, fpsDen)));
+  const createdNames = [];
+  const createdMarkerFrames = [];
+  let linkedAudioSplit = false;
+
+  if (splitMode === "markers_only" || splitMode === "split_and_markers") {
+    if (!Array.isArray(nextDoc.markers)) nextDoc.markers = [];
+    const existing = new Set(nextDoc.markers.map((m) => Number(m.frame)));
+    sortedOffsets.forEach((off, idx) => {
+      const absFrame = (Number(clip.start_frame) || 0) + off;
+      if (!existing.has(absFrame)) {
+        const tc = framesToSmpteTimecode(absFrame, fpsInt);
+        nextDoc.markers.push({
+          name: `Cut ${String(idx + 1).padStart(2, "0")} (${clip.name})`,
+          frame: absFrame,
+          duration_frames: 1,
+          color: markerColor,
+          note: `Scene Cut @ ${tc}`
+        });
+        existing.add(absFrame);
+        createdMarkerFrames.push(absFrame);
+      }
+    });
+    nextDoc.markers.sort((a, b) => Number(a.frame) - Number(b.frame));
+  }
+
+  if (splitMode === "split_clips" || splitMode === "split_and_markers") {
+    const origLink = clip.link_group_id || "";
+    const segCount = sortedOffsets.length + 1;
+    let newLinkGroups = null;
+    if (origLink && splitLinkedAudio) {
+      newLinkGroups = Array.from({ length: segCount }, (_, i) =>
+        `${origLink}_sc${String(i + 1).padStart(2, "0")}`.slice(0, 64)
+      );
+    }
+    const videoSegments = splitClipSegmentsClient(clip, sortedOffsets, shotPrefix, newLinkGroups);
+    for (const seg of videoSegments) createdNames.push(seg.name);
+    track.clips.splice(clpIdx, 1, ...videoSegments);
+
+    if (origLink && splitLinkedAudio) {
+      for (const aTrack of nextDoc.tracks) {
+        if (!aTrack || aTrack.kind !== "audio" || !Array.isArray(aTrack.clips)) continue;
+        const aIdx = aTrack.clips.findIndex(
+          (ac) =>
+            ac &&
+            ac.link_group_id === origLink &&
+            Number(ac.start_frame) === Number(clip.start_frame) &&
+            Number(ac.duration_frames) === dur
+        );
+        if (aIdx >= 0) {
+          const aClip = aTrack.clips[aIdx];
+          const audioSegments = splitClipSegmentsClient(aClip, sortedOffsets, "", newLinkGroups);
+          aTrack.clips.splice(aIdx, 1, ...audioSegments);
+          linkedAudioSplit = true;
+          break;
+        }
+      }
+    }
+  }
+
+  let summary = "";
+  if (splitMode === "markers_only") {
+    summary = `Added ${createdMarkerFrames.length} scene-cut marker(s) on '${clip.name}'.`;
+  } else if (linkedAudioSplit) {
+    summary = `Split '${clip.name}' + linked audio into ${createdNames.length} shot(s) (${sortedOffsets.length} cut(s)).`;
+  } else {
+    summary = `Split '${clip.name}' into ${createdNames.length} shot(s) (${sortedOffsets.length} cut(s)).`;
+  }
+
+  return {
+    changed: true,
+    track_index: trkIdx,
+    clip_index: clpIdx,
+    split_mode: splitMode,
+    created_clip_names: createdNames,
+    created_marker_frames: createdMarkerFrames,
+    cut_count: sortedOffsets.length,
+    linked_audio_split: linkedAudioSplit,
+    summary,
+    document: nextDoc
+  };
+}

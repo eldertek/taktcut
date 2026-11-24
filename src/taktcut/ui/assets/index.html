@@ -1468,6 +1468,12 @@
                   </svg>
                   <span data-i18n="timeline.tool.multicam">+ Multi-Cam</span>
                 </button>
+                <button type="button" id="btn-timeline-scene-cut" class="btn btn-mini tl-scenecut-btn" title="Scene Cut Detection &amp; Auto-Split (Shift+C)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path d="M2 4h3v8H2zM7 2v12M11 4h3v8h-3z" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.sceneCut">Scene Cuts</span>
+                </button>
               </div>
 
               <div class="tl-zoom-group">
@@ -3968,6 +3974,89 @@
           <pre id="pool-sync-fg-preview" class="code-box mono"></pre>
         </div>
       </section>
+    </div>
+  </dialog>
+
+  <dialog id="scene-cut-dialog" class="nle-dialog scene-cut-dialog" aria-labelledby="scene-cut-title" aria-describedby="scene-cut-subtitle">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="scene-cut-title" data-i18n="sceneCut.title">Scene Cut Detection &amp; Auto-Split</h2>
+        <p id="scene-cut-subtitle" class="nle-dialog-subtitle" data-i18n="sceneCut.subtitle">FFmpeg scdet Shot Boundary Analyzer, Prune Review &amp; Frame-Accurate Auto-Split</p>
+      </div>
+      <div class="viewer-controls">
+        <button type="button" id="btn-close-scene-cut" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+      </div>
+    </div>
+    <div class="nle-dialog-body scene-cut-body">
+      <div class="scene-cut-form-grid">
+        <div class="form-row">
+          <label for="scene-cut-clip-select" data-i18n="sceneCut.targetClip">Target Video Clip</label>
+          <select id="scene-cut-clip-select" class="input-control mono"></select>
+        </div>
+        <div class="form-row">
+          <label for="scene-cut-method" data-i18n="sceneCut.method">Detection Engine</label>
+          <select id="scene-cut-method" class="input-control mono">
+            <option value="hybrid" data-i18n="sceneCut.methodHybrid">Hybrid (Luma + Histogram)</option>
+            <option value="ffmpeg_scdet" data-i18n="sceneCut.methodScdet">FFmpeg scdet (MAFD)</option>
+            <option value="luma_histogram" data-i18n="sceneCut.methodHistogram">Histogram Delta</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="scene-cut-threshold-range" data-i18n="sceneCut.threshold">Cut Threshold</label>
+          <div class="scene-cut-threshold-pair">
+            <input type="range" id="scene-cut-threshold-range" min="0.05" max="0.95" step="0.05" value="0.35">
+            <input type="number" id="scene-cut-threshold-num" class="input-control input-num mono" min="0.05" max="0.95" step="0.05" value="0.35" aria-label="Scene cut threshold">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="scene-cut-min-shot" data-i18n="sceneCut.minShot">Min Shot Length (frames)</label>
+          <input type="number" id="scene-cut-min-shot" class="input-control mono" min="2" max="240" step="1" value="6">
+        </div>
+        <div class="form-row">
+          <label for="scene-cut-split-mode" data-i18n="sceneCut.splitMode">Commit Mode</label>
+          <select id="scene-cut-split-mode" class="input-control mono">
+            <option value="split_and_markers" data-i18n="sceneCut.splitAndMarkers">Split Clips + Cut Markers</option>
+            <option value="split_clips" data-i18n="sceneCut.splitClips">Split Clips Only</option>
+            <option value="markers_only" data-i18n="sceneCut.markersOnly">Drop Cut Markers Only</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="scene-cut-marker-color" data-i18n="sceneCut.markerColor">Marker Color</label>
+          <select id="scene-cut-marker-color" class="input-control mono">
+            <option value="Cyan">Cyan</option>
+            <option value="Gold">Gold</option>
+            <option value="Green">Green</option>
+            <option value="Blue">Blue</option>
+            <option value="Red">Red</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="check-label scene-cut-audio-check">
+        <input type="checkbox" id="scene-cut-split-audio" checked>
+        <span data-i18n="sceneCut.splitAudio">Split Linked Audio Clip</span>
+      </label>
+
+      <div class="btn-row scene-cut-actions">
+        <button type="button" id="btn-scene-cut-analyze" class="btn btn-secondary" data-i18n="sceneCut.analyze">Analyze Cuts</button>
+        <button type="button" id="btn-scene-cut-prev" class="btn btn-mini" disabled data-i18n="sceneCut.prevCut">&lt; Prev Cut</button>
+        <button type="button" id="btn-scene-cut-next" class="btn btn-mini" disabled data-i18n="sceneCut.nextCut">Next Cut &gt;</button>
+        <button type="button" id="btn-scene-cut-add-manual" class="btn btn-mini" data-i18n="sceneCut.addManual">+ Cut @ PH</button>
+        <button type="button" id="btn-scene-cut-apply" class="btn btn-primary" disabled>Auto-Split (0)</button>
+      </div>
+
+      <div class="viewer-well scene-cut-canvas-well">
+        <canvas id="scene-cut-canvas" class="studio-canvas" aria-label="Scene cut confidence oscilloscope"></canvas>
+      </div>
+
+      <div id="scene-cut-status" class="telemetry-note mono" aria-live="polite" data-i18n="sceneCut.statsIdle">Ready to scan shot boundaries.</div>
+
+      <div id="scene-cut-list" class="scene-cut-list" role="list" aria-label="Detected scene cut boundaries"></div>
+
+      <div class="form-row">
+        <label for="scene-cut-fg-preview" data-i18n="sceneCut.ffmpegPreview">Compiled FFmpeg scdet Filtergraph</label>
+        <pre id="scene-cut-fg-preview" class="code-box mono"></pre>
+      </div>
     </div>
   </dialog>
 
