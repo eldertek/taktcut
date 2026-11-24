@@ -160,6 +160,71 @@ ColorWarperPresetId = Literal[
     "cyber_neon",
 ]
 
+StudioLutCategory = Literal["film_print", "camera_log", "creative_cinema", "monochrome"]
+STUDIO_LUT_CATEGORIES: tuple[StudioLutCategory, ...] = (
+    "film_print",
+    "camera_log",
+    "creative_cinema",
+    "monochrome",
+)
+StudioLutPresetId = Literal[
+    "kodak_2383_d65",
+    "fuji_3513_print",
+    "rec709_slog3_conv",
+    "rec709_logc_conv",
+    "teal_orange_cinema",
+    "bleach_bypass",
+    "golden_hour_warm",
+    "silver_gelatin_bw",
+]
+STUDIO_LUT_PRESET_IDS: tuple[StudioLutPresetId, ...] = (
+    "kodak_2383_d65",
+    "fuji_3513_print",
+    "rec709_slog3_conv",
+    "rec709_logc_conv",
+    "teal_orange_cinema",
+    "bleach_bypass",
+    "golden_hour_warm",
+    "silver_gelatin_bw",
+)
+
+ColorChartProfileId = Literal["xrite_classic_24", "datacolor_spyder_24", "rec709_smpte"]
+COLOR_CHART_PROFILES: tuple[ColorChartProfileId, ...] = (
+    "xrite_classic_24",
+    "datacolor_spyder_24",
+    "rec709_smpte",
+)
+ShotMatchSourceProfileId = Literal[
+    "current_chart",
+    "sony_slog3",
+    "arri_logc3",
+    "canon_clog2",
+    "underexposed_cool",
+    "warm_tungsten",
+]
+SHOT_MATCH_SOURCE_PROFILES: tuple[ShotMatchSourceProfileId, ...] = (
+    "current_chart",
+    "sony_slog3",
+    "arri_logc3",
+    "canon_clog2",
+    "underexposed_cool",
+    "warm_tungsten",
+)
+ShotMatchTargetProfileId = Literal[
+    "rec709_d65",
+    "teal_orange_ref",
+    "film_warm_ref",
+    "kodak_print_ref",
+    "custom_reference",
+]
+SHOT_MATCH_TARGET_PROFILES: tuple[ShotMatchTargetProfileId, ...] = (
+    "rec709_d65",
+    "teal_orange_ref",
+    "film_warm_ref",
+    "kodak_print_ref",
+    "custom_reference",
+)
+
 
 def _clamp_unit(value: float) -> float:
     if value < 0.0:
@@ -2497,3 +2562,691 @@ def bake_color_node_chain_to_cube(
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return parse_cube_lut(out_path)
+
+
+# ---------------------------------------------------------------------------
+# Studio 3D .cube LUT Library & Look Browser
+# ---------------------------------------------------------------------------
+
+
+class StudioLutPreset(BaseModel):
+    """Metadata and preview swatches for a built-in DaVinci-style 3D .cube LUT."""
+
+    id: StudioLutPresetId
+    title: str
+    category: StudioLutCategory
+    description: str
+    default_size: int = 17
+    swatches: list[str] = Field(default_factory=list)
+
+
+_STUDIO_LUT_METADATA: tuple[tuple[StudioLutPresetId, str, StudioLutCategory, str], ...] = (
+    (
+        "kodak_2383_d65",
+        "Kodak 2383 Print D65",
+        "film_print",
+        "Classic cinema print film contrast with rich blacks and warm highlight roll-off.",
+    ),
+    (
+        "fuji_3513_print",
+        "Fujifilm 3513D Print",
+        "film_print",
+        "Crisp emerald foliage, cool shadow separation, and balanced skin rendition.",
+    ),
+    (
+        "rec709_slog3_conv",
+        "Sony S-Log3 -> Rec.709",
+        "camera_log",
+        "Log-to-Rec.709 technical S-curve expansion with gamut saturation recovery.",
+    ),
+    (
+        "rec709_logc_conv",
+        "ARRI LogC3 -> Rec.709",
+        "camera_log",
+        "Smooth photographic highlight roll-off and neutral Rec.709 tonal mapping.",
+    ),
+    (
+        "teal_orange_cinema",
+        "Blockbuster Teal & Orange",
+        "creative_cinema",
+        "Split-toned cyan-teal shadows paired with warm amber skin and highlights.",
+    ),
+    (
+        "bleach_bypass",
+        "Silver Bleach Bypass",
+        "creative_cinema",
+        "High-contrast silver-retained look with sculpted midtones and muted chroma.",
+    ),
+    (
+        "golden_hour_warm",
+        "Golden Hour Amber",
+        "creative_cinema",
+        "Lifted warm midtones, sunset highlight glow, and gentle shadow softness.",
+    ),
+    (
+        "silver_gelatin_bw",
+        "Ilford Silver B&W",
+        "monochrome",
+        "Red-filtered panchromatic black-and-white curve with deep silver contrast.",
+    ),
+)
+
+_SWATCH_PROBES: tuple[tuple[float, float, float], ...] = (
+    (0.18, 0.24, 0.34),  # Shadow cool
+    (0.76, 0.58, 0.48),  # Light skin
+    (0.38, 0.54, 0.72),  # Sky blue
+    (0.34, 0.48, 0.26),  # Foliage
+    (0.84, 0.50, 0.18),  # Warm amber
+    (0.90, 0.90, 0.88),  # Highlight white
+)
+
+
+def _rgb_to_hex(r: float, g: float, b: float) -> str:
+    ri = max(0, min(255, round(_clamp_unit(r) * 255.0)))
+    gi = max(0, min(255, round(_clamp_unit(g) * 255.0)))
+    bi = max(0, min(255, round(_clamp_unit(b) * 255.0)))
+    return f"#{ri:02x}{gi:02x}{bi:02x}"
+
+
+def _scurve(x: float, strength: float) -> float:
+    x_c = _clamp_unit(x)
+    s_c = x_c * x_c * (3.0 - 2.0 * x_c)
+    return _clamp_unit(x_c + (s_c - x_c) * strength)
+
+
+def evaluate_studio_lut_rgb(
+    preset_id: str,
+    r: float,
+    g: float,
+    b: float,
+) -> tuple[float, float, float]:
+    """Evaluate a built-in studio 3D LUT transform at normalized RGB in [0.0, 1.0]."""
+    if preset_id not in STUDIO_LUT_PRESET_IDS:
+        raise ValueError(f"Unknown studio LUT preset {preset_id!r}")
+    ri, gi, bi = _clamp_unit(r), _clamp_unit(g), _clamp_unit(b)
+    luma = 0.2126 * ri + 0.7152 * gi + 0.0722 * bi
+
+    if preset_id == "kodak_2383_d65":
+        rc = _scurve(ri, 0.52) * 1.02
+        gc = _scurve(gi, 0.50) * 0.99
+        bc = _scurve(bi, 0.54) * 0.95
+        warm_hi = max(0.0, luma - 0.5) * 0.10
+        cool_sh = max(0.0, 0.38 - luma) * 0.08
+        return (
+            _clamp_unit(rc + warm_hi - cool_sh * 0.4),
+            _clamp_unit(gc + warm_hi * 0.3),
+            _clamp_unit(bc - warm_hi * 0.6 + cool_sh),
+        )
+
+    if preset_id == "fuji_3513_print":
+        rc = _scurve(ri, 0.42) * 0.97
+        gc = _scurve(gi, 0.46) * 1.03
+        bc = _scurve(bi, 0.44) * 1.01
+        sh_teal = max(0.0, 0.42 - luma) * 0.10
+        return (
+            _clamp_unit(rc - sh_teal * 0.6 + 0.015),
+            _clamp_unit(gc + sh_teal * 0.35),
+            _clamp_unit(bc + sh_teal * 0.55),
+        )
+
+    if preset_id == "rec709_slog3_conv":
+        def _expand_log(v: float) -> float:
+            pivot = 0.42
+            scaled = (v - pivot) * 1.62 + 0.48
+            return _scurve(scaled, 0.48)
+
+        rl, gl, bl = _expand_log(ri), _expand_log(gi), _expand_log(bi)
+        lm = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl
+        sat_boost = 1.28
+        return (
+            _clamp_unit(lm + (rl - lm) * sat_boost),
+            _clamp_unit(lm + (gl - lm) * sat_boost),
+            _clamp_unit(lm + (bl - lm) * sat_boost),
+        )
+
+    if preset_id == "rec709_logc_conv":
+        def _expand_logc(v: float) -> float:
+            scaled = (v - 0.39) * 1.54 + 0.47
+            c = _scurve(scaled, 0.38)
+            if c > 0.78:
+                c = 0.78 + (c - 0.78) * 0.72
+            return _clamp_unit(c)
+
+        rl, gl, bl = _expand_logc(ri), _expand_logc(gi), _expand_logc(bi)
+        lm = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl
+        sat_boost = 1.22
+        return (
+            _clamp_unit(lm + (rl - lm) * sat_boost),
+            _clamp_unit(lm + (gl - lm) * sat_boost),
+            _clamp_unit(lm + (bl - lm) * sat_boost),
+        )
+
+    if preset_id == "teal_orange_cinema":
+        sh = max(0.0, 0.48 - luma) / 0.48
+        hi = max(0.0, luma - 0.42) / 0.58
+        rc = _scurve(ri, 0.35) - 0.11 * sh + 0.12 * hi
+        gc = _scurve(gi, 0.35) + 0.04 * sh + 0.02 * hi
+        bc = _scurve(bi, 0.35) + 0.14 * sh - 0.13 * hi
+        return (_clamp_unit(rc), _clamp_unit(gc), _clamp_unit(bc))
+
+    if preset_id == "bleach_bypass":
+        sl = _scurve(luma, 0.75)
+        rc = _scurve(ri, 0.60) * 0.46 + sl * 0.54
+        gc = _scurve(gi, 0.60) * 0.46 + sl * 0.54
+        bc = _scurve(bi, 0.60) * 0.46 + sl * 0.54
+        return (_clamp_unit(rc), _clamp_unit(gc), _clamp_unit(bc))
+
+    if preset_id == "golden_hour_warm":
+        rc = _scurve(ri * 1.06 + 0.03, 0.25)
+        gc = _scurve(gi * 1.00 + 0.015, 0.25)
+        bc = _scurve(bi * 0.86 + 0.01, 0.25)
+        return (_clamp_unit(rc), _clamp_unit(gc), _clamp_unit(bc))
+
+    mono = _scurve(0.36 * ri + 0.52 * gi + 0.12 * bi, 0.62)
+    return (mono, mono, mono)
+
+
+def generate_studio_lut_table(
+    preset_id: str,
+    size: int = 17,
+) -> tuple[CubeLutInfo, list[tuple[float, float, float]]]:
+    """Generate a valid 3D .cube LUT info and RGB table for a built-in studio LUT preset."""
+    if preset_id not in STUDIO_LUT_PRESET_IDS:
+        raise ValueError(f"Unknown studio LUT preset {preset_id!r}")
+    if size < 2 or size > 65:
+        raise ValueError(f"LUT size must be between 2 and 65, got {size}")
+    title = next(item[1] for item in _STUDIO_LUT_METADATA if item[0] == preset_id)
+    denom = float(size - 1)
+    table: list[tuple[float, float, float]] = []
+    for b_idx in range(size):
+        b_in = b_idx / denom
+        for g_idx in range(size):
+            g_in = g_idx / denom
+            for r_idx in range(size):
+                table.append(evaluate_studio_lut_rgb(preset_id, r_idx / denom, g_in, b_in))
+    info = CubeLutInfo(
+        path=f"{preset_id}.cube",
+        title=title,
+        dimension="3D",
+        size=size,
+        domain_min=(0.0, 0.0, 0.0),
+        domain_max=(1.0, 1.0, 1.0),
+        entry_count=len(table),
+    )
+    return info, table
+
+
+def format_cube_lut_text(
+    info: CubeLutInfo,
+    table: Sequence[tuple[float, float, float]],
+) -> str:
+    """Serialize a CubeLutInfo + table into standard Adobe .cube text format."""
+    lines: list[str] = [
+        f'TITLE "{info.title}"',
+        f"LUT_3D_SIZE {info.size}" if info.dimension == "3D" else f"LUT_1D_SIZE {info.size}",
+        f"DOMAIN_MIN {info.domain_min[0]:.4f} {info.domain_min[1]:.4f} {info.domain_min[2]:.4f}",
+        f"DOMAIN_MAX {info.domain_max[0]:.4f} {info.domain_max[1]:.4f} {info.domain_max[2]:.4f}",
+        "",
+    ]
+    for r, g, b in table:
+        lines.append(f"{r:.6f} {g:.6f} {b:.6f}")
+    return "\n".join(lines) + "\n"
+
+
+def get_studio_lut_preset(preset_id: str) -> StudioLutPreset:
+    """Return metadata and computed preview swatches for a studio LUT preset."""
+    for pid, title, category, desc in _STUDIO_LUT_METADATA:
+        if pid == preset_id:
+            swatches = [
+                _rgb_to_hex(*evaluate_studio_lut_rgb(pid, pr, pg, pb))
+                for pr, pg, pb in _SWATCH_PROBES
+            ]
+            return StudioLutPreset(
+                id=pid,
+                title=title,
+                category=category,
+                description=desc,
+                default_size=17,
+                swatches=swatches,
+            )
+    raise ValueError(f"Unknown studio LUT preset {preset_id!r}")
+
+
+def list_studio_lut_presets() -> list[StudioLutPreset]:
+    """List all built-in DaVinci-style 3D LUT presets with preview swatches."""
+    return [get_studio_lut_preset(pid) for pid, _, _, _ in _STUDIO_LUT_METADATA]
+
+
+# ---------------------------------------------------------------------------
+# X-Rite ColorChecker 24 & Histogram-Moment Shot-Match Auto-Balance
+# ---------------------------------------------------------------------------
+
+
+COLORCHECKER_24_PATCHES: tuple[tuple[str, tuple[float, float, float]], ...] = (
+    ("Dark Skin", (0.451, 0.322, 0.267)),
+    ("Light Skin", (0.761, 0.588, 0.510)),
+    ("Blue Sky", (0.384, 0.478, 0.616)),
+    ("Foliage", (0.341, 0.424, 0.263)),
+    ("Blue Flower", (0.522, 0.502, 0.694)),
+    ("Bluish Green", (0.404, 0.741, 0.667)),
+    ("Orange", (0.839, 0.494, 0.173)),
+    ("Purplish Blue", (0.314, 0.357, 0.651)),
+    ("Moderate Red", (0.757, 0.353, 0.388)),
+    ("Purple", (0.369, 0.235, 0.424)),
+    ("Yellow Green", (0.616, 0.737, 0.251)),
+    ("Orange Yellow", (0.878, 0.639, 0.180)),
+    ("Blue", (0.220, 0.239, 0.588)),
+    ("Green", (0.275, 0.580, 0.286)),
+    ("Red", (0.686, 0.212, 0.235)),
+    ("Yellow", (0.906, 0.780, 0.122)),
+    ("Magenta", (0.733, 0.337, 0.584)),
+    ("Cyan", (0.031, 0.522, 0.631)),
+    ("White", (0.953, 0.953, 0.949)),
+    ("Neutral 8", (0.784, 0.784, 0.784)),
+    ("Neutral 6.5", (0.627, 0.627, 0.627)),
+    ("Neutral 5", (0.478, 0.478, 0.478)),
+    ("Neutral 3.5", (0.333, 0.333, 0.337)),
+    ("Black", (0.204, 0.204, 0.208)),
+)
+
+_SMPTE_MATCH_PATCHES: tuple[tuple[str, tuple[float, float, float]], ...] = (
+    ("75% Gray", (0.75, 0.75, 0.75)),
+    ("Yellow Bar", (0.75, 0.75, 0.05)),
+    ("Cyan Bar", (0.05, 0.75, 0.75)),
+    ("Green Bar", (0.05, 0.75, 0.05)),
+    ("Magenta Bar", (0.75, 0.05, 0.75)),
+    ("Red Bar", (0.75, 0.05, 0.05)),
+    ("Blue Bar", (0.05, 0.05, 0.75)),
+    ("Light Skin", (0.761, 0.588, 0.510)),
+    ("Dark Skin", (0.451, 0.322, 0.267)),
+    ("Sky Blue", (0.384, 0.478, 0.616)),
+    ("Foliage", (0.341, 0.424, 0.263)),
+    ("White 95%", (0.95, 0.95, 0.95)),
+    ("Mid Gray 50%", (0.50, 0.50, 0.50)),
+    ("Black 10%", (0.10, 0.10, 0.10)),
+)
+
+
+def _srgb_to_linear(c: float) -> float:
+    c_clamped = _clamp_unit(c)
+    if c_clamped <= 0.04045:
+        return c_clamped / 12.92
+    return float(math.pow((c_clamped + 0.055) / 1.055, 2.4))
+
+
+def rgb_to_lab(r: float, g: float, b: float) -> tuple[float, float, float]:
+    """Convert Rec.709 / sRGB [0..1] RGB triplet to CIE L*a*b* (D65 reference white)."""
+    rl = _srgb_to_linear(r)
+    gl = _srgb_to_linear(g)
+    bl = _srgb_to_linear(b)
+
+    x = (0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl) / 0.95047
+    y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl
+    z = (0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl) / 1.08883
+
+    def _f(t: float) -> float:
+        if t > 0.008856:
+            return float(math.pow(t, 1.0 / 3.0))
+        return (7.787 * t) + (16.0 / 116.0)
+
+    fx, fy, fz = _f(x), _f(y), _f(z)
+    l_star = 116.0 * fy - 16.0
+    a_star = 500.0 * (fx - fy)
+    b_star = 200.0 * (fy - fz)
+    return (l_star, a_star, b_star)
+
+
+def delta_e_cie76(
+    rgb_a: tuple[float, float, float],
+    rgb_b: tuple[float, float, float],
+) -> float:
+    """Compute perceptual CIE76 Delta-E distance between two sRGB [0..1] colors."""
+    la, aa, ba = rgb_to_lab(rgb_a[0], rgb_a[1], rgb_a[2])
+    lb, ab, bb = rgb_to_lab(rgb_b[0], rgb_b[1], rgb_b[2])
+    return math.sqrt((la - lb) ** 2 + (aa - ab) ** 2 + (ba - bb) ** 2)
+
+
+class ShotMatchMoments(BaseModel):
+    """Per-channel RGB histogram moments (mean and std dev) for shot matching."""
+
+    mean_rgb: tuple[float, float, float]
+    std_rgb: tuple[float, float, float]
+    luma_mean: float
+    luma_std: float
+
+
+class ShotMatchPatchComparison(BaseModel):
+    """Per-patch source, target, and matched RGB comparison with Delta-E metrics."""
+
+    name: str
+    source_rgb: tuple[float, float, float]
+    target_rgb: tuple[float, float, float]
+    matched_rgb: tuple[float, float, float]
+    delta_e_before: float
+    delta_e_after: float
+
+
+class ShotMatchResult(BaseModel):
+    """Result of histogram-moment & ColorChecker auto-balance shot matching."""
+
+    grade: ColorGradeParams
+    delta_e_before: float
+    delta_e_after: float
+    improvement_pct: float
+    strength: float
+    chart_profile: ColorChartProfileId
+    source_profile: ShotMatchSourceProfileId
+    target_profile: ShotMatchTargetProfileId
+    patch_count: int
+    patches: list[ShotMatchPatchComparison]
+    source_moments: ShotMatchMoments
+    target_moments: ShotMatchMoments
+    matched_moments: ShotMatchMoments
+    ffmpeg_filter: str
+
+
+def compute_rgb_moments(samples: Sequence[tuple[float, float, float]]) -> ShotMatchMoments:
+    """Compute per-channel RGB mean, std dev, and Rec.709 luma moments."""
+    if not samples:
+        raise ValueError("At least one RGB sample is required to compute moments")
+    n = float(len(samples))
+    mr = sum(_clamp_unit(s[0]) for s in samples) / n
+    mg = sum(_clamp_unit(s[1]) for s in samples) / n
+    mb = sum(_clamp_unit(s[2]) for s in samples) / n
+    lumas = [
+        0.2126 * _clamp_unit(s[0]) + 0.7152 * _clamp_unit(s[1]) + 0.0722 * _clamp_unit(s[2])
+        for s in samples
+    ]
+    ml = sum(lumas) / n
+    vr = sum((_clamp_unit(s[0]) - mr) ** 2 for s in samples) / n
+    vg = sum((_clamp_unit(s[1]) - mg) ** 2 for s in samples) / n
+    vb = sum((_clamp_unit(s[2]) - mb) ** 2 for s in samples) / n
+    vl = sum((lv - ml) ** 2 for lv in lumas) / n
+    return ShotMatchMoments(
+        mean_rgb=(round(mr, 4), round(mg, 4), round(mb, 4)),
+        std_rgb=(round(math.sqrt(vr), 4), round(math.sqrt(vg), 4), round(math.sqrt(vb), 4)),
+        luma_mean=round(ml, 4),
+        luma_std=round(math.sqrt(vl), 4),
+    )
+
+
+def _apply_source_simulation(
+    rgb: tuple[float, float, float],
+    source_profile: ShotMatchSourceProfileId,
+) -> tuple[float, float, float]:
+    """Transform canonical chart RGB into simulated camera/cast source RGB."""
+    r, g, b = rgb
+    if source_profile == "current_chart":
+        return (r, g, b)
+    if source_profile == "sony_slog3":
+        return (
+            _clamp_unit(0.24 + r * 0.46),
+            _clamp_unit(0.25 + g * 0.47),
+            _clamp_unit(0.24 + b * 0.45),
+        )
+    if source_profile == "arri_logc3":
+        return (
+            _clamp_unit(0.21 + r * 0.52),
+            _clamp_unit(0.22 + g * 0.52),
+            _clamp_unit(0.21 + b * 0.51),
+        )
+    if source_profile == "canon_clog2":
+        return (
+            _clamp_unit(0.22 + r * 0.50 + 0.015),
+            _clamp_unit(0.21 + g * 0.49),
+            _clamp_unit(0.20 + b * 0.48),
+        )
+    if source_profile == "underexposed_cool":
+        return (
+            _clamp_unit(r * 0.72 - 0.03),
+            _clamp_unit(g * 0.78),
+            _clamp_unit(b * 0.90 + 0.05),
+        )
+    return (
+        _clamp_unit(r * 0.98 + 0.08),
+        _clamp_unit(g * 0.90 + 0.02),
+        _clamp_unit(b * 0.72 - 0.04),
+    )
+
+
+def _get_chart_base_patches(
+    chart_profile: ColorChartProfileId,
+) -> tuple[tuple[str, tuple[float, float, float]], ...]:
+    if chart_profile == "rec709_smpte":
+        return _SMPTE_MATCH_PATCHES
+    if chart_profile == "datacolor_spyder_24":
+        return tuple(
+            (
+                name,
+                (
+                    _clamp_unit(rgb[0] * 0.99 + 0.005),
+                    _clamp_unit(rgb[1] * 1.00),
+                    _clamp_unit(rgb[2] * 0.99 + 0.004),
+                ),
+            )
+            for name, rgb in COLORCHECKER_24_PATCHES
+        )
+    return COLORCHECKER_24_PATCHES
+
+
+def _apply_target_profile_rgb(
+    rgb: tuple[float, float, float],
+    target_profile: ShotMatchTargetProfileId,
+) -> tuple[float, float, float]:
+    r, g, b = rgb
+    if target_profile in ("rec709_d65", "custom_reference"):
+        return (r, g, b)
+    if target_profile == "teal_orange_ref":
+        return get_color_preset("teal_orange").params.apply_rgb(r, g, b)
+    if target_profile == "film_warm_ref":
+        return get_color_preset("film_warm").params.apply_rgb(r, g, b)
+    return evaluate_studio_lut_rgb("kodak_2383_d65", r, g, b)
+
+
+def _normalize_sample_triplets(
+    raw_samples: Sequence[Sequence[float]],
+    field_name: str,
+) -> list[tuple[float, float, float]]:
+    out: list[tuple[float, float, float]] = []
+    for idx, item in enumerate(raw_samples):
+        if len(item) != 3:
+            raise ValueError(f"{field_name}[{idx}] must have 3 RGB components")
+        r = _validate_bounded_float(item[0], f"{field_name}[{idx}][0]", 0.0, 1.0)
+        g = _validate_bounded_float(item[1], f"{field_name}[{idx}][1]", 0.0, 1.0)
+        b = _validate_bounded_float(item[2], f"{field_name}[{idx}][2]", 0.0, 1.0)
+        out.append((r, g, b))
+    return out
+
+
+def _clamp_grade_component(value: float, min_val: float, max_val: float) -> float:
+    return max(min_val, min(max_val, value))
+
+
+def solve_shot_match(
+    *,
+    chart_profile: ColorChartProfileId = "xrite_classic_24",
+    source_profile: ShotMatchSourceProfileId = "current_chart",
+    target_profile: ShotMatchTargetProfileId = "rec709_d65",
+    strength: float = 1.0,
+    source_samples: Sequence[Sequence[float]] | None = None,
+    target_samples: Sequence[Sequence[float]] | None = None,
+) -> ShotMatchResult:
+    """Solve ColorGradeParams matching source chart/histogram moments to target reference."""
+    if chart_profile not in COLOR_CHART_PROFILES:
+        raise ValueError(f"Unsupported chart_profile {chart_profile!r}")
+    if source_profile not in SHOT_MATCH_SOURCE_PROFILES:
+        raise ValueError(f"Unsupported source_profile {source_profile!r}")
+    if target_profile not in SHOT_MATCH_TARGET_PROFILES:
+        raise ValueError(f"Unsupported target_profile {target_profile!r}")
+    blend = _validate_bounded_float(strength, "strength", 0.0, 1.0)
+
+    base_patches = _get_chart_base_patches(chart_profile)
+    patch_names = [p[0] for p in base_patches]
+
+    if source_samples is not None and len(source_samples) > 0:
+        src_list = _normalize_sample_triplets(source_samples, "source_samples")
+    else:
+        src_list = [_apply_source_simulation(p[1], source_profile) for p in base_patches]
+
+    if target_samples is not None and len(target_samples) > 0:
+        tgt_list = _normalize_sample_triplets(target_samples, "target_samples")
+    else:
+        tgt_list = [_apply_target_profile_rgb(p[1], target_profile) for p in base_patches]
+
+    pair_count = min(len(src_list), len(tgt_list))
+    if pair_count == 0:
+        raise ValueError("Shot-match requires at least 1 valid source/target sample")
+    src_aligned = src_list[:pair_count]
+    tgt_aligned = tgt_list[:pair_count]
+    names_aligned = [
+        patch_names[i] if i < len(patch_names) else f"Zone {i + 1}"
+        for i in range(pair_count)
+    ]
+
+    src_moments = compute_rgb_moments(src_aligned)
+    tgt_moments = compute_rgb_moments(tgt_aligned)
+
+    luma_ratio = tgt_moments.luma_std / max(0.03, src_moments.luma_std)
+    contrast_est = _clamp_grade_component(luma_ratio, 0.45, 1.85)
+
+    def _mean_chroma(samples: Sequence[tuple[float, float, float]]) -> float:
+        return sum(max(s) - min(s) for s in samples) / float(len(samples))
+
+    src_chroma = _mean_chroma(src_aligned)
+    tgt_chroma = _mean_chroma(tgt_aligned)
+    sat_ratio = (tgt_chroma / max(0.03, src_chroma)) / max(0.55, contrast_est * 0.88)
+    saturation_est = _clamp_grade_component(sat_ratio, 0.25, 2.0)
+
+    src_rb_bias = src_moments.mean_rgb[0] - src_moments.mean_rgb[2]
+    tgt_rb_bias = tgt_moments.mean_rgb[0] - tgt_moments.mean_rgb[2]
+    temp_est = _clamp_grade_component((tgt_rb_bias - src_rb_bias) * 1.15, -0.75, 0.75)
+
+    lift = [0.0, 0.0, 0.0]
+    gamma = [0.0, 0.0, 0.0]
+    gain = [0.0, 0.0, 0.0]
+
+    order = sorted(
+        range(pair_count),
+        key=lambda idx: 0.2126 * src_aligned[idx][0]
+        + 0.7152 * src_aligned[idx][1]
+        + 0.0722 * src_aligned[idx][2],
+    )
+    band = max(1, pair_count // 3)
+    sh_indices = order[:band]
+    hi_indices = order[-band:]
+    mid_indices = order[band : pair_count - band] if pair_count >= 3 else order
+
+    for _pass in range(4):
+        probe_grade = ColorGradeParams(
+            lift=(lift[0], lift[1], lift[2]),
+            gamma=(gamma[0], gamma[1], gamma[2]),
+            gain=(gain[0], gain[1], gain[2]),
+            contrast=contrast_est,
+            saturation=saturation_est,
+            temperature=temp_est,
+        )
+        cur_out = [probe_grade.apply_rgb(s[0], s[1], s[2]) for s in src_aligned]
+        for ch in range(3):
+            sh_err = sum(tgt_aligned[i][ch] - cur_out[i][ch] for i in sh_indices) / len(sh_indices)
+            mid_err = sum(tgt_aligned[i][ch] - cur_out[i][ch] for i in mid_indices) / len(
+                mid_indices
+            )
+            hi_err = sum(tgt_aligned[i][ch] - cur_out[i][ch] for i in hi_indices) / len(hi_indices)
+            lift[ch] = _clamp_grade_component(lift[ch] + sh_err * 0.85, -0.75, 0.75)
+            gamma[ch] = _clamp_grade_component(gamma[ch] + mid_err * 0.90, -0.75, 0.75)
+            gain[ch] = _clamp_grade_component(gain[ch] + hi_err * 0.90, -0.75, 0.75)
+
+    final_grade = ColorGradeParams(
+        lift=(
+            round(lift[0] * blend, 4),
+            round(lift[1] * blend, 4),
+            round(lift[2] * blend, 4),
+        ),
+        gamma=(
+            round(gamma[0] * blend, 4),
+            round(gamma[1] * blend, 4),
+            round(gamma[2] * blend, 4),
+        ),
+        gain=(
+            round(gain[0] * blend, 4),
+            round(gain[1] * blend, 4),
+            round(gain[2] * blend, 4),
+        ),
+        contrast=round(1.0 + (contrast_est - 1.0) * blend, 4),
+        saturation=round(1.0 + (saturation_est - 1.0) * blend, 4),
+        temperature=round(temp_est * blend, 4),
+    )
+
+    matched_list: list[tuple[float, float, float]] = []
+    comparisons: list[ShotMatchPatchComparison] = []
+    de_before_sum = 0.0
+    de_after_sum = 0.0
+
+    for idx in range(pair_count):
+        s_rgb = src_aligned[idx]
+        t_rgb = tgt_aligned[idx]
+        m_rgb = final_grade.apply_rgb(s_rgb[0], s_rgb[1], s_rgb[2])
+        matched_list.append(m_rgb)
+        de_b = delta_e_cie76(s_rgb, t_rgb)
+        de_a = delta_e_cie76(m_rgb, t_rgb)
+        de_before_sum += de_b
+        de_after_sum += de_a
+        comparisons.append(
+            ShotMatchPatchComparison(
+                name=names_aligned[idx],
+                source_rgb=(round(s_rgb[0], 4), round(s_rgb[1], 4), round(s_rgb[2], 4)),
+                target_rgb=(round(t_rgb[0], 4), round(t_rgb[1], 4), round(t_rgb[2], 4)),
+                matched_rgb=(round(m_rgb[0], 4), round(m_rgb[1], 4), round(m_rgb[2], 4)),
+                delta_e_before=round(de_b, 2),
+                delta_e_after=round(de_a, 2),
+            )
+        )
+
+    avg_before = de_before_sum / pair_count
+    avg_after = de_after_sum / pair_count
+    improvement = (
+        ((avg_before - avg_after) / avg_before) * 100.0 if avg_before > 1e-4 else 0.0
+    )
+
+    return ShotMatchResult(
+        grade=final_grade,
+        delta_e_before=round(avg_before, 2),
+        delta_e_after=round(avg_after, 2),
+        improvement_pct=round(improvement, 1),
+        strength=round(blend, 4),
+        chart_profile=chart_profile,
+        source_profile=source_profile,
+        target_profile=target_profile,
+        patch_count=pair_count,
+        patches=comparisons,
+        source_moments=src_moments,
+        target_moments=tgt_moments,
+        matched_moments=compute_rgb_moments(matched_list),
+        ffmpeg_filter=compile_color_grade_filter(final_grade, pix_fmt=None),
+    )
+
+
+def list_shot_match_profiles() -> dict[str, list[dict[str, str]]]:
+    """Return supported chart, source camera, and target reference profiles."""
+    return {
+        "charts": [
+            {"id": "xrite_classic_24", "label": "X-Rite ColorChecker 24"},
+            {"id": "datacolor_spyder_24", "label": "SpyderCheckr 24"},
+            {"id": "rec709_smpte", "label": "Rec.709 SMPTE Chart"},
+        ],
+        "sources": [
+            {"id": "current_chart", "label": "Current Node Chart"},
+            {"id": "sony_slog3", "label": "Sony S-Log3 (Flat)"},
+            {"id": "arri_logc3", "label": "ARRI LogC3 (Flat)"},
+            {"id": "canon_clog2", "label": "Canon C-Log2"},
+            {"id": "underexposed_cool", "label": "Underexposed Cool"},
+            {"id": "warm_tungsten", "label": "Warm Tungsten Cast"},
+        ],
+        "targets": [
+            {"id": "rec709_d65", "label": "Rec.709 D65 Standard"},
+            {"id": "teal_orange_ref", "label": "Teal & Orange Look"},
+            {"id": "film_warm_ref", "label": "Film Warm Look"},
+            {"id": "kodak_print_ref", "label": "Kodak 2383 Print"},
+            {"id": "custom_reference", "label": "Reference Still / Frame"},
+        ],
+    }

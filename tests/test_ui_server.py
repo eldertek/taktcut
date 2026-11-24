@@ -11023,6 +11023,238 @@ def test_timeline_dual_monitor_three_point_edit_parity_and_playwright(tmp_path: 
         thread.join(timeout=5)
 
 
+def test_color_lut_library_and_shot_match_api_and_js_parity(tmp_path: Path) -> None:
+    import subprocess
+
+    from taktcut.color import generate_studio_lut_table, solve_shot_match
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        status_presets, _, raw_presets = _http_call(f"{base_url}/api/color/presets")
+        assert status_presets == 200
+        presets_data = json.loads(raw_presets.decode("utf-8"))
+        assert len(presets_data["studio_luts"]) == 8
+        assert "charts" in presets_data["shot_match_profiles"]
+
+        status_luts, _, raw_luts = _http_call(f"{base_url}/api/color/luts")
+        assert status_luts == 200
+        luts_data = json.loads(raw_luts.decode("utf-8"))
+        assert len(luts_data["luts"]) == 8
+        assert luts_data["categories"] == [
+            "film_print",
+            "camera_log",
+            "creative_cinema",
+            "monochrome",
+        ]
+
+        status_lut, _, raw_lut = _http_call(
+            f"{base_url}/api/color/lut-preset",
+            method="POST",
+            payload={"preset_id": "kodak_2383_d65", "size": 17},
+        )
+        assert status_lut == 200
+        lut_data = json.loads(raw_lut.decode("utf-8"))
+        assert lut_data["lut"]["size"] == 17
+        assert lut_data["lut"]["entry_count"] == 17**3
+
+        status_bad_lut, _, _ = _http_call(
+            f"{base_url}/api/color/lut-preset",
+            method="POST",
+            payload={"preset_id": "nonexistent_lut"},
+        )
+        assert status_bad_lut == 400
+
+        status_sm, _, raw_sm = _http_call(
+            f"{base_url}/api/color/shot-match",
+            method="POST",
+            payload={
+                "chart_profile": "xrite_classic_24",
+                "source_profile": "sony_slog3",
+                "target_profile": "rec709_d65",
+                "strength": 1.0,
+            },
+        )
+        assert status_sm == 200
+        sm_data = json.loads(raw_sm.decode("utf-8"))
+        assert sm_data["patch_count"] == 24
+        assert sm_data["delta_e_after"] < sm_data["delta_e_before"]
+        assert "colorbalance=" in sm_data["ffmpeg_filter"]
+
+        status_bad_sm, _, _ = _http_call(
+            f"{base_url}/api/color/shot-match",
+            method="POST",
+            payload={"chart_profile": "invalid_chart"},
+        )
+        assert status_bad_sm == 400
+
+        ops_path = (
+            Path(__file__).resolve().parents[1] / "src/taktcut/ui/assets/timeline_ops.js"
+        )
+        ops_url = ops_path.as_uri()
+        py_info, py_table = generate_studio_lut_table("teal_orange_cinema", size=17)
+        py_sm = solve_shot_match(
+            chart_profile="xrite_classic_24",
+            source_profile="underexposed_cool",
+            target_profile="rec709_d65",
+            strength=0.85,
+        )
+        js_script = (
+            f"import {{ generateStudioLutPresetClient, solveShotMatchClient }} from '{ops_url}';\n"
+            "const lut = generateStudioLutPresetClient('teal_orange_cinema', 17);\n"
+            "const sm = solveShotMatchClient({\n"
+            "  chart_profile: 'xrite_classic_24',\n"
+            "  source_profile: 'underexposed_cool',\n"
+            "  target_profile: 'rec709_d65',\n"
+            "  strength: 0.85\n"
+            "});\n"
+            "console.log(JSON.stringify({\n"
+            "  lutSample: lut.lut.table[1000],\n"
+            "  entryCount: lut.lut.entry_count,\n"
+            "  sm\n"
+            "}));\n"
+        )
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", js_script],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+        js_out = json.loads(proc.stdout)
+        assert js_out["entryCount"] == py_info.entry_count
+        assert js_out["lutSample"] == pytest.approx(list(py_table[1000]), abs=1e-4)
+        assert js_out["sm"]["delta_e_before"] == pytest.approx(py_sm.delta_e_before, abs=0.05)
+        assert js_out["sm"]["delta_e_after"] == pytest.approx(py_sm.delta_e_after, abs=0.05)
+        assert js_out["sm"]["grade"]["contrast"] == pytest.approx(py_sm.grade.contrast, abs=1e-3)
+        assert js_out["sm"]["grade"]["temperature"] == pytest.approx(
+            py_sm.grade.temperature, abs=1e-3
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_color_lut_browser_and_shot_match_playwright_e2e(tmp_path: Path) -> None:
+    pw_mod = pytest.importorskip("playwright.sync_api")
+    sync_playwright = pw_mod.sync_playwright
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
+            page.on("pageerror", lambda exc: console_errors.append(str(exc)))
+            try:
+                page.goto(base_url, wait_until="networkidle")
+                page.click("#tab-color")
+                page.wait_for_selector("#color-lut-browser-dock")
+                page.wait_for_selector("#color-shot-match-dock")
+
+                assert page.locator(".lut-card").count() == 8
+                page.click(".lut-cat-btn[data-lut-category='film_print']")
+                assert page.locator(".lut-card").count() == 2
+                page.click(".lut-card[data-lut-preset-id='kodak_2383_d65']")
+                page.wait_for_function(
+                    "() => (document.getElementById('color-node-lut-badge')?.textContent || '')"
+                    ".includes('Kodak 2383')"
+                )
+                assert page.locator("#cube-lut-mix-range").is_disabled() is False
+
+                page.click("#btn-color-node-clear-lut")
+                page.wait_for_function(
+                    "() => (document.getElementById('color-node-lut-badge')?.textContent || '')"
+                    " === 'NO LUT'"
+                )
+                page.click(".lut-cat-btn[data-lut-category='all']")
+                assert page.locator(".lut-card").count() == 8
+
+                page.select_option("#shot-match-source-select", "sony_slog3")
+                page.locator("#tab-color").focus()
+                page.keyboard.press("Shift+K")
+                page.wait_for_function(
+                    "() => (document.getElementById('shot-match-delta-badge')?.textContent || '')"
+                    ".includes('->')"
+                )
+                badge_txt = page.locator("#shot-match-delta-badge").text_content() or ""
+                assert "dE " in badge_txt and "->" in badge_txt
+                assert page.locator("#shot-match-patch-grid .shot-match-patch").count() == 24
+
+                page.click("#btn-color-chart-overlay")
+                chart_pressed = page.locator("#btn-color-chart-overlay").get_attribute(
+                    "aria-pressed"
+                )
+                assert chart_pressed == "true"
+                page.click("#btn-color-wipe-mode")
+                wipe_pressed = page.locator("#btn-color-wipe-mode").get_attribute("aria-pressed")
+                assert wipe_pressed == "true"
+
+                page.click("#btn-shot-match-new-node")
+                page.wait_for_function(
+                    "() => (document.getElementById('color-node-count')?.textContent || '')"
+                    ".startsWith('2 /')"
+                )
+
+                page.click("#lang-fr")
+                fr_dock = page.locator("#color-shot-match-dock").text_content() or ""
+                fr_lut = page.locator("#color-lut-browser-dock").text_content() or ""
+                assert "Équilibrer Auto" in fr_dock
+                assert "Bibliothèque LUT 3D" in fr_lut
+                assert "\u2013" not in fr_dock and "\u2014" not in fr_dock
+                assert "\u2013" not in fr_lut and "\u2014" not in fr_lut
+                page.click("#lang-en")
+
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop 1440px overflow: {overflow_desktop}px"
+
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                for btn_id in (
+                    "btn-color-wipe-mode",
+                    "btn-color-chart-overlay",
+                    "btn-color-shot-match",
+                    "btn-shot-match-run",
+                    "btn-shot-match-new-node",
+                    "btn-shot-match-chart-toggle",
+                    "btn-shot-match-reset",
+                    "shot-match-chart-select",
+                    "shot-match-source-select",
+                    "shot-match-target-select",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{btn_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {btn_id} too small: {h}px"
+
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 
 
 

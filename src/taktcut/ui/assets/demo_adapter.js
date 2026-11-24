@@ -12,6 +12,7 @@ import {
   PLANAR_TRACKER_PRESETS_CLIENT,
   QUALIFIER_PRESETS,
   STABILIZER_PRESETS_CLIENT,
+  STUDIO_LUT_CATEGORIES_CLIENT,
   TRANSFORM_BORDER_FEATHER_MAX,
   TRANSFORM_BORDER_FEATHER_MIN,
   TRANSFORM_BORDER_WIDTH_MAX,
@@ -64,8 +65,10 @@ import {
   estimateRenderFileSize,
   flattenAllCompoundsInDocument,
   flattenMulticamClipInDocument,
+  generateStudioLutPresetClient,
   getDeliveryPresetClient,
   linkAvClipsInDocument,
+  listStudioLutPresetsClient,
   normalizeFairlightAudioParams,
   normalizeRetimeProcess,
   normalizeRetimeRampPreset,
@@ -78,6 +81,7 @@ import {
   setAllTracksSyncLockInDocument,
   slideClipInDocument,
   slipClipInDocument,
+  solveShotMatchClient,
   switchMulticamAngleInDocument,
   syncMulticamClipInDocument,
   threePointEditInDocument,
@@ -2879,6 +2883,29 @@ export function createApiClient() {
           hsl_curve_presets: Object.values(HSL_CURVE_PRESETS),
           warper_presets: COLOR_WARPER_PRESETS_CLIENT,
           qualifier_presets: Object.values(QUALIFIER_PRESETS),
+          studio_luts: listStudioLutPresetsClient(),
+          shot_match_profiles: {
+            charts: [
+              { id: "xrite_classic_24", label: "X-Rite ColorChecker 24" },
+              { id: "datacolor_spyder_24", label: "SpyderCheckr 24" },
+              { id: "rec709_smpte", label: "Rec.709 SMPTE Chart" }
+            ],
+            sources: [
+              { id: "current_chart", label: "Current Node Chart" },
+              { id: "sony_slog3", label: "Sony S-Log3 (Flat)" },
+              { id: "arri_logc3", label: "ARRI LogC3 (Flat)" },
+              { id: "canon_clog2", label: "Canon C-Log2" },
+              { id: "underexposed_cool", label: "Underexposed Cool" },
+              { id: "warm_tungsten", label: "Warm Tungsten Cast" }
+            ],
+            targets: [
+              { id: "rec709_d65", label: "Rec.709 D65 Standard" },
+              { id: "teal_orange_ref", label: "Teal & Orange Look" },
+              { id: "film_warm_ref", label: "Film Warm Look" },
+              { id: "kodak_print_ref", label: "Kodak 2383 Print" },
+              { id: "custom_reference", label: "Reference Still / Frame" }
+            ]
+          },
           bounds: {
             color_warper: {
               hue_count: COLOR_WARPER_HUE_COUNT,
@@ -2898,6 +2925,30 @@ export function createApiClient() {
         return compileColorClient(payload, payload);
       }
       return requestJson("/api/color/compile", { method: "POST", body: payload });
+    },
+    async getStudioLuts() {
+      if (resolvedMode === "static-demo") {
+        return {
+          categories: STUDIO_LUT_CATEGORIES_CLIENT,
+          luts: listStudioLutPresetsClient()
+        };
+      }
+      return requestJson("/api/color/luts");
+    },
+    async getStudioLutPreset(presetId, size = 17) {
+      if (resolvedMode === "static-demo") {
+        return generateStudioLutPresetClient(presetId, size);
+      }
+      return requestJson("/api/color/lut-preset", {
+        method: "POST",
+        body: { preset_id: presetId, size }
+      });
+    },
+    async solveShotMatch(payload) {
+      if (resolvedMode === "static-demo") {
+        return solveShotMatchClient(payload);
+      }
+      return requestJson("/api/color/shot-match", { method: "POST", body: payload });
     },
     async getFxPresets() {
       if (resolvedMode === "static-demo") {

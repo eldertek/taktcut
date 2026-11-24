@@ -11360,3 +11360,549 @@ export function findAdjacentMarkerIndex(doc, playheadFrame, direction = 1) {
   }
   return indexed[indexed.length - 1].idx;
 }
+
+// ---------------------------------------------------------------------------
+// Studio 3D .cube LUT Library & ColorChecker Shot-Match Auto-Balance (Client Parity)
+// ---------------------------------------------------------------------------
+
+export const STUDIO_LUT_CATEGORIES_CLIENT = [
+  "film_print",
+  "camera_log",
+  "creative_cinema",
+  "monochrome"
+];
+
+export const STUDIO_LUT_METADATA_CLIENT = [
+  {
+    id: "kodak_2383_d65",
+    title: "Kodak 2383 Print D65",
+    category: "film_print",
+    description: "Classic cinema print film contrast with rich blacks and warm highlight roll-off."
+  },
+  {
+    id: "fuji_3513_print",
+    title: "Fujifilm 3513D Print",
+    category: "film_print",
+    description: "Crisp emerald foliage, cool shadow separation, and balanced skin rendition."
+  },
+  {
+    id: "rec709_slog3_conv",
+    title: "Sony S-Log3 -> Rec.709",
+    category: "camera_log",
+    description: "Log-to-Rec.709 technical S-curve expansion with gamut saturation recovery."
+  },
+  {
+    id: "rec709_logc_conv",
+    title: "ARRI LogC3 -> Rec.709",
+    category: "camera_log",
+    description: "Smooth photographic highlight roll-off and neutral Rec.709 tonal mapping."
+  },
+  {
+    id: "teal_orange_cinema",
+    title: "Blockbuster Teal & Orange",
+    category: "creative_cinema",
+    description: "Split-toned cyan-teal shadows paired with warm amber skin and highlights."
+  },
+  {
+    id: "bleach_bypass",
+    title: "Silver Bleach Bypass",
+    category: "creative_cinema",
+    description: "High-contrast silver-retained look with sculpted midtones and muted chroma."
+  },
+  {
+    id: "golden_hour_warm",
+    title: "Golden Hour Amber",
+    category: "creative_cinema",
+    description: "Lifted warm midtones, sunset highlight glow, and gentle shadow softness."
+  },
+  {
+    id: "silver_gelatin_bw",
+    title: "Ilford Silver B&W",
+    category: "monochrome",
+    description: "Red-filtered panchromatic black-and-white curve with deep silver contrast."
+  }
+];
+
+const _STUDIO_LUT_SWATCH_PROBES = [
+  [0.18, 0.24, 0.34],
+  [0.76, 0.58, 0.48],
+  [0.38, 0.54, 0.72],
+  [0.34, 0.48, 0.26],
+  [0.84, 0.50, 0.18],
+  [0.90, 0.90, 0.88]
+];
+
+function _rgbUnitToHex(r, g, b) {
+  const toHex = (v) =>
+    Math.max(0, Math.min(255, Math.round(clampUnitColor(v) * 255)))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function _scurveClient(x, strength) {
+  const xc = clampUnitColor(x);
+  const sc = xc * xc * (3.0 - 2.0 * xc);
+  return clampUnitColor(xc + (sc - xc) * strength);
+}
+
+export function evaluateStudioLutRgbClient(presetId, r, g, b) {
+  const ri = clampUnitColor(r);
+  const gi = clampUnitColor(g);
+  const bi = clampUnitColor(b);
+  const luma = 0.2126 * ri + 0.7152 * gi + 0.0722 * bi;
+
+  if (presetId === "kodak_2383_d65") {
+    const rc = _scurveClient(ri, 0.52) * 1.02;
+    const gc = _scurveClient(gi, 0.50) * 0.99;
+    const bc = _scurveClient(bi, 0.54) * 0.95;
+    const warmHi = Math.max(0.0, luma - 0.5) * 0.10;
+    const coolSh = Math.max(0.0, 0.38 - luma) * 0.08;
+    return [
+      clampUnitColor(rc + warmHi - coolSh * 0.4),
+      clampUnitColor(gc + warmHi * 0.3),
+      clampUnitColor(bc - warmHi * 0.6 + coolSh)
+    ];
+  }
+  if (presetId === "fuji_3513_print") {
+    const rc = _scurveClient(ri, 0.42) * 0.97;
+    const gc = _scurveClient(gi, 0.46) * 1.03;
+    const bc = _scurveClient(bi, 0.44) * 1.01;
+    const shTeal = Math.max(0.0, 0.42 - luma) * 0.10;
+    return [
+      clampUnitColor(rc - shTeal * 0.6 + 0.015),
+      clampUnitColor(gc + shTeal * 0.35),
+      clampUnitColor(bc + shTeal * 0.55)
+    ];
+  }
+  if (presetId === "rec709_slog3_conv") {
+    const expandLog = (v) => _scurveClient((v - 0.42) * 1.62 + 0.48, 0.48);
+    const rl = expandLog(ri);
+    const gl = expandLog(gi);
+    const bl = expandLog(bi);
+    const lm = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+    return [
+      clampUnitColor(lm + (rl - lm) * 1.28),
+      clampUnitColor(lm + (gl - lm) * 1.28),
+      clampUnitColor(lm + (bl - lm) * 1.28)
+    ];
+  }
+  if (presetId === "rec709_logc_conv") {
+    const expandLogc = (v) => {
+      const c = _scurveClient((v - 0.39) * 1.54 + 0.47, 0.38);
+      return clampUnitColor(c > 0.78 ? 0.78 + (c - 0.78) * 0.72 : c);
+    };
+    const rl = expandLogc(ri);
+    const gl = expandLogc(gi);
+    const bl = expandLogc(bi);
+    const lm = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+    return [
+      clampUnitColor(lm + (rl - lm) * 1.22),
+      clampUnitColor(lm + (gl - lm) * 1.22),
+      clampUnitColor(lm + (bl - lm) * 1.22)
+    ];
+  }
+  if (presetId === "teal_orange_cinema") {
+    const sh = Math.max(0.0, 0.48 - luma) / 0.48;
+    const hi = Math.max(0.0, luma - 0.42) / 0.58;
+    return [
+      clampUnitColor(_scurveClient(ri, 0.35) - 0.11 * sh + 0.12 * hi),
+      clampUnitColor(_scurveClient(gi, 0.35) + 0.04 * sh + 0.02 * hi),
+      clampUnitColor(_scurveClient(bi, 0.35) + 0.14 * sh - 0.13 * hi)
+    ];
+  }
+  if (presetId === "bleach_bypass") {
+    const sl = _scurveClient(luma, 0.75);
+    return [
+      clampUnitColor(_scurveClient(ri, 0.60) * 0.46 + sl * 0.54),
+      clampUnitColor(_scurveClient(gi, 0.60) * 0.46 + sl * 0.54),
+      clampUnitColor(_scurveClient(bi, 0.60) * 0.46 + sl * 0.54)
+    ];
+  }
+  if (presetId === "golden_hour_warm") {
+    return [
+      clampUnitColor(_scurveClient(ri * 1.06 + 0.03, 0.25)),
+      clampUnitColor(_scurveClient(gi * 1.00 + 0.015, 0.25)),
+      clampUnitColor(_scurveClient(bi * 0.86 + 0.01, 0.25))
+    ];
+  }
+  if (presetId === "silver_gelatin_bw") {
+    const mono = _scurveClient(0.36 * ri + 0.52 * gi + 0.12 * bi, 0.62);
+    return [mono, mono, mono];
+  }
+  throw new Error(`Unknown studio LUT preset '${presetId}'`);
+}
+
+export function listStudioLutPresetsClient() {
+  return STUDIO_LUT_METADATA_CLIENT.map((item) => ({
+    id: item.id,
+    title: item.title,
+    category: item.category,
+    description: item.description,
+    default_size: 17,
+    swatches: _STUDIO_LUT_SWATCH_PROBES.map(([pr, pg, pb]) => {
+      const [ro, go, bo] = evaluateStudioLutRgbClient(item.id, pr, pg, pb);
+      return _rgbUnitToHex(ro, go, bo);
+    })
+  }));
+}
+
+export function generateStudioLutPresetClient(presetId, size = 17) {
+  const meta = STUDIO_LUT_METADATA_CLIENT.find((item) => item.id === presetId);
+  if (!meta) {
+    throw new Error(`Unknown studio LUT preset '${presetId}'`);
+  }
+  const nSize = Math.max(2, Math.min(65, Math.round(Number(size) || 17)));
+  const denom = nSize - 1;
+  const table = [];
+  for (let bIdx = 0; bIdx < nSize; bIdx++) {
+    const bIn = bIdx / denom;
+    for (let gIdx = 0; gIdx < nSize; gIdx++) {
+      const gIn = gIdx / denom;
+      for (let rIdx = 0; rIdx < nSize; rIdx++) {
+        table.push(evaluateStudioLutRgbClient(presetId, rIdx / denom, gIn, bIn));
+      }
+    }
+  }
+  return {
+    preset_id: presetId,
+    info: {
+      path: `${presetId}.cube`,
+      title: meta.title,
+      dimension: "3D",
+      size: nSize,
+      domain_min: [0.0, 0.0, 0.0],
+      domain_max: [1.0, 1.0, 1.0],
+      entry_count: table.length
+    },
+    lut: {
+      title: meta.title,
+      dimension: "3D",
+      size: nSize,
+      domain_min: [0.0, 0.0, 0.0],
+      domain_max: [1.0, 1.0, 1.0],
+      entry_count: table.length,
+      table
+    }
+  };
+}
+
+export const COLORCHECKER_24_PATCHES_CLIENT = [
+  ["Dark Skin", [0.451, 0.322, 0.267]],
+  ["Light Skin", [0.761, 0.588, 0.510]],
+  ["Blue Sky", [0.384, 0.478, 0.616]],
+  ["Foliage", [0.341, 0.424, 0.263]],
+  ["Blue Flower", [0.522, 0.502, 0.694]],
+  ["Bluish Green", [0.404, 0.741, 0.667]],
+  ["Orange", [0.839, 0.494, 0.173]],
+  ["Purplish Blue", [0.314, 0.357, 0.651]],
+  ["Moderate Red", [0.757, 0.353, 0.388]],
+  ["Purple", [0.369, 0.235, 0.424]],
+  ["Yellow Green", [0.616, 0.737, 0.251]],
+  ["Orange Yellow", [0.878, 0.639, 0.180]],
+  ["Blue", [0.220, 0.239, 0.588]],
+  ["Green", [0.275, 0.580, 0.286]],
+  ["Red", [0.686, 0.212, 0.235]],
+  ["Yellow", [0.906, 0.780, 0.122]],
+  ["Magenta", [0.733, 0.337, 0.584]],
+  ["Cyan", [0.031, 0.522, 0.631]],
+  ["White", [0.953, 0.953, 0.949]],
+  ["Neutral 8", [0.784, 0.784, 0.784]],
+  ["Neutral 6.5", [0.627, 0.627, 0.627]],
+  ["Neutral 5", [0.478, 0.478, 0.478]],
+  ["Neutral 3.5", [0.333, 0.333, 0.337]],
+  ["Black", [0.204, 0.204, 0.208]]
+];
+
+const _SMPTE_MATCH_PATCHES_CLIENT = [
+  ["75% Gray", [0.75, 0.75, 0.75]],
+  ["Yellow Bar", [0.75, 0.75, 0.05]],
+  ["Cyan Bar", [0.05, 0.75, 0.75]],
+  ["Green Bar", [0.05, 0.75, 0.05]],
+  ["Magenta Bar", [0.75, 0.05, 0.75]],
+  ["Red Bar", [0.75, 0.05, 0.05]],
+  ["Blue Bar", [0.05, 0.05, 0.75]],
+  ["Light Skin", [0.761, 0.588, 0.510]],
+  ["Dark Skin", [0.451, 0.322, 0.267]],
+  ["Sky Blue", [0.384, 0.478, 0.616]],
+  ["Foliage", [0.341, 0.424, 0.263]],
+  ["White 95%", [0.95, 0.95, 0.95]],
+  ["Mid Gray 50%", [0.50, 0.50, 0.50]],
+  ["Black 10%", [0.10, 0.10, 0.10]]
+];
+
+function _srgbToLinearClient(c) {
+  const cc = clampUnitColor(c);
+  return cc <= 0.04045 ? cc / 12.92 : Math.pow((cc + 0.055) / 1.055, 2.4);
+}
+
+export function rgbToLabClient(r, g, b) {
+  const rl = _srgbToLinearClient(r);
+  const gl = _srgbToLinearClient(g);
+  const bl = _srgbToLinearClient(b);
+  const x = (0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl) / 0.95047;
+  const y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl;
+  const z = (0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl) / 1.08883;
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16.0 / 116.0);
+  const fx = f(x);
+  const fy = f(y);
+  const fz = f(z);
+  return [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)];
+}
+
+export function deltaE76Client(rgbA, rgbB) {
+  const [la, aa, ba] = rgbToLabClient(rgbA[0], rgbA[1], rgbA[2]);
+  const [lb, ab, bb] = rgbToLabClient(rgbB[0], rgbB[1], rgbB[2]);
+  return Math.hypot(la - lb, aa - ab, ba - bb);
+}
+
+export function computeRgbMomentsClient(samples) {
+  if (!Array.isArray(samples) || samples.length === 0) {
+    throw new Error("At least one RGB sample is required");
+  }
+  const n = samples.length;
+  let sr = 0;
+  let sg = 0;
+  let sb = 0;
+  let sl = 0;
+  const lumas = [];
+  for (const s of samples) {
+    const r = clampUnitColor(s[0]);
+    const g = clampUnitColor(s[1]);
+    const b = clampUnitColor(s[2]);
+    const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    sr += r;
+    sg += g;
+    sb += b;
+    sl += l;
+    lumas.push(l);
+  }
+  const mr = sr / n;
+  const mg = sg / n;
+  const mb = sb / n;
+  const ml = sl / n;
+  let vr = 0;
+  let vg = 0;
+  let vb = 0;
+  let vl = 0;
+  for (let i = 0; i < n; i++) {
+    const r = clampUnitColor(samples[i][0]);
+    const g = clampUnitColor(samples[i][1]);
+    const b = clampUnitColor(samples[i][2]);
+    vr += (r - mr) ** 2;
+    vg += (g - mg) ** 2;
+    vb += (b - mb) ** 2;
+    vl += (lumas[i] - ml) ** 2;
+  }
+  const round4 = (v) => Number(v.toFixed(4));
+  return {
+    mean_rgb: [round4(mr), round4(mg), round4(mb)],
+    std_rgb: [round4(Math.sqrt(vr / n)), round4(Math.sqrt(vg / n)), round4(Math.sqrt(vb / n))],
+    luma_mean: round4(ml),
+    luma_std: round4(Math.sqrt(vl / n))
+  };
+}
+
+function _applySourceSimClient(rgb, sourceProfile) {
+  const [r, g, b] = rgb;
+  if (sourceProfile === "current_chart") return [r, g, b];
+  if (sourceProfile === "sony_slog3") {
+    return [clampUnitColor(0.24 + r * 0.46), clampUnitColor(0.25 + g * 0.47), clampUnitColor(0.24 + b * 0.45)];
+  }
+  if (sourceProfile === "arri_logc3") {
+    return [clampUnitColor(0.21 + r * 0.52), clampUnitColor(0.22 + g * 0.52), clampUnitColor(0.21 + b * 0.51)];
+  }
+  if (sourceProfile === "canon_clog2") {
+    return [clampUnitColor(0.22 + r * 0.50 + 0.015), clampUnitColor(0.21 + g * 0.49), clampUnitColor(0.20 + b * 0.48)];
+  }
+  if (sourceProfile === "underexposed_cool") {
+    return [clampUnitColor(r * 0.72 - 0.03), clampUnitColor(g * 0.78), clampUnitColor(b * 0.90 + 0.05)];
+  }
+  return [clampUnitColor(r * 0.98 + 0.08), clampUnitColor(g * 0.90 + 0.02), clampUnitColor(b * 0.72 - 0.04)];
+}
+
+function _applyTargetProfileClient(rgb, targetProfile) {
+  const [r, g, b] = rgb;
+  if (targetProfile === "rec709_d65" || targetProfile === "custom_reference") return [r, g, b];
+  if (targetProfile === "teal_orange_ref") {
+    return applyColorGradeRgbPure(r, g, b, {
+      lift: [-0.08, 0.0, 0.14],
+      gamma: [0.05, 0.01, -0.04],
+      gain: [0.16, 0.04, -0.14],
+      contrast: 1.15,
+      saturation: 1.2,
+      temperature: 0.1
+    });
+  }
+  if (targetProfile === "film_warm_ref") {
+    return applyColorGradeRgbPure(r, g, b, {
+      lift: [0.02, 0.0, -0.03],
+      gamma: [0.06, 0.02, -0.05],
+      gain: [0.1, 0.03, -0.08],
+      contrast: 1.08,
+      saturation: 1.1,
+      temperature: 0.25
+    });
+  }
+  return evaluateStudioLutRgbClient("kodak_2383_d65", r, g, b);
+}
+
+export function solveShotMatchClient(payload = {}) {
+  const chartProfile = String(payload.chart_profile || "xrite_classic_24");
+  const sourceProfile = String(payload.source_profile || "current_chart");
+  const targetProfile = String(payload.target_profile || "rec709_d65");
+  const rawStrength = payload.strength !== undefined ? Number(payload.strength) : 1.0;
+  const blend = Math.max(0.0, Math.min(1.0, Number.isFinite(rawStrength) ? rawStrength : 1.0));
+
+  let basePatches = COLORCHECKER_24_PATCHES_CLIENT;
+  if (chartProfile === "rec709_smpte") {
+    basePatches = _SMPTE_MATCH_PATCHES_CLIENT;
+  } else if (chartProfile === "datacolor_spyder_24") {
+    basePatches = COLORCHECKER_24_PATCHES_CLIENT.map(([name, rgb]) => [
+      name,
+      [clampUnitColor(rgb[0] * 0.99 + 0.005), clampUnitColor(rgb[1]), clampUnitColor(rgb[2] * 0.99 + 0.004)]
+    ]);
+  }
+  const patchNames = basePatches.map((p) => p[0]);
+
+  const srcList =
+    Array.isArray(payload.source_samples) && payload.source_samples.length > 0
+      ? payload.source_samples.map((s) => [clampUnitColor(s[0]), clampUnitColor(s[1]), clampUnitColor(s[2])])
+      : basePatches.map((p) => _applySourceSimClient(p[1], sourceProfile));
+
+  const tgtList =
+    Array.isArray(payload.target_samples) && payload.target_samples.length > 0
+      ? payload.target_samples.map((s) => [clampUnitColor(s[0]), clampUnitColor(s[1]), clampUnitColor(s[2])])
+      : basePatches.map((p) => _applyTargetProfileClient(p[1], targetProfile));
+
+  const pairCount = Math.min(srcList.length, tgtList.length);
+  const srcAligned = srcList.slice(0, pairCount);
+  const tgtAligned = tgtList.slice(0, pairCount);
+  const namesAligned = Array.from({ length: pairCount }, (_, i) => patchNames[i] || `Zone ${i + 1}`);
+
+  const srcMoments = computeRgbMomentsClient(srcAligned);
+  const tgtMoments = computeRgbMomentsClient(tgtAligned);
+
+  const clampBound = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const contrastEst = clampBound(tgtMoments.luma_std / Math.max(0.03, srcMoments.luma_std), 0.45, 1.85);
+  const meanChroma = (samples) =>
+    samples.reduce((acc, s) => acc + (Math.max(s[0], s[1], s[2]) - Math.min(s[0], s[1], s[2])), 0) /
+    samples.length;
+  const satEst = clampBound(
+    (meanChroma(tgtAligned) / Math.max(0.03, meanChroma(srcAligned))) /
+      Math.max(0.55, contrastEst * 0.88),
+    0.25,
+    2.0
+  );
+  const srcRb = srcMoments.mean_rgb[0] - srcMoments.mean_rgb[2];
+  const tgtRb = tgtMoments.mean_rgb[0] - tgtMoments.mean_rgb[2];
+  const tempEst = clampBound((tgtRb - srcRb) * 1.15, -0.75, 0.75);
+
+  const lift = [0, 0, 0];
+  const gamma = [0, 0, 0];
+  const gain = [0, 0, 0];
+  const order = Array.from({ length: pairCount }, (_, i) => i).sort((a, b) => {
+    const la = 0.2126 * srcAligned[a][0] + 0.7152 * srcAligned[a][1] + 0.0722 * srcAligned[a][2];
+    const lb = 0.2126 * srcAligned[b][0] + 0.7152 * srcAligned[b][1] + 0.0722 * srcAligned[b][2];
+    return la - lb;
+  });
+  const band = Math.max(1, Math.floor(pairCount / 3));
+  const shIdx = order.slice(0, band);
+  const hiIdx = order.slice(-band);
+  const midIdx = pairCount >= 3 ? order.slice(band, pairCount - band) : order;
+
+  for (let pass = 0; pass < 4; pass++) {
+    const probe = {
+      lift: [...lift],
+      gamma: [...gamma],
+      gain: [...gain],
+      contrast: contrastEst,
+      saturation: satEst,
+      temperature: tempEst
+    };
+    const curOut = srcAligned.map((s) => applyColorGradeRgbPure(s[0], s[1], s[2], probe));
+    for (let ch = 0; ch < 3; ch++) {
+      const shErr = shIdx.reduce((a, i) => a + (tgtAligned[i][ch] - curOut[i][ch]), 0) / shIdx.length;
+      const midErr = midIdx.reduce((a, i) => a + (tgtAligned[i][ch] - curOut[i][ch]), 0) / midIdx.length;
+      const hiErr = hiIdx.reduce((a, i) => a + (tgtAligned[i][ch] - curOut[i][ch]), 0) / hiIdx.length;
+      lift[ch] = clampBound(lift[ch] + shErr * 0.85, -0.75, 0.75);
+      gamma[ch] = clampBound(gamma[ch] + midErr * 0.90, -0.75, 0.75);
+      gain[ch] = clampBound(gain[ch] + hiErr * 0.90, -0.75, 0.75);
+    }
+  }
+
+  const r4 = (v) => Number(v.toFixed(4));
+  const finalGrade = {
+    lift: [r4(lift[0] * blend), r4(lift[1] * blend), r4(lift[2] * blend)],
+    gamma: [r4(gamma[0] * blend), r4(gamma[1] * blend), r4(gamma[2] * blend)],
+    gain: [r4(gain[0] * blend), r4(gain[1] * blend), r4(gain[2] * blend)],
+    contrast: r4(1.0 + (contrastEst - 1.0) * blend),
+    saturation: r4(1.0 + (satEst - 1.0) * blend),
+    temperature: r4(tempEst * blend),
+    preserve_lightness: false
+  };
+
+  const matchedList = [];
+  const patches = [];
+  let deBeforeSum = 0;
+  let deAfterSum = 0;
+  for (let i = 0; i < pairCount; i++) {
+    const sRgb = srcAligned[i];
+    const tRgb = tgtAligned[i];
+    const mRgb = applyColorGradeRgbPure(sRgb[0], sRgb[1], sRgb[2], finalGrade);
+    matchedList.push(mRgb);
+    const deB = deltaE76Client(sRgb, tRgb);
+    const deA = deltaE76Client(mRgb, tRgb);
+    deBeforeSum += deB;
+    deAfterSum += deA;
+    patches.push({
+      name: namesAligned[i],
+      source_rgb: sRgb.map(r4),
+      target_rgb: tRgb.map(r4),
+      matched_rgb: mRgb.map(r4),
+      delta_e_before: Number(deB.toFixed(2)),
+      delta_e_after: Number(deA.toFixed(2))
+    });
+  }
+  const avgBefore = deBeforeSum / pairCount;
+  const avgAfter = deAfterSum / pairCount;
+  const improvement = avgBefore > 1e-4 ? ((avgBefore - avgAfter) / avgBefore) * 100.0 : 0.0;
+
+  const tempR = finalGrade.temperature * 0.25;
+  const tempG = finalGrade.temperature * 0.03;
+  const tempB = -finalGrade.temperature * 0.28;
+  const clampB = (v) => Math.max(-1, Math.min(1, v));
+  const sC = finalGrade.lift.map(clampB);
+  const mC = [
+    clampB(finalGrade.gamma[0] + tempR),
+    clampB(finalGrade.gamma[1] + tempG),
+    clampB(finalGrade.gamma[2] + tempB)
+  ];
+  const hC = [
+    clampB(finalGrade.gain[0] + tempR * 0.8),
+    clampB(finalGrade.gain[1] + tempG * 0.8),
+    clampB(finalGrade.gain[2] + tempB * 0.8)
+  ];
+  const ffmpegFilter =
+    `colorbalance=rs=${sC[0].toFixed(4)}:gs=${sC[1].toFixed(4)}:bs=${sC[2].toFixed(4)}:` +
+    `rm=${mC[0].toFixed(4)}:gm=${mC[1].toFixed(4)}:bm=${mC[2].toFixed(4)}:` +
+    `rh=${hC[0].toFixed(4)}:gh=${hC[1].toFixed(4)}:bh=${hC[2].toFixed(4)}:pl=0,` +
+    `eq=contrast=${finalGrade.contrast.toFixed(4)}:saturation=${finalGrade.saturation.toFixed(4)}`;
+
+  return {
+    grade: finalGrade,
+    delta_e_before: Number(avgBefore.toFixed(2)),
+    delta_e_after: Number(avgAfter.toFixed(2)),
+    improvement_pct: Number(improvement.toFixed(1)),
+    strength: r4(blend),
+    chart_profile: chartProfile,
+    source_profile: sourceProfile,
+    target_profile: targetProfile,
+    patch_count: pairCount,
+    patches,
+    source_moments: srcMoments,
+    target_moments: tgtMoments,
+    matched_moments: computeRgbMomentsClient(matchedList),
+    ffmpeg_filter: ffmpegFilter
+  };
+}

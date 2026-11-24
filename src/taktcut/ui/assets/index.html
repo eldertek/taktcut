@@ -2295,10 +2295,16 @@
               <div class="viewer-controls">
                 <div id="color-split-wipe-group" class="split-wipe-group is-enabled" role="group" aria-label="Color Split-Screen Wipe">
                   <button type="button" id="btn-color-split-wipe" class="btn btn-secondary btn-split-wipe is-active" aria-pressed="true" data-i18n="wipe.btn.toggle" title="Split Wipe (W / Ctrl+W)">Split Wipe</button>
+                  <button type="button" id="btn-color-wipe-mode" class="btn btn-mini" aria-pressed="false" data-i18n="color.wipe.modeBeforeAfter" title="Switch between Before/After and Ref/Match split wipe">Before/After</button>
                   <label class="inline-label" for="cdl-wipe-slider" data-i18n="color.preview.wipe">Wipe</label>
                   <input type="range" id="cdl-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="Color split wipe position">
                   <span id="cdl-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
                 </div>
+                <button type="button" id="btn-color-chart-overlay" class="btn btn-secondary" aria-pressed="false" data-i18n="color.chart.overlayBtn" title="Toggle ColorChecker 24 overlay">Chart</button>
+                <button type="button" id="btn-color-shot-match" class="btn btn-secondary btn-shot-match" title="Shot Match &amp; Color Chart Auto-Balance (Shift+K)">
+                  <span data-i18n="color.shotMatch.btnShort">Shot Match</span>
+                  <span class="kbd-chip mono">Shift+K</span>
+                </button>
                 <button type="button" id="btn-color-qual-highlight" class="btn btn-secondary btn-qual-highlight" aria-pressed="false" title="Qualifier Highlight Matte (Shift+H)">
                   <span data-i18n="color.qual.highlight">Highlight</span>
                   <span class="kbd-chip mono">Shift+H</span>
@@ -2390,6 +2396,23 @@
                     <input type="number" id="cube-lut-mix-num" class="input-num mono" min="0" max="100" step="1" value="100" aria-label="Node LUT mix percentage" disabled>
                     <button type="button" id="btn-color-node-clear-lut" class="btn btn-mini" disabled data-i18n="color.nodes.clearLut">Clear LUT</button>
                   </div>
+                </div>
+                <div id="color-lut-browser-dock" class="color-lut-browser-dock" role="region" aria-label="3D LUT Look Library">
+                  <div class="lut-browser-toolbar">
+                    <div class="lut-browser-title-group">
+                      <span class="pane-subheader-label" data-i18n="color.lutBrowser.title">3D LUT Library (.cube)</span>
+                      <span id="lut-browser-count-badge" class="nle-tag mono">8 LUTS</span>
+                    </div>
+                    <div id="lut-browser-category-strip" class="lut-category-strip" role="group" aria-label="LUT Category Filter">
+                      <button type="button" class="btn btn-mini lut-cat-btn is-active" data-lut-category="all" aria-pressed="true" data-i18n="color.lutBrowser.catAll">All</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="film_print" aria-pressed="false" data-i18n="color.lutBrowser.catFilm">Film Print</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="camera_log" aria-pressed="false" data-i18n="color.lutBrowser.catLog">Camera Log</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="creative_cinema" aria-pressed="false" data-i18n="color.lutBrowser.catCinema">Cinema</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="monochrome" aria-pressed="false" data-i18n="color.lutBrowser.catMono">Mono</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="custom" aria-pressed="false" data-i18n="color.lutBrowser.catCustom">Custom</button>
+                    </div>
+                  </div>
+                  <div id="color-lut-browser-grid" class="color-lut-browser-grid" role="list" aria-label="Studio 3D LUT presets"></div>
                 </div>
                 <div id="color-power-window-dock" class="color-power-window-dock" role="region" aria-label="Power Window Shape Mask">
                   <div class="pw-toolbar">
@@ -2735,6 +2758,61 @@
                     <div class="curves-hint mono" data-i18n="color.warper.hint">Drag any spider-grid node to warp Hue and Saturation simultaneously. Double-click node or Rst Pt to reset.</div>
                   </div>
                 </div>
+              </div>
+
+              <!-- DAVINCI COLOR CHART AUTO-BALANCE & SHOT MATCH -->
+              <div id="color-shot-match-dock" class="color-shot-match-dock" role="region" aria-label="Shot Match and Color Chart Auto-Balance">
+                <div class="shot-match-toolbar">
+                  <div class="shot-match-title-group">
+                    <span class="pane-subheader-label" data-i18n="color.shotMatch.title">Shot Match &amp; Color Chart</span>
+                    <span id="shot-match-delta-badge" class="nle-tag mono">READY</span>
+                  </div>
+                  <div class="shot-match-actions">
+                    <button type="button" id="btn-shot-match-run" class="btn btn-primary btn-mini" title="Run Shot Match &amp; Auto-Balance (Shift+K)" data-i18n="color.shotMatch.run">Auto Balance (Shift+K)</button>
+                    <button type="button" id="btn-shot-match-new-node" class="btn btn-mini" data-i18n="color.shotMatch.newNode">+ Matched Node</button>
+                    <button type="button" id="btn-shot-match-chart-toggle" class="btn btn-mini" aria-pressed="false" data-i18n="color.shotMatch.chartOverlay">Chart Overlay</button>
+                    <button type="button" id="btn-shot-match-reset" class="btn btn-mini" disabled data-i18n="color.shotMatch.reset">Reset</button>
+                  </div>
+                </div>
+                <div class="shot-match-controls-grid">
+                  <div class="shot-match-field">
+                    <label for="shot-match-chart-select" data-i18n="color.shotMatch.chart">Color Chart</label>
+                    <select id="shot-match-chart-select" class="input-control mono">
+                      <option value="xrite_classic_24" selected>X-Rite ColorChecker 24</option>
+                      <option value="datacolor_spyder_24">SpyderCheckr 24</option>
+                      <option value="rec709_smpte">Rec.709 SMPTE Chart</option>
+                    </select>
+                  </div>
+                  <div class="shot-match-field">
+                    <label for="shot-match-source-select" data-i18n="color.shotMatch.source">Source Shot</label>
+                    <select id="shot-match-source-select" class="input-control mono">
+                      <option value="current_chart">Current Node Chart</option>
+                      <option value="sony_slog3" selected>Sony S-Log3 (Flat)</option>
+                      <option value="arri_logc3">ARRI LogC3 (Flat)</option>
+                      <option value="canon_clog2">Canon C-Log2</option>
+                      <option value="underexposed_cool">Underexposed Cool</option>
+                      <option value="warm_tungsten">Warm Tungsten Cast</option>
+                    </select>
+                  </div>
+                  <div class="shot-match-field">
+                    <label for="shot-match-target-select" data-i18n="color.shotMatch.target">Reference Target</label>
+                    <select id="shot-match-target-select" class="input-control mono">
+                      <option value="rec709_d65" selected>Rec.709 D65 Standard</option>
+                      <option value="teal_orange_ref">Teal &amp; Orange Look</option>
+                      <option value="film_warm_ref">Film Warm Look</option>
+                      <option value="kodak_print_ref">Kodak 2383 Print</option>
+                    </select>
+                  </div>
+                  <div class="shot-match-field shot-match-strength-field">
+                    <label for="shot-match-strength-range" data-i18n="color.shotMatch.strength">Match (%)</label>
+                    <div class="shot-match-strength-row mono">
+                      <input type="range" id="shot-match-strength-range" min="0" max="100" step="1" value="100">
+                      <input type="number" id="shot-match-strength-num" class="input-num" min="0" max="100" step="1" value="100" aria-label="Shot Match strength percentage">
+                    </div>
+                  </div>
+                </div>
+                <div id="shot-match-metrics-bar" class="shot-match-metrics-bar mono" aria-live="polite"></div>
+                <div id="shot-match-patch-grid" class="shot-match-patch-grid" role="list" aria-label="ColorChecker 24 target vs matched patch comparison"></div>
               </div>
             </div>
           </section>

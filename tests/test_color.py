@@ -14,11 +14,14 @@ from taktcut.color import (
     COLOR_WARPER_HUE_COUNT,
     COLOR_WARPER_POINT_COUNT,
     COLOR_WARPER_SAT_RINGS,
+    COLORCHECKER_24_PATCHES,
     CURVE_CHANNELS,
     HSL_CURVE_MODES,
     HSL_HUE_VECTORS,
     POWER_WINDOW_SHAPES,
     QUALIFIER_PRESET_IDS,
+    STUDIO_LUT_CATEGORIES,
+    STUDIO_LUT_PRESET_IDS,
     ColorCurvesParams,
     ColorGradeParams,
     ColorNodeParams,
@@ -44,24 +47,34 @@ from taktcut.color import (
     compile_hsl_curves_filter,
     compile_power_window_mask_expr,
     compile_qualifier_mask_expr,
+    compute_rgb_moments,
+    delta_e_cie76,
     evaluate_curve_pchip,
     evaluate_periodic_hue_curve,
+    evaluate_studio_lut_rgb,
+    format_cube_lut_text,
+    generate_studio_lut_table,
     get_color_curves_preset,
     get_color_preset,
     get_color_warper_preset,
     get_hsl_curve_preset,
     get_qualifier_preset,
+    get_studio_lut_preset,
     hsl_to_rgb,
     list_color_curves_presets,
     list_color_presets,
     list_color_warper_presets,
     list_hsl_curve_presets,
     list_qualifier_presets,
+    list_shot_match_profiles,
+    list_studio_lut_presets,
     normalize_curve_points,
     parse_cdl_xml,
     parse_cube_lut,
     parse_cube_lut_text,
     rgb_to_hsl,
+    rgb_to_lab,
+    solve_shot_match,
 )
 from taktcut.models import AscCdlParams, HardwareCapabilities, RenderProfile
 from taktcut.render import build_render_plan
@@ -1098,3 +1111,153 @@ def test_color_warper_ffmpeg_execution_runtime() -> None:
     assert px_red[1] > 45
     # Green saturation pulled down relative to input (216 - 32 = 184)
     assert (px_green[1] - px_green[0]) < 130
+
+
+def test_studio_lut_library_generation_roundtrip_and_ffmpeg_lut3d(tmp_path: Path) -> None:
+    luts = list_studio_lut_presets()
+    assert len(luts) == len(STUDIO_LUT_PRESET_IDS) == 8
+    cats = {item.category for item in luts}
+    assert cats == set(STUDIO_LUT_CATEGORIES)
+    for item in luts:
+        assert len(item.swatches) == 6
+        assert all(s.startswith("#") and len(s) == 7 for s in item.swatches)
+
+    single = get_studio_lut_preset("kodak_2383_d65")
+    assert single.title == "Kodak 2383 Print D65"
+    with pytest.raises(ValueError, match="Unknown studio LUT preset"):
+        get_studio_lut_preset("missing_lut")
+
+    info, table = generate_studio_lut_table("silver_gelatin_bw", size=17)
+    assert info.dimension == "3D"
+    assert info.size == 17
+    assert info.entry_count == 17**3
+    cube_text = format_cube_lut_text(info, table)
+    parsed_info, parsed_table = parse_cube_lut_text(cube_text, source_name="silver.cube")
+    assert parsed_info.size == 17
+    assert len(parsed_table) == 17**3
+
+    # Silver B&W LUT collapses chromatic input to monochrome neutral gray
+    bw_r, bw_g, bw_b = apply_cube_lut_rgb(
+        0.85,
+        0.25,
+        0.15,
+        dimension="3D",
+        size=17,
+        table=parsed_table,
+        mix=1.0,
+    )
+    assert abs(bw_r - bw_g) < 1e-4
+    assert abs(bw_g - bw_b) < 1e-4
+
+    # Teal & Orange LUT warms skin highlights
+    to_r, _to_g, to_b = evaluate_studio_lut_rgb("teal_orange_cinema", 0.78, 0.56, 0.45)
+    assert to_r > to_b
+
+    # Real FFmpeg lut3d filter execution on baked studio .cube LUT
+    ffmpeg_bin = shutil.which("ffmpeg")
+    assert ffmpeg_bin is not None
+    lut_file = tmp_path / "kodak_2383.cube"
+    k_info, k_table = generate_studio_lut_table("kodak_2383_d65", size=17)
+    lut_file.write_text(format_cube_lut_text(k_info, k_table), encoding="utf-8")
+    fg = build_rec709_lut_filter(lut_file, target_pix_fmt="rgb24")
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=0xc08868:s=16x16:d=0.1,format=rgb24",
+        "-vf",
+        fg,
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    assert proc.returncode == 0, f"FFmpeg lut3d failed: {proc.stderr.decode()}"
+    assert len(proc.stdout) == 16 * 16 * 3
+
+
+def test_colorchecker_shot_match_solver_moments_and_ffmpeg_execution() -> None:
+    assert len(COLORCHECKER_24_PATCHES) == 24
+    l_w, _a_w, _b_w = rgb_to_lab(1.0, 1.0, 1.0)
+    assert l_w == pytest.approx(100.0, abs=0.2)
+    assert delta_e_cie76((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) == pytest.approx(0.0, abs=1e-6)
+    assert delta_e_cie76((0.8, 0.2, 0.2), (0.2, 0.8, 0.2)) > 40.0
+
+    profiles = list_shot_match_profiles()
+    assert len(profiles["charts"]) == 3
+    assert len(profiles["sources"]) == 6
+    assert len(profiles["targets"]) == 5
+
+    # Sony S-Log3 flat source matched to Rec.709 D65 reference dramatically drops Delta-E
+    res_slog3 = solve_shot_match(
+        chart_profile="xrite_classic_24",
+        source_profile="sony_slog3",
+        target_profile="rec709_d65",
+        strength=1.0,
+    )
+    assert res_slog3.patch_count == 24
+    assert res_slog3.delta_e_before > 12.0
+    assert res_slog3.delta_e_after < res_slog3.delta_e_before
+    assert res_slog3.improvement_pct > 45.0
+    assert res_slog3.grade.contrast > 1.1
+    assert "colorbalance=" in res_slog3.ffmpeg_filter
+
+    # Strength=0.0 produces neutral identity grade and zero change
+    res_zero = solve_shot_match(
+        source_profile="underexposed_cool",
+        target_profile="rec709_d65",
+        strength=0.0,
+    )
+    assert res_zero.grade.is_identity() is True
+    assert res_zero.delta_e_after == pytest.approx(res_zero.delta_e_before, abs=0.05)
+
+    # Custom reference sample grids (e.g. from Reference Still) work deterministically
+    src_grid = [(0.22, 0.28, 0.40), (0.42, 0.46, 0.55), (0.64, 0.65, 0.72)]
+    tgt_grid = [(0.25, 0.22, 0.18), (0.52, 0.48, 0.44), (0.85, 0.80, 0.72)]
+    moments = compute_rgb_moments(src_grid)
+    assert moments.mean_rgb[2] > moments.mean_rgb[0]
+    res_custom = solve_shot_match(
+        source_profile="current_chart",
+        target_profile="custom_reference",
+        source_samples=src_grid,
+        target_samples=tgt_grid,
+        strength=1.0,
+    )
+    assert res_custom.delta_e_after < res_custom.delta_e_before
+    assert res_custom.grade.temperature > 0.0
+
+    # Validation guards
+    with pytest.raises(ValueError, match="Unsupported chart_profile"):
+        solve_shot_match(chart_profile="bad_chart")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="strength"):
+        solve_shot_match(strength=1.5)
+
+    # Real FFmpeg runtime execution of solved Shot-Match filter
+    ffmpeg_bin = shutil.which("ffmpeg")
+    assert ffmpeg_bin is not None
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=0x586878:s=16x16:d=0.1,format=rgb24",
+        "-vf",
+        f"{res_slog3.ffmpeg_filter},format=rgb24",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    assert proc.returncode == 0, f"FFmpeg rejected Shot Match filter: {proc.stderr.decode()}"
+    assert len(proc.stdout) == 16 * 16 * 3

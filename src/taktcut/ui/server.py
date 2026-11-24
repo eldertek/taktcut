@@ -43,6 +43,7 @@ from taktcut.color import (
     MAX_COLOR_NODES,
     SATURATION_MAX,
     SATURATION_MIN,
+    STUDIO_LUT_CATEGORIES,
     TEMPERATURE_MAX,
     TEMPERATURE_MIN,
     ColorGradeParams,
@@ -53,14 +54,18 @@ from taktcut.color import (
     bake_color_node_chain_to_cube,
     compile_color_grade,
     compile_color_node_chain,
+    generate_studio_lut_table,
     list_color_curves_presets,
     list_color_presets,
     list_color_warper_presets,
     list_hsl_curve_presets,
     list_qualifier_presets,
+    list_shot_match_profiles,
+    list_studio_lut_presets,
     parse_cdl_xml,
     parse_cube_lut,
     parse_cube_lut_text,
+    solve_shot_match,
 )
 from taktcut.compound import (
     ALLOWED_COMPOUND_OPS,
@@ -1746,6 +1751,10 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "qualifier_presets": [
                         p.model_dump(mode="json") for p in list_qualifier_presets()
                     ],
+                    "studio_luts": [
+                        p.model_dump(mode="json") for p in list_studio_lut_presets()
+                    ],
+                    "shot_match_profiles": list_shot_match_profiles(),
                     "bounds": {
                         "lift": {
                             "min": COLOR_BALANCE_MIN,
@@ -1782,6 +1791,16 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                             "sat_offset_max": COLOR_WARPER_SAT_OFFSET_MAX,
                         },
                     },
+                },
+            )
+            return
+
+        if route == "/api/color/luts":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "categories": list(STUDIO_LUT_CATEGORIES),
+                    "luts": [p.model_dump(mode="json") for p in list_studio_lut_presets()],
                 },
             )
             return
@@ -2805,6 +2824,56 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             info = parse_cube_lut(confined)
             self._send_json(HTTPStatus.OK, {"info": info.model_dump(mode="json")})
+            return
+
+        if route == "/api/color/lut-preset":
+            raw_preset_id = payload.get("preset_id")
+            if not isinstance(raw_preset_id, str) or not raw_preset_id.strip():
+                raise ValueError("Provide 'preset_id' for studio 3D .cube LUT preset")
+            raw_size = payload.get("size", 17)
+            if isinstance(raw_size, bool) or not isinstance(raw_size, int):
+                raise ValueError("LUT 'size' must be an integer between 2 and 65")
+            info, table = generate_studio_lut_table(raw_preset_id.strip(), size=raw_size)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "preset_id": raw_preset_id.strip(),
+                    "info": info.model_dump(mode="json"),
+                    "lut": {
+                        "title": info.title,
+                        "dimension": info.dimension,
+                        "size": info.size,
+                        "domain_min": list(info.domain_min),
+                        "domain_max": list(info.domain_max),
+                        "entry_count": info.entry_count,
+                        "table": [list(row) for row in table],
+                    },
+                },
+            )
+            return
+
+        if route == "/api/color/shot-match":
+            chart_profile: Any = str(payload.get("chart_profile") or "xrite_classic_24").strip()
+            source_profile: Any = str(payload.get("source_profile") or "current_chart").strip()
+            target_profile: Any = str(payload.get("target_profile") or "rec709_d65").strip()
+            raw_strength = payload.get("strength", 1.0)
+            if isinstance(raw_strength, bool) or not isinstance(raw_strength, (int, float)):
+                raise ValueError("Shot-match 'strength' must be a number in [0.0, 1.0]")
+            raw_src_samples = payload.get("source_samples")
+            raw_tgt_samples = payload.get("target_samples")
+            if raw_src_samples is not None and not isinstance(raw_src_samples, list):
+                raise ValueError("'source_samples' must be a list of [r, g, b] triplets")
+            if raw_tgt_samples is not None and not isinstance(raw_tgt_samples, list):
+                raise ValueError("'target_samples' must be a list of [r, g, b] triplets")
+            match_res = solve_shot_match(
+                chart_profile=chart_profile,
+                source_profile=source_profile,
+                target_profile=target_profile,
+                strength=float(raw_strength),
+                source_samples=raw_src_samples,
+                target_samples=raw_tgt_samples,
+            )
+            self._send_json(HTTPStatus.OK, match_res.model_dump(mode="json"))
             return
 
         if route == "/api/color/compile":

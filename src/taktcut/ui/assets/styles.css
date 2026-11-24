@@ -4244,6 +4244,279 @@ input[type="range"] {
   accent-color: #f4a46b;
 }
 
+/* 3D LUT LOOK LIBRARY BROWSER */
+.color-lut-browser-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.lut-browser-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lut-browser-title-group,
+.lut-category-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lut-cat-btn.is-active {
+  background: rgba(230, 132, 66, 0.22);
+  border-color: var(--accent);
+  color: #ffd3b3;
+}
+
+.color-lut-browser-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.lut-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 7px 8px;
+  background: var(--bg-well);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.lut-card:hover {
+  border-color: rgba(230, 132, 66, 0.65);
+  background: #20232b;
+}
+
+.lut-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lut-card.is-active {
+  border-color: var(--accent);
+  background: rgba(230, 132, 66, 0.14);
+}
+
+.lut-card-swatches {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  height: 12px;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.lut-card-swatch {
+  width: 100%;
+  height: 100%;
+}
+
+.lut-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lut-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.lut-card-cat {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.lut-browser-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-well);
+  border: 1px dashed var(--border-inner);
+}
+
+/* SHOT MATCH & COLOR CHECKER AUTO-BALANCE */
+.color-shot-match-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-workbench);
+  border: 1px solid var(--border-inner);
+  min-width: 0;
+}
+
+.shot-match-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shot-match-title-group,
+.shot-match-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.shot-match-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.shot-match-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.shot-match-field label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.shot-match-strength-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shot-match-metrics-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-well);
+  border: 1px solid var(--border-inner);
+  font-size: 10px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.shot-match-metric-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+}
+
+.shot-match-metric-chip.is-pass {
+  border-color: rgba(82, 196, 128, 0.55);
+  color: #8ee5ad;
+}
+
+.shot-match-patch-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+}
+
+.shot-match-patch {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-well);
+  border: 1px solid var(--border-inner);
+  border-radius: 2px;
+  min-width: 0;
+}
+
+.shot-match-patch-swatch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: 16px;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.shot-match-patch-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  font-size: 9px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.shot-match-patch-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shot-match-patch-de {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+#btn-color-wipe-mode.is-ref-match {
+  background: rgba(104, 156, 255, 0.22);
+  border-color: #689cff;
+  color: #cfe0ff;
+}
+
+#btn-color-chart-overlay.is-active,
+#btn-shot-match-chart-toggle.is-active {
+  background: rgba(230, 132, 66, 0.22);
+  border-color: var(--accent);
+  color: #ffd3b3;
+}
+
 .code-box-compact {
   max-height: 92px;
 }
@@ -7339,6 +7612,37 @@ input[type="range"] {
   .pw-param-grid,
   .qual-param-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .lut-cat-btn,
+  .lut-card,
+  #btn-color-wipe-mode,
+  #btn-color-chart-overlay,
+  #btn-color-shot-match,
+  #btn-shot-match-run,
+  #btn-shot-match-new-node,
+  #btn-shot-match-chart-toggle,
+  #btn-shot-match-reset,
+  #shot-match-chart-select,
+  #shot-match-source-select,
+  #shot-match-target-select,
+  #shot-match-strength-range,
+  #shot-match-strength-num {
+    min-height: 44px;
+  }
+  .lut-cat-btn,
+  #btn-color-wipe-mode,
+  #btn-color-chart-overlay,
+  #btn-shot-match-reset {
+    min-width: 44px;
+  }
+  .color-lut-browser-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .shot-match-controls-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shot-match-patch-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .color-node-bypass-btn {
     min-width: 44px;

@@ -28,6 +28,7 @@ import {
   renderFairlightEqCurveCanvas,
   renderFairlightFftCanvas,
   sampleColorViewerInputRgb,
+  sampleDataUrlRgbGrid,
   trackPointSequenceCanvas
 } from "./canvas.js";
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
@@ -241,6 +242,7 @@ import {
   isQualifierActive,
   isTrackAudiblyMuted,
   linkAvClipsInDocument,
+  listStudioLutPresetsClient,
   moveClipInDocument,
   moveColorNodeInTree,
   normalizeAutoDuckParams,
@@ -296,6 +298,7 @@ import {
   slideClipInDocument,
   slipClipInDocument,
   smartInsertClipInDocument,
+  solveShotMatchClient,
   splitClipInDocument,
   splitClipsAtPlayhead,
   stepPlayheadInRange,
@@ -586,6 +589,20 @@ const state = {
   colorWarperSelectedPt: { hue_idx: 0, ring_idx: 2 },
   colorWarperHoverPt: null,
   colorWarperDrag: null,
+  studioLutCatalog: listStudioLutPresetsClient(),
+  customLutLibrary: [],
+  lutBrowserCategory: "all",
+  activeStudioLutId: "",
+  colorChartOverlay: false,
+  colorWipeMode: "before_after",
+  shotMatch: {
+    chartProfile: "xrite_classic_24",
+    sourceProfile: "sony_slog3",
+    targetProfile: "rec709_d65",
+    strengthPct: 100,
+    lastResult: null,
+    busy: false
+  },
   wipeRatio: 0.5,
   colorSplitWipe: {
     enabled: true,
@@ -912,6 +929,8 @@ function setLanguage(lang) {
   renderMediaPool();
   renderFairlightAudioUI();
   renderColorNodeTreeUI();
+  renderLutBrowserUI();
+  renderShotMatchUI();
   renderFxStack();
   renderDeliveryPresetStrip();
   updateDeliverSizeEstimate();
@@ -1381,11 +1400,29 @@ function redrawActiveCanvases() {
   } else if (state.activeTab === "color") {
     const previewCanvas = byId("color-preview-canvas");
     const activeNode = getSelectedColorNode(state.colorNodeTree);
+    const refTargetId = state.shotMatch ? state.shotMatch.targetProfile : "rec709_d65";
+    let refGradeChain = null;
+    if (state.colorWipeMode === "ref_match") {
+      if (refTargetId === "teal_orange_ref") {
+        refGradeChain = { ...COLOR_GRADE_PRESETS.teal_orange.params };
+      } else if (refTargetId === "film_warm_ref") {
+        refGradeChain = { ...COLOR_GRADE_PRESETS.film_warm.params };
+      } else {
+        refGradeChain = { ...COLOR_GRADE_PRESETS.rec709_clean.params };
+      }
+    }
     drawColorPreviewCanvas(previewCanvas, activeColorChain, state.wipeRatio, {
       enabled: Boolean(state.colorSplitWipe.enabled),
       positionPct: state.colorSplitWipe.positionPct,
       isHovered: Boolean(state.colorSplitWipe.isHovered),
       isDragging: Boolean(state.colorSplitWipe.isDragging),
+      wipeMode: state.colorWipeMode,
+      refGrade: refGradeChain,
+      refLabel: state.lang === "fr" ? "CIBLE RÉF" : "REF TARGET",
+      matchLabel: state.lang === "fr" ? "MATCHÉ" : "MATCHED",
+      showColorChartOverlay: Boolean(state.colorChartOverlay),
+      shotMatchPatches:
+        state.shotMatch && state.shotMatch.lastResult ? state.shotMatch.lastResult.patches : null,
       beforeLabel: t("wipe.pill.before"),
       afterLabel: t("wipe.pill.after"),
       qualifierHighlight: Boolean(state.qualifierHighlight),
@@ -8307,9 +8344,378 @@ function syncColorInputsFromState() {
   }
   updateColorPresetBadges();
   renderColorNodeTreeUI();
+  renderLutBrowserUI();
+  renderShotMatchUI();
   if (state.activeTab === "color" || state.activeTab === "timeline" || state.activeTab === "fx") {
     redrawActiveCanvases();
   }
+}
+
+const LUT_CATEGORY_LABELS = {
+  film_print: "FILM",
+  camera_log: "LOG",
+  creative_cinema: "CINEMA",
+  monochrome: "MONO",
+  custom: "CUSTOM"
+};
+
+function renderLutBrowserUI() {
+  const grid = byId("color-lut-browser-grid");
+  if (!grid) return;
+  const activeNode = getSelectedColorNode(state.colorNodeTree);
+  const activeLutTitle = activeNode && activeNode.lut ? String(activeNode.lut.title || "") : "";
+
+  const studioEntries = (Array.isArray(state.studioLutCatalog) ? state.studioLutCatalog : []).map((item) => ({
+    ...item,
+    isCustom: false
+  }));
+  const customEntries = (Array.isArray(state.customLutLibrary) ? state.customLutLibrary : []).map((item) => ({
+    ...item,
+    category: "custom",
+    isCustom: true
+  }));
+  const allEntries = [...studioEntries, ...customEntries];
+
+  const countBadge = byId("lut-browser-count-badge");
+  if (countBadge) {
+    countBadge.textContent = `${allEntries.length} LUTS`;
+  }
+
+  document.querySelectorAll(".lut-cat-btn").forEach((btn) => {
+    const cat = btn.getAttribute("data-lut-category") || "all";
+    const isActive = cat === state.lutBrowserCategory;
+    btn.classList.toggle("is-active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  const filtered =
+    state.lutBrowserCategory === "all"
+      ? allEntries
+      : allEntries.filter((e) => e.category === state.lutBrowserCategory);
+
+  if (filtered.length === 0) {
+    const msg =
+      state.lutBrowserCategory === "custom"
+        ? t("color.lutBrowser.emptyCustom")
+        : t("color.nodes.noLut");
+    grid.replaceChildren(dom("p", "lut-browser-empty", msg));
+    return;
+  }
+
+  const cards = [];
+  for (const entry of filtered) {
+    const isApplied =
+      (entry.id && entry.id === state.activeStudioLutId && activeLutTitle === entry.title) ||
+      (activeNode && activeNode.lut && activeLutTitle === entry.title);
+    const btn = dom("button", `lut-card${isApplied ? " is-active" : ""}`);
+    btn.type = "button";
+    btn.setAttribute("role", "listitem");
+    btn.setAttribute("data-lut-preset-id", entry.id);
+    btn.setAttribute("aria-pressed", isApplied ? "true" : "false");
+    btn.title = entry.description || entry.title;
+
+    const swatchStrip = dom("span", "lut-card-swatches");
+    const swatches =
+      Array.isArray(entry.swatches) && entry.swatches.length > 0
+        ? entry.swatches
+        : ["#2a3140", "#b88974", "#5582b4", "#4f723b", "#d0822d", "#e4e4e0"];
+    for (const hex of swatches.slice(0, 6)) {
+      const sw = dom("span", "lut-card-swatch");
+      sw.style.backgroundColor = hex;
+      swatchStrip.appendChild(sw);
+    }
+
+    const head = dom("span", "lut-card-head");
+    head.appendChild(dom("span", "lut-card-title", entry.title));
+    head.appendChild(
+      dom(
+        "span",
+        "lut-card-cat mono",
+        LUT_CATEGORY_LABELS[entry.category] || String(entry.category || "3D").toUpperCase()
+      )
+    );
+    btn.appendChild(swatchStrip);
+    btn.appendChild(head);
+
+    btn.addEventListener("click", () => {
+      applyStudioLutPresetAction(entry);
+    });
+    cards.push(btn);
+  }
+  grid.replaceChildren(...cards);
+}
+
+async function applyStudioLutPresetAction(entry) {
+  if (!entry) return;
+  try {
+    let parsedLut = null;
+    if (entry.isCustom && entry.lut) {
+      parsedLut = { ...entry.lut, mix: 1.0 };
+      state.activeStudioLutId = "";
+    } else {
+      const res = await api.getStudioLutPreset(entry.id, 17);
+      const raw = res && res.lut ? res.lut : null;
+      if (!raw) throw new Error("Failed to load 3D .cube LUT preset");
+      parsedLut = {
+        title: raw.title || entry.title,
+        dimension: raw.dimension || "3D",
+        size: raw.size || 17,
+        domainMin: raw.domain_min || raw.domainMin || [0, 0, 0],
+        domainMax: raw.domain_max || raw.domainMax || [1, 1, 1],
+        entryCount: raw.entry_count || raw.entryCount || (raw.table ? raw.table.length : 4913),
+        mix: 1.0,
+        table: raw.table
+      };
+      state.activeStudioLutId = entry.id;
+    }
+    const active = syncActiveColorGradeFromTree();
+    state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+      lut: parsedLut
+    });
+    syncActiveColorGradeFromTree();
+    state.colorActivePresetId = "";
+    syncColorInputsFromState();
+    compileColorNow();
+    showBanner(`Applied 3D LUT ${parsedLut.title} (${parsedLut.size}^3) onto ${active.label}`, "success");
+  } catch (err) {
+    showBanner(err.message, "error");
+  }
+}
+
+function syncShotMatchTargetOptions() {
+  const select = byId("shot-match-target-select");
+  if (!select) return;
+  const currentVal = state.shotMatch.targetProfile || "rec709_d65";
+  const baseTargets = [
+    { value: "rec709_d65", label: state.lang === "fr" ? "Rec.709 D65 Standard" : "Rec.709 D65 Standard" },
+    { value: "teal_orange_ref", label: state.lang === "fr" ? "Look Teal & Orange" : "Teal & Orange Look" },
+    { value: "film_warm_ref", label: state.lang === "fr" ? "Look Film Chaud" : "Film Warm Look" },
+    { value: "kodak_print_ref", label: "Kodak 2383 Print" }
+  ];
+  const stills = Array.isArray(state.stillsGallery) ? state.stillsGallery : [];
+  const opts = [];
+  for (const item of baseTargets) {
+    const opt = document.createElement("option");
+    opt.value = item.value;
+    opt.textContent = item.label;
+    opts.push(opt);
+  }
+  for (const still of stills) {
+    const opt = document.createElement("option");
+    opt.value = `still:${still.id}`;
+    const tc = still.timecode || still.timestampLabel || still.id;
+    opt.textContent = `Still: ${still.preset || still.source || "Frame"} (${tc})`;
+    opts.push(opt);
+  }
+  select.replaceChildren(...opts);
+  const validValues = new Set(opts.map((o) => o.value));
+  select.value = validValues.has(currentVal) ? currentVal : "rec709_d65";
+  state.shotMatch.targetProfile = select.value;
+}
+
+function renderShotMatchUI() {
+  const wipeModeBtn = byId("btn-color-wipe-mode");
+  if (wipeModeBtn) {
+    const isRef = state.colorWipeMode === "ref_match";
+    wipeModeBtn.classList.toggle("is-ref-match", isRef);
+    wipeModeBtn.setAttribute("aria-pressed", isRef ? "true" : "false");
+    wipeModeBtn.textContent = isRef
+      ? t("color.wipe.modeRefMatch")
+      : t("color.wipe.modeBeforeAfter");
+  }
+
+  for (const btnId of ["btn-color-chart-overlay", "btn-shot-match-chart-toggle"]) {
+    const chartBtn = byId(btnId);
+    if (chartBtn) {
+      const on = Boolean(state.colorChartOverlay);
+      chartBtn.classList.toggle("is-active", on);
+      chartBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+  }
+
+  const strengthRange = byId("shot-match-strength-range");
+  const strengthNum = byId("shot-match-strength-num");
+  const pct = Math.round(Number(state.shotMatch.strengthPct ?? 100));
+  if (strengthRange) strengthRange.value = String(pct);
+  if (strengthNum && document.activeElement !== strengthNum) {
+    strengthNum.value = String(pct);
+  }
+
+  const badge = byId("shot-match-delta-badge");
+  const resetBtn = byId("btn-shot-match-reset");
+  const metricsBar = byId("shot-match-metrics-bar");
+  const patchGrid = byId("shot-match-patch-grid");
+  const res = state.shotMatch.lastResult;
+
+  if (!res) {
+    if (badge) {
+      badge.textContent = "READY";
+      badge.className = "nle-tag mono";
+    }
+    if (resetBtn) resetBtn.disabled = true;
+    if (metricsBar) {
+      metricsBar.replaceChildren(dom("span", "", t("color.shotMatch.idleMetrics")));
+    }
+    if (patchGrid) {
+      const previewPatches = solveShotMatchClient({
+        chart_profile: state.shotMatch.chartProfile,
+        source_profile: state.shotMatch.sourceProfile,
+        target_profile: String(state.shotMatch.targetProfile).startsWith("still:")
+          ? "custom_reference"
+          : state.shotMatch.targetProfile,
+        strength: 0.0
+      }).patches;
+      _renderShotMatchPatchGrid(patchGrid, previewPatches, false);
+    }
+    return;
+  }
+
+  if (badge) {
+    badge.textContent = `dE ${Number(res.delta_e_before).toFixed(1)} -> ${Number(res.delta_e_after).toFixed(1)}`;
+    badge.className = Number(res.delta_e_after) <= Number(res.delta_e_before) ? "nle-tag is-pass mono" : "nle-tag mono";
+  }
+  if (resetBtn) resetBtn.disabled = false;
+
+  if (metricsBar) {
+    const g = res.grade || {};
+    const chipBefore = dom(
+      "span",
+      "shot-match-metric-chip",
+      `Before dE: ${Number(res.delta_e_before).toFixed(2)}`
+    );
+    const chipAfter = dom(
+      "span",
+      "shot-match-metric-chip is-pass",
+      `After dE: ${Number(res.delta_e_after).toFixed(2)} (-${Number(res.improvement_pct).toFixed(0)}%)`
+    );
+    const chipGain = dom(
+      "span",
+      "shot-match-metric-chip",
+      `Con ${Number(g.contrast ?? 1).toFixed(2)} | Sat ${Number(g.saturation ?? 1).toFixed(2)} | Temp ${Number(g.temperature ?? 0) >= 0 ? "+" : ""}${Number(g.temperature ?? 0).toFixed(2)}`
+    );
+    metricsBar.replaceChildren(chipBefore, chipAfter, chipGain);
+  }
+  if (patchGrid && Array.isArray(res.patches)) {
+    _renderShotMatchPatchGrid(patchGrid, res.patches, true);
+  }
+}
+
+function _renderShotMatchPatchGrid(patchGrid, patches, isMatched) {
+  const nodes = [];
+  const toCss = (rgb) => {
+    const r = Math.max(0, Math.min(255, Math.round((rgb[0] ?? 0.5) * 255)));
+    const g = Math.max(0, Math.min(255, Math.round((rgb[1] ?? 0.5) * 255)));
+    const b = Math.max(0, Math.min(255, Math.round((rgb[2] ?? 0.5) * 255)));
+    return `rgb(${r}, ${g}, ${b})`;
+  };
+  for (const p of patches.slice(0, 24)) {
+    const card = dom("div", "shot-match-patch");
+    card.setAttribute("role", "listitem");
+    card.title = `${p.name}: dE ${Number(p.delta_e_before).toFixed(1)} -> ${Number(p.delta_e_after).toFixed(1)}`;
+
+    const swatch = dom("div", "shot-match-patch-swatch");
+    const leftHalf = dom("span", "");
+    leftHalf.style.backgroundColor = toCss(p.target_rgb || [0.5, 0.5, 0.5]);
+    const rightHalf = dom("span", "");
+    rightHalf.style.backgroundColor = toCss(isMatched ? p.matched_rgb : p.source_rgb);
+    swatch.replaceChildren(leftHalf, rightHalf);
+
+    const meta = dom("div", "shot-match-patch-meta mono");
+    meta.appendChild(dom("span", "shot-match-patch-name", p.name));
+    meta.appendChild(
+      dom(
+        "span",
+        "shot-match-patch-de",
+        isMatched ? Number(p.delta_e_after).toFixed(1) : Number(p.delta_e_before).toFixed(1)
+      )
+    );
+    card.appendChild(swatch);
+    card.appendChild(meta);
+    nodes.push(card);
+  }
+  patchGrid.replaceChildren(...nodes);
+}
+
+function toggleColorChartOverlay() {
+  state.colorChartOverlay = !state.colorChartOverlay;
+  renderShotMatchUI();
+  if (state.activeTab === "color") redrawActiveCanvases();
+}
+
+function toggleColorWipeMode() {
+  state.colorWipeMode = state.colorWipeMode === "ref_match" ? "before_after" : "ref_match";
+  if (!state.colorSplitWipe.enabled) {
+    state.colorSplitWipe.enabled = true;
+    syncSplitWipeControls("color");
+  }
+  renderShotMatchUI();
+  if (state.activeTab === "color") redrawActiveCanvases();
+}
+
+async function runShotMatchAction(opts = {}) {
+  if (state.shotMatch.busy) return;
+  state.shotMatch.busy = true;
+  try {
+    const rawTarget = String(state.shotMatch.targetProfile || "rec709_d65");
+    let targetProfile = rawTarget;
+    let targetSamples = null;
+    if (rawTarget.startsWith("still:")) {
+      const stillId = rawTarget.slice(6);
+      const still = (state.stillsGallery || []).find((s) => s.id === stillId);
+      targetProfile = "custom_reference";
+      if (still && still.dataUrl) {
+        targetSamples = await sampleDataUrlRgbGrid(still.dataUrl, 6, 4);
+      }
+    }
+
+    const strength = Math.max(0, Math.min(1, Number(state.shotMatch.strengthPct ?? 100) / 100));
+    const payload = {
+      chart_profile: state.shotMatch.chartProfile || "xrite_classic_24",
+      source_profile: state.shotMatch.sourceProfile || "sony_slog3",
+      target_profile: targetProfile,
+      strength,
+      ...(targetSamples ? { target_samples: targetSamples } : {})
+    };
+    const result = await api.solveShotMatch(payload);
+    state.shotMatch.lastResult = result;
+
+    if (opts.createNewNode && state.colorNodeTree.nodes.length < MAX_COLOR_NODES) {
+      state.colorNodeTree = addColorNodeToTree(state.colorNodeTree, {
+        label: "Shot Match"
+      });
+    }
+    const active = syncActiveColorGradeFromTree();
+    const nextGrade = normalizeColorGrade(result.grade || {});
+    state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+      grade: nextGrade
+    });
+    syncActiveColorGradeFromTree();
+    state.colorActivePresetId = "";
+    syncColorInputsFromState();
+    compileColorNow();
+    showBanner(
+      `Shot Match balanced ${active.label}: dE ${Number(result.delta_e_before).toFixed(1)} -> ${Number(result.delta_e_after).toFixed(1)} (-${Number(result.improvement_pct).toFixed(0)}%)`,
+      "success"
+    );
+  } catch (err) {
+    showBanner(err.message, "error");
+  } finally {
+    state.shotMatch.busy = false;
+  }
+}
+
+function resetShotMatchAction() {
+  state.shotMatch.lastResult = null;
+  state.shotMatch.strengthPct = 100;
+  state.colorWipeMode = "before_after";
+  const active = syncActiveColorGradeFromTree();
+  state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+    grade: createNeutralColorGrade()
+  });
+  syncActiveColorGradeFromTree();
+  state.colorActivePresetId = state.colorNodeTree.nodes.length === 1 ? "rec709_clean" : "";
+  syncColorInputsFromState();
+  compileColorNow();
 }
 
 function applyColorPresetUI(presetId) {
@@ -8484,6 +8890,7 @@ function renderStillsGalleryContainer(container) {
 function renderStillsGallery() {
   renderStillsGalleryContainer(byId("color-stills-gallery"));
   renderStillsGalleryContainer(byId("fx-stills-gallery"));
+  syncShotMatchTargetOptions();
   renderMediaPool();
 }
 
@@ -12404,6 +12811,7 @@ const NLE_SHORTCUT_GROUPS = [
     items: [
       { kbd: "W / Ctrl+W", descKey: "shortcuts.key.splitWipe" },
       { kbd: "Shift+H", descKey: "shortcuts.key.qualHighlight" },
+      { kbd: "Shift+K", descKey: "shortcuts.key.shotMatch" },
       { kbd: "Shift+M", descKey: "shortcuts.key.multicamQuad" },
       { kbd: "1 - 4", descKey: "shortcuts.key.multicamCut" },
       { kbd: "Alt+L", descKey: "shortcuts.key.avLink" },
@@ -12573,6 +12981,19 @@ function handleTransportKeydown(ev) {
   ) {
     ev.preventDefault();
     toggleQualifierHighlight();
+    return;
+  }
+
+  if (
+    !ev.ctrlKey &&
+    !ev.metaKey &&
+    !ev.altKey &&
+    ev.shiftKey &&
+    lower === "k" &&
+    state.activeTab === "color"
+  ) {
+    ev.preventDefault();
+    runShotMatchAction();
     return;
   }
 
@@ -18126,6 +18547,19 @@ function wireEvents() {
         parsedLut = parseCubeLutTextClient(cubeContent, file.name.replace(/\.cube$/i, ""));
       }
       const active = syncActiveColorGradeFromTree();
+      state.activeStudioLutId = "";
+      const customEntry = {
+        id: `custom_${Date.now()}`,
+        title: parsedLut.title,
+        category: "custom",
+        description: `${parsedLut.dimension} ${parsedLut.size}^3 custom .cube LUT`,
+        lut: parsedLut,
+        swatches: ["#353a45", "#c4947a", "#527eb0", "#4f723b", "#d0822d", "#e4e4e0"]
+      };
+      state.customLutLibrary = [
+        customEntry,
+        ...(state.customLutLibrary || []).filter((item) => item.title !== customEntry.title)
+      ].slice(0, 12);
       state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
         lut: parsedLut
       });
@@ -18165,10 +18599,92 @@ function wireEvents() {
   });
   byId("btn-color-node-clear-lut")?.addEventListener("click", () => {
     const active = syncActiveColorGradeFromTree();
+    state.activeStudioLutId = "";
     state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, { lut: null });
     syncActiveColorGradeFromTree();
     syncColorInputsFromState();
     compileColorNow();
+  });
+
+  document.querySelectorAll(".lut-cat-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.lutBrowserCategory = btn.getAttribute("data-lut-category") || "all";
+      renderLutBrowserUI();
+    });
+  });
+
+  byId("btn-color-wipe-mode")?.addEventListener("click", toggleColorWipeMode);
+  byId("btn-color-chart-overlay")?.addEventListener("click", toggleColorChartOverlay);
+  byId("btn-shot-match-chart-toggle")?.addEventListener("click", toggleColorChartOverlay);
+  byId("btn-color-shot-match")?.addEventListener("click", () => {
+    runShotMatchAction({ createNewNode: false });
+  });
+  byId("btn-shot-match-run")?.addEventListener("click", () => {
+    runShotMatchAction({ createNewNode: false });
+  });
+  byId("btn-shot-match-new-node")?.addEventListener("click", () => {
+    runShotMatchAction({ createNewNode: true });
+  });
+  byId("btn-shot-match-reset")?.addEventListener("click", resetShotMatchAction);
+
+  byId("shot-match-chart-select")?.addEventListener("change", (ev) => {
+    state.shotMatch.chartProfile = ev.target.value || "xrite_classic_24";
+    if (state.shotMatch.lastResult) {
+      runShotMatchAction({ createNewNode: false });
+    } else {
+      renderShotMatchUI();
+    }
+  });
+  byId("shot-match-source-select")?.addEventListener("change", (ev) => {
+    state.shotMatch.sourceProfile = ev.target.value || "sony_slog3";
+    if (state.shotMatch.lastResult) {
+      runShotMatchAction({ createNewNode: false });
+    } else {
+      renderShotMatchUI();
+    }
+  });
+  byId("shot-match-target-select")?.addEventListener("change", (ev) => {
+    state.shotMatch.targetProfile = ev.target.value || "rec709_d65";
+    if (state.shotMatch.lastResult) {
+      runShotMatchAction({ createNewNode: false });
+    } else {
+      renderShotMatchUI();
+      if (state.activeTab === "color") redrawActiveCanvases();
+    }
+  });
+
+  const applyShotMatchStrengthPct = (rawPct) => {
+    const pct = Math.min(100, Math.max(0, Math.round(Number(rawPct))));
+    if (!Number.isFinite(pct)) return;
+    state.shotMatch.strengthPct = pct;
+    const rEl = byId("shot-match-strength-range");
+    const nEl = byId("shot-match-strength-num");
+    if (rEl) rEl.value = String(pct);
+    if (nEl && document.activeElement !== nEl) nEl.value = String(pct);
+    if (state.shotMatch.lastResult) {
+      // Live 60fps client-side re-solve for smooth strength slider scrubbing
+      const rawTarget = String(state.shotMatch.targetProfile || "rec709_d65");
+      const solved = solveShotMatchClient({
+        chart_profile: state.shotMatch.chartProfile,
+        source_profile: state.shotMatch.sourceProfile,
+        target_profile: rawTarget.startsWith("still:") ? "custom_reference" : rawTarget,
+        strength: pct / 100
+      });
+      state.shotMatch.lastResult = solved;
+      const active = syncActiveColorGradeFromTree();
+      state.colorNodeTree = updateColorNodeInTree(state.colorNodeTree, active.id, {
+        grade: normalizeColorGrade(solved.grade)
+      });
+      syncColorInputsFromState();
+      scheduleColorCompile();
+    }
+  };
+
+  byId("shot-match-strength-range")?.addEventListener("input", (ev) => {
+    applyShotMatchStrengthPct(ev.target.value);
+  });
+  byId("shot-match-strength-num")?.addEventListener("change", (ev) => {
+    applyShotMatchStrengthPct(ev.target.value);
   });
 
   byId("btn-send-lut-render").addEventListener("click", () => {
@@ -19297,6 +19813,10 @@ async function loadColorCatalog() {
     const data = await api.getColorPresets();
     if (data && Array.isArray(data.presets) && data.presets.length > 0) {
       state.colorPresetsCatalog = data.presets;
+    }
+    if (data && Array.isArray(data.studio_luts) && data.studio_luts.length > 0) {
+      state.studioLutCatalog = data.studio_luts;
+      renderLutBrowserUI();
     }
   } catch {
     // Fallback to built-in COLOR_GRADE_PRESETS constants

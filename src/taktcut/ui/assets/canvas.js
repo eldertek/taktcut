@@ -1,5 +1,6 @@
 import {
   CLIP_LABEL_COLORS,
+  COLORCHECKER_24_PATCHES_CLIENT,
   COLOR_WARPER_BOUNDS,
   COLOR_WARPER_HUE_COUNT,
   COLOR_WARPER_HUE_LABELS,
@@ -6493,6 +6494,131 @@ function drawPowerWindowOverlay(ctx, width, height, rawPw, opts = {}) {
   };
 }
 
+function drawColorChartOverlay(ctx, width, height, cdl, splitOpts) {
+  const patches =
+    splitOpts && Array.isArray(splitOpts.shotMatchPatches) && splitOpts.shotMatchPatches.length > 0
+      ? splitOpts.shotMatchPatches
+      : COLORCHECKER_24_PATCHES_CLIENT.map(([name, rgb]) => ({
+          name,
+          target_rgb: rgb,
+          matched_rgb: applyGradeOrCdlRgb(rgb[0], rgb[1], rgb[2], cdl)
+        }));
+  const count = Math.min(24, patches.length);
+  const cols = 6;
+  const rows = Math.ceil(count / cols);
+  const boxW = Math.min(252, Math.max(150, Math.round(width * 0.44)));
+  const cellW = Math.floor((boxW - 18 - (cols - 1) * 3) / cols);
+  const cellH = Math.max(12, Math.min(18, Math.round(cellW * 0.56)));
+  const gridW = cols * cellW + (cols - 1) * 3;
+  const gridH = rows * cellH + (rows - 1) * 3;
+  const panelW = gridW + 16;
+  const panelH = gridH + 26;
+  const px = Math.max(8, Math.round((width - panelW) / 2));
+  const py = Math.max(30, height - panelH - 10);
+
+  ctx.save();
+  roundRectPath(ctx, px, py, panelW, panelH, 5);
+  ctx.fillStyle = "rgba(15, 16, 20, 0.90)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(230, 132, 66, 0.72)";
+  ctx.lineWidth = 1.25;
+  ctx.stroke();
+
+  ctx.fillStyle = "#d8d8de";
+  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.fillText("COLORCHECKER 24 (TGT / OUT)", px + 8, py + 13);
+
+  const gx0 = px + 8;
+  const gy0 = py + 19;
+  for (let i = 0; i < count; i++) {
+    const p = patches[i];
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = gx0 + col * (cellW + 3);
+    const cy = gy0 + row * (cellH + 3);
+    const tgt = p.target_rgb || [0.5, 0.5, 0.5];
+    const out = p.matched_rgb || applyGradeOrCdlRgb(tgt[0], tgt[1], tgt[2], cdl);
+
+    // Top-left triangle: target reference; bottom-right triangle: active node output
+    ctx.fillStyle = toCssRgb(tgt[0], tgt[1], tgt[2]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + cellW, cy);
+    ctx.lineTo(cx, cy + cellH);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = toCssRgb(out[0], out[1], out[2]);
+    ctx.beginPath();
+    ctx.moveTo(cx + cellW, cy);
+    ctx.lineTo(cx + cellW, cy + cellH);
+    ctx.lineTo(cx, cy + cellH);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
+    ctx.lineWidth = 0.75;
+    ctx.strokeRect(cx, cy, cellW, cellH);
+  }
+  ctx.restore();
+}
+
+export function sampleDataUrlRgbGrid(dataUrl, cols = 6, rows = 4) {
+  return new Promise((resolve) => {
+    if (!dataUrl || typeof dataUrl !== "string") {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = Math.max(12, cols * 8);
+        const h = Math.max(8, rows * 8);
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        const imgData = ctx.getImageData(0, 0, w, h).data;
+        const samples = [];
+        const cw = w / cols;
+        const ch = h / rows;
+        for (let r = 0; r < rows; r++) {
+          for (let col = 0; col < cols; col++) {
+            const x0 = Math.floor(col * cw);
+            const x1 = Math.max(x0 + 1, Math.floor((col + 1) * cw));
+            const y0 = Math.floor(r * ch);
+            const y1 = Math.max(y0 + 1, Math.floor((r + 1) * ch));
+            let sr = 0;
+            let sg = 0;
+            let sb = 0;
+            let cnt = 0;
+            for (let y = y0; y < y1; y++) {
+              for (let x = x0; x < x1; x++) {
+                const idx = (y * w + x) * 4;
+                sr += imgData[idx] / 255;
+                sg += imgData[idx + 1] / 255;
+                sb += imgData[idx + 2] / 255;
+                cnt += 1;
+              }
+            }
+            samples.push(cnt > 0 ? [sr / cnt, sg / cnt, sb / cnt] : [0.5, 0.5, 0.5]);
+          }
+        }
+        resolve(samples);
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null) {
   const { ctx, width, height } = setupCanvas(canvas, 224);
   const wipeEnabled =
@@ -6501,22 +6627,35 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     splitOpts && splitOpts.positionPct !== undefined
       ? clampSplitWipePercent(splitOpts.positionPct)
       : clampSplitWipePercent((wipeRatio ?? 0.5) * 100);
+  const isRefMatchMode = Boolean(splitOpts && splitOpts.wipeMode === "ref_match");
 
-  const drawHalf = (xStart, xEnd, graded) => {
+  const drawHalf = (xStart, xEnd, graded, overrideCdl = null) => {
     if (xEnd <= xStart) return;
     ctx.save();
     ctx.beginPath();
     ctx.rect(xStart, 0, xEnd - xStart, height);
     ctx.clip();
-    renderColorPreviewScene(ctx, width, height, cdl, graded, true, splitOpts);
+    renderColorPreviewScene(ctx, width, height, overrideCdl || cdl, graded, true, splitOpts);
     ctx.restore();
   };
 
   if (wipeEnabled) {
     const geom = computeSplitWipeGeometry(0, 0, width, height, wipePct);
-    drawHalf(0, geom.dividerX, false);
-    drawHalf(geom.dividerX, width, true);
-    drawSplitWipeOverlay(ctx, 0, 0, width, height, geom, splitOpts || {});
+    if (isRefMatchMode && splitOpts && splitOpts.refGrade) {
+      drawHalf(0, geom.dividerX, true, splitOpts.refGrade);
+      drawHalf(geom.dividerX, width, true, cdl);
+    } else {
+      drawHalf(0, geom.dividerX, false);
+      drawHalf(geom.dividerX, width, true);
+    }
+    const overlayOpts = isRefMatchMode
+      ? {
+          ...(splitOpts || {}),
+          beforeLabel: (splitOpts && splitOpts.refLabel) || "REF TARGET",
+          afterLabel: (splitOpts && splitOpts.matchLabel) || "MATCHED"
+        }
+      : splitOpts || {};
+    drawSplitWipeOverlay(ctx, 0, 0, width, height, geom, overlayOpts);
     canvas._splitWipeGeom = {
       ...geom,
       canvasWidth: width,
@@ -6525,6 +6664,10 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   } else {
     drawHalf(0, width, true);
     canvas._splitWipeGeom = null;
+  }
+
+  if (splitOpts && splitOpts.showColorChartOverlay) {
+    drawColorChartOverlay(ctx, width, height, cdl, splitOpts);
   }
 
   if (splitOpts && splitOpts.qualifierHighlight) {
