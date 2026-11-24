@@ -14301,3 +14301,661 @@ export function analyzeBroadcastComplianceClient(rawPayload) {
     filtergraph: compiled.filtergraph
   };
 }
+
+// ---------------------------------------------------------------------------
+// Auto Reframe & Multi-Aspect Subject Tracking Studio (Client Parity Engine)
+// ---------------------------------------------------------------------------
+
+export const AUTO_REFRAME_ASPECT_SPECS_CLIENT = Object.freeze({
+  "9:16": Object.freeze({
+    aspect_ratio: "9:16",
+    ratio_num: 9,
+    ratio_den: 16,
+    target_width: 1080,
+    target_height: 1920,
+    label: "9:16 Vertical",
+    platform_hint: "Reels / Shorts / TikTok"
+  }),
+  "4:5": Object.freeze({
+    aspect_ratio: "4:5",
+    ratio_num: 4,
+    ratio_den: 5,
+    target_width: 1080,
+    target_height: 1350,
+    label: "4:5 Portrait Feed",
+    platform_hint: "Instagram / LinkedIn Feed"
+  }),
+  "1:1": Object.freeze({
+    aspect_ratio: "1:1",
+    ratio_num: 1,
+    ratio_den: 1,
+    target_width: 1080,
+    target_height: 1080,
+    label: "1:1 Square",
+    platform_hint: "Square Social / Carousel"
+  }),
+  "21:9": Object.freeze({
+    aspect_ratio: "21:9",
+    ratio_num: 21,
+    ratio_den: 9,
+    target_width: 2560,
+    target_height: 1080,
+    label: "21:9 Cinemascope",
+    platform_hint: "Widescreen / Anamorphic"
+  }),
+  "16:9": Object.freeze({
+    aspect_ratio: "16:9",
+    ratio_num: 16,
+    ratio_den: 9,
+    target_width: 1920,
+    target_height: 1080,
+    label: "16:9 Landscape",
+    platform_hint: "YouTube / Broadcast HD"
+  })
+});
+
+export const AUTO_REFRAME_MOTION_PRESETS_CLIENT = Object.freeze({
+  slower: Object.freeze({
+    preset: "slower",
+    label: "Slower Motion",
+    smoothing_window: 1.65,
+    deadband_threshold: 0.12,
+    max_pan_velocity: 0.28,
+    rdp_epsilon: 0.045,
+    description: "Tripod and dialogue stabilization with minimal camera drift."
+  }),
+  default: Object.freeze({
+    preset: "default",
+    label: "Default Motion",
+    smoothing_window: 0.85,
+    deadband_threshold: 0.06,
+    max_pan_velocity: 0.62,
+    rdp_epsilon: 0.028,
+    description: "Balanced natural subject follow for interviews and vlogs."
+  }),
+  faster: Object.freeze({
+    preset: "faster",
+    label: "Faster Motion",
+    smoothing_window: 0.32,
+    deadband_threshold: 0.025,
+    max_pan_velocity: 1.45,
+    rdp_epsilon: 0.016,
+    description: "High-agility tracking for sports, dance, and rapid action."
+  })
+});
+
+const _AR_ASPECT_ALIASES = {
+  "9:16": "9:16",
+  "4:5": "4:5",
+  "1:1": "1:1",
+  "21:9": "21:9",
+  "2.39:1": "21:9",
+  "16:9": "16:9"
+};
+
+export function normalizeAutoReframeConfigClient(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const rawAspect = String(src.aspect_ratio || "9:16").trim().toLowerCase();
+  const aspect_ratio = _AR_ASPECT_ALIASES[rawAspect] || "9:16";
+  const rawPreset = String(src.motion_preset || "default").trim().toLowerCase();
+  const motion_preset = Object.hasOwn(AUTO_REFRAME_MOTION_PRESETS_CLIENT, rawPreset)
+    ? rawPreset
+    : "default";
+  const presetSpec = AUTO_REFRAME_MOTION_PRESETS_CLIENT[motion_preset];
+  const rawPriority = String(src.subject_priority || "auto_saliency").trim().toLowerCase();
+  const subject_priority = ["auto_saliency", "face_headroom", "action_center", "manual_override"].includes(rawPriority)
+    ? rawPriority
+    : "auto_saliency";
+  const defaultHeadroom =
+    subject_priority === "face_headroom" ? -0.18 : subject_priority === "action_center" ? 0.0 : -0.12;
+  return {
+    enabled: src.enabled !== false,
+    aspect_ratio,
+    motion_preset,
+    subject_priority,
+    source_width: Math.max(128, Math.min(7680, Math.round(Number(src.source_width ?? 1920) || 1920))),
+    source_height: Math.max(128, Math.min(4320, Math.round(Number(src.source_height ?? 1080) || 1080))),
+    fps: Math.max(1, Math.min(120, Number(src.fps ?? 25) || 25)),
+    duration_s: Math.max(0.2, Math.min(86400, Number(src.duration_s ?? 10) || 10)),
+    headroom_bias: clampNum(Number(src.headroom_bias ?? defaultHeadroom), -0.5, 0.5),
+    smoothing_window: clampNum(Number(src.smoothing_window ?? presetSpec.smoothing_window), 0.05, 4.0),
+    deadband_threshold: clampNum(Number(src.deadband_threshold ?? presetSpec.deadband_threshold), 0.0, 0.4),
+    max_pan_velocity: clampNum(Number(src.max_pan_velocity ?? presetSpec.max_pan_velocity), 0.05, 3.0),
+    rdp_epsilon: clampNum(Number(src.rdp_epsilon ?? presetSpec.rdp_epsilon), 0.002, 0.2),
+    sample_interval_s: clampNum(Number(src.sample_interval_s ?? 0.4), 0.1, 5.0),
+    include_scale: src.include_scale !== false
+  };
+}
+
+function _evenIntClient(val, minV = 2, maxV = 8192) {
+  const even = Math.max(minV, Math.min(maxV, Math.floor(Math.round(val) / 2) * 2));
+  return Math.max(minV, even);
+}
+
+export function computeAutoReframeCropGeometryClient(sourceW, sourceH, aspectRatio) {
+  const spec = AUTO_REFRAME_ASPECT_SPECS_CLIENT[aspectRatio] || AUTO_REFRAME_ASPECT_SPECS_CLIENT["9:16"];
+  const sw = Math.max(64, Math.round(Number(sourceW) || 1920));
+  const sh = Math.max(64, Math.round(Number(sourceH) || 1080));
+  const srcAspect = sw / sh;
+  const tgtAspect = spec.ratio_num / spec.ratio_den;
+  let cropW = sw;
+  let cropH = sh;
+  if (srcAspect > tgtAspect + 1e-6) {
+    cropH = _evenIntClient(sh, 2, sh);
+    cropW = _evenIntClient(cropH * tgtAspect, 2, sw);
+  } else if (srcAspect < tgtAspect - 1e-6) {
+    cropW = _evenIntClient(sw, 2, sw);
+    cropH = _evenIntClient(cropW / tgtAspect, 2, sh);
+  } else {
+    cropW = _evenIntClient(sw, 2, sw);
+    cropH = _evenIntClient(sh, 2, sh);
+  }
+  return {
+    crop_width: cropW,
+    crop_height: cropH,
+    slack_x: Math.max(0, sw - cropW),
+    slack_y: Math.max(0, sh - cropH)
+  };
+}
+
+export function subjectToAutoReframePanClient(
+  subjectX,
+  subjectY,
+  sourceW,
+  sourceH,
+  aspectRatio,
+  headroomBias = -0.12
+) {
+  const geom = computeAutoReframeCropGeometryClient(sourceW, sourceH, aspectRatio);
+  const sx = clampNum(Number(subjectX), 0, 1);
+  const sy = clampNum(Number(subjectY), 0, 1);
+  let panX = 0;
+  let panY = 0;
+  if (geom.slack_x > 0) {
+    const desiredX = sx * sourceW - geom.crop_width * 0.5;
+    const clampedX = clampNum(desiredX, 0, geom.slack_x);
+    panX = (clampedX / geom.slack_x) * 2 - 1;
+  }
+  if (geom.slack_y > 0) {
+    const desiredY = sy * sourceH - geom.crop_height * (0.5 + headroomBias * 0.35);
+    const clampedY = clampNum(desiredY, 0, geom.slack_y);
+    panY = (clampedY / geom.slack_y) * 2 - 1;
+  }
+  return {
+    pan_x: Number(clampNum(panX, -1, 1).toFixed(4)),
+    pan_y: Number(clampNum(panY, -1, 1).toFixed(4))
+  };
+}
+
+export function panToAutoReframeSubjectClient(panX, panY, sourceW, sourceH, aspectRatio) {
+  const geom = computeAutoReframeCropGeometryClient(sourceW, sourceH, aspectRatio);
+  const px = clampNum(Number(panX), -1, 1);
+  const py = clampNum(Number(panY), -1, 1);
+  const cropX = geom.slack_x * 0.5 * (1 + px);
+  const cropY = geom.slack_y * 0.5 * (1 + py);
+  const sx = (cropX + geom.crop_width * 0.5) / Math.max(1, sourceW);
+  const sy = (cropY + geom.crop_height * 0.5) / Math.max(1, sourceH);
+  return {
+    subject_x: Number(clampNum(sx, 0, 1).toFixed(4)),
+    subject_y: Number(clampNum(sy, 0, 1).toFixed(4))
+  };
+}
+
+function _hashSeedBytesClient(seedKey) {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  const txt = String(seedKey || "taktcut_clip");
+  for (let i = 0; i < txt.length; i += 1) {
+    const ch = txt.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ (ch + i), 0x85ebca6b) >>> 0;
+  }
+  return [
+    h1 & 255,
+    (h1 >>> 8) & 255,
+    (h2 >>> 8) & 255,
+    (h2 >>> 16) & 255
+  ];
+}
+
+export function synthesizeAutoReframeTrajectoryClient(cfg, seedKey = "taktcut_clip") {
+  const b = _hashSeedBytesClient(seedKey);
+  const phase = (b[0] / 255) * Math.PI * 2;
+  let ampX = 0.22 + (b[1] / 255) * 0.18;
+  const ampY = 0.08 + (b[2] / 255) * 0.09;
+  const cutNorm = 0.48 + (b[3] / 255) * 0.16;
+  const dur = Math.max(0.2, Number(cfg.duration_s) || 10);
+  const step = Math.max(0.1, Math.min(cfg.sample_interval_s || 0.4, dur / 4));
+  const count = Math.max(3, Math.min(180, Math.floor(dur / step) + 1));
+  const baseY = cfg.subject_priority === "face_headroom" ? 0.38 : 0.48;
+  if (cfg.subject_priority === "action_center") {
+    ampX = Math.min(0.42, ampX * 1.32);
+  }
+  const samples = [];
+  for (let idx = 0; idx < count; idx += 1) {
+    const u = idx / Math.max(1, count - 1);
+    const tS = Number((u * dur).toFixed(3));
+    const frame = Math.max(0, Math.round(tS * cfg.fps));
+    let sx;
+    let sy;
+    if (cfg.subject_priority === "manual_override") {
+      sx = 0.5 + Math.sin(u * Math.PI * 1.2 + phase) * 0.12;
+      sy = baseY;
+    } else if (u < cutNorm) {
+      sx = 0.5 + Math.sin(u * Math.PI * 2.1 + phase) * ampX;
+      sy = baseY + Math.cos(u * Math.PI * 1.5 + phase) * ampY;
+    } else {
+      sx = 0.5 - Math.cos((u - cutNorm) * Math.PI * 2.4 + phase) * (ampX * 0.92);
+      sy = baseY + Math.sin((u - cutNorm) * Math.PI * 1.8) * ampY;
+    }
+    const energy = clampNum(0.68 + 0.24 * Math.abs(Math.cos(u * Math.PI * 3 + phase)), 0.35, 0.99);
+    const conf = clampNum(0.84 + 0.13 * Math.sin(u * Math.PI + 0.4), 0.62, 0.99);
+    samples.push({
+      time_s: tS,
+      frame,
+      subject_x: Number(clampNum(sx, 0.08, 0.92).toFixed(4)),
+      subject_y: Number(clampNum(sy, 0.12, 0.88).toFixed(4)),
+      saliency_energy: Number(energy.toFixed(4)),
+      confidence: Number(conf.toFixed(4))
+    });
+  }
+  return samples;
+}
+
+function _rdpSimplifyIndicesClient(points, epsilon) {
+  const n = points.length;
+  if (n <= 2) return points.map((_, i) => i);
+  const keep = new Array(n).fill(false);
+  keep[0] = true;
+  keep[n - 1] = true;
+  const stack = [[0, n - 1]];
+  while (stack.length > 0) {
+    const [startIdx, endIdx] = stack.pop();
+    if (endIdx - startIdx <= 1) continue;
+    const [t0, x0, y0] = points[startIdx];
+    const [t1, x1, y1] = points[endIdx];
+    const dt = Math.max(1e-6, t1 - t0);
+    let maxDist = -1;
+    let splitIdx = -1;
+    for (let i = startIdx + 1; i < endIdx; i += 1) {
+      const [ti, xi, yi] = points[i];
+      const alpha = (ti - t0) / dt;
+      const projX = x0 + (x1 - x0) * alpha;
+      const projY = y0 + (y1 - y0) * alpha;
+      const dist = Math.hypot(xi - projX, yi - projY);
+      if (dist > maxDist) {
+        maxDist = dist;
+        splitIdx = i;
+      }
+    }
+    if (maxDist > epsilon && splitIdx !== -1) {
+      keep[splitIdx] = true;
+      stack.push([startIdx, splitIdx]);
+      stack.push([splitIdx, endIdx]);
+    }
+  }
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    if (keep[i]) out.push(i);
+  }
+  return out;
+}
+
+export function solveAutoReframeKeyframesClient(rawSamples, cfg) {
+  const ordered = (Array.isArray(rawSamples) ? rawSamples : [])
+    .slice()
+    .sort((a, b) => a.time_s - b.time_s || a.frame - b.frame);
+  if (ordered.length === 0) {
+    return [
+      {
+        time_s: 0,
+        frame: 0,
+        pan_x: 0,
+        pan_y: 0,
+        subject_x: 0.5,
+        subject_y: 0.44,
+        confidence: 1.0,
+        is_manual: false
+      }
+    ];
+  }
+  const rawPans = ordered.map((s) =>
+    subjectToAutoReframePanClient(
+      s.subject_x,
+      s.subject_y,
+      cfg.source_width,
+      cfg.source_height,
+      cfg.aspect_ratio,
+      cfg.headroom_bias
+    )
+  );
+  const smoothed = [];
+  let curX = rawPans[0].pan_x;
+  let curY = rawPans[0].pan_y;
+  smoothed.push({ pan_x: curX, pan_y: curY });
+  for (let i = 1; i < ordered.length; i += 1) {
+    const dt = Math.max(0.02, ordered[i].time_s - ordered[i - 1].time_s);
+    const tgtX = rawPans[i].pan_x;
+    const tgtY = rawPans[i].pan_y;
+    const rawJump = Math.hypot(
+      ordered[i].subject_x - ordered[i - 1].subject_x,
+      ordered[i].subject_y - ordered[i - 1].subject_y
+    );
+    if (rawJump > 0.42) {
+      curX = tgtX;
+      curY = tgtY;
+      smoothed.push({ pan_x: Number(curX.toFixed(4)), pan_y: Number(curY.toFixed(4)) });
+      continue;
+    }
+    const errX = tgtX - curX;
+    const errY = tgtY - curY;
+    if (Math.hypot(errX, errY) <= cfg.deadband_threshold) {
+      smoothed.push({ pan_x: Number(curX.toFixed(4)), pan_y: Number(curY.toFixed(4)) });
+      continue;
+    }
+    const alpha = 1 - Math.exp(-dt / Math.max(0.05, cfg.smoothing_window * 0.42));
+    let stepX = errX * alpha;
+    let stepY = errY * alpha;
+    const maxStep = cfg.max_pan_velocity * dt;
+    const stepMag = Math.hypot(stepX, stepY);
+    if (stepMag > maxStep && stepMag > 1e-6) {
+      const s = maxStep / stepMag;
+      stepX *= s;
+      stepY *= s;
+    }
+    curX = clampNum(curX + stepX, -1, 1);
+    curY = clampNum(curY + stepY, -1, 1);
+    smoothed.push({ pan_x: Number(curX.toFixed(4)), pan_y: Number(curY.toFixed(4)) });
+  }
+  const dur = Math.max(0.2, ordered[ordered.length - 1].time_s - ordered[0].time_s);
+  const rdpInput = ordered.map((s, i) => [
+    (s.time_s - ordered[0].time_s) / dur,
+    smoothed[i].pan_x,
+    smoothed[i].pan_y
+  ]);
+  const kept = _rdpSimplifyIndicesClient(rdpInput, cfg.rdp_epsilon);
+  return kept.map((i) => {
+    const smp = ordered[i];
+    const p = smoothed[i];
+    const subj = panToAutoReframeSubjectClient(
+      p.pan_x,
+      p.pan_y,
+      cfg.source_width,
+      cfg.source_height,
+      cfg.aspect_ratio
+    );
+    return {
+      time_s: Number(smp.time_s.toFixed(3)),
+      frame: smp.frame,
+      pan_x: p.pan_x,
+      pan_y: p.pan_y,
+      subject_x: subj.subject_x,
+      subject_y: subj.subject_y,
+      confidence: smp.confidence,
+      is_manual: false
+    };
+  });
+}
+
+export function evaluateAutoReframeAtTimeClient(keyframes, timeS) {
+  const ordered = (Array.isArray(keyframes) ? keyframes : [])
+    .slice()
+    .sort((a, b) => a.time_s - b.time_s || (a.frame || 0) - (b.frame || 0));
+  const tVal = Math.max(0, Number(timeS) || 0);
+  if (ordered.length === 0) {
+    return {
+      time_s: Number(tVal.toFixed(3)),
+      frame: 0,
+      pan_x: 0,
+      pan_y: 0,
+      subject_x: 0.5,
+      subject_y: 0.44,
+      confidence: 1.0,
+      is_manual: false
+    };
+  }
+  if (tVal <= ordered[0].time_s || ordered.length === 1) {
+    return { ...ordered[0], time_s: Number(tVal.toFixed(3)) };
+  }
+  const last = ordered[ordered.length - 1];
+  if (tVal >= last.time_s) {
+    return { ...last, time_s: Number(tVal.toFixed(3)) };
+  }
+  for (let i = 0; i < ordered.length - 1; i += 1) {
+    const a = ordered[i];
+    const b = ordered[i + 1];
+    if (tVal <= b.time_s) {
+      const span = b.time_s - a.time_s;
+      if (span <= 1e-6) return { ...b, time_s: Number(tVal.toFixed(3)) };
+      const u = clampNum((tVal - a.time_s) / span, 0, 1);
+      const eased = u * u * (3 - 2 * u);
+      return {
+        time_s: Number(tVal.toFixed(3)),
+        frame: Math.round((a.frame || 0) + ((b.frame || 0) - (a.frame || 0)) * u),
+        pan_x: Number((a.pan_x + (b.pan_x - a.pan_x) * eased).toFixed(4)),
+        pan_y: Number((a.pan_y + (b.pan_y - a.pan_y) * eased).toFixed(4)),
+        subject_x: Number(((a.subject_x ?? 0.5) + ((b.subject_x ?? 0.5) - (a.subject_x ?? 0.5)) * eased).toFixed(4)),
+        subject_y: Number(((a.subject_y ?? 0.44) + ((b.subject_y ?? 0.44) - (a.subject_y ?? 0.44)) * eased).toFixed(4)),
+        confidence: Number(((a.confidence ?? 0.9) + ((b.confidence ?? 0.9) - (a.confidence ?? 0.9)) * u).toFixed(4)),
+        is_manual: Boolean(a.is_manual || b.is_manual)
+      };
+    }
+  }
+  return last;
+}
+
+function _buildPiecewisePanExprClient(keyframes, axis) {
+  if (!Array.isArray(keyframes) || keyframes.length === 0) return "0";
+  const ordered = keyframes.slice().sort((a, b) => a.time_s - b.time_s || (a.frame || 0) - (b.frame || 0));
+  const vals = ordered.map((kf) => Number(axis === "x" ? kf.pan_x : kf.pan_y) || 0);
+  if (ordered.length === 1 || vals.every((v) => Math.abs(v - vals[0]) < 1e-4)) {
+    return vals[0].toFixed(4);
+  }
+  let expr = vals[vals.length - 1].toFixed(4);
+  for (let i = ordered.length - 2; i >= 0; i -= 1) {
+    const t0 = Number(ordered[i].time_s) || 0;
+    const t1 = Number(ordered[i + 1].time_s) || 0;
+    const v0 = vals[i];
+    const v1 = vals[i + 1];
+    const dt = t1 - t0;
+    const segExpr =
+      dt <= 1e-4 || Math.abs(v0 - v1) < 1e-4
+        ? v0.toFixed(4)
+        : `(${v0.toFixed(4)}+(${((v1 - v0) / dt).toFixed(5)})*(t-${t0.toFixed(3)}))`;
+    expr = `if(lt(t,${t1.toFixed(3)}),${segExpr},${expr})`;
+  }
+  return expr;
+}
+
+export function compileAutoReframeFiltergraphClient(cfgRaw, keyframes, includeScaleOverride = null) {
+  const cfg = normalizeAutoReframeConfigClient(cfgRaw);
+  const spec = AUTO_REFRAME_ASPECT_SPECS_CLIENT[cfg.aspect_ratio] || AUTO_REFRAME_ASPECT_SPECS_CLIENT["9:16"];
+  const geom = computeAutoReframeCropGeometryClient(cfg.source_width, cfg.source_height, cfg.aspect_ratio);
+  const useScale = includeScaleOverride === null ? cfg.include_scale : Boolean(includeScaleOverride);
+  if (!cfg.enabled) {
+    return {
+      filtergraph: "null",
+      ffmpeg_vf_args: [],
+      crop_width: geom.crop_width,
+      crop_height: geom.crop_height,
+      output_width: spec.target_width,
+      output_height: spec.target_height,
+      aspect_ratio: cfg.aspect_ratio,
+      keyframe_count: Array.isArray(keyframes) ? keyframes.length : 0,
+      is_active: false,
+      x_expr: "0",
+      y_expr: "0",
+      warnings: ["Auto Reframe is disabled; returning pass-through filtergraph."]
+    };
+  }
+  const ordered = (Array.isArray(keyframes) ? keyframes : [])
+    .slice()
+    .sort((a, b) => a.time_s - b.time_s || (a.frame || 0) - (b.frame || 0));
+  const xExpr =
+    geom.slack_x <= 0
+      ? "0"
+      : `max(0,min(iw-ow,(iw-ow)/2*(1+(${_buildPiecewisePanExprClient(ordered, "x")}))))`;
+  const yExpr =
+    geom.slack_y <= 0
+      ? "0"
+      : `max(0,min(ih-oh,(ih-oh)/2*(1+(${_buildPiecewisePanExprClient(ordered, "y")}))))`;
+  const cropStage = `crop=w=${geom.crop_width}:h=${geom.crop_height}:x='${xExpr}':y='${yExpr}'`;
+  const fg = useScale
+    ? `${cropStage},scale=${spec.target_width}:${spec.target_height}:flags=lanczos,setsar=1`
+    : `${cropStage},setsar=1`;
+  return {
+    filtergraph: fg,
+    ffmpeg_vf_args: ["-vf", fg],
+    crop_width: geom.crop_width,
+    crop_height: geom.crop_height,
+    output_width: useScale ? spec.target_width : geom.crop_width,
+    output_height: useScale ? spec.target_height : geom.crop_height,
+    aspect_ratio: cfg.aspect_ratio,
+    keyframe_count: ordered.length,
+    is_active: true,
+    x_expr: xExpr,
+    y_expr: yExpr,
+    warnings: []
+  };
+}
+
+export function analyzeAutoReframeClient(payload = {}) {
+  const rawCfg = payload && payload.config ? { ...payload.config } : {};
+  let clipName = String((payload && payload.clip_name) || "").trim() || "Sequence Clip";
+  let mediaPath = String((payload && payload.media_path) || "").trim();
+  if (payload && payload.document) {
+    const trkIdx = Number.isInteger(payload.track_index) ? payload.track_index : 1;
+    const clpIdx = Number.isInteger(payload.clip_index) ? payload.clip_index : 0;
+    const found = findTrackAndClip(payload.document, "video", trkIdx, clpIdx);
+    const fpsVal = payload.document.fps
+      ? Math.max(1, payload.document.fps.num / Math.max(1, payload.document.fps.den))
+      : 25;
+    if (found && found.clip) {
+      clipName = found.clip.name || clipName;
+      if (!mediaPath && found.clip.source_path) mediaPath = found.clip.source_path;
+      if (rawCfg.fps === undefined) rawCfg.fps = fpsVal;
+      if (rawCfg.duration_s === undefined) {
+        rawCfg.duration_s = Math.max(0.2, (found.clip.duration_frames || 125) / fpsVal);
+      }
+    }
+  }
+  const cfg = normalizeAutoReframeConfigClient(rawCfg);
+  const hasCustom = Array.isArray(payload.custom_samples) && payload.custom_samples.length > 0;
+  const rawSamples = hasCustom
+    ? payload.custom_samples
+    : synthesizeAutoReframeTrajectoryClient(
+        cfg,
+        `${clipName}|${mediaPath}|${cfg.subject_priority}|${cfg.duration_s.toFixed(2)}`
+      );
+  const keyframes = solveAutoReframeKeyframesClient(rawSamples, cfg);
+  const compiled = compileAutoReframeFiltergraphClient(cfg, keyframes);
+  let travelX = 0;
+  let travelY = 0;
+  let peakVel = 0;
+  for (let i = 1; i < keyframes.length; i += 1) {
+    const dx = Math.abs(keyframes[i].pan_x - keyframes[i - 1].pan_x);
+    const dy = Math.abs(keyframes[i].pan_y - keyframes[i - 1].pan_y);
+    const dt = Math.max(0.05, keyframes[i].time_s - keyframes[i - 1].time_s);
+    travelX += dx;
+    travelY += dy;
+    peakVel = Math.max(peakVel, Math.hypot(dx, dy) / dt);
+  }
+  const avgConf =
+    keyframes.reduce((acc, k) => acc + (Number(k.confidence) || 0.9), 0) / Math.max(1, keyframes.length);
+  let rawJitter = 0;
+  for (let i = 1; i < rawSamples.length; i += 1) {
+    rawJitter += Math.abs(rawSamples[i].subject_x - rawSamples[i - 1].subject_x);
+  }
+  const smoothness =
+    rawJitter > 1e-4
+      ? clampNum(100 * (1 - Math.min(1, (travelX * 0.5) / (rawJitter * 1.4 + 0.1))), 45, 99.5)
+      : 98.5;
+  return {
+    config: cfg,
+    raw_samples: rawSamples,
+    keyframes,
+    stats: {
+      raw_sample_count: rawSamples.length,
+      keyframe_count: keyframes.length,
+      pan_travel_x: Number(travelX.toFixed(3)),
+      pan_travel_y: Number(travelY.toFixed(3)),
+      avg_confidence: Number(avgConf.toFixed(4)),
+      peak_velocity: Number(peakVel.toFixed(3)),
+      smoothness_score: Number(smoothness.toFixed(1)),
+      crop_width: compiled.crop_width,
+      crop_height: compiled.crop_height,
+      output_width: compiled.output_width,
+      output_height: compiled.output_height
+    },
+    compiled,
+    probe_source: hasCustom ? "custom_samples" : "procedural_saliency",
+    clip_name: clipName,
+    warnings: []
+  };
+}
+
+export function applyAutoReframeToDocumentClient(doc, payload = {}) {
+  const trkKind = payload && payload.track_kind === "audio" ? "audio" : "video";
+  if (trkKind !== "video") throw new Error("Auto Reframe can only be applied to video tracks");
+  const trkIdx = Number.isInteger(payload.track_index) ? payload.track_index : 1;
+  const clpIdx = Number.isInteger(payload.clip_index) ? payload.clip_index : 0;
+  const foundOrig = findTrackAndClip(doc, trkKind, trkIdx, clpIdx);
+  if (!foundOrig) throw new Error(`Track ${trkKind} #${trkIdx} clip ${clpIdx} not found`);
+  const cfg = normalizeAutoReframeConfigClient(payload.config);
+  let kfs = Array.isArray(payload.keyframes) && payload.keyframes.length > 0 ? payload.keyframes : null;
+  if (!kfs) {
+    const analyzed = analyzeAutoReframeClient({
+      document: doc,
+      track_index: trkIdx,
+      clip_index: clpIdx,
+      config: cfg
+    });
+    kfs = analyzed.keyframes;
+  }
+  const trackModel = {
+    enabled: cfg.enabled,
+    aspect_ratio: cfg.aspect_ratio,
+    motion_preset: cfg.motion_preset,
+    subject_priority: cfg.subject_priority,
+    headroom_bias: cfg.headroom_bias,
+    keyframes: kfs.slice().sort((a, b) => a.time_s - b.time_s || (a.frame || 0) - (b.frame || 0))
+  };
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trkKind, trkIdx, clpIdx);
+  if (found && found.clip) {
+    found.clip.auto_reframe = trackModel;
+  }
+  return {
+    changed: true,
+    track_kind: trkKind,
+    track_index: trkIdx,
+    clip_index: clpIdx,
+    clip_name: foundOrig.clip.name,
+    auto_reframe: trackModel,
+    compiled: compileAutoReframeFiltergraphClient(cfg, trackModel.keyframes),
+    document: nextDoc
+  };
+}
+
+export function clearAutoReframeFromDocumentClient(doc, payload = {}) {
+  const trkKind = payload && payload.track_kind === "audio" ? "audio" : "video";
+  const trkIdx = Number.isInteger(payload.track_index) ? payload.track_index : 1;
+  const clpIdx = Number.isInteger(payload.clip_index) ? payload.clip_index : 0;
+  const foundOrig = findTrackAndClip(doc, trkKind, trkIdx, clpIdx);
+  if (!foundOrig) throw new Error(`Track ${trkKind} #${trkIdx} clip ${clpIdx} not found`);
+  const hadReframe = Boolean(foundOrig.clip && foundOrig.clip.auto_reframe);
+  const nextDoc = cloneTimelineDoc(doc);
+  const found = findTrackAndClip(nextDoc, trkKind, trkIdx, clpIdx);
+  if (found && found.clip) {
+    found.clip.auto_reframe = null;
+  }
+  return {
+    changed: hadReframe,
+    track_kind: trkKind,
+    track_index: trkIdx,
+    clip_index: clpIdx,
+    clip_name: foundOrig.clip.name,
+    auto_reframe: null,
+    document: nextDoc
+  };
+}

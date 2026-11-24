@@ -12495,3 +12495,277 @@ assert.equal(hardCmp.filtergraph, "limiter=min=16:max=235:planes=7");
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_ui_auto_reframe_endpoints_demo_parity_and_playwright(tmp_path: Path) -> None:
+    """Verify Auto Reframe subject-tracking API, demo_adapter.js parity & Playwright E2E."""
+    from taktcut.ui.samples import build_sample_timeline
+
+    server = create_ui_server(host="127.0.0.1", port=0, workspace_dir=tmp_path)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[0], server.server_address[1]
+    host_s = host.decode("ascii") if isinstance(host, bytes) else str(host)
+    base_url = f"http://{host_s}:{port}"
+    try:
+        # 1. Server API checks (/presets, /analyze, /compile, /apply, /clear)
+        st_pre, _, raw_pre = _http_call(
+            f"{base_url}/api/timeline/auto-reframe/presets",
+            method="GET",
+        )
+        assert st_pre == 200
+        pre_data = json.loads(raw_pre.decode("utf-8"))
+        assert len(pre_data["aspects"]) == 5
+        assert len(pre_data["motion_presets"]) == 3
+
+        st_ana, _, raw_ana = _http_call(
+            f"{base_url}/api/timeline/auto-reframe/analyze",
+            method="POST",
+            payload={
+                "clip_name": "Hero_Walk",
+                "config": {
+                    "aspect_ratio": "9:16",
+                    "motion_preset": "default",
+                    "duration_s": 8.0,
+                    "fps": 25.0,
+                },
+            },
+        )
+        assert st_ana == 200
+        ana_data = json.loads(raw_ana.decode("utf-8"))
+        assert len(ana_data["keyframes"]) >= 2
+        assert ana_data["compiled"]["output_width"] == 1080
+        assert ana_data["compiled"]["output_height"] == 1920
+        assert "crop=w=608:h=1080" in ana_data["compiled"]["filtergraph"]
+
+        st_cmp, _, raw_cmp = _http_call(
+            f"{base_url}/api/timeline/auto-reframe/compile",
+            method="POST",
+            payload={
+                "config": {"aspect_ratio": "4:5", "motion_preset": "faster"},
+                "keyframes": [
+                    {"time_s": 0.0, "frame": 0, "pan_x": -0.4, "pan_y": 0.0},
+                    {"time_s": 3.0, "frame": 75, "pan_x": 0.4, "pan_y": 0.0},
+                ],
+            },
+        )
+        assert st_cmp == 200
+        cmp_data = json.loads(raw_cmp.decode("utf-8"))
+        assert cmp_data["output_width"] == 1080
+        assert cmp_data["output_height"] == 1350
+        assert "if(lt(t,3.000)" in cmp_data["filtergraph"]
+
+        doc_payload = build_sample_timeline("clean").model_dump(mode="json")
+        st_app, _, raw_app = _http_call(
+            f"{base_url}/api/timeline/auto-reframe/apply",
+            method="POST",
+            payload={
+                "document": doc_payload,
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 0,
+                "config": {"aspect_ratio": "9:16", "motion_preset": "slower"},
+                "keyframes": ana_data["keyframes"],
+            },
+        )
+        assert st_app == 200
+        app_data = json.loads(raw_app.decode("utf-8"))
+        assert app_data["changed"] is True
+        applied_clip = app_data["document"]["tracks"][0]["clips"][0]
+        assert applied_clip["auto_reframe"]["aspect_ratio"] == "9:16"
+
+        st_clr, _, raw_clr = _http_call(
+            f"{base_url}/api/timeline/auto-reframe/clear",
+            method="POST",
+            payload={
+                "document": app_data["document"],
+                "track_kind": "video",
+                "track_index": 1,
+                "clip_index": 0,
+            },
+        )
+        assert st_clr == 200
+        clr_data = json.loads(raw_clr.decode("utf-8"))
+        assert clr_data["changed"] is True
+        assert clr_data["document"]["tracks"][0]["clips"][0]["auto_reframe"] is None
+
+        st_bad, _, _ = _http_call(
+            f"{base_url}/api/timeline/auto-reframe/compile",
+            method="POST",
+            payload={"config": {"aspect_ratio": "bad_ratio"}, "keyframes": []},
+        )
+        assert st_bad == 400
+
+        # 2. demo_adapter.js Node parity check
+        assets_dir = Path(__file__).resolve().parents[1] / "src" / "taktcut" / "ui" / "assets"
+        demo_uri = (assets_dir / "demo_adapter.js").as_uri()
+        node_script = f"""
+import assert from "node:assert/strict";
+globalThis.window = {{ __TAKTCUT_CONFIG__: {{ mode: "static-demo" }} }};
+const {{ createApiClient }} = await import({json.dumps(demo_uri)});
+
+const api = createApiClient();
+const pre = await api.getAutoReframePresets();
+assert.equal(pre.aspects.length, 5);
+assert.equal(pre.motion_presets.length, 3);
+
+const ana = await api.analyzeAutoReframe({{
+  clip_name: "Hero_Walk",
+  config: {{ aspect_ratio: "9:16", motion_preset: "default", duration_s: 8, fps: 25 }}
+}});
+assert.ok(ana.keyframes.length >= 2);
+assert.equal(ana.compiled.output_width, 1080);
+assert.equal(ana.compiled.output_height, 1920);
+assert.ok(ana.compiled.filtergraph.includes("crop=w=608:h=1080"));
+
+const sample = await api.getSampleTimeline("clean");
+const applied = await api.applyAutoReframe({{
+  document: sample.document,
+  track_kind: "video",
+  track_index: 1,
+  clip_index: 0,
+  config: {{ aspect_ratio: "4:5", motion_preset: "faster" }},
+  keyframes: ana.keyframes
+}});
+assert.equal(applied.changed, true);
+assert.equal(applied.document.tracks[0].clips[0].auto_reframe.aspect_ratio, "4:5");
+const cleared = await api.clearAutoReframe({{
+  document: applied.document,
+  track_kind: "video",
+  track_index: 1,
+  clip_index: 0
+}});
+assert.equal(cleared.changed, true);
+assert.equal(cleared.document.tracks[0].clips[0].auto_reframe, null);
+"""
+        node_proc = subprocess.run(
+            ["node", "--input-type=module", "-e", node_script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert node_proc.returncode == 0, node_proc.stderr
+
+        # 3. Live Playwright E2E check at 1440x900 and 375x812
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            pytest.skip("Playwright not installed")
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                console_errors: list[str] = []
+                page.on(
+                    "console",
+                    lambda msg: console_errors.append(msg.text)
+                    if msg.type == "error"
+                    else None,
+                )
+                page.on("pageerror", lambda err: console_errors.append(str(err)))
+
+                page.goto(base_url, wait_until="networkidle")
+                page.wait_for_selector("#timeline-program-canvas")
+                prog_before = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+
+                # Open Auto Reframe Studio via Shift+R shortcut
+                page.keyboard.press("Shift+R")
+                page.wait_for_selector("#auto-reframe-dialog[open]")
+                page.wait_for_selector("#ar-keyframe-list .ar-kf-chip")
+                page.wait_for_selector("#ar-stats-grid .broadcast-kv-card")
+                fg_txt = page.locator("#ar-fg-preview").text_content() or ""
+                assert "crop=w=608:h=1080" in fg_txt
+
+                # Program canvas should now render animated crop & saliency reticle
+                assert console_errors == [], f"Console errors before canvas check: {console_errors}"
+                prog_after_open = page.evaluate(
+                    "() => document.getElementById('timeline-program-canvas').toDataURL()"
+                )
+                assert prog_after_open != prog_before
+
+                # Switch to 4:5 Feed & Faster Motion
+                page.click(".ar-aspect-btn[data-ar-aspect='4:5']")
+                page.click(".ar-motion-btn[data-ar-motion='faster']")
+                page.wait_for_function(
+                    "() => (document.getElementById('ar-fg-preview')?.textContent || '')"
+                    ".includes('scale=1080:1350')"
+                )
+
+                # Scrub playhead on curve canvas inside dialog, add manual keyframe & apply
+                initial_kfs = page.locator("#ar-keyframe-list .ar-kf-chip").count()
+                curve_box = page.locator("#auto-reframe-curve-canvas").bounding_box()
+                assert curve_box is not None
+                page.mouse.click(
+                    curve_box["x"] + curve_box["width"] * 0.55,
+                    curve_box["y"] + curve_box["height"] * 0.5,
+                )
+                page.click("#btn-ar-add-kf")
+                assert page.locator("#ar-keyframe-list .ar-kf-chip").count() >= initial_kfs
+                page.click("#btn-ar-apply")
+
+                # Close and verify FR i18n parity
+                page.click("#btn-close-auto-reframe")
+                page.wait_for_function(
+                    "() => !document.getElementById('auto-reframe-dialog')?.open"
+                )
+                page.click("#lang-fr")
+                ar_btn_txt = (
+                    page.locator("#btn-timeline-auto-reframe span").text_content() or ""
+                ).strip()
+                assert ar_btn_txt == "Recadrage Auto"
+                page.click("#btn-program-auto-reframe")
+                page.wait_for_selector("#auto-reframe-dialog[open]")
+                fr_dlg_txt = page.locator("#auto-reframe-dialog").text_content() or ""
+                assert "Studio Recadrage Auto" in fr_dlg_txt
+                assert "\u2013" not in fr_dlg_txt and "\u2014" not in fr_dlg_txt
+
+                page.click("#btn-close-auto-reframe")
+                page.click("#lang-en")
+                overflow_desktop = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_desktop <= 0, f"Desktop overflow: {overflow_desktop}px"
+
+                # Mobile 375x812 check
+                page.set_viewport_size({"width": 375, "height": 812})
+                page.wait_for_function("() => window.innerWidth === 375")
+                overflow_mobile = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile <= 0, f"Mobile 375px overflow: {overflow_mobile}px"
+
+                page.click("#btn-program-auto-reframe")
+                page.wait_for_selector("#auto-reframe-dialog[open]")
+                overflow_mobile_dlg = page.evaluate(
+                    "() => document.documentElement.scrollWidth - window.innerWidth"
+                )
+                assert overflow_mobile_dlg <= 0, f"Mobile dialog overflow: {overflow_mobile_dlg}px"
+                dlg_w = page.evaluate(
+                    "() => document.getElementById('auto-reframe-dialog')"
+                    ".getBoundingClientRect().width"
+                )
+                assert dlg_w <= 375, f"Mobile dialog wider than 375px: {dlg_w}px"
+
+                for ctrl_id in (
+                    "btn-program-auto-reframe",
+                    "btn-timeline-auto-reframe",
+                    "btn-ar-analyze",
+                    "btn-ar-apply",
+                    "btn-close-auto-reframe",
+                ):
+                    h = page.evaluate(
+                        f"() => document.getElementById('{ctrl_id}').getBoundingClientRect().height"
+                    )
+                    assert h >= 44, f"Mobile touch target {ctrl_id} too small: {h}px"
+
+                page.click("#btn-close-auto-reframe")
+                assert console_errors == [], f"Console errors: {console_errors}"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

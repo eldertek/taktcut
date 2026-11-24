@@ -310,6 +310,7 @@
                     <option value="9:16">9:16 1080x1920 Reels/Shorts</option>
                     <option value="1:1">1:1 1080x1080 Square</option>
                     <option value="4:5">4:5 1080x1350 Feed</option>
+                    <option value="21:9">21:9 2560x1080 Cinemascope</option>
                   </select>
                   <select id="program-framing-mode" class="input-control input-compact mono" aria-label="Program reframe mode">
                     <option value="fill" data-i18n="framing.mode.fill">Fill (Crop)</option>
@@ -329,6 +330,7 @@
                   <button type="button" id="btn-program-false-color" class="btn btn-mini bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.falseColor" title="Toggle False Color IRE Exposure Map (Shift+F)">False Color</button>
                   <button type="button" id="btn-program-zebra" class="btn btn-mini bm-toggle-btn" aria-pressed="false" data-i18n="broadcast.btn.zebra" title="Toggle Dual Zebra Clipping Stripes (Shift+Z)">Zebra</button>
                   <button type="button" id="btn-program-broadcast-studio" class="btn btn-mini bm-studio-btn" data-i18n="broadcast.btn.studio" title="Open False Color, Zebra &amp; EBU R103 Broadcast Safe Studio (Shift+G)">IRE / Safe</button>
+                  <button type="button" id="btn-program-auto-reframe" class="btn btn-mini ar-studio-btn" data-i18n="autoReframe.btn.studio" title="Open Auto Reframe Subject Tracking Studio (Shift+R)">Auto Reframe</button>
                 </div>
               </div>
               <div id="timeline-viewer-well" class="viewer-well">
@@ -1482,6 +1484,14 @@
                     <path d="M2.5 4h11M2.5 8h7.5M2.5 12h9.5M12.5 7l2 2-2 2" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                   <span data-i18n="timeline.tool.textEdit">Text Edit</span>
+                </button>
+                <button type="button" id="btn-timeline-auto-reframe" class="btn btn-mini tl-autoreframe-btn" title="Auto Reframe &amp; Multi-Aspect Subject Tracking (Shift+R)">
+                  <svg class="tl-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <rect x="2" y="3.5" width="12" height="9" rx="1" stroke="currentColor" stroke-width="1.2" fill="none" opacity="0.55"/>
+                    <rect x="5.5" y="2" width="5" height="12" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                    <circle cx="8" cy="7.2" r="1.3" fill="currentColor"/>
+                  </svg>
+                  <span data-i18n="timeline.tool.autoReframe">Auto Reframe</span>
                 </button>
               </div>
 
@@ -4267,6 +4277,106 @@
       <div class="form-row">
         <label for="broadcast-fg-preview" data-i18n="broadcast.ffmpegPreview">Compiled FFmpeg Broadcast Legal Limiter Filtergraph</label>
         <pre id="broadcast-fg-preview" class="code-box mono"></pre>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="auto-reframe-dialog" class="nle-dialog auto-reframe-dialog" aria-labelledby="auto-reframe-title" aria-describedby="auto-reframe-subtitle">
+    <div class="nle-dialog-header">
+      <div>
+        <h2 id="auto-reframe-title" data-i18n="autoReframe.dialog.title">Auto Reframe &amp; Subject Tracking Studio</h2>
+        <p id="auto-reframe-subtitle" class="nle-dialog-subtitle" data-i18n="autoReframe.dialog.subtitle">Optical Saliency Subject Tracker, Motion Damping &amp; Multi-Aspect FFmpeg Crop Compiler</p>
+      </div>
+      <button type="button" id="btn-close-auto-reframe" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
+    </div>
+    <div class="nle-dialog-body auto-reframe-dialog-body">
+      <div class="ar-target-bar">
+        <span class="mono nle-tag" id="ar-clip-badge">V1 : Clip</span>
+        <span class="mono nle-tag" id="ar-resolution-badge">Crop 608x1080 -&gt; 1080x1920</span>
+        <label class="check-label ar-preview-toggle">
+          <input type="checkbox" id="ar-preview-program-check" checked>
+          <span data-i18n="autoReframe.previewOnProgram">Live Crop Gizmo on Program Monitor</span>
+        </label>
+      </div>
+
+      <div class="ar-preset-section">
+        <span class="pane-subheader-label" data-i18n="autoReframe.aspectLabel">Target Aspect Ratio</span>
+        <div id="ar-aspect-bar" class="ar-aspect-bar" role="group" aria-label="Auto Reframe target aspect ratio">
+          <button type="button" class="btn btn-chip ar-aspect-btn is-active" data-ar-aspect="9:16" aria-pressed="true">9:16 Reels</button>
+          <button type="button" class="btn btn-chip ar-aspect-btn" data-ar-aspect="4:5" aria-pressed="false">4:5 Feed</button>
+          <button type="button" class="btn btn-chip ar-aspect-btn" data-ar-aspect="1:1" aria-pressed="false">1:1 Square</button>
+          <button type="button" class="btn btn-chip ar-aspect-btn" data-ar-aspect="21:9" aria-pressed="false">21:9 Cinema</button>
+          <button type="button" class="btn btn-chip ar-aspect-btn" data-ar-aspect="16:9" aria-pressed="false">16:9 HD</button>
+        </div>
+      </div>
+
+      <div class="ar-preset-section">
+        <span class="pane-subheader-label" data-i18n="autoReframe.motionLabel">Motion Tracking Preset</span>
+        <div id="ar-motion-bar" class="ar-motion-bar" role="group" aria-label="Auto Reframe motion smoothing preset">
+          <button type="button" class="btn btn-chip ar-motion-btn" data-ar-motion="slower" aria-pressed="false" data-i18n="autoReframe.motion.slower">Slower Motion</button>
+          <button type="button" class="btn btn-chip ar-motion-btn is-active" data-ar-motion="default" aria-pressed="true" data-i18n="autoReframe.motion.default">Default Motion</button>
+          <button type="button" class="btn btn-chip ar-motion-btn" data-ar-motion="faster" aria-pressed="false" data-i18n="autoReframe.motion.faster">Faster Motion</button>
+        </div>
+      </div>
+
+      <div class="ar-form-grid">
+        <div class="form-row">
+          <label for="ar-subject-priority" data-i18n="autoReframe.priorityLabel">Subject Priority</label>
+          <select id="ar-subject-priority" class="input-control">
+            <option value="auto_saliency" data-i18n="autoReframe.priority.auto">Auto Saliency (Optical Center)</option>
+            <option value="face_headroom" data-i18n="autoReframe.priority.face">Face &amp; Headroom Safe</option>
+            <option value="action_center" data-i18n="autoReframe.priority.action">Fast Action Center</option>
+            <option value="manual_override" data-i18n="autoReframe.priority.manual">Manual Keyframe Hold</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="ar-headroom-range" data-i18n="autoReframe.headroomLabel">Vertical Headroom Bias</label>
+          <div class="broadcast-range-pair">
+            <input type="range" id="ar-headroom-range" min="-0.5" max="0.5" step="0.02" value="-0.12">
+            <input type="number" id="ar-headroom-num" class="input-num mono" min="-0.5" max="0.5" step="0.02" value="-0.12" aria-label="Vertical headroom bias">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="ar-smoothing-range" data-i18n="autoReframe.smoothingLabel">Smoothing Window (s)</label>
+          <div class="broadcast-range-pair">
+            <input type="range" id="ar-smoothing-range" min="0.1" max="3.0" step="0.05" value="0.85">
+            <input type="number" id="ar-smoothing-num" class="input-num mono" min="0.1" max="3.0" step="0.05" value="0.85" aria-label="Smoothing window seconds">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="ar-deadband-range" data-i18n="autoReframe.deadbandLabel">Deadband Hysteresis</label>
+          <div class="broadcast-range-pair">
+            <input type="range" id="ar-deadband-range" min="0" max="0.3" step="0.01" value="0.06">
+            <input type="number" id="ar-deadband-num" class="input-num mono" min="0" max="0.3" step="0.01" value="0.06" aria-label="Deadband threshold">
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-row ar-actions">
+        <button type="button" id="btn-ar-analyze" class="btn btn-secondary" data-i18n="autoReframe.action.analyze">Analyze &amp; Track Subject</button>
+        <button type="button" id="btn-ar-add-kf" class="btn btn-mini" data-i18n="autoReframe.action.addKf">+ Keyframe @ Playhead</button>
+        <button type="button" id="btn-ar-del-kf" class="btn btn-mini" disabled data-i18n="autoReframe.action.delKf">Delete Keyframe</button>
+        <button type="button" id="btn-ar-apply" class="btn btn-primary" data-i18n="autoReframe.action.apply">Apply to Clip</button>
+        <button type="button" id="btn-ar-clear" class="btn btn-mini btn-danger-mini" data-i18n="autoReframe.action.clear">Clear Clip Reframe</button>
+        <button type="button" id="btn-ar-copy-fg" class="btn btn-mini" data-i18n="autoReframe.action.copyFg">Copy Filtergraph</button>
+      </div>
+
+      <div class="viewer-well ar-canvas-well">
+        <canvas id="auto-reframe-curve-canvas" class="studio-canvas" aria-label="Auto Reframe pan trajectory and keyframe curve editor"></canvas>
+      </div>
+
+      <div id="ar-stats-grid" class="broadcast-compliance-grid" aria-live="polite"></div>
+
+      <div class="ar-kf-section">
+        <span class="pane-subheader-label" data-i18n="autoReframe.keyframeListLabel">Tracked Pan Keyframes (Click to Scrub, Drag Curve to Override)</span>
+        <div id="ar-keyframe-list" class="ar-keyframe-list" role="list" aria-label="Auto Reframe pan keyframes"></div>
+      </div>
+
+      <div id="ar-status-note" class="telemetry-note mono" aria-live="polite" data-i18n="autoReframe.status.idle">Ready to analyze subject saliency and compile keyframes.</div>
+
+      <div class="form-row">
+        <label for="ar-fg-preview" data-i18n="autoReframe.ffmpegPreview">Compiled FFmpeg Dynamic Crop &amp; Scale Filtergraph</label>
+        <pre id="ar-fg-preview" class="code-box mono"></pre>
       </div>
     </div>
   </dialog>

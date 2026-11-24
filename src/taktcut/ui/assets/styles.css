@@ -9501,17 +9501,146 @@ input[type="range"] {
   outline-offset: 1px;
 }
 
+/* AUTO REFRAME & SUBJECT TRACKING STUDIO */
+.auto-reframe-dialog {
+  max-width: min(880px, calc(100vw - 16px));
+  width: min(880px, calc(100vw - 16px));
+}
+
+.auto-reframe-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(82vh, 760px);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.auto-reframe-dialog-body > * {
+  flex-shrink: 0;
+}
+
+.auto-reframe-dialog-body .code-box,
+.auto-reframe-dialog-body select.input-control {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.ar-target-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ar-preview-toggle {
+  margin-left: auto;
+}
+
+.ar-preset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ar-aspect-bar,
+.ar-motion-bar,
+.ar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ar-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.ar-canvas-well {
+  min-height: 185px;
+}
+
+#auto-reframe-curve-canvas {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.ar-kf-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ar-keyframe-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 128px;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.ar-kf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-inner);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ar-kf-chip.is-selected {
+  border-color: var(--accent-amber);
+  background: rgba(230, 132, 66, 0.14);
+}
+
+.ar-kf-chip.is-manual {
+  border-left: 3px solid #facc15;
+}
+
+#auto-reframe-dialog .btn:focus-visible,
+#auto-reframe-dialog .input-control:focus-visible,
+.ar-studio-btn:focus-visible,
+.tl-autoreframe-btn:focus-visible,
+.ar-kf-chip:focus-visible {
+  outline: 2px solid #e68442;
+  outline-offset: 1px;
+}
+
 @media (max-width: 760px) {
   .broadcast-form-grid,
   .broadcast-checks-cell,
-  .broadcast-compliance-grid {
+  .broadcast-compliance-grid,
+  .ar-form-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .ar-preview-toggle {
+    margin-left: 0;
   }
   .bm-toggle-btn,
   .bm-studio-btn,
+  .ar-studio-btn,
+  .tl-autoreframe-btn,
   .broadcast-actions .btn,
+  .ar-actions .btn,
+  .ar-aspect-btn,
+  .ar-motion-btn,
+  .ar-kf-chip,
   #broadcast-monitor-dialog .input-control,
-  #btn-close-broadcast-studio {
+  #auto-reframe-dialog .input-control,
+  #btn-close-broadcast-studio,
+  #btn-close-auto-reframe {
     min-height: 45px;
   }
 }

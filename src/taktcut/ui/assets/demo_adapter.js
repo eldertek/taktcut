@@ -1,6 +1,8 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
 import {
   ASPECT_RATIO_PRESETS,
+  AUTO_REFRAME_ASPECT_SPECS_CLIENT,
+  AUTO_REFRAME_MOTION_PRESETS_CLIENT,
   BROADCAST_STANDARDS_CLIENT,
   COLOR_CURVE_PRESETS,
   FALSE_COLOR_PALETTES_CLIENT,
@@ -36,23 +38,27 @@ import {
   bakeColorNodeChainToCubeTextClient,
   buildAtempoStagesClient,
   alignAvSplitInDocument,
+  analyzeAutoReframeClient,
   analyzeAvSyncClient,
   analyzeBroadcastComplianceClient,
   analyzeAudioSpectrumClient,
   analyzeClipSceneCutsClient,
   analyzeClipTranscriptClient,
+  applyAutoReframeToDocumentClient,
   applyAvSyncInDocumentClient,
   applyBroadcastLegalClampClient,
   applySplitEditJlInDocument,
   applyTextEditRoughCutClient,
   auditMediaPoolLinksClient,
   autoRelinkAllInDocumentClient,
+  clearAutoReframeFromDocumentClient,
   clearProxiesInDocument,
   generateProxiesInDocument,
   relinkClipInDocumentClient,
   toggleClipOfflineInDocumentClient,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
+  compileAutoReframeFiltergraphClient,
   compileBroadcastFilterClient,
   compileColorNodeChainClient,
   compileCompoundFiltergraphClient,
@@ -3885,6 +3891,54 @@ export function createApiClient() {
         return analyzeBroadcastComplianceClient(payload);
       }
       return requestJson("/api/color/broadcast-monitor/analyze", { method: "POST", body: payload });
+    },
+    async getAutoReframePresets() {
+      if (resolvedMode === "static-demo") {
+        return {
+          aspects: Object.values(AUTO_REFRAME_ASPECT_SPECS_CLIENT),
+          motion_presets: Object.values(AUTO_REFRAME_MOTION_PRESETS_CLIENT),
+          subject_priorities: ["auto_saliency", "face_headroom", "action_center", "manual_override"]
+        };
+      }
+      return requestJson("/api/timeline/auto-reframe/presets");
+    },
+    async analyzeAutoReframe(payload) {
+      if (resolvedMode === "static-demo") {
+        return analyzeAutoReframeClient(payload || {});
+      }
+      return requestJson("/api/timeline/auto-reframe/analyze", { method: "POST", body: payload });
+    },
+    async compileAutoReframe(payload) {
+      if (resolvedMode === "static-demo") {
+        const cfg = payload && payload.config ? payload.config : {};
+        const kfs = payload && Array.isArray(payload.keyframes) ? payload.keyframes : [];
+        return compileAutoReframeFiltergraphClient(cfg, kfs);
+      }
+      return requestJson("/api/timeline/auto-reframe/compile", { method: "POST", body: payload });
+    },
+    async applyAutoReframe(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const res = applyAutoReframeToDocumentClient(doc, payload || {});
+        return {
+          ...res,
+          validation: validateTimelineClient(res.document)
+        };
+      }
+      return requestJson("/api/timeline/auto-reframe/apply", { method: "POST", body: payload });
+    },
+    async clearAutoReframe(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = payload && payload.document ? payload.document : null;
+        if (!doc) throw new Error("Timeline document is required.");
+        const res = clearAutoReframeFromDocumentClient(doc, payload || {});
+        return {
+          ...res,
+          validation: validateTimelineClient(res.document)
+        };
+      }
+      return requestJson("/api/timeline/auto-reframe/clear", { method: "POST", body: payload });
     }
   };
 }

@@ -4,6 +4,7 @@ import {
   clientPosToColorWarperOffset,
   computeCueWordTimingsCanvas,
   drawAvSyncWaveformCanvas,
+  drawAutoReframeCurveCanvas,
   drawBroadcastHistogramCanvas,
   drawColorCurvesCanvas,
   drawColorPreviewCanvas,
@@ -48,6 +49,8 @@ import {
   AUTO_DUCK_ATTACK_MS_DEFAULT,
   AUTO_DUCK_ATTACK_MS_MAX,
   AUTO_DUCK_ATTACK_MS_MIN,
+  AUTO_REFRAME_ASPECT_SPECS_CLIENT,
+  AUTO_REFRAME_MOTION_PRESETS_CLIENT,
   AUTO_DUCK_RATIO_DEFAULT,
   AUTO_DUCK_RATIO_MAX,
   AUTO_DUCK_RATIO_MIN,
@@ -164,6 +167,7 @@ import {
   clampSplitWipePercent,
   compileAudioFilterClient,
   compileAutoDuckFilterClient,
+  compileAutoReframeFiltergraphClient,
   compileCompoundFiltergraphClient,
   compileFairlightAudioFilterClient,
   compileFairlightAudioRackClient,
@@ -206,6 +210,7 @@ import {
   detectAudioTransientsClient,
   estimateFairlightCompressorGrClient,
   estimateRenderFileSize,
+  evaluateAutoReframeAtTimeClient,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
   evaluateCurvePchipClient,
@@ -264,7 +269,9 @@ import {
   moveClipInDocument,
   moveColorNodeInTree,
   normalizeAutoDuckParams,
+  normalizeAutoReframeConfigClient,
   normalizeBroadcastConfigClient,
+  panToAutoReframeSubjectClient,
   normalizeClipAudio,
   normalizeClipLabelColor,
   normalizeClipRetime,
@@ -610,6 +617,37 @@ const state = {
   broadcastComplianceReport: null,
   broadcastCompileResult: null,
   broadcastAnalyzeSeq: 0,
+  autoReframeStudio: {
+    isOpen: false,
+    previewOnProgram: true,
+    trackIndex: 1,
+    clipIndex: 0,
+    clipName: "Sequence Clip",
+    clipStartFrame: 0,
+    config: {
+      enabled: true,
+      aspect_ratio: "9:16",
+      motion_preset: "default",
+      subject_priority: "auto_saliency",
+      source_width: 1920,
+      source_height: 1080,
+      fps: 25,
+      duration_s: 10,
+      headroom_bias: -0.12,
+      smoothing_window: 0.85,
+      deadband_threshold: 0.06,
+      max_pan_velocity: 0.62,
+      rdp_epsilon: 0.028,
+      sample_interval_s: 0.4,
+      include_scale: true
+    },
+    analysis: null,
+    keyframes: [],
+    selectedKeyframeIdx: -1,
+    curveGeom: null,
+    curveDrag: { active: false, pointerId: null, kfIdx: -1 },
+    analyzeSeq: 0
+  },
   colorPresetsCatalog: null,
   colorLastCompile: null,
   colorCompileTimer: null,
@@ -984,6 +1022,7 @@ function setLanguage(lang) {
   renderStillsGallery();
   renderUpdateButton();
   syncBroadcastMonitorUI();
+  if (typeof syncAutoReframeUI === "function") syncAutoReframeUI();
   renderTimelineUI();
   renderMediaPool();
   const teSearch = byId("text-edit-search");
@@ -1353,7 +1392,16 @@ function redrawActiveCanvases() {
         multicamClip: mcCtx ? mcCtx.clip : null,
         multicamHoveredAngle: state.multicamHoveredAngle,
         proxyModeEnabled: Boolean(state.mediaPoolProxyMode),
-        broadcastMonitor: state.broadcastMonitor
+        broadcastMonitor: state.broadcastMonitor,
+        autoReframePreview:
+          state.autoReframeStudio && state.autoReframeStudio.isOpen && state.autoReframeStudio.previewOnProgram
+            ? {
+                enabled: true,
+                aspect_ratio: state.autoReframeStudio.config.aspect_ratio,
+                clipStartFrame: state.autoReframeStudio.clipStartFrame || 0,
+                keyframes: state.autoReframeStudio.keyframes || []
+              }
+            : null
       }
     );
     const startFrame = state.timelineDoc ? state.timelineDoc.start_frame || 0 : 0;
@@ -1408,6 +1456,9 @@ function redrawActiveCanvases() {
     state.timelineStartFrame = tlDraw.startFrame;
     state.timelineRulerHeight = tlDraw.rulerHeight;
     state.timelineLabelColW = tlDraw.labelColW;
+    if (state.autoReframeStudio && state.autoReframeStudio.isOpen && typeof renderAutoReframeCurve === "function") {
+      renderAutoReframeCurve();
+    }
     drawStereoVuMeterCanvas(byId("timeline-vu-meter"), {
       leftDb: state.vuMeter.leftDb,
       rightDb: state.vuMeter.rightDb,
@@ -13061,6 +13112,7 @@ const NLE_SHORTCUT_GROUPS = [
       { kbd: "Shift+Z", descKey: "shortcuts.key.zebra" },
       { kbd: "Shift+B", descKey: "shortcuts.key.broadcastSafe" },
       { kbd: "Shift+G", descKey: "shortcuts.key.broadcastStudio" },
+      { kbd: "Shift+R", descKey: "shortcuts.key.autoReframe" },
       { kbd: "Ctrl+S", descKey: "shortcuts.key.save" },
       { kbd: "?", descKey: "shortcuts.key.help" }
     ]
@@ -13389,6 +13441,11 @@ function handleTransportKeydown(ev) {
     if (lower === "d" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       openTextEditDialog();
+      return;
+    }
+    if (lower === "r" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      openAutoReframeDialog();
       return;
     }
     if (
@@ -19928,6 +19985,7 @@ function wireEvents() {
   wireSceneCutEvents();
   wireTextEditEvents();
   wireBroadcastMonitorEvents();
+  wireAutoReframeEvents();
 }
 
 function wireFairlightAudioRackEvents() {
@@ -20390,6 +20448,7 @@ async function bootstrap() {
   updateDeliverSizeEstimate();
   syncColorInputsFromState();
   syncBroadcastMonitorUI();
+  syncAutoReframeUI();
   syncSplitWipeControls("color");
   syncSplitWipeControls("fx");
   renderStillsGallery();
@@ -23225,6 +23284,573 @@ function wireBroadcastMonitorEvents() {
     redrawActiveCanvases();
     analyzeBroadcastMonitorAction();
   });
+}
+
+// =========================================================================
+// CYCLE #103: AUTO REFRAME & MULTI-ASPECT SUBJECT TRACKING STUDIO
+// =========================================================================
+
+function resolveAutoReframeTargetClipContext() {
+  const doc = state.timelineDoc;
+  if (!doc || !Array.isArray(doc.tracks)) {
+    return { trackIndex: 1, clipIndex: 0, clipName: "Sequence Clip", clipStartFrame: 0, durationS: 10, fps: 25, clip: null };
+  }
+  const fps = doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+  const sel = state.timelineSelected;
+  if (sel && sel.trackKind === "video") {
+    const trk = doc.tracks.find((t) => t.kind === "video" && t.index === sel.trackIndex);
+    if (trk && trk.clips && trk.clips[sel.clipIndex]) {
+      const c = trk.clips[sel.clipIndex];
+      return {
+        trackIndex: trk.index,
+        clipIndex: sel.clipIndex,
+        clipName: c.name || "Video Clip",
+        clipStartFrame: c.start_frame || 0,
+        durationS: Math.max(0.2, (c.duration_frames || 125) / fps),
+        fps,
+        clip: c
+      };
+    }
+  }
+  for (const trk of doc.tracks) {
+    if (trk.kind === "video" && Array.isArray(trk.clips) && trk.clips.length > 0) {
+      const ph = state.playheadFrame || 0;
+      let idx = trk.clips.findIndex((c) => ph >= c.start_frame && ph < c.start_frame + c.duration_frames);
+      if (idx < 0) idx = 0;
+      const c = trk.clips[idx];
+      return {
+        trackIndex: trk.index,
+        clipIndex: idx,
+        clipName: c.name || "Video Clip",
+        clipStartFrame: c.start_frame || 0,
+        durationS: Math.max(0.2, (c.duration_frames || 125) / fps),
+        fps,
+        clip: c
+      };
+    }
+  }
+  return { trackIndex: 1, clipIndex: 0, clipName: "Sequence Clip", clipStartFrame: 0, durationS: 10, fps, clip: null };
+}
+
+function renderAutoReframeCurve() {
+  const canvas = byId("auto-reframe-curve-canvas");
+  if (!canvas) return;
+  const st = state.autoReframeStudio;
+  const fps = st.config.fps || 25;
+  const localFrames = Math.max(0, (state.playheadFrame || 0) - (st.clipStartFrame || 0));
+  const localTimeS = Math.min(st.config.duration_s || 10, localFrames / fps);
+  st.curveGeom = drawAutoReframeCurveCanvas(
+    canvas,
+    {
+      config: st.config,
+      keyframes: st.keyframes,
+      raw_samples: st.analysis ? st.analysis.raw_samples : []
+    },
+    {
+      duration_s: st.config.duration_s || 10,
+      local_time_s: localTimeS,
+      selected_idx: st.selectedKeyframeIdx
+    }
+  );
+}
+
+function renderAutoReframeStatsAndList() {
+  const st = state.autoReframeStudio;
+  const statsGrid = byId("ar-stats-grid");
+  const kfList = byId("ar-keyframe-list");
+  const fgEl = byId("ar-fg-preview");
+  const statusEl = byId("ar-status-note");
+  const delBtn = byId("btn-ar-del-kf");
+
+  const compiled =
+    st.analysis && st.analysis.compiled
+      ? st.analysis.compiled
+      : compileAutoReframeFiltergraphClient(st.config, st.keyframes);
+
+  if (fgEl) {
+    fgEl.textContent = compiled.filtergraph || "null";
+  }
+
+  const resBadge = byId("ar-resolution-badge");
+  if (resBadge) {
+    resBadge.textContent = `Crop ${compiled.crop_width}x${compiled.crop_height} -> ${compiled.output_width}x${compiled.output_height}`;
+  }
+
+  if (delBtn) {
+    delBtn.disabled = !(st.selectedKeyframeIdx >= 0 && st.selectedKeyframeIdx < st.keyframes.length && st.keyframes.length > 1);
+  }
+
+  const stats = st.analysis && st.analysis.stats ? st.analysis.stats : null;
+  if (statsGrid) {
+    const cards = [
+      { label: t("autoReframe.kv.keyframes"), value: String(st.keyframes.length), cls: "" },
+      {
+        label: t("autoReframe.kv.smoothness"),
+        value: stats ? `${Number(stats.smoothness_score).toFixed(1)}%` : "--",
+        cls: stats && stats.smoothness_score >= 75 ? "is-pass" : ""
+      },
+      {
+        label: t("autoReframe.kv.confidence"),
+        value: stats ? `${Math.round(Number(stats.avg_confidence) * 100)}%` : "--",
+        cls: "is-pass"
+      },
+      {
+        label: t("autoReframe.kv.travel"),
+        value: stats ? `${Number(stats.pan_travel_x).toFixed(2)} / ${Number(stats.pan_travel_y).toFixed(2)}` : "--",
+        cls: ""
+      },
+      {
+        label: t("autoReframe.kv.peakVel"),
+        value: stats ? `${Number(stats.peak_velocity).toFixed(2)}/s` : "--",
+        cls: ""
+      },
+      {
+        label: t("autoReframe.kv.output"),
+        value: `${compiled.output_width}x${compiled.output_height} (${st.config.aspect_ratio})`,
+        cls: ""
+      }
+    ];
+    statsGrid.replaceChildren(
+      ...cards.map((c) => {
+        const card = dom("div", "broadcast-kv-card");
+        card.append(
+          dom("span", "broadcast-kv-label", c.label),
+          dom("span", `broadcast-kv-value mono ${c.cls}`.trim(), c.value)
+        );
+        return card;
+      })
+    );
+  }
+
+  if (kfList) {
+    kfList.replaceChildren(
+      ...st.keyframes.map((kf, idx) => {
+        const btn = dom(
+          "button",
+          `ar-kf-chip mono ${idx === st.selectedKeyframeIdx ? "is-selected" : ""} ${kf.is_manual ? "is-manual" : ""}`.trim(),
+          `#${idx + 1} ${Number(kf.time_s).toFixed(2)}s | X:${Number(kf.pan_x).toFixed(2)} Y:${Number(kf.pan_y).toFixed(2)}`
+        );
+        btn.type = "button";
+        btn.setAttribute("role", "listitem");
+        btn.setAttribute("aria-pressed", idx === st.selectedKeyframeIdx ? "true" : "false");
+        btn.addEventListener("click", () => {
+          st.selectedKeyframeIdx = idx;
+          const fps = st.config.fps || 25;
+          const absFrame = Math.max(0, Math.round((st.clipStartFrame || 0) + kf.time_s * fps));
+          stopPlayback();
+          setPlayhead(absFrame);
+          renderAutoReframeStatsAndList();
+          renderAutoReframeCurve();
+        });
+        return btn;
+      })
+    );
+  }
+
+  if (statusEl && stats) {
+    statusEl.textContent = t("autoReframe.status.summary")
+      .replace("{kfs}", String(st.keyframes.length))
+      .replace("{smooth}", Number(stats.smoothness_score).toFixed(1))
+      .replace("{conf}", String(Math.round(Number(stats.avg_confidence) * 100)))
+      .replace("{cw}", String(compiled.crop_width))
+      .replace("{ch}", String(compiled.crop_height))
+      .replace("{ow}", String(compiled.output_width))
+      .replace("{oh}", String(compiled.output_height));
+  }
+}
+
+function syncAutoReframeUI() {
+  const st = state.autoReframeStudio;
+  if (!st) return;
+  const cfg = normalizeAutoReframeConfigClient(st.config);
+  st.config = cfg;
+
+  const clipBadge = byId("ar-clip-badge");
+  if (clipBadge) {
+    clipBadge.textContent = `V${st.trackIndex} : ${st.clipName}`;
+  }
+  const previewChk = byId("ar-preview-program-check");
+  if (previewChk) previewChk.checked = Boolean(st.previewOnProgram);
+
+  for (const btn of document.querySelectorAll(".ar-aspect-btn[data-ar-aspect]")) {
+    const active = btn.getAttribute("data-ar-aspect") === cfg.aspect_ratio;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  for (const btn of document.querySelectorAll(".ar-motion-btn[data-ar-motion]")) {
+    const active = btn.getAttribute("data-ar-motion") === cfg.motion_preset;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  const prioEl = byId("ar-subject-priority");
+  if (prioEl) prioEl.value = cfg.subject_priority;
+
+  const pairBindings = [
+    ["ar-headroom-range", "ar-headroom-num", cfg.headroom_bias],
+    ["ar-smoothing-range", "ar-smoothing-num", cfg.smoothing_window],
+    ["ar-deadband-range", "ar-deadband-num", cfg.deadband_threshold]
+  ];
+  for (const [rId, nId, val] of pairBindings) {
+    const rEl = byId(rId);
+    const nEl = byId(nId);
+    if (rEl && document.activeElement !== rEl) rEl.value = String(val);
+    if (nEl && document.activeElement !== nEl) nEl.value = String(val);
+  }
+
+  renderAutoReframeStatsAndList();
+  if (st.isOpen) {
+    renderAutoReframeCurve();
+  }
+}
+
+async function runAutoReframeAnalyzeAction() {
+  const st = state.autoReframeStudio;
+  const seq = ++st.analyzeSeq;
+  try {
+    const res = await api.analyzeAutoReframe({
+      document: state.timelineDoc,
+      track_index: st.trackIndex,
+      clip_index: st.clipIndex,
+      clip_name: st.clipName,
+      config: st.config
+    });
+    if (seq !== st.analyzeSeq) return;
+    st.analysis = res;
+    st.keyframes = Array.isArray(res.keyframes) ? res.keyframes : [];
+    st.selectedKeyframeIdx = st.keyframes.length > 0 ? 0 : -1;
+    syncAutoReframeUI();
+    redrawActiveCanvases();
+  } catch (err) {
+    showBanner(`Auto Reframe analyze failed: ${err.message}`, "error");
+  }
+}
+
+async function recompileAutoReframeFromKeyframes() {
+  const st = state.autoReframeStudio;
+  try {
+    const compiled = await api.compileAutoReframe({
+      config: st.config,
+      keyframes: st.keyframes
+    });
+    if (!st.analysis) st.analysis = {};
+    st.analysis.compiled = compiled;
+    renderAutoReframeStatsAndList();
+    renderAutoReframeCurve();
+    redrawActiveCanvases();
+  } catch (err) {
+    showBanner(`Auto Reframe compile failed: ${err.message}`, "error");
+  }
+}
+
+function addAutoReframeKeyframeAtPlayheadAction() {
+  const st = state.autoReframeStudio;
+  const fps = st.config.fps || 25;
+  const dur = st.config.duration_s || 10;
+  const localFrames = Math.max(0, (state.playheadFrame || 0) - (st.clipStartFrame || 0));
+  const tVal = Number(Math.min(dur, Math.max(0, localFrames / fps)).toFixed(3));
+  const evalKf = evaluateAutoReframeAtTimeClient(st.keyframes, tVal);
+  const existingIdx = st.keyframes.findIndex((k) => Math.abs(k.time_s - tVal) < 0.05);
+  const nextKf = {
+    time_s: tVal,
+    frame: Math.round(tVal * fps),
+    pan_x: evalKf.pan_x,
+    pan_y: evalKf.pan_y,
+    subject_x: evalKf.subject_x,
+    subject_y: evalKf.subject_y,
+    confidence: 1.0,
+    is_manual: true
+  };
+  if (existingIdx >= 0) {
+    st.keyframes[existingIdx] = nextKf;
+    st.selectedKeyframeIdx = existingIdx;
+  } else {
+    st.keyframes.push(nextKf);
+    st.keyframes.sort((a, b) => a.time_s - b.time_s || a.frame - b.frame);
+    st.selectedKeyframeIdx = st.keyframes.findIndex((k) => Math.abs(k.time_s - tVal) < 1e-4);
+  }
+  recompileAutoReframeFromKeyframes();
+}
+
+function deleteSelectedAutoReframeKeyframeAction() {
+  const st = state.autoReframeStudio;
+  if (st.keyframes.length <= 1) return;
+  if (st.selectedKeyframeIdx < 0 || st.selectedKeyframeIdx >= st.keyframes.length) return;
+  st.keyframes.splice(st.selectedKeyframeIdx, 1);
+  st.selectedKeyframeIdx = Math.min(st.selectedKeyframeIdx, st.keyframes.length - 1);
+  recompileAutoReframeFromKeyframes();
+}
+
+async function applyAutoReframeToClipAction() {
+  const st = state.autoReframeStudio;
+  if (!state.timelineDoc) return;
+  try {
+    const res = await api.applyAutoReframe({
+      document: state.timelineDoc,
+      track_kind: "video",
+      track_index: st.trackIndex,
+      clip_index: st.clipIndex,
+      config: st.config,
+      keyframes: st.keyframes
+    });
+    if (res && res.document) {
+      commitTimelineMutation(res.document, preserveSelectionAcrossDoc(res.document));
+      showBanner(`Auto Reframe (${st.config.aspect_ratio}) applied to ${st.clipName}.`, "success");
+    }
+  } catch (err) {
+    showBanner(`Auto Reframe apply failed: ${err.message}`, "error");
+  }
+}
+
+async function clearAutoReframeFromClipAction() {
+  const st = state.autoReframeStudio;
+  if (!state.timelineDoc) return;
+  try {
+    const res = await api.clearAutoReframe({
+      document: state.timelineDoc,
+      track_kind: "video",
+      track_index: st.trackIndex,
+      clip_index: st.clipIndex
+    });
+    if (res && res.document) {
+      if (res.changed) {
+        commitTimelineMutation(res.document, preserveSelectionAcrossDoc(res.document));
+      }
+      showBanner(`Cleared Auto Reframe from ${st.clipName}.`, "info");
+    }
+  } catch (err) {
+    showBanner(`Auto Reframe clear failed: ${err.message}`, "error");
+  }
+}
+
+function openAutoReframeDialog() {
+  const dlg = byId("auto-reframe-dialog");
+  if (!dlg) return;
+  const ctx = resolveAutoReframeTargetClipContext();
+  const st = state.autoReframeStudio;
+  st.isOpen = true;
+  st.trackIndex = ctx.trackIndex;
+  st.clipIndex = ctx.clipIndex;
+  st.clipName = ctx.clipName;
+  st.clipStartFrame = ctx.clipStartFrame;
+  st.config.fps = ctx.fps;
+  st.config.duration_s = ctx.durationS;
+
+  if (ctx.clip && ctx.clip.auto_reframe && Array.isArray(ctx.clip.auto_reframe.keyframes) && ctx.clip.auto_reframe.keyframes.length > 0) {
+    st.config.aspect_ratio = ctx.clip.auto_reframe.aspect_ratio || st.config.aspect_ratio;
+    st.config.motion_preset = ctx.clip.auto_reframe.motion_preset || st.config.motion_preset;
+    st.config.subject_priority = ctx.clip.auto_reframe.subject_priority || st.config.subject_priority;
+    st.config.headroom_bias = Number(ctx.clip.auto_reframe.headroom_bias ?? -0.12);
+    st.keyframes = ctx.clip.auto_reframe.keyframes.map((k) => ({ ...k }));
+    st.selectedKeyframeIdx = 0;
+  }
+
+  if (typeof dlg.showModal === "function" && !dlg.open) dlg.showModal();
+  else dlg.setAttribute("open", "open");
+
+  syncAutoReframeUI();
+  if (!ctx.clip || !ctx.clip.auto_reframe || !ctx.clip.auto_reframe.keyframes?.length) {
+    runAutoReframeAnalyzeAction();
+  } else {
+    recompileAutoReframeFromKeyframes();
+  }
+}
+
+function closeAutoReframeDialog() {
+  const dlg = byId("auto-reframe-dialog");
+  if (dlg) {
+    if (typeof dlg.close === "function" && dlg.open) dlg.close();
+    else dlg.removeAttribute("open");
+  }
+  state.autoReframeStudio.isOpen = false;
+  redrawActiveCanvases();
+}
+
+function wireAutoReframeEvents() {
+  byId("btn-program-auto-reframe")?.addEventListener("click", openAutoReframeDialog);
+  byId("btn-timeline-auto-reframe")?.addEventListener("click", openAutoReframeDialog);
+  byId("btn-close-auto-reframe")?.addEventListener("click", closeAutoReframeDialog);
+
+  const dlg = byId("auto-reframe-dialog");
+  if (dlg) {
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      closeAutoReframeDialog();
+    });
+    dlg.addEventListener("click", (ev) => {
+      if (ev.target === dlg) closeAutoReframeDialog();
+    });
+  }
+
+  byId("ar-preview-program-check")?.addEventListener("change", (ev) => {
+    state.autoReframeStudio.previewOnProgram = Boolean(ev.target.checked);
+    redrawActiveCanvases();
+  });
+
+  for (const btn of document.querySelectorAll(".ar-aspect-btn[data-ar-aspect]")) {
+    btn.addEventListener("click", () => {
+      const ratio = btn.getAttribute("data-ar-aspect") || "9:16";
+      state.autoReframeStudio.config.aspect_ratio = ratio;
+      syncAutoReframeUI();
+      runAutoReframeAnalyzeAction();
+    });
+  }
+
+  for (const btn of document.querySelectorAll(".ar-motion-btn[data-ar-motion]")) {
+    btn.addEventListener("click", () => {
+      const preset = btn.getAttribute("data-ar-motion") || "default";
+      const spec = AUTO_REFRAME_MOTION_PRESETS_CLIENT[preset] || AUTO_REFRAME_MOTION_PRESETS_CLIENT.default;
+      state.autoReframeStudio.config.motion_preset = spec.preset;
+      state.autoReframeStudio.config.smoothing_window = spec.smoothing_window;
+      state.autoReframeStudio.config.deadband_threshold = spec.deadband_threshold;
+      state.autoReframeStudio.config.max_pan_velocity = spec.max_pan_velocity;
+      state.autoReframeStudio.config.rdp_epsilon = spec.rdp_epsilon;
+      syncAutoReframeUI();
+      runAutoReframeAnalyzeAction();
+    });
+  }
+
+  byId("ar-subject-priority")?.addEventListener("change", (ev) => {
+    const prio = String(ev.target.value || "auto_saliency");
+    state.autoReframeStudio.config.subject_priority = prio;
+    if (prio === "face_headroom") state.autoReframeStudio.config.headroom_bias = -0.18;
+    else if (prio === "action_center") state.autoReframeStudio.config.headroom_bias = 0.0;
+    syncAutoReframeUI();
+    runAutoReframeAnalyzeAction();
+  });
+
+  const sliderConfigs = [
+    ["ar-headroom-range", "ar-headroom-num", "headroom_bias", -0.5, 0.5],
+    ["ar-smoothing-range", "ar-smoothing-num", "smoothing_window", 0.1, 3.0],
+    ["ar-deadband-range", "ar-deadband-num", "deadband_threshold", 0.0, 0.3]
+  ];
+  for (const [rId, nId, key, minV, maxV] of sliderConfigs) {
+    const rEl = byId(rId);
+    const nEl = byId(nId);
+    if (rEl) {
+      rEl.addEventListener("input", () => {
+        const val = Number.parseFloat(rEl.value);
+        if (Number.isFinite(val)) {
+          state.autoReframeStudio.config[key] = Math.max(minV, Math.min(maxV, val));
+          if (nEl) nEl.value = String(state.autoReframeStudio.config[key]);
+        }
+      });
+      rEl.addEventListener("change", runAutoReframeAnalyzeAction);
+    }
+    if (nEl) {
+      nEl.addEventListener("input", () => {
+        const val = Number.parseFloat(nEl.value);
+        if (Number.isFinite(val) && val >= minV && val <= maxV) {
+          state.autoReframeStudio.config[key] = val;
+          if (rEl) rEl.value = String(val);
+        }
+      });
+      nEl.addEventListener("change", () => {
+        const parsed = Number.parseFloat(nEl.value);
+        const clamped = Number.isFinite(parsed) ? Math.max(minV, Math.min(maxV, parsed)) : state.autoReframeStudio.config[key];
+        nEl.value = String(clamped);
+        state.autoReframeStudio.config[key] = clamped;
+        if (rEl) rEl.value = String(clamped);
+        runAutoReframeAnalyzeAction();
+      });
+    }
+  }
+
+  byId("btn-ar-analyze")?.addEventListener("click", runAutoReframeAnalyzeAction);
+  byId("btn-ar-add-kf")?.addEventListener("click", addAutoReframeKeyframeAtPlayheadAction);
+  byId("btn-ar-del-kf")?.addEventListener("click", deleteSelectedAutoReframeKeyframeAction);
+  byId("btn-ar-apply")?.addEventListener("click", applyAutoReframeToClipAction);
+  byId("btn-ar-clear")?.addEventListener("click", clearAutoReframeFromClipAction);
+  byId("btn-ar-copy-fg")?.addEventListener("click", async () => {
+    const fgText = byId("ar-fg-preview")?.textContent || "null";
+    try {
+      await navigator.clipboard.writeText(fgText);
+    } catch {
+      // Clipboard may be unavailable in headless mode
+    }
+    const statusEl = byId("ar-status-note");
+    if (statusEl) statusEl.textContent = t("autoReframe.action.copied");
+  });
+
+  const curveCanvas = byId("auto-reframe-curve-canvas");
+  if (curveCanvas) {
+    const getCanvasPoint = (ev) => {
+      const rect = curveCanvas.getBoundingClientRect();
+      return {
+        x: ev.clientX - rect.left,
+        y: ev.clientY - rect.top
+      };
+    };
+    curveCanvas.addEventListener("pointerdown", (ev) => {
+      const st = state.autoReframeStudio;
+      const g = st.curveGeom;
+      if (!g) return;
+      const pt = getCanvasPoint(ev);
+      let hitIdx = -1;
+      let bestDist = 14;
+      for (const node of g.hitNodes || []) {
+        const d = Math.hypot(pt.x - node.x, pt.y - node.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          hitIdx = node.index;
+        }
+      }
+      if (hitIdx >= 0) {
+        st.selectedKeyframeIdx = hitIdx;
+        st.curveDrag = { active: true, pointerId: ev.pointerId, kfIdx: hitIdx };
+        try {
+          curveCanvas.setPointerCapture(ev.pointerId);
+        } catch {
+          // Ignore pointer capture errors
+        }
+        renderAutoReframeStatsAndList();
+        renderAutoReframeCurve();
+      } else if (pt.x >= g.padL && pt.x <= g.padL + g.plotW) {
+        const u = Math.max(0, Math.min(1, (pt.x - g.padL) / Math.max(1, g.plotW)));
+        const tVal = u * g.durationS;
+        const fps = st.config.fps || 25;
+        stopPlayback();
+        setPlayhead(Math.max(0, Math.round((st.clipStartFrame || 0) + tVal * fps)));
+        renderAutoReframeCurve();
+      }
+    });
+    curveCanvas.addEventListener("pointermove", (ev) => {
+      const st = state.autoReframeStudio;
+      const g = st.curveGeom;
+      if (!st.curveDrag.active || !g) return;
+      const kf = st.keyframes[st.curveDrag.kfIdx];
+      if (!kf) return;
+      const pt = getCanvasPoint(ev);
+      const normY = Math.max(0, Math.min(1, (pt.y - g.padT) / Math.max(1, g.plotH)));
+      const nextPanX = Number(((1 - normY) * 2 - 1).toFixed(3));
+      kf.pan_x = Math.max(-1, Math.min(1, nextPanX));
+      const subj = panToAutoReframeSubjectClient(
+        kf.pan_x,
+        kf.pan_y,
+        st.config.source_width,
+        st.config.source_height,
+        st.config.aspect_ratio
+      );
+      kf.subject_x = subj.subject_x;
+      kf.subject_y = subj.subject_y;
+      kf.is_manual = true;
+      renderAutoReframeCurve();
+      redrawActiveCanvases();
+    });
+    const endCurveDrag = (ev) => {
+      const st = state.autoReframeStudio;
+      if (!st.curveDrag.active) return;
+      st.curveDrag = { active: false, pointerId: null, kfIdx: -1 };
+      try {
+        if (ev && ev.pointerId !== undefined) curveCanvas.releasePointerCapture(ev.pointerId);
+      } catch {
+        // Ignore release errors
+      }
+      recompileAutoReframeFromKeyframes();
+    };
+    curveCanvas.addEventListener("pointerup", endCurveDrag);
+    curveCanvas.addEventListener("pointercancel", endCurveDrag);
+  }
 }
 
 bootstrap();

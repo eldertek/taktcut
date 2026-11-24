@@ -33,6 +33,7 @@ import {
   computeTitleOverlayAnchorBox,
   estimateFairlightCompressorGrClient,
   evaluateActiveNodeMaskAtClient,
+  evaluateAutoReframeAtTimeClient,
   evaluateClipFadeEnvelope,
   evaluateClipTransformAtTime,
   evaluateCornerPinsClient,
@@ -1835,6 +1836,7 @@ const REFRAME_ASPECT_MAP = {
   "9:16": 9 / 16,
   "4:5": 4 / 5,
   "1:1": 1,
+  "21:9": 21 / 9,
   "2.39:1": 2.39
 };
 
@@ -1917,7 +1919,9 @@ export function drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeSt
   ctx.stroke();
 
   // Ratio pill inside crop region
-  const pillText = `REFRAME ${ratioKey.toUpperCase()}`;
+  const pillText = reframeState.tracked
+    ? `AUTO REFRAME ${ratioKey.toUpperCase()} (${Math.round((Number(reframeState.confidence) || 0.9) * 100)}%)`
+    : `REFRAME ${ratioKey.toUpperCase()}`;
   ctx.font = "700 9px ui-monospace, monospace";
   const pillW = Math.min(Math.max(36, cropW - 8), ctx.measureText(pillText).width + 10);
   ctx.fillStyle = "rgba(230, 132, 66, 0.92)";
@@ -1926,6 +1930,31 @@ export function drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeSt
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
   ctx.fillText(fitCanvasText(ctx, pillText, Math.max(16, pillW - 8)), cropX + 8, cropY + 7);
+
+  // Subject saliency reticle when dynamic Auto Reframe tracking is active
+  if (reframeState.tracked && Number.isFinite(Number(reframeState.subject_x)) && Number.isFinite(Number(reframeState.subject_y))) {
+    const sx = fx + clamp01(Number(reframeState.subject_x)) * frameW;
+    const sy = fy + clamp01(Number(reframeState.subject_y)) * frameH;
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.95)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx - 15, sy);
+    ctx.lineTo(sx - 5, sy);
+    ctx.moveTo(sx + 5, sy);
+    ctx.lineTo(sx + 15, sy);
+    ctx.moveTo(sx, sy - 15);
+    ctx.lineTo(sx, sy - 5);
+    ctx.moveTo(sx, sy + 5);
+    ctx.lineTo(sx, sy + 15);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(56, 189, 248, 0.96)";
+    ctx.beginPath();
+    ctx.arc(sx, sy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   ctx.restore();
   return true;
@@ -4284,8 +4313,39 @@ export function drawProgramMonitorCanvas(
     canvas._planarTrackerGeom = null;
   }
 
-  // Auto-Reframe & Social Aspect Ratio Crop overlay
-  const reframeState = renderOpts && renderOpts.reframe ? renderOpts.reframe : null;
+  // Auto-Reframe & Social Aspect Ratio Crop overlay (dynamic tracked clip or static Deliver preview)
+  let reframeState = renderOpts && renderOpts.reframe ? renderOpts.reframe : null;
+  const arPreview = renderOpts && renderOpts.autoReframePreview ? renderOpts.autoReframePreview : null;
+  const arTopEntry = activeClips.find((entry) => entry.clip && entry.clip.auto_reframe && entry.clip.auto_reframe.enabled);
+  const fpsVal = doc && doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+  if (arPreview && arPreview.enabled && Array.isArray(arPreview.keyframes) && arPreview.keyframes.length > 0) {
+    const localFrames = Math.max(0, playheadFrame - (arPreview.clipStartFrame || 0));
+    const sample = evaluateAutoReframeAtTimeClient(arPreview.keyframes, localFrames / fpsVal);
+    reframeState = {
+      enabled: true,
+      aspect_ratio: arPreview.aspect_ratio || "9:16",
+      pan_x: sample.pan_x,
+      pan_y: sample.pan_y,
+      subject_x: sample.subject_x,
+      subject_y: sample.subject_y,
+      confidence: sample.confidence,
+      tracked: true
+    };
+  } else if (arTopEntry && arTopEntry.clip && arTopEntry.clip.auto_reframe) {
+    const arTrack = arTopEntry.clip.auto_reframe;
+    const localFrames = Math.max(0, playheadFrame - (arTopEntry.clip.start_frame || 0));
+    const sample = evaluateAutoReframeAtTimeClient(arTrack.keyframes || [], localFrames / fpsVal);
+    reframeState = {
+      enabled: true,
+      aspect_ratio: arTrack.aspect_ratio || "9:16",
+      pan_x: sample.pan_x,
+      pan_y: sample.pan_y,
+      subject_x: sample.subject_x,
+      subject_y: sample.subject_y,
+      confidence: sample.confidence,
+      tracked: true
+    };
+  }
   drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeState);
 
   // Cinematic Vignette preview overlay
@@ -5881,6 +5941,8 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           const mcTag = mcBank
             ? ` | MC ${(mcBank.angles || []).length}x/${(mcBank.cuts || []).length}C`
             : "";
+          const arTrack = clip.auto_reframe;
+          const arTag = arTrack && arTrack.enabled ? ` | AR ${arTrack.aspect_ratio}` : "";
           const avGid = normalizeClipLinkGroupId(clip.link_group_id);
           const avSplit = avGid ? computeAvSplitEditInfo(doc, trk.kind, trk.index, clipIndex) : null;
           let avLinkTag = "";
@@ -5904,7 +5966,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
               )}`
             : "";
           ctx.fillText(
-            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${avLinkTag}${cmpTag}${mcTag}${gainTag}${muteTag}${retimeTag}`,
+            `${clip.start_frame}-${clip.start_frame + clip.duration_frames}f${avLinkTag}${cmpTag}${mcTag}${arTag}${gainTag}${muteTag}${retimeTag}`,
             textStartX + 2,
             rowY + 32
           );
@@ -10410,4 +10472,171 @@ export function drawBroadcastHistogramCanvas(canvas, report, rawConfig) {
   for (const tick of [0, 25, 50, 75, 100]) {
     ctx.fillText(`${tick}`, ireToX(tick), height - 5);
   }
+}
+
+export function drawAutoReframeCurveCanvas(canvas, analysis, opts = {}) {
+  if (!canvas) return null;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const width = Math.max(260, canvas.clientWidth || 640);
+  const height = Math.max(150, canvas.clientHeight || 190);
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  ctx.fillStyle = "#0e1015";
+  ctx.fillRect(0, 0, width, height);
+
+  const padL = 42;
+  const padR = 14;
+  const padT = 26;
+  const padB = 24;
+  const plotW = Math.max(80, width - padL - padR);
+  const plotH = Math.max(60, height - padT - padB);
+
+  const keyframes = analysis && Array.isArray(analysis.keyframes) ? analysis.keyframes : [];
+  const rawSamples = analysis && Array.isArray(analysis.raw_samples) ? analysis.raw_samples : [];
+  const durationS = Math.max(
+    0.5,
+    Number(opts.duration_s ?? (analysis && analysis.config ? analysis.config.duration_s : 10)) || 10
+  );
+  const localTimeS = Math.max(0, Math.min(durationS, Number(opts.local_time_s ?? 0) || 0));
+  const selectedIdx = Number.isInteger(opts.selected_idx) ? opts.selected_idx : -1;
+
+  const tToX = (t) => padL + clamp01(t / durationS) * plotW;
+  const panToY = (pan) => padT + (1 - (clampNum(pan, -1, 1) + 1) * 0.5) * plotH;
+
+  // Grid lines (-1.0, -0.5, 0.0, +0.5, +1.0)
+  ctx.strokeStyle = "#1e222d";
+  ctx.lineWidth = 1;
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.fillStyle = "#7c8599";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (const val of [-1.0, -0.5, 0.0, 0.5, 1.0]) {
+    const yy = Math.round(panToY(val)) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(padL, yy);
+    ctx.lineTo(padL + plotW, yy);
+    ctx.stroke();
+    ctx.fillText(val === 0 ? "0.0" : val.toFixed(1), padL - 6, yy);
+  }
+  ctx.strokeStyle = "#2d3240";
+  ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
+
+  // Raw saliency trajectory (dashed)
+  if (rawSamples.length >= 2) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.36)";
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    for (let i = 0; i < rawSamples.length; i += 1) {
+      const s = rawSamples[i];
+      const rx = tToX(s.time_s);
+      const ry = panToY((Number(s.subject_x ?? 0.5) - 0.5) * 2);
+      if (i === 0) ctx.moveTo(rx, ry);
+      else ctx.lineTo(rx, ry);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Smoothed pan_y(t) curve (cyan)
+  if (keyframes.length >= 1) {
+    const steps = Math.max(48, Math.min(180, Math.round(plotW / 3)));
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i += 1) {
+      const t = (i / steps) * durationS;
+      const ev = evaluateAutoReframeAtTimeClient(keyframes, t);
+      const px = tToX(t);
+      const py = panToY(ev.pan_y);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+
+    // Smoothed pan_x(t) curve (amber)
+    ctx.strokeStyle = "#e68442";
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i += 1) {
+      const t = (i / steps) * durationS;
+      const ev = evaluateAutoReframeAtTimeClient(keyframes, t);
+      const px = tToX(t);
+      const py = panToY(ev.pan_x);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+
+  // Playhead line
+  const phX = Math.round(tToX(localTimeS)) + 0.5;
+  ctx.strokeStyle = "#ef4444";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(phX, padT);
+  ctx.lineTo(phX, padT + plotH);
+  ctx.stroke();
+
+  // Keyframe nodes (diamonds)
+  const hitNodes = [];
+  for (let i = 0; i < keyframes.length; i += 1) {
+    const kf = keyframes[i];
+    const kx = tToX(kf.time_s);
+    const ky = panToY(kf.pan_x);
+    const isSel = i === selectedIdx;
+    const sz = isSel ? 6.5 : 5;
+    ctx.fillStyle = isSel ? "#ffffff" : kf.is_manual ? "#facc15" : "#e68442";
+    ctx.strokeStyle = "#0e1015";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(kx, ky - sz);
+    ctx.lineTo(kx + sz, ky);
+    ctx.lineTo(kx, ky + sz);
+    ctx.lineTo(kx - sz, ky);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    hitNodes.push({ index: i, x: kx, y: ky, time_s: kf.time_s, pan_x: kf.pan_x, pan_y: kf.pan_y });
+  }
+
+  // Header legend
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#e68442";
+  ctx.fillText("PAN X", padL, 7);
+  ctx.fillStyle = "#38bdf8";
+  ctx.fillText("PAN Y", padL + 46, 7);
+  ctx.fillStyle = "#94a3b8";
+  ctx.fillText("RAW SALIENCY", padL + 94, 7);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.fillText(`${keyframes.length} KF | t=${localTimeS.toFixed(2)}s / ${durationS.toFixed(2)}s`, padL + plotW, 7);
+
+  // Time ticks
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.fillStyle = "#94a3b8";
+  ctx.textBaseline = "bottom";
+  for (let idx = 0; idx <= 4; idx += 1) {
+    const tTick = (idx / 4) * durationS;
+    ctx.textAlign = idx === 0 ? "left" : idx === 4 ? "right" : "center";
+    ctx.fillText(`${tTick.toFixed(1)}s`, tToX(tTick), height - 5);
+  }
+
+  return {
+    padL,
+    padT,
+    plotW,
+    plotH,
+    durationS,
+    hitNodes
+  };
 }

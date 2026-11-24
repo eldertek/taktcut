@@ -10,7 +10,7 @@ from fractions import Fraction
 from math import gcd
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _check_finite_number(raw: Any, field_name: str) -> float:
@@ -192,6 +192,14 @@ ReelSlatePosition = Literal["off", "top_right", "bottom_left"]
 RenderQueueJobStatus = Literal["queued", "rendering", "completed", "failed", "skipped"]
 LowerThirdPosition = Literal["bottom_left", "bottom_center", "top_left"]
 ReframeAspectRatio = Literal["source", "16:9", "9:16", "4:5", "1:1", "2.39:1"]
+AutoReframeAspectRatio = Literal["9:16", "4:5", "1:1", "21:9", "16:9"]
+AutoReframeMotionPreset = Literal["slower", "default", "faster"]
+AutoReframeSubjectPriority = Literal[
+    "auto_saliency",
+    "face_headroom",
+    "action_center",
+    "manual_override",
+]
 FilmGrainPresetId = Literal["35mm_fine", "16mm_organic", "super8_heavy", "custom"]
 VignettePresetId = Literal["subtle_cinema", "moody_portrait", "heavy_noir", "custom"]
 VignetteMode = Literal["forward", "backward"]
@@ -277,6 +285,24 @@ ALLOWED_REFRAME_ASPECT_RATIOS: tuple[ReframeAspectRatio, ...] = (
     "4:5",
     "1:1",
     "2.39:1",
+)
+ALLOWED_AUTO_REFRAME_ASPECT_RATIOS: tuple[AutoReframeAspectRatio, ...] = (
+    "9:16",
+    "4:5",
+    "1:1",
+    "21:9",
+    "16:9",
+)
+ALLOWED_AUTO_REFRAME_MOTION_PRESETS: tuple[AutoReframeMotionPreset, ...] = (
+    "slower",
+    "default",
+    "faster",
+)
+ALLOWED_AUTO_REFRAME_SUBJECT_PRIORITIES: tuple[AutoReframeSubjectPriority, ...] = (
+    "auto_saliency",
+    "face_headroom",
+    "action_center",
+    "manual_override",
 )
 ALLOWED_FILM_GRAIN_PRESETS: tuple[FilmGrainPresetId, ...] = (
     "35mm_fine",
@@ -1232,6 +1258,39 @@ def compute_retime_ramp_summary(
     }
 
 
+class AutoReframeKeyframe(BaseModel):
+    """Subject-tracking pan keyframe for dynamic multi-aspect Auto Reframe."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    time_s: float = Field(ge=0.0, le=86400.0)
+    frame: int = Field(default=0, ge=0)
+    pan_x: float = Field(default=0.0, ge=-1.0, le=1.0)
+    pan_y: float = Field(default=0.0, ge=-1.0, le=1.0)
+    subject_x: float = Field(default=0.5, ge=0.0, le=1.0)
+    subject_y: float = Field(default=0.44, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.9, ge=0.0, le=1.0)
+    is_manual: bool = False
+
+
+class ClipAutoReframeTrack(BaseModel):
+    """Non-destructive Auto Reframe subject-tracking envelope stored on a TimelineClip."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    aspect_ratio: AutoReframeAspectRatio = "9:16"
+    motion_preset: AutoReframeMotionPreset = "default"
+    subject_priority: AutoReframeSubjectPriority = "auto_saliency"
+    headroom_bias: float = Field(default=-0.12, ge=-0.5, le=0.5)
+    keyframes: list[AutoReframeKeyframe] = Field(default_factory=list, max_length=256)
+
+    @field_validator("keyframes", mode="after")
+    @classmethod
+    def _sort_keyframes(cls, value: list[AutoReframeKeyframe]) -> list[AutoReframeKeyframe]:
+        return sorted(value, key=lambda kf: (kf.time_s, kf.frame))
+
+
 class TimelineClip(BaseModel):
     """An editorial clip item positioned in exact integer frames."""
 
@@ -1258,6 +1317,7 @@ class TimelineClip(BaseModel):
     transform: ClipTransformParams | None = None
     compound_subsequence: CompoundSubSequence | None = None
     multicam_bank: MulticamBank | None = None
+    auto_reframe: ClipAutoReframeTrack | None = None
     proxy_path: str = ""
     proxy_scale: ProxyScaleOption | None = None
     proxy_codec: ProxyCodecId | None = None

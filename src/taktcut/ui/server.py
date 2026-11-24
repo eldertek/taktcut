@@ -30,6 +30,15 @@ from taktcut.audio_analysis import (
     analyze_audio_spectrum,
     detect_audio_transients,
 )
+from taktcut.auto_reframe import (
+    analyze_auto_reframe_clip,
+    apply_auto_reframe_to_document,
+    clear_auto_reframe_from_document,
+    compile_auto_reframe_filtergraph,
+    list_auto_reframe_aspect_specs,
+    list_auto_reframe_motion_presets,
+    normalize_auto_reframe_config,
+)
 from taktcut.broadcast_monitor import (
     ALLOWED_FALSE_COLOR_PALETTES,
     analyze_broadcast_compliance,
@@ -147,6 +156,7 @@ from taktcut.models import (
     TRANSFORM_SHADOW_OPACITY_MIN,
     AscCdlParams,
     AudioOnlyFormatId,
+    AutoReframeKeyframe,
     ClipTransformParams,
     CompoundColorTag,
     CompoundSubSequence,
@@ -1909,6 +1919,26 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/timeline/auto-reframe/presets":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "aspects": [
+                        a.model_dump(mode="json") for a in list_auto_reframe_aspect_specs()
+                    ],
+                    "motion_presets": [
+                        m.model_dump(mode="json") for m in list_auto_reframe_motion_presets()
+                    ],
+                    "subject_priorities": [
+                        "auto_saliency",
+                        "face_headroom",
+                        "action_center",
+                        "manual_override",
+                    ],
+                },
+            )
+            return
+
         if route == "/api/transform/presets":
             self._send_json(
                 HTTPStatus.OK,
@@ -3572,6 +3602,133 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 execute_ffmpeg=exec_ffmpeg,
             )
             self._send_json(HTTPStatus.OK, bm_report.model_dump(mode="json"))
+            return
+
+        if route == "/api/timeline/auto-reframe/analyze":
+            raw_cfg_val = payload.get("config")
+            ar_cfg_raw = dict(raw_cfg_val) if isinstance(raw_cfg_val, dict) else {}
+            ar_clip_name = str(payload.get("clip_name", "")).strip() or "Sequence Clip"
+            raw_media_path = payload.get("media_path")
+            ar_media_path = (
+                str(raw_media_path).strip()
+                if isinstance(raw_media_path, str) and raw_media_path.strip()
+                else None
+            )
+            if payload.get("document") is not None:
+                ar_doc = _resolve_timeline_from_payload(self.app_state, payload)
+                trk_idx = int(payload.get("track_index", 1))
+                clp_idx = int(payload.get("clip_index", 0))
+                fps_val = ar_doc.fps.as_float if ar_doc.fps else 25.0
+                for trk in ar_doc.tracks:
+                    if (
+                        trk.kind == "video"
+                        and trk.index == trk_idx
+                        and 0 <= clp_idx < len(trk.clips)
+                    ):
+                        target_clp = trk.clips[clp_idx]
+                        ar_clip_name = target_clp.name
+                        if not ar_media_path and target_clp.source_path:
+                            ar_media_path = target_clp.source_path
+                        ar_cfg_raw.setdefault("fps", fps_val)
+                        ar_cfg_raw.setdefault(
+                            "duration_s",
+                            max(0.2, target_clp.duration_frames / max(1.0, fps_val)),
+                        )
+                        break
+            ar_cfg = normalize_auto_reframe_config(ar_cfg_raw)
+            raw_custom = payload.get("custom_samples")
+            custom_samples = (
+                raw_custom if isinstance(raw_custom, list) and len(raw_custom) > 0 else None
+            )
+            ar_res = analyze_auto_reframe_clip(
+                config=ar_cfg,
+                clip_name=ar_clip_name,
+                media_path=ar_media_path,
+                workspace_root=self.app_state.workspace_root,
+                execute_ffmpeg=bool(payload.get("execute_ffmpeg", False)),
+                custom_samples=custom_samples,
+            )
+            self._send_json(HTTPStatus.OK, ar_res.model_dump(mode="json"))
+            return
+
+        if route == "/api/timeline/auto-reframe/compile":
+            ar_cfg = normalize_auto_reframe_config(payload.get("config"))
+            raw_kfs = payload.get("keyframes")
+            kfs_list = (
+                [AutoReframeKeyframe.model_validate(item) for item in raw_kfs]
+                if isinstance(raw_kfs, list)
+                else []
+            )
+            ar_compiled = compile_auto_reframe_filtergraph(ar_cfg, kfs_list)
+            self._send_json(HTTPStatus.OK, ar_compiled.model_dump(mode="json"))
+            return
+
+        if route == "/api/timeline/auto-reframe/apply":
+            ar_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            trk_kind_raw = str(payload.get("track_kind", "video")).strip().lower()
+            trk_kind: Literal["video", "audio"] = "audio" if trk_kind_raw == "audio" else "video"
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            ar_cfg = normalize_auto_reframe_config(payload.get("config"))
+            raw_kfs = payload.get("keyframes")
+            apply_kfs = raw_kfs if isinstance(raw_kfs, list) else None
+            ar_applied = apply_auto_reframe_to_document(
+                ar_doc,
+                track_kind=trk_kind,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+                config=ar_cfg,
+                keyframes=apply_kfs,
+            )
+            val = validate_timeline(ar_applied.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": ar_applied.changed,
+                    "track_kind": ar_applied.track_kind,
+                    "track_index": ar_applied.track_index,
+                    "clip_index": ar_applied.clip_index,
+                    "clip_name": ar_applied.clip_name,
+                    "auto_reframe": ar_applied.auto_reframe.model_dump(mode="json")
+                    if ar_applied.auto_reframe
+                    else None,
+                    "compiled": ar_applied.compiled.model_dump(mode="json")
+                    if ar_applied.compiled
+                    else None,
+                    "document": ar_applied.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/timeline/auto-reframe/clear":
+            ar_doc = _resolve_timeline_from_payload(self.app_state, payload)
+            trk_kind_raw = str(payload.get("track_kind", "video")).strip().lower()
+            trk_kind_clear: Literal["video", "audio"] = (
+                "audio" if trk_kind_raw == "audio" else "video"
+            )
+            trk_idx = int(payload.get("track_index", 1))
+            clp_idx = int(payload.get("clip_index", 0))
+            ar_cleared = clear_auto_reframe_from_document(
+                ar_doc,
+                track_kind=trk_kind_clear,
+                track_index=trk_idx,
+                clip_index=clp_idx,
+            )
+            val = validate_timeline(ar_cleared.document)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "changed": ar_cleared.changed,
+                    "track_kind": ar_cleared.track_kind,
+                    "track_index": ar_cleared.track_index,
+                    "clip_index": ar_cleared.clip_index,
+                    "clip_name": ar_cleared.clip_name,
+                    "auto_reframe": None,
+                    "document": ar_cleared.document.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                },
+            )
             return
 
         if route == "/api/render/plan":
