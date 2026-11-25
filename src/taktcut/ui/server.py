@@ -1252,6 +1252,9 @@ def _compile_timeline_render_plan_from_payload(
             else None
         ),
         lut_path=lut_str,
+        output_blanking=(
+            str(payload.get("output_blanking") or doc.output_blanking or "off").strip()
+        ),
         fusion_nodes=(
             payload["fusion_nodes"]
             if isinstance(payload.get("fusion_nodes"), list)

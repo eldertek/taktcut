@@ -3181,6 +3181,16 @@ export function drawProgramMonitorCanvas(
       }
     }
   }
+  if (doc && doc.output_blanking && String(doc.output_blanking).toLowerCase() !== "off") {
+    const parsedOb = Number.parseFloat(String(doc.output_blanking));
+    if (Number.isFinite(parsedOb) && parsedOb > 1.79) {
+      perClipFxNodes.push({
+        effect: "letterbox",
+        enabled: true,
+        params: { ratio: parsedOb }
+      });
+    }
+  }
   const hoverFxNodes = [];
   if (livePreview && livePreview.dropKind === "clip-fx") {
     hoverFxNodes.push({

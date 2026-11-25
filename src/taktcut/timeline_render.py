@@ -53,6 +53,7 @@ class TimelineRenderRequest(BaseModel):
     loudness_preset: str = "off"
     color_grade: dict[str, Any] | None = None
     lut_path: str | None = None
+    output_blanking: str | None = None
     fusion_nodes: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -113,6 +114,26 @@ _FONT_SEARCH_CANDIDATES: dict[str, tuple[str, ...]] = {
         "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/segoeui.ttf",
     ),
+    "bahnschrift": (
+        "C:/Windows/Fonts/bahnschrift.ttf",
+        "C:/Windows/Fonts/segoeuil.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ),
+    "segoe_light": (
+        "C:/Windows/Fonts/segoeuil.ttf",
+        "C:/Windows/Fonts/bahnschrift.ttf",
+        "C:/Windows/Fonts/segoeui.ttf",
+    ),
+    "garamond": (
+        "C:/Windows/Fonts/GARA.TTF",
+        "C:/Windows/Fonts/georgia.ttf",
+        "C:/Windows/Fonts/times.ttf",
+    ),
+    "georgia": (
+        "C:/Windows/Fonts/georgia.ttf",
+        "C:/Windows/Fonts/GARA.TTF",
+        "C:/Windows/Fonts/times.ttf",
+    ),
     "mono": (
         "C:/Windows/Fonts/consolab.ttf",
         "C:/Windows/Fonts/consola.ttf",
@@ -160,6 +181,14 @@ def resolve_title_font(font_name: str | None) -> Path | None:
     if "anton" in key:
         candidates.append(ui_fonts / "Anton-Regular.ttf")
         candidates.extend(Path(p) for p in _FONT_SEARCH_CANDIDATES["anton"])
+    elif "bahnschrift" in key or "din" in key or "cinema_sans" in key:
+        candidates.extend(Path(p) for p in _FONT_SEARCH_CANDIDATES["bahnschrift"])
+    elif "segoe_light" in key or "light" in key or "thin" in key:
+        candidates.extend(Path(p) for p in _FONT_SEARCH_CANDIDATES["segoe_light"])
+    elif "garamond" in key or "cinema_serif" in key or "serif" in key:
+        candidates.extend(Path(p) for p in _FONT_SEARCH_CANDIDATES["garamond"])
+    elif "georgia" in key:
+        candidates.extend(Path(p) for p in _FONT_SEARCH_CANDIDATES["georgia"])
     elif "impact" in key:
         candidates.extend(Path(p) for p in _FONT_SEARCH_CANDIDATES["impact"])
     elif "mono" in key or "consola" in key or "courier" in key:
@@ -326,6 +355,42 @@ def _compile_resolve_fx_filters(
         elif any(k in key for k in ("horror_red", "crimson", "red_tint")):
             filters.append("colorchannelmixer=rr=1.22:gg=0.52:bb=0.46")
             filters.append("eq=contrast=1.25:brightness=-0.06")
+        elif any(k in key for k in ("kodak_2383", "film_look_creator", "film_look")):
+            # DaVinci Resolve Film Look Creator / Kodak 2383 print curve + fine 35mm grain
+            s_amt = max(0.25, min(1.5, strength))
+            filters.append(
+                f"colorbalance=rs={-0.06 * s_amt:.3f}:gs={-0.01 * s_amt:.3f}:bs={0.07 * s_amt:.3f}:"
+                f"rm={-0.02 * s_amt:.3f}:gm={-0.01 * s_amt:.3f}:bm={0.03 * s_amt:.3f}:"
+                f"rh={0.03 * s_amt:.3f}:gh={0.01 * s_amt:.3f}:bh={-0.02 * s_amt:.3f}"
+            )
+            filters.append(
+                f"eq=contrast={1.0 + 0.14 * s_amt:.3f}:"
+                f"saturation={max(0.4, 1.0 - 0.16 * s_amt):.3f}:brightness=-0.025"
+            )
+            filters.append(f"noise=alls={max(4, min(14, round(6 * s_amt)))}:allf=t+u")
+            filters.append(f"vignette=angle={min(0.95, 0.44 + 0.14 * s_amt):.3f}")
+        elif any(k in key for k in ("horror_cold", "teal_dread", "midnight_horror")):
+            s_amt = max(0.25, min(1.5, strength))
+            filters.append(
+                f"colorbalance=rs={-0.10 * s_amt:.3f}:gs={-0.02 * s_amt:.3f}:bs={0.11 * s_amt:.3f}:"
+                f"rm={-0.05 * s_amt:.3f}:gm={-0.01 * s_amt:.3f}:bm={0.05 * s_amt:.3f}"
+            )
+            filters.append(
+                f"eq=contrast={1.0 + 0.20 * s_amt:.3f}:"
+                f"saturation={max(0.35, 1.0 - 0.30 * s_amt):.3f}:brightness=-0.045"
+            )
+            filters.append(f"vignette=angle={min(1.1, 0.50 + 0.18 * s_amt):.3f}")
+        elif any(k in key for k in ("warm_christmas", "hearth_warm")):
+            s_amt = max(0.25, min(1.5, strength))
+            filters.append(
+                f"colorbalance=rs={0.07 * s_amt:.3f}:gs={0.03 * s_amt:.3f}:bs={-0.07 * s_amt:.3f}:"
+                f"rm={0.04 * s_amt:.3f}:gm={0.02 * s_amt:.3f}:bm={-0.04 * s_amt:.3f}"
+            )
+            filters.append(
+                f"eq=contrast={1.0 + 0.08 * s_amt:.3f}:"
+                f"saturation={1.0 + 0.12 * s_amt:.3f}:brightness=0.01"
+            )
+            filters.append(f"vignette=angle={min(0.85, 0.38 + 0.10 * s_amt):.3f}")
         elif any(k in key for k in ("invert", "negative")):
             filters.append("negate")
     return filters
@@ -335,7 +400,9 @@ def _has_glow_fx(fx_list: list[dict[str, Any]]) -> tuple[bool, float, str]:
     for fx in fx_list:
         if not isinstance(fx, dict) or fx.get("enabled", True) is False:
             continue
-        raw_id = str(fx.get("id") or fx.get("effect_id") or fx.get("name") or "").strip().lower()
+        raw_id = str(
+            fx.get("id") or fx.get("effect_id") or fx.get("effect") or fx.get("name") or ""
+        ).strip().lower()
         if any(k in raw_id for k in ("glow", "halation", "bloom", "light_ray")):
             strength = max(
                 0.1,
@@ -401,6 +468,17 @@ def _compile_fairlight_audio_fx(
         elif any(k in key for k in ("bass_boost", "sub", "lfe")):
             gain = max(1.0, min(12.0, _as_float(fx.get("gain_db", p.get("gain_db", 5.5)), 5.5)))
             af.append(f"equalizer=f=60:t=q:w=1.1:g={gain:.1f}")
+        elif any(k in key for k in ("wow_flutter", "music_box_warp", "detune")):
+            freq = max(0.4, min(8.0, _as_float(fx.get("frequency", p.get("frequency", 2.8)), 2.8)))
+            depth = max(0.05, min(0.95, _as_float(fx.get("depth", p.get("depth", 0.38)), 0.38)))
+            af.append(f"vibrato=f={freq:.2f}:d={depth:.2f}")
+            af.append("lowpass=f=3600")
+        elif any(k in key for k in ("pan", "spatial_pan")):
+            pan_val = max(-1.0, min(1.0, _as_float(fx.get("pan", p.get("pan", 0.0)), 0.0)))
+            ang = (pan_val + 1.0) * math.pi * 0.25
+            left_g = math.cos(ang) * 1.414
+            right_g = math.sin(ang) * 1.414
+            af.append(f"pan=stereo|c0={left_g:.3f}*c0|c1={right_g:.3f}*c1")
         elif any(k in key for k in ("eq", "highpass", "lowpass")):
             hp = _as_float(fx.get("highpass_hz", p.get("highpass_hz", 0.0)), 0.0)
             lp = _as_float(fx.get("lowpass_hz", p.get("lowpass_hz", 0.0)), 0.0)
@@ -409,6 +487,55 @@ def _compile_fairlight_audio_fx(
             if lp >= 200.0:
                 af.append(f"lowpass=f={min(18000.0, lp):.0f}")
     return af
+
+
+def _find_tape_stop_fx(audio_fx_list: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return Fairlight tape_stop / pitch_drop FX config if enabled on clip."""
+    for fx in audio_fx_list:
+        if not isinstance(fx, dict) or fx.get("enabled", True) is False:
+            continue
+        raw_id = (
+            str(fx.get("id") or fx.get("kind") or fx.get("plugin") or fx.get("name") or "")
+            .strip()
+            .lower()
+        )
+        key = re.sub(r"[^a-z0-9]+", "_", raw_id).strip("_")
+        if any(k in key for k in ("tape_stop", "pitch_drop", "wind_down")):
+            return fx
+    return None
+
+
+def _parse_output_blanking_ratio(raw: str | None) -> float | None:
+    """Parse Resolve Timeline -> Output Blanking aspect ratio (e.g. '2.39', '2.39:1', '2.35')."""
+    if not raw:
+        return None
+    cleaned = str(raw).strip().lower()
+    if cleaned in ("", "off", "none", "0", "16:9", "1.77", "1.78"):
+        return None
+    if ":" in cleaned:
+        parts = cleaned.split(":", 1)
+        try:
+            num = float(parts[0])
+            den = float(parts[1])
+            if num > 0.5 and den > 0.0:
+                return num / den
+        except ValueError:
+            return None
+    try:
+        val = float(cleaned)
+        return val if val > 1.0 else None
+    except ValueError:
+        return None
+
+
+def _apply_cinema_tracking(text: str, tracking: float) -> str:
+    """Apply proportional Resolve Text+ character tracking via clean space spacing."""
+    if tracking <= 0.05 or not text:
+        return text
+    char_sep = "  " if tracking >= 1.2 else " "
+    word_sep = "    " if tracking >= 1.2 else "   "
+    words = [w for w in text.split(" ") if w]
+    return word_sep.join(char_sep.join(list(word)) for word in words)
 
 
 def _build_title_filter_chain(
@@ -453,7 +580,10 @@ def _build_title_filter_chain(
         shake_px = 9.0
 
     y_offset_pct = float(tp.get("y_offset_pct", 0.0))
-    line_spacing = round(base_fs * 1.24)
+    tracking = max(0.0, min(3.0, _as_float(tp.get("tracking", tp.get("letter_spacing", 0.0)), 0.0)))
+    sub_tracking = max(0.0, min(3.0, _as_float(tp.get("sub_tracking", tracking), tracking)))
+    line_mult = max(1.0, min(2.4, _as_float(tp.get("line_spacing_mult", 1.28), 1.28)))
+    line_spacing = round(base_fs * line_mult)
     total_text_h = line_spacing * len(lines)
     base_y_center = round(height * (0.5 + y_offset_pct / 100.0) - total_text_h / 2)
 
@@ -472,9 +602,12 @@ def _build_title_filter_chain(
 
     draw_filters: list[str] = []
     for idx, line in enumerate(lines):
-        esc = escape_ffmpeg_drawtext_text(line)
+        is_sub = bool(subtitle and idx == len(lines) - 1)
+        tr_amt = sub_tracking if is_sub else tracking
+        spaced_line = _apply_cinema_tracking(line, tr_amt)
+        esc = escape_ffmpeg_drawtext_text(spaced_line)
         line_color = _hex_to_ffmpeg(accent_hex) if idx == accent_line else ff_color
-        fs_cur = round(base_fs * 0.62) if (subtitle and idx == len(lines) - 1) else base_fs
+        fs_cur = round(base_fs * 0.56) if is_sub else base_fs
         y_pos = base_y_center + idx * line_spacing
         if shake_px > 0.1:
             x_expr = f"(w-text_w)/2+{shake_px:.1f}*sin(t*51+{idx})"
@@ -492,14 +625,16 @@ def _build_title_filter_chain(
             f"drawtext={font_opt}expansion=none:text='{esc}'"
             f":fontsize={fs_cur}:fontcolor={line_color}"
             f":alpha='{alpha_expr}'"
-            f":shadowcolor=black@0.85:shadowx=0:shadowy=4"
+            f":shadowcolor=black@0.85:shadowx=0:shadowy=3"
             f":x='{x_expr}':y='{y_expr}'{enable_part}"
         )
 
     chains: list[str] = []
     raw_lbl = f"{prefix}_txt_raw"
+    bg_raw = str(tp.get("bg_color") or "").strip()
+    bg_color_opt = _hex_to_ffmpeg(bg_raw) if bg_raw else "black@0.0"
     chains.append(
-        f"color=c=black@0.0:s={width}x{height}:r={fps:.4f}:d={dur_s:.4f},"
+        f"color=c={bg_color_opt}:s={width}x{height}:r={fps:.4f}:d={dur_s:.4f},"
         f"format=rgba,{','.join(draw_filters)}[{raw_lbl}]"
     )
 
@@ -669,6 +804,7 @@ def build_timeline_render_plan(
         key=lambda t: t.index,
     )
     for trk in video_tracks:
+        visible_clips: list[tuple[int, TimelineClip, float, float, float, float, float]] = []
         for c_idx, clip in enumerate(sorted(trk.clips, key=lambda c: c.start_frame)):
             if not clip.enabled or clip.duration_frames <= 0:
                 continue
@@ -676,12 +812,49 @@ def build_timeline_render_plan(
             c_end_s = (clip.start_frame + clip.duration_frames) / fps
             if c_end_s <= start_s or c_start_s >= end_s:
                 continue
-
             vis_start = max(c_start_s, start_s)
             vis_end = min(c_end_s, end_s)
             vis_dur = max(1.0 / fps, vis_end - vis_start)
             rel_start = vis_start - start_s
             trim_head = max(0.0, vis_start - c_start_s)
+            visible_clips.append((c_idx, clip, vis_start, vis_end, vis_dur, rel_start, trim_head))
+
+        incoming_dissolve: tuple[float, str] | None = None
+        dip_overlays: list[tuple[float, float, str]] = []
+
+        for v_i, (c_idx, clip, _vis_start, _vis_end, vis_dur, rel_start, trim_head) in enumerate(
+            visible_clips
+        ):
+            cur_in_dissolve = incoming_dissolve
+            incoming_dissolve = None
+
+            # Inspect outgoing DaVinci Resolve transition on this clip
+            tail_ext_s = 0.0
+            tr_out = clip.transition_out
+            if tr_out is not None:
+                tr_style = (tr_out.trans_style or "").strip().lower()
+                tr_preset = (tr_out.preset or "fade").strip().lower()
+                tr_dur = max(0.10, min(float(tr_out.duration_s), vis_dur * 0.95))
+                if tr_preset == "fadeblack" or tr_style in ("dip_color", "brightness_flash"):
+                    dip_hex = (
+                        "#ffffff"
+                        if tr_style == "brightness_flash"
+                        else _sanitize_hex_color(tr_out.dip_color, "#000000")
+                    )
+                    dip_overlays.append((rel_start + vis_dur, tr_dur, dip_hex))
+                elif v_i + 1 < len(visible_clips):
+                    nxt_tuple = visible_clips[v_i + 1]
+                    nxt_vis_dur = nxt_tuple[4]
+                    nxt_rel_start = nxt_tuple[5]
+                    if nxt_rel_start <= rel_start + vis_dur + 0.15:
+                        overlap_d = max(
+                            0.08,
+                            min(tr_dur, vis_dur * 0.48, nxt_vis_dur * 0.48),
+                        )
+                        tail_ext_s = overlap_d
+                        incoming_dissolve = (overlap_d, tr_style or "cross")
+
+            eff_dur = vis_dur + tail_ext_s
             prefix = f"v{trk.index}_{c_idx}_{v_step}"
             clip_lbl = f"{prefix}_ready"
 
@@ -693,7 +866,7 @@ def build_timeline_render_plan(
                         width=w,
                         height=h,
                         fps=fps,
-                        dur_s=vis_dur,
+                        dur_s=eff_dur,
                         prefix=prefix,
                     )
                 )
@@ -705,7 +878,7 @@ def build_timeline_render_plan(
                         width=w,
                         height=h,
                         fps=fps,
-                        dur_s=vis_dur,
+                        dur_s=eff_dur,
                         prefix=prefix,
                     )
                 )
@@ -723,12 +896,12 @@ def build_timeline_render_plan(
                 src_fps = clip.source_fps.as_float if clip.source_fps else fps
                 speed = max(0.25, min(4.0, float(clip.speed_rate or 1.0)))
                 src_in_s = (clip.source_in_frame / max(1.0, src_fps)) + trim_head * speed
-                src_read_s = vis_dur * speed + 0.15
+                src_read_s = eff_dur * speed + 0.20
 
                 in_i = input_idx
                 input_idx += 1
                 if is_image:
-                    inputs.extend(["-loop", "1", "-t", f"{vis_dur:.4f}", "-i", str(src_path)])
+                    inputs.extend(["-loop", "1", "-t", f"{eff_dur:.4f}", "-i", str(src_path)])
                 else:
                     inputs.extend(
                         [
@@ -747,11 +920,13 @@ def build_timeline_render_plan(
                 pos_x_pct = 0.0
                 pos_y_pct = 0.0
                 rot_deg = 0.0
+                dz_mode = "off"
                 if clip.transform is not None:
                     zoom_pct = float(clip.transform.zoom_pct)
                     pos_x_pct = float(clip.transform.pos_x_pct)
                     pos_y_pct = float(clip.transform.pos_y_pct)
                     rot_deg = float(clip.transform.rotation_deg)
+                    dz_mode = str(clip.transform.dynamic_zoom or "off").strip().lower()
 
                 if not is_image and abs(speed - 1.0) > 0.005:
                     chain.append(f"setpts=PTS/{speed:.5f}")
@@ -780,7 +955,38 @@ def build_timeline_render_plan(
 
                 chain.append(f"fps={fps:.4f}")
                 chain.append("setsar=1")
-                chain.append(f"trim=duration={vis_dur:.4f},setpts=PTS-STARTPTS")
+                if not is_image and tail_ext_s > 0.01:
+                    chain.append(f"tpad=stop_mode=clone:stop_duration={tail_ext_s + 0.15:.4f}")
+                chain.append(f"trim=duration={eff_dur:.4f},setpts=PTS-STARTPTS")
+
+                # DaVinci Resolve Dynamic Zoom (smooth subpixel cinema push-in/pull-out/pan)
+                if dz_mode != "off":
+                    dz_frames = max(2, round(eff_dur * fps))
+                    if dz_mode == "slow_zoom_in":
+                        chain.append(
+                            f"zoompan=z='1+0.10*min(1,on/{dz_frames})':"
+                            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                            f"d=1:s={w}x{h}:fps={fps:.4f}"
+                        )
+                    elif dz_mode == "slow_zoom_out":
+                        chain.append(
+                            f"zoompan=z='1.10-0.10*min(1,on/{dz_frames})':"
+                            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                            f"d=1:s={w}x{h}:fps={fps:.4f}"
+                        )
+                    elif dz_mode == "pan_left_to_right":
+                        chain.append(
+                            f"zoompan=z='1.08':"
+                            f"x='(iw-iw/zoom)*min(1,on/{dz_frames})':y='ih/2-(ih/zoom/2)':"
+                            f"d=1:s={w}x{h}:fps={fps:.4f}"
+                        )
+                    elif dz_mode == "pan_right_to_left":
+                        chain.append(
+                            f"zoompan=z='1.08':"
+                            f"x='(iw-iw/zoom)*(1-min(1,on/{dz_frames}))':y='ih/2-(ih/zoom/2)':"
+                            f"d=1:s={w}x{h}:fps={fps:.4f}"
+                        )
+                    chain.append(f"trim=duration={eff_dur:.4f},setpts=PTS-STARTPTS")
 
                 # Per-clip Color Grade
                 if clip.color_grade:
@@ -801,10 +1007,10 @@ def build_timeline_render_plan(
                 filter_parts.append(f"[{in_i}:v]{','.join(chain)}[{base_src_lbl}]")
                 cur_c = base_src_lbl
 
-                # Optional Glow / Halation pass
+                # Optional Glow / Highlight-targeted 35mm Halation pass
                 has_glow, g_str, g_tint = _has_glow_fx(clip.resolve_fx)
                 if has_glow:
-                    sigma = max(4.0, min(28.0, 8.0 + g_str * 14.0))
+                    sigma = max(4.0, min(28.0, 10.0 + g_str * 12.0))
                     g_a, g_b, g_bl, g_out = (
                         f"{prefix}_ga",
                         f"{prefix}_gb",
@@ -812,33 +1018,64 @@ def build_timeline_render_plan(
                         f"{prefix}_gout",
                     )
                     filter_parts.append(f"[{cur_c}]split[{g_a}][{g_b}]")
-                    tint_f = (
-                        ",colorchannelmixer=rr=1.35:gg=0.35:bb=0.25"
-                        if g_tint == "red"
-                        else ""
-                    )
+                    if g_tint == "red":
+                        # True Resolve Film Halation: extract bright highlights only (>168)
+                        filter_parts.append(
+                            f"[{g_b}]format=rgb24,"
+                            "lutrgb=r='if(gt(val,168),(val-168)*2.6,0)':"
+                            "g='if(gt(val,168),(val-168)*0.68,0)':"
+                            "b='if(gt(val,168),(val-168)*0.26,0)',"
+                            f"gblur=sigma={sigma:.1f},format=rgba[{g_bl}]"
+                        )
+                        hal_op = min(0.65, max(0.15, g_str * 0.55))
+                    else:
+                        filter_parts.append(
+                            f"[{g_b}]gblur=sigma={sigma:.1f},format=rgba[{g_bl}]"
+                        )
+                        hal_op = min(0.85, g_str)
                     filter_parts.append(
-                        f"[{g_b}]gblur=sigma={sigma:.1f}{tint_f},format=rgba[{g_bl}]"
-                    )
-                    filter_parts.append(
-                        f"[{g_a}][{g_bl}]blend=all_mode=screen:all_opacity={min(0.95, g_str):.2f},"
+                        f"[{g_a}][{g_bl}]blend=all_mode=screen:all_opacity={hal_op:.2f},"
                         f"format=rgba[{g_out}]"
                     )
                     cur_c = g_out
 
-                # Per-clip video fades & opacity
+                # Per-clip Blur Dissolve incoming pass if transition_style == "blur"
+                if cur_in_dissolve is not None and cur_in_dissolve[1] == "blur":
+                    in_d = cur_in_dissolve[0]
+                    bd_a, bd_b, bd_bl, bd_out = (
+                        f"{prefix}_bda",
+                        f"{prefix}_bdb",
+                        f"{prefix}_bdbl",
+                        f"{prefix}_bdout",
+                    )
+                    filter_parts.append(f"[{cur_c}]split[{bd_a}][{bd_b}]")
+                    filter_parts.append(
+                        f"[{bd_b}]gblur=sigma=14,format=rgba,"
+                        f"fade=t=out:st=0:d={in_d:.4f}:alpha=1[{bd_bl}]"
+                    )
+                    filter_parts.append(
+                        f"[{bd_a}][{bd_bl}]overlay=0:0:enable='lte(t,{in_d:.4f})',format=rgba[{bd_out}]"
+                    )
+                    cur_c = bd_out
+
+                # Per-clip video fades, incoming dissolve alpha, & opacity
                 post_c: list[str] = []
                 op_val = max(0.0, min(1.0, float(clip.opacity) / 100.0))
                 if clip.transform is not None:
                     op_val *= max(0.0, min(1.0, float(clip.transform.opacity_pct) / 100.0))
                 if op_val < 0.995:
                     post_c.append(f"colorchannelmixer=aa={op_val:.3f}")
-                if clip.fade_in_s > 0.01:
-                    fi = min(clip.fade_in_s, vis_dur * 0.5)
+                eff_fade_in = float(clip.fade_in_s or 0.0)
+                if cur_in_dissolve is not None:
+                    eff_fade_in = max(eff_fade_in, cur_in_dissolve[0])
+                if eff_fade_in > 0.01:
+                    fi = min(eff_fade_in, eff_dur * 0.5)
                     post_c.append(f"fade=t=in:st=0:d={fi:.3f}:alpha=1")
-                if clip.fade_out_s > 0.01:
-                    fo = min(clip.fade_out_s, vis_dur * 0.5)
-                    post_c.append(f"fade=t=out:st={max(0.0, vis_dur - fo):.3f}:d={fo:.3f}:alpha=1")
+                if clip.fade_out_s > 0.01 and tail_ext_s <= 0.01:
+                    fo = min(clip.fade_out_s, eff_dur * 0.5)
+                    post_c.append(
+                        f"fade=t=out:st={max(0.0, eff_dur - fo):.3f}:d={fo:.3f}:alpha=1"
+                    )
                 if post_c:
                     filter_parts.append(f"[{cur_c}]{','.join(post_c)}[{clip_lbl}]")
                 else:
@@ -850,7 +1087,7 @@ def build_timeline_render_plan(
             v_step += 1
             video_clip_count += 1
             mode = (clip.composite_mode or "normal").strip().lower()
-            en_expr = f"between(t,{rel_start:.4f},{rel_start + vis_dur:.4f})"
+            en_expr = f"between(t,{rel_start:.4f},{rel_start + eff_dur:.4f})"
 
             if mode in ("screen", "add", "addition", "multiply", "overlay", "lighten", "darken"):
                 ff_mode = "addition" if mode == "add" else mode
@@ -883,7 +1120,26 @@ def build_timeline_render_plan(
                 )
             current_v = next_v
 
-    # Global Color Page grade + LUT applied to master video output
+        # Composite track-level Dip To Color Dissolve / Brightness Flash at cut junctions
+        for d_idx, (cut_t, dip_d, dip_hex) in enumerate(dip_overlays):
+            half_d = max(0.04, dip_d * 0.5)
+            dip_start = max(0.0, cut_t - half_d)
+            dip_lbl = f"vdip_{trk.index}_{d_idx}_{v_step}"
+            next_v = f"vbase{v_step + 1}"
+            v_step += 1
+            filter_parts.append(
+                f"color=c={_hex_to_ffmpeg(dip_hex)}:s={w}x{h}:r={fps:.4f}:d={dip_d:.4f},"
+                f"format=rgba,fade=t=in:st=0:d={half_d:.4f}:alpha=1,"
+                f"fade=t=out:st={half_d:.4f}:d={half_d:.4f}:alpha=1,"
+                f"setpts=PTS-STARTPTS+{dip_start:.4f}/TB[{dip_lbl}]"
+            )
+            filter_parts.append(
+                f"[{current_v}][{dip_lbl}]overlay=0:0:eof_action=pass:"
+                f"enable='between(t,{dip_start:.4f},{dip_start + dip_d:.4f})',format=rgba[{next_v}]"
+            )
+            current_v = next_v
+
+    # Global Color Page grade + LUT + Resolve Output Blanking applied to master video output
     master_v_filters: list[str] = []
     if req.color_grade:
         try:
@@ -896,6 +1152,17 @@ def build_timeline_render_plan(
     if req.lut_path and Path(req.lut_path).is_file():
         lut_esc = escape_ffmpeg_filter_path(Path(req.lut_path))
         master_v_filters.append(f"lut3d=file='{lut_esc}'")
+
+    blank_ratio = _parse_output_blanking_ratio(req.output_blanking or doc.output_blanking)
+    if blank_ratio is not None and blank_ratio > (w / max(1, h)) + 0.02:
+        active_h = max(2, round(w / blank_ratio))
+        active_h -= active_h % 2
+        bar_h = max(0, (h - active_h) // 2)
+        if bar_h > 0:
+            master_v_filters.append(f"drawbox=x=0:y=0:w={w}:h={bar_h}:color=black:t=fill")
+            master_v_filters.append(
+                f"drawbox=x=0:y={h - bar_h}:w={w}:h={bar_h}:color=black:t=fill"
+            )
 
     master_v_filters.append("format=yuv420p")
     filter_parts.append(f"[{current_v}]{','.join(master_v_filters)}[vout]")
@@ -949,6 +1216,92 @@ def build_timeline_render_plan(
                 ]
             )
 
+            albl = f"a{trk.index}_{c_idx}_{a_step}"
+            a_step += 1
+            audio_clip_count += 1
+
+            tape_fx = _find_tape_stop_fx(clip.audio_fx)
+            if tape_fx is not None and vis_dur >= 1.5:
+                # Fairlight FX Tape Stop / progressive music-box wind-down (5 steps)
+                raw_tp = tape_fx.get("params")
+                tp_map: dict[str, Any] = raw_tp if isinstance(raw_tp, dict) else {}
+                raw_end_r = tape_fx.get("end_ratio", tp_map.get("end_ratio", 0.56))
+                end_ratio = max(0.42, min(0.92, _as_float(raw_end_r, 0.56)))
+                raw_hold = tape_fx.get("hold_fraction", tp_map.get("hold_fraction", 0.35))
+                hold_frac = max(0.15, min(0.65, _as_float(raw_hold, 0.35)))
+                t0 = vis_dur * hold_frac
+                step_d = (vis_dur - t0) / 4.0
+                xf = min(0.08, step_d * 0.25)
+                ratios = [
+                    1.0,
+                    1.0 - (1.0 - end_ratio) * 0.18,
+                    1.0 - (1.0 - end_ratio) * 0.42,
+                    1.0 - (1.0 - end_ratio) * 0.70,
+                    end_ratio,
+                ]
+                ts_pfx = f"{albl}_ts"
+                filter_parts.append(
+                    f"[{in_i}:a]atrim=duration={vis_dur:.4f},asetpts=PTS-STARTPTS,"
+                    f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    f"asplit=5[{ts_pfx}s0][{ts_pfx}s1][{ts_pfx}s2][{ts_pfx}s3][{ts_pfx}s4]"
+                )
+                bounds = [
+                    (0.0, t0),
+                    (max(0.0, t0 - xf), t0 + step_d),
+                    (max(0.0, t0 + step_d - xf), t0 + 2 * step_d),
+                    (max(0.0, t0 + 2 * step_d - xf), t0 + 3 * step_d),
+                    (max(0.0, t0 + 3 * step_d - xf), vis_dur),
+                ]
+                for si, ((b_st, b_en), rat) in enumerate(zip(bounds, ratios, strict=True)):
+                    seg_f = [f"atrim={b_st:.4f}:{b_en:.4f}", "asetpts=PTS-STARTPTS"]
+                    if rat < 0.995:
+                        seg_f.append(f"asetrate=48000*{rat:.4f}")
+                        seg_f.append("aresample=48000")
+                    if si >= 2:
+                        vib_d = min(0.58, 0.18 + (si - 1) * 0.13)
+                        seg_f.append(f"vibrato=f={2.6 + si * 0.45:.2f}:d={vib_d:.2f}")
+                    if si == 3:
+                        seg_f.append("lowpass=f=2800")
+                    elif si == 4:
+                        seg_f.append("lowpass=f=1600")
+                    filter_parts.append(f"[{ts_pfx}s{si}]{','.join(seg_f)}[{ts_pfx}p{si}]")
+                filter_parts.append(
+                    f"[{ts_pfx}p0][{ts_pfx}p1]acrossfade=d={xf:.4f}:c1=tri:c2=tri[{ts_pfx}m1]"
+                )
+                filter_parts.append(
+                    f"[{ts_pfx}m1][{ts_pfx}p2]acrossfade=d={xf:.4f}:c1=tri:c2=tri[{ts_pfx}m2]"
+                )
+                filter_parts.append(
+                    f"[{ts_pfx}m2][{ts_pfx}p3]acrossfade=d={xf:.4f}:c1=tri:c2=tri[{ts_pfx}m3]"
+                )
+                post_ts: list[str] = [
+                    f"acrossfade=d={xf:.4f}:c1=tri:c2=tri",
+                    f"atrim=duration={vis_dur:.4f}",
+                    "asetpts=PTS-STARTPTS",
+                ]
+                post_ts.extend(_compile_fairlight_audio_fx(clip.audio_fx, reverse=clip.reverse))
+                raw_db = float(clip.audio_gain_db or 0.0) + float(trk.volume_db or 0.0)
+                total_db = max(-48.0, min(18.0, raw_db))
+                if abs(total_db) > 0.05:
+                    post_ts.append(f"volume={total_db:.2f}dB")
+                if abs(float(trk.pan or 0.0)) > 0.01:
+                    ang = (max(-1.0, min(1.0, float(trk.pan))) + 1.0) * math.pi * 0.25
+                    lg = math.cos(ang) * 1.414
+                    rg = math.sin(ang) * 1.414
+                    post_ts.append(f"pan=stereo|c0={lg:.3f}*c0|c1={rg:.3f}*c1")
+                if clip.fade_in_s > 0.005:
+                    fi = min(clip.fade_in_s, vis_dur * 0.5)
+                    post_ts.append(f"afade=t=in:st=0:d={fi:.3f}")
+                if clip.fade_out_s > 0.005:
+                    fo = min(clip.fade_out_s, vis_dur * 0.5)
+                    post_ts.append(f"afade=t=out:st={max(0.0, vis_dur - fo):.3f}:d={fo:.3f}")
+                delay_ms = max(0, round(rel_start * 1000.0))
+                if delay_ms > 0:
+                    post_ts.append(f"adelay={delay_ms}|{delay_ms}")
+                filter_parts.append(f"[{ts_pfx}m3][{ts_pfx}p4]{','.join(post_ts)}[{albl}]")
+                audio_mix_labels.append(albl)
+                continue
+
             achain: list[str] = [
                 f"atrim=duration={vis_dur:.4f}",
                 "asetpts=PTS-STARTPTS",
@@ -964,6 +1317,13 @@ def build_timeline_render_plan(
             if abs(total_db) > 0.05:
                 achain.append(f"volume={total_db:.2f}dB")
 
+            # Fairlight Track Stereo Pan
+            if abs(float(trk.pan or 0.0)) > 0.01:
+                ang = (max(-1.0, min(1.0, float(trk.pan))) + 1.0) * math.pi * 0.25
+                lg = math.cos(ang) * 1.414
+                rg = math.sin(ang) * 1.414
+                achain.append(f"pan=stereo|c0={lg:.3f}*c0|c1={rg:.3f}*c1")
+
             # Fades
             if clip.fade_in_s > 0.005:
                 fi = min(clip.fade_in_s, vis_dur * 0.5)
@@ -977,9 +1337,6 @@ def build_timeline_render_plan(
             if delay_ms > 0:
                 achain.append(f"adelay={delay_ms}|{delay_ms}")
 
-            albl = f"a{trk.index}_{c_idx}_{a_step}"
-            a_step += 1
-            audio_clip_count += 1
             filter_parts.append(f"[{in_i}:a]{','.join(achain)}[{albl}]")
             audio_mix_labels.append(albl)
 
@@ -992,11 +1349,12 @@ def build_timeline_render_plan(
     master_af: list[str] = [
         f"amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0:normalize=0",
         f"atrim=duration={total_dur_s:.4f}",
-        "alimiter=limit=0.95:attack=3:release=50",
+        "alimiter=limit=0.92:attack=3:release=50",
     ]
     if req.loudness_preset in ("youtube_14", "reels_16", "broadcast_23"):
         lufs_map = {"youtube_14": -14.0, "reels_16": -16.0, "broadcast_23": -23.0}
-        master_af.append(f"loudnorm=I={lufs_map[req.loudness_preset]:.1f}:TP=-1.0:LRA=11")
+        master_af.append(f"loudnorm=I={lufs_map[req.loudness_preset]:.1f}:TP=-2.0:LRA=11")
+        master_af.append("alimiter=limit=0.84:level=disabled:attack=2:release=40")
     filter_parts.append(f"{mix_in_str}{','.join(master_af)}[aout]")
 
     filter_complex = ";\n".join(filter_parts)

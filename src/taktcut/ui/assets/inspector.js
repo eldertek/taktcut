@@ -499,7 +499,7 @@ export function createResolveInspectorController(ctx) {
       rSub.appendChild(inpSub);
       tSec.body.appendChild(rSub);
 
-      tSec.body.appendChild(makeSelectRow("Font", ["Anton", "Open Sans"], tp.font || "Anton", (v) => {
+      tSec.body.appendChild(makeSelectRow("Font", ["Bahnschrift", "Garamond", "Georgia", "Open Sans", "Anton"], tp.font || "Bahnschrift", (v) => {
         tp.font = v;
         syncTitleParams();
         redrawActiveCanvases();
@@ -520,6 +520,23 @@ export function createResolveInspectorController(ctx) {
         decimals: 0,
         defaultValue: 96,
         onChange: (v) => { tp.font_size = v; syncTitleParams(); redrawActiveCanvases(); }
+      }));
+
+      tSec.body.appendChild(makeSliderRow({
+        label: "Tracking",
+        value: Number(tp.tracking ?? (clip.title_params && clip.title_params.tracking) ?? 0),
+        min: 0,
+        max: 2.0,
+        step: 0.1,
+        decimals: 1,
+        defaultValue: 0,
+        onChange: (v) => {
+          tp.tracking = v;
+          if (!clip.title_params) clip.title_params = {};
+          clip.title_params.tracking = v;
+          syncTitleParams();
+          redrawActiveCanvases();
+        }
       }));
 
       tSec.body.appendChild(makeSliderRow({
@@ -1257,6 +1274,16 @@ export function createResolveInspectorController(ctx) {
       { id: "center", label: "Center" },
       { id: "end", label: "End" }
     ], tr.alignment || "center", (id) => { tr.alignment = id; render(); redrawActiveCanvases(); }));
+    if (tr.trans_style === "dip_color" || tr.preset === "fadeblack") {
+      const rDip = el("div", "insp-param-row");
+      rDip.appendChild(el("span", "insp-param-label", "Dip Color"));
+      const inpDip = document.createElement("input");
+      inpDip.type = "color";
+      inpDip.value = tr.dip_color || "#000000";
+      inpDip.addEventListener("input", () => { tr.dip_color = inpDip.value; redrawActiveCanvases(); });
+      rDip.appendChild(inpDip);
+      sec.body.appendChild(rDip);
+    }
     const delRow = el("div", "insp-fx-node-bar");
     const delBtn = el("button", "insp-danger-btn", "Remove Transition");
     delBtn.type = "button";

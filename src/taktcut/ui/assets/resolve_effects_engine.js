@@ -388,9 +388,30 @@ export function renderResolveTitle(ctx, w, h, titleStyle, progress = 0.5, props 
   const cx = w * Number(props.x_pct !== undefined ? props.x_pct : 0.5);
   const cy = h * Number(props.y_pct !== undefined ? props.y_pct : 0.5);
   const anim = String(props.animation || style || "").toLowerCase();
-  const fontFamily = String(props.font || "").toLowerCase().includes("anton")
+  const fontKey = String(props.font || "").toLowerCase();
+  const fontFamily = fontKey.includes("anton")
     ? "'Anton', 'Impact', 'Open Sans', sans-serif"
-    : "'Open Sans', 'Segoe UI', sans-serif";
+    : fontKey.includes("garamond") || fontKey.includes("serif")
+      ? "'Garamond', 'Georgia', serif"
+      : fontKey.includes("georgia")
+        ? "'Georgia', serif"
+        : fontKey.includes("bahnschrift") || fontKey.includes("din")
+          ? "'Bahnschrift', 'Segoe UI Light', 'Open Sans', sans-serif"
+          : "'Open Sans', 'Segoe UI', sans-serif";
+  const fontWeight = fontKey.includes("bahnschrift") || fontKey.includes("garamond") || fontKey.includes("light") ? 400 : 800;
+
+  if (props.bg_color) {
+    ctx.fillStyle = props.bg_color;
+    ctx.fillRect(0, 0, w, h);
+  }
+  const applyTrackingStr = (s, trk) => {
+    const tv = Number(trk || 0);
+    if (tv <= 0.05 || !s) return s;
+    const cSep = tv >= 1.2 ? "  " : " ";
+    const wSep = tv >= 1.2 ? "    " : "   ";
+    return s.split(" ").filter(Boolean).map((wd) => [...wd].join(cSep)).join(wSep);
+  };
+  const trackedText = applyTrackingStr(text, props.tracking ?? props.letter_spacing ?? 0);
 
   if (style === "letterbox") {
     const barH = h * 0.12 * ease;
@@ -422,11 +443,11 @@ export function renderResolveTitle(ctx, w, h, titleStyle, progress = 0.5, props 
     alphaVal = (strobe < -0.45 ? 0.18 : 0.82 + 0.18 * Math.abs(strobe)) * ease;
   }
   ctx.globalAlpha = clamp01(alphaVal);
-  ctx.font = `800 ${mainSize}px ${fontFamily}`;
+  ctx.font = `${fontWeight} ${mainSize}px ${fontFamily}`;
   ctx.textAlign = "center";
 
   if (style === "dark_box" || style === "bg_reveal" || style === "headline") {
-    const tw = ctx.measureText(text).width + 34;
+    const tw = ctx.measureText(trackedText).width + 34;
     const bh = mainSize + (sub ? subSize + 24 : 20);
     ctx.fillStyle = style === "headline" ? "rgba(230, 75, 61, 0.9)" : "rgba(15, 16, 20, 0.84)";
     roundRect(ctx, -tw * 0.5, -bh * 0.5, tw, bh, 3);
@@ -439,7 +460,7 @@ export function renderResolveTitle(ctx, w, h, titleStyle, progress = 0.5, props 
     ctx.fillRect(-lineW * 0.5, mainSize * 0.46, lineW, 2.5);
   }
 
-  const lines = text.split("\n");
+  const lines = trackedText.split("\n");
   const lineH = mainSize * 1.14;
   const startY = -((lines.length - 1) * lineH) * 0.5 - (sub ? subSize * 0.45 : 0);
 

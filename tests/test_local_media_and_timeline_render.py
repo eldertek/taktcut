@@ -18,6 +18,8 @@ from taktcut.local_media import (
     probe_local_media,
 )
 from taktcut.models import (
+    ClipTransformParams,
+    ClipTransition,
     RationalFrameRate,
     RenderProfile,
     TimelineClip,
@@ -370,3 +372,159 @@ def test_server_media_import_range_stream_and_timeline_queue(tmp_path: Path) -> 
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg/ffprobe required")
+def test_cinema_pack_transitions_blanking_dynamic_zoom_tracking_tapestop(tmp_path: Path) -> None:
+    """Verify Pack Cinema: transitions, 2.39:1 blanking, Dynamic Zoom, tracking & Tape-Stop."""
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    c1 = _make_sample_video(media_dir / "probe_warm.mp4", duration_s=2.4, color="0x553015")
+    c2 = _make_sample_video(media_dir / "probe_cold.mp4", duration_s=2.4, color="0x122238")
+    c3 = _make_sample_video(media_dir / "probe_red.mp4", duration_s=2.0, color="0x600c0c")
+    mb = _make_sample_audio(media_dir / "probe_box.wav", duration_s=3.0, freq=440)
+
+    doc = TimelineDocument(
+        name="Sentinel_Cinema_Pack_Test",
+        source_format="drt",
+        fps=RationalFrameRate(num=25, den=1),
+        width=640,
+        height=360,
+        output_blanking="2.39",
+        tracks=[
+            TimelineTrack(
+                index=1,
+                kind="video",
+                name="V1 Cinema",
+                clips=[
+                    TimelineClip(
+                        name="WarmShot",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=0,
+                        duration_frames=40,
+                        source_path="media/probe_warm.mp4",
+                        transform=ClipTransformParams(dynamic_zoom="slow_zoom_in"),
+                        transition_out=ClipTransition(
+                            preset="fade",
+                            trans_style="cross",
+                            duration_s=0.4,
+                        ),
+                        resolve_fx=[
+                            {"effect": "warm_christmas", "enabled": True, "intensity": 0.7},
+                            {"effect": "halation", "enabled": True, "intensity": 0.6},
+                        ],
+                    ),
+                    TimelineClip(
+                        name="ColdShot",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=40,
+                        duration_frames=40,
+                        source_path="media/probe_cold.mp4",
+                        transform=ClipTransformParams(dynamic_zoom="slow_zoom_out"),
+                        transition_out=ClipTransition(
+                            preset="fadeblack",
+                            trans_style="dip_color",
+                            duration_s=0.5,
+                            dip_color="#000000",
+                        ),
+                        resolve_fx=[
+                            {"effect": "kodak_2383", "enabled": True, "intensity": 0.8},
+                        ],
+                    ),
+                    TimelineClip(
+                        name="RedShot",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=80,
+                        duration_frames=35,
+                        source_path="media/probe_red.mp4",
+                    ),
+                ],
+            ),
+            TimelineTrack(
+                index=2,
+                kind="video",
+                name="V2 Cinema Titles",
+                clips=[
+                    TimelineClip(
+                        name="Intertitle",
+                        track_index=2,
+                        media_type="video",
+                        clip_kind="title",
+                        start_frame=82,
+                        duration_frames=30,
+                        title_params={
+                            "text": "SENTINEL SCOPE",
+                            "subtitle": "TEST CARD",
+                            "font": "Bahnschrift",
+                            "font_size": 44,
+                            "tracking": 0.8,
+                            "color": "#f4f4f6",
+                            "bg_color": "#000000",
+                            "glow": 0.45,
+                            "fade_in_s": 0.2,
+                            "fade_out_s": 0.2,
+                        },
+                    )
+                ],
+            ),
+            TimelineTrack(
+                index=1,
+                kind="audio",
+                name="A1 MusicBox",
+                pan=-0.35,
+                clips=[
+                    TimelineClip(
+                        name="MusicBoxTapeStop",
+                        track_index=1,
+                        media_type="audio",
+                        start_frame=0,
+                        duration_frames=75,
+                        source_path="media/probe_box.wav",
+                        audio_gain_db=-2.0,
+                        fade_in_s=0.1,
+                        fade_out_s=0.25,
+                        audio_fx=[
+                            {
+                                "kind": "tape_stop",
+                                "enabled": True,
+                                "params": {"end_ratio": 0.56, "hold_fraction": 0.35},
+                            }
+                        ],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    out_mp4 = tmp_path / "renders" / "sentinel_cinema.mp4"
+    req = TimelineRenderRequest(
+        document=doc,
+        output_path=str(out_mp4),
+        width=640,
+        height=360,
+        profile=RenderProfile.WEB_H264,
+        prefer_hw=False,
+    )
+    plan = build_timeline_render_plan(
+        req,
+        workspace_root=tmp_path,
+        media_lookup={
+            "media/probe_warm.mp4": c1,
+            "media/probe_cold.mp4": c2,
+            "media/probe_red.mp4": c3,
+            "media/probe_box.wav": mb,
+        },
+    )
+    assert "drawbox=x=0:y=0:w=640:h=46:color=black:t=fill" in plan.filter_complex
+    assert "zoompan=z=" in plan.filter_complex
+    assert "acrossfade=" in plan.filter_complex
+    assert "pan=stereo|" in plan.filter_complex
+    assert "vdip_1_0_" in plan.filter_complex
+
+    res = execute_timeline_render_plan(plan, job_label="sentinel-cinema")
+    assert res.success, f"Cinema Pack render failed: {res.stderr_tail}"
+    assert out_mp4.is_file() and res.bytes_written > 4000
+

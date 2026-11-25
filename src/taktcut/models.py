@@ -395,9 +395,13 @@ class ClipTransition(BaseModel):
     """Editorial video & audio transition attached to an outgoing clip cut junction."""
 
     preset: TransitionPresetId = "fade"
-    duration_s: float = Field(default=0.5, ge=0.1, le=2.0)
+    duration_s: float = Field(default=0.5, ge=0.1, le=5.0)
     include_audio: bool = True
     audio_curve: str = "tri"
+    trans_style: str = ""
+    label: str = ""
+    alignment: Literal["start", "center", "end"] = "center"
+    dip_color: str = "#000000"
 
     @field_validator("preset", mode="before")
     @classmethod
@@ -414,9 +418,19 @@ class ClipTransition(BaseModel):
     @classmethod
     def _validate_duration_s(cls, raw: Any) -> float:
         val = _check_finite_number(raw, "duration_s")
-        if val < 0.1 or val > 2.0:
-            raise ValueError(f"duration_s must be within [0.1, 2.0], got {val}")
+        if val < 0.1 or val > 5.0:
+            raise ValueError(f"duration_s must be within [0.1, 5.0], got {val}")
         return val
+
+    @field_validator("dip_color", mode="before")
+    @classmethod
+    def _validate_dip_color(cls, raw: Any) -> str:
+        if raw is None or raw == "":
+            return "#000000"
+        cleaned = str(raw).strip().lower()
+        if re.fullmatch(r"#[0-9a-f]{6}", cleaned):
+            return cleaned
+        return "#000000"
 
     @field_validator("audio_curve", mode="before")
     @classmethod
@@ -2042,6 +2056,7 @@ class TimelineDocument(BaseModel):
     width: int = Field(default=1920, ge=0)
     height: int = Field(default=1080, ge=0)
     start_frame: int = Field(default=0, ge=0)
+    output_blanking: str = "off"
     tracks: list[TimelineTrack] = Field(default_factory=list)
     markers: list[TimelineMarker] = Field(default_factory=list)
     color_space_tags: list[str] = Field(default_factory=list)
