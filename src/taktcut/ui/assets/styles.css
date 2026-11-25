@@ -14621,3 +14621,1022 @@ input[type="range"]:hover::-webkit-slider-thumb {
     flex-wrap: wrap;
   }
 }
+
+/* ============================================================================
+   DAVINCI RESOLVE STUDIO 21 EXACT VISUAL PARITY POLISH (DESKTOP PASS 3)
+   Zero web-dashboard chrome: matte graphite shells, 1-line icon strips,
+   vertical Cut/Fairlight dB meters, full-height viewers & flat timelines.
+============================================================================ */
+@media (min-width: 821px) {
+  /* Row 1: Quiet Resolve system menu bar right side */
+  #nle-bg-tasks-badge,
+  #ffmpeg-status-pill,
+  #btn-shortcuts-help {
+    display: none;
+  }
+
+  #btn-menu-search {
+    background: transparent;
+    border-color: transparent;
+    color: #848490;
+    padding: 1px 6px;
+    font-size: 10.5px;
+    opacity: 0.72;
+  }
+
+  #btn-menu-search .kbd-chip {
+    display: none;
+  }
+
+  #btn-menu-search:hover {
+    color: #f0f0f6;
+    background: #2b2b31;
+    opacity: 1;
+  }
+
+  .lang-switch {
+    opacity: 0.55;
+    transform: scale(0.88);
+    transform-origin: right center;
+  }
+
+  .lang-switch:hover {
+    opacity: 1;
+  }
+
+  /* Row 2: Crisp Resolve context strip without web metadata tags */
+  .nle-menubar {
+    min-height: 26px;
+    padding: 2px 10px;
+    background: #1f1f23;
+    border-bottom: 1px solid #121215;
+  }
+
+  #topbar-seq-meta,
+  #workspace-pill {
+    display: none;
+  }
+
+  #btn-open-project,
+  #btn-save-project {
+    width: 24px;
+    height: 22px;
+    min-width: 24px;
+    padding: 0;
+    justify-content: center;
+    background: transparent;
+    border-color: transparent;
+    color: #b4b4c0;
+  }
+
+  #btn-open-project:hover,
+  #btn-save-project:hover {
+    background: #2f2f37;
+    color: #ffffff;
+    border-color: transparent;
+  }
+
+  #btn-open-project .sr-label,
+  #btn-save-project .sr-label {
+    display: none;
+  }
+
+  /* Cut Page: pure monochrome Resolve icons + vertical dB meter alignment */
+  .cut-quick-tools-bar .btn-mini .sr-label,
+  .cut-transport-btns .btn-mini .sr-label {
+    display: none;
+  }
+
+  .cut-quick-tools-bar .btn-mini,
+  .cut-transport-btns .btn-mini {
+    width: 26px;
+    height: 22px;
+    min-width: 26px;
+    padding: 0;
+    justify-content: center;
+    color: #b4b4c0;
+  }
+
+  .cut-quick-tools-bar .btn-mini.is-active,
+  .cut-transport-btns .btn-mini.is-active {
+    color: #ffffff;
+    background: #2f2f37;
+  }
+
+  .cut-viewer-stage-row {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+
+  .cut-meter-well {
+    padding: 4px 2px;
+    background: #151518;
+    display: flex;
+  }
+
+  .cut-vu-canvas {
+    flex: 1 1 auto;
+    height: 100%;
+    min-height: 210px;
+  }
+
+  .cut-clip-frame {
+    padding: 3px 5px;
+    border-color: #1e1e23;
+  }
+
+  .cut-clip-badge {
+    font-size: 8.5px;
+    background: rgba(12, 12, 16, 0.72);
+    color: #9e9eac;
+  }
+
+  /* Edit Page: collapse multi-row button walls & telemetry clutter so black Program Monitor & Timeline rule */
+  #panel-timeline .nle-telemetry-bar {
+    display: none;
+  }
+
+  #panel-timeline .program-framing-bar,
+  #panel-timeline .timeline-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    white-space: nowrap;
+    min-height: 26px;
+    padding: 2px 6px;
+    gap: 2px;
+  }
+
+  #panel-timeline .program-framing-bar::-webkit-scrollbar,
+  #panel-timeline .timeline-toolbar::-webkit-scrollbar,
+  #panel-color .preset-bar::-webkit-scrollbar,
+  #panel-fx .preset-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  #panel-timeline .program-framing-bar .kbd-chip,
+  #panel-timeline .transport-bar .kbd-chip,
+  #panel-timeline .three-point-edit-bar .kbd-chip,
+  #panel-timeline .timeline-toolbar .kbd-chip {
+    display: none;
+  }
+
+  #panel-timeline .program-framing-bar .btn-mini,
+  #panel-timeline .timeline-toolbar .btn-mini {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    font-size: 10.5px;
+  }
+
+  #panel-timeline .timeline-toolbar-sep {
+    flex: 0 0 auto;
+    height: 14px;
+    margin: 0 2px;
+  }
+
+  #panel-timeline .transport-bar-stacked {
+    padding: 2px 8px;
+    gap: 2px;
+  }
+
+  #panel-timeline .three-point-edit-bar {
+    padding: 2px 8px;
+  }
+
+  #panel-timeline .timeline-program-canvas {
+    min-height: 265px;
+  }
+
+  #panel-timeline .timeline-canvas {
+    min-height: 225px;
+  }
+
+  /* Edit Page Media Pool: dark Resolve clip cards instead of mini timeline pills */
+  #media-pool-list .media-pool-card {
+    background: #1a1a1e;
+    border-color: #292930;
+    padding: 5px;
+  }
+
+  #media-pool-list .media-pool-card:hover {
+    border-color: #e64b38;
+    background: #202026;
+  }
+
+  #media-pool-list .media-pool-thumb {
+    background: #070709;
+    border-color: #23232a;
+    height: 44px;
+  }
+
+  /* Calm Inspector action buttons from loud green/orange to matte Resolve graphite */
+  #timeline-right-inspector .btn-accent,
+  #timeline-right-inspector .btn-primary {
+    background: #292930;
+    border-color: #3d3d48;
+    color: #e4e4ec;
+  }
+
+  #timeline-right-inspector .btn-accent:hover,
+  #timeline-right-inspector .btn-primary:hover {
+    background: #e64b38;
+    border-color: #e64b38;
+    color: #111114;
+  }
+
+  /* Fusion & Color Preset Bars: crisp single-line horizontal strips */
+  #panel-color .preset-bar,
+  #panel-fx .preset-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+    padding-bottom: 2px;
+  }
+
+  #panel-color .preset-bar > *,
+  #panel-fx .preset-bar > * {
+    flex: 0 0 auto;
+  }
+
+  /* Color Filmstrip: authentic graded tonal previews */
+  .color-shot-thumb.is-shot-0 {
+    background: linear-gradient(155deg, #3c2920 0%, #1c222e 55%, #0c121b 100%);
+  }
+
+  .color-shot-thumb.is-shot-1 {
+    background: linear-gradient(155deg, #1b313a 0%, #242129 55%, #11151d 100%);
+  }
+
+  .color-shot-thumb.is-shot-2 {
+    background: linear-gradient(155deg, #2d261a 0%, #1d1a22 55%, #0e0e14 100%);
+  }
+
+  .color-shot-thumb.is-shot-3 {
+    background: linear-gradient(155deg, #1e332c 0%, #19242b 55%, #0d1216 100%);
+  }
+
+  /* Deliver Page: calm dark sidebar tiles & header */
+  #panel-render .render-preset-grid .btn-chip {
+    background: #1f1f24;
+    border-color: #303038;
+  }
+
+  #panel-render .render-preset-grid .btn-chip.is-active {
+    background: #2b2b33;
+    border-color: #e64b38;
+    color: #ffffff;
+  }
+}
+
+@media (min-width: 1181px) {
+  /* Color Page: side-by-side Primaries Wheels + Custom Curves above the fold at 1440x900 */
+  #panel-color .nle-color-bottom > section.nle-pane > .pane-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.32fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 6px;
+    padding: 5px 8px;
+  }
+
+  #panel-color .wheels-grid {
+    grid-column: 1;
+    order: 1;
+    gap: 5px;
+  }
+
+  #panel-color .color-curves-tone-split {
+    grid-column: 2;
+    order: 2;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  #panel-color .grade-tone-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px 6px;
+    background: #19191d;
+    border: 1px solid #2b2b33;
+    border-radius: 3px;
+  }
+
+  #panel-color .grade-tone-row {
+    grid-template-columns: auto minmax(0, 1fr) 44px auto;
+    gap: 3px;
+    font-size: 9.5px;
+  }
+
+  #panel-color #color-node-tree-dock,
+  #panel-color .color-secondary-tools-stack,
+  #panel-color #color-warper-dock,
+  #panel-color #color-shot-match-dock {
+    grid-column: 1 / -1;
+  }
+
+  #panel-color #color-node-tree-dock {
+    order: 3;
+  }
+
+  #panel-color .color-secondary-tools-stack {
+    order: 4;
+  }
+
+  #panel-color #color-warper-dock {
+    order: 5;
+  }
+
+  #panel-color #color-shot-match-dock {
+    order: 6;
+  }
+
+  #panel-color .wheel-canvas {
+    width: min(88px, 100%);
+  }
+
+  #panel-color .wheel-bars .cdl-slider-row {
+    gap: 3px;
+  }
+
+  #panel-color #color-curves-canvas {
+    height: 112px;
+  }
+
+  .fairlight-mixer-body {
+    grid-template-columns: 1fr 56px;
+  }
+
+  /* Precision Polish: Edit single-row safe guides, calm media cards, crisp Color tone sliders, 1-line Fusion monitor header */
+  #panel-timeline .safe-guides-group {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 2px;
+  }
+
+  #panel-timeline .safe-guides-group::-webkit-scrollbar,
+  #panel-fx .pane-header .viewer-controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  #media-pool-list .media-pool-thumb {
+    background: #0a0a0d;
+    border-left-width: 2px;
+    border-left-color: #3a5272;
+  }
+
+  #media-pool-list .media-pool-card.is-audio .media-pool-thumb {
+    background: #081210;
+    border-left-color: #2f6c5e;
+  }
+
+  #media-pool-list .media-pool-visual.is-film,
+  #media-pool-list .media-pool-visual.is-wave {
+    opacity: 0.4;
+  }
+
+  #timeline-right-inspector .tl-sync-btn,
+  #timeline-right-inspector .tl-sync-btn.is-active,
+  #timeline-right-inspector #btn-unlink-av {
+    background: #26262c;
+    border-color: #3d3d48;
+    color: #d8d8e2;
+  }
+
+  #timeline-right-inspector .tl-sync-btn.is-active,
+  #timeline-right-inspector #btn-unlink-av.is-active {
+    box-shadow: inset 0 -1.5px 0 #e64b38;
+    color: #ffffff;
+  }
+
+  #panel-fx .pane-header {
+    gap: 6px;
+  }
+
+  #panel-fx .pane-header .viewer-controls {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 4px;
+    max-width: 72%;
+  }
+
+  #panel-fx .pane-header .viewer-controls > * {
+    flex: 0 0 auto;
+  }
+
+  #panel-fx .pane-header .viewer-controls .kbd-chip {
+    display: none;
+  }
+
+  #panel-fx .fx-preset-grid {
+    gap: 4px;
+  }
+
+  #panel-fx .fx-preset-btn {
+    padding: 4px 6px;
+    background: #1b1b20;
+    border-color: #2d2d35;
+  }
+
+  #panel-color .grade-tone-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    padding: 4px 6px;
+  }
+
+  #panel-color .grade-tone-row {
+    grid-template-columns: 76px minmax(36px, 1fr) 56px 30px;
+    gap: 5px;
+    font-size: 9.5px;
+  }
+
+  #panel-color .curves-hint {
+    display: none;
+  }
+
+  #panel-color #color-curves-canvas {
+    height: 100px;
+  }
+}
+
+.pm-project-thumb {
+  position: relative;
+  overflow: hidden;
+  border-radius: 3px;
+}
+
+.pm-project-thumb.is-preview {
+  padding: 0;
+}
+
+.pm-project-thumb .pm-active-slate {
+  position: absolute;
+  bottom: 5px;
+  right: 6px;
+  z-index: 1;
+  white-space: nowrap;
+  max-width: calc(100% - 12px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pm-thumb-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pm-resolve-badge {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(16, 16, 20, 0.85);
+  border: 1px solid #e64b38;
+  color: #f4f4f8;
+}
+
+.pm-demo-badge {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(12, 16, 22, 0.88);
+  border: 1px solid #38bdf8;
+  color: #e0f2fe;
+}
+
+/* Eclipse Web Static Demo: lock local file uploads while highlighting Training Projects */
+.is-static-demo-mode #btn-open-project,
+.is-static-demo-mode #project-file-input,
+.is-static-demo-mode #timeline-file-input,
+.is-static-demo-mode label[for="timeline-file-input"],
+.is-static-demo-mode #btn-media-import-tl,
+.is-static-demo-mode #cdl-file-input,
+.is-static-demo-mode label[for="cdl-file-input"],
+.is-static-demo-mode #cube-file-input,
+.is-static-demo-mode label[for="cube-file-input"],
+.is-static-demo-mode #btn-pm-open-json,
+.is-static-demo-mode #btn-pm-import {
+  display: none;
+}
+
+/* ============================================================================
+   EDIT PAGE PASS 4: DaVinci Resolve 21 readability parity (IDA classes
+   UiEditToolbarBottomImp, UiEditTimelineWidgetImp, UiTimeCodeLabel,
+   UiEditIndexContainerImp). Icon-only single-row edit toolbar, merged
+   transport/3-point strip, Resolve media pool thumbnails, taller tracks.
+============================================================================ */
+@media (min-width: 1181px) {
+  #panel-timeline {
+    grid-template-rows: minmax(300px, 1fr) minmax(250px, 0.92fr);
+  }
+
+  #panel-timeline .nle-edit-top {
+    grid-template-columns: 300px minmax(0, 1fr) 320px;
+  }
+
+  /* ---- Bottom edit toolbar: one 34px row of monochrome icons ---- */
+  #panel-timeline .timeline-pane-header {
+    min-height: 34px;
+    padding: 3px 8px;
+    gap: 8px;
+    flex-wrap: nowrap;
+    align-items: center;
+    background: #1f1f23;
+    border-bottom: 1px solid #121215;
+  }
+
+  #panel-timeline .timeline-title-group {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  #panel-timeline .timeline-title-group h2 {
+    display: none;
+  }
+
+  #panel-timeline #timeline-tool-badge {
+    font-size: 9.5px;
+    background: transparent;
+    border-color: #2e2e36;
+    color: #8e8e9a;
+  }
+
+  #panel-timeline .timeline-toolbar {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 0;
+    min-height: 28px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    scrollbar-width: none;
+  }
+
+  #panel-timeline .timeline-toolbar > * {
+    flex: 0 0 auto;
+  }
+
+  #panel-timeline .timeline-toolbar .tl-tool-group,
+  #panel-timeline .timeline-toolbar .tl-marker-nav-group,
+  #panel-timeline .timeline-toolbar .tl-bpm-group,
+  #panel-timeline .timeline-toolbar .tl-zoom-group {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 1px;
+    padding: 0 6px;
+    border-left: 1px solid #2c2c33;
+  }
+
+  #panel-timeline .timeline-toolbar > .tl-tool-group:first-child {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  #panel-timeline .timeline-toolbar .btn-mini {
+    height: 26px;
+    min-height: 26px;
+    min-width: 28px;
+    padding: 0 6px;
+    gap: 4px;
+    justify-content: center;
+    border-radius: 3px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #a4a4b0;
+    font-size: 10.5px;
+    box-shadow: none;
+  }
+
+  #panel-timeline .timeline-toolbar .btn-mini:has(> svg) {
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
+  }
+
+  #panel-timeline .timeline-toolbar .btn-mini:has(> svg) > span {
+    display: none;
+  }
+
+  #panel-timeline .timeline-toolbar .tl-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  #panel-timeline .timeline-toolbar .btn-mini:hover {
+    background: #2c2c33;
+    color: #f2f2f6;
+    border-color: transparent;
+  }
+
+  #panel-timeline .timeline-toolbar .tl-tool-btn.is-active {
+    background: #3a3a43;
+    color: #ffffff;
+    border-color: #4a4a55;
+    box-shadow: none;
+  }
+
+  #panel-timeline .timeline-toolbar .tl-snap-btn.is-active,
+  #panel-timeline .timeline-toolbar .tl-sync-btn.is-active,
+  #panel-timeline .timeline-toolbar .tl-avlink-btn.is-active,
+  #panel-timeline .timeline-toolbar .tl-bpm-btn[aria-pressed="true"] {
+    color: #ff6a4d;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  #panel-timeline .timeline-toolbar .tl-bpm-group {
+    order: 90;
+  }
+
+  #panel-timeline .timeline-toolbar .tl-zoom-group {
+    order: 99;
+    margin-left: auto;
+  }
+
+  #panel-timeline .timeline-toolbar .inline-label {
+    font-size: 9.5px;
+    color: #7e7e8a;
+  }
+
+  #panel-timeline .timeline-toolbar .tl-bpm-input,
+  #panel-timeline .timeline-toolbar .tl-offset-input {
+    width: 46px;
+    height: 22px;
+    min-height: 22px;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  #panel-timeline #timeline-zoom {
+    width: 110px;
+  }
+
+  #panel-timeline #timeline-zoom-label {
+    font-size: 9.5px;
+  }
+
+  /* ---- Viewer: Resolve viewer header + black well + one transport/edit strip ---- */
+  #panel-timeline .nle-viewer-dock > .pane-header {
+    min-height: 28px;
+    padding: 2px 10px;
+  }
+
+  #panel-timeline .nle-viewer-dock > .pane-header h2 {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #d8d8e0;
+  }
+
+  #panel-timeline #program-tc {
+    font-size: 13px;
+    color: #f2f2f6;
+  }
+
+  #panel-timeline .viewer-pane-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    padding: 0;
+    gap: 0;
+  }
+
+  #panel-timeline .viewer-pane-body > .program-framing-bar,
+  #panel-timeline .viewer-pane-body > #timeline-viewer-well {
+    grid-column: 1 / -1;
+  }
+
+  #panel-timeline .viewer-pane-body > #timeline-viewer-well {
+    min-height: 0;
+    background: #000000;
+  }
+
+  #panel-timeline .viewer-pane-body > .transport-bar {
+    grid-column: 1;
+    grid-row: 3;
+    min-width: 0;
+  }
+
+  #panel-timeline .viewer-pane-body > .three-point-edit-bar {
+    grid-column: 2;
+    grid-row: 3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border-top: 1px solid #121215;
+    border-left: 1px solid #121215;
+  }
+
+  #panel-timeline .viewer-pane-body > .nle-telemetry-bar {
+    display: none;
+  }
+
+  #panel-timeline .program-framing-bar {
+    min-height: 26px;
+    padding: 1px 8px;
+    background: #1b1b1f;
+  }
+
+  #panel-timeline .program-framing-bar .btn-mini,
+  #panel-timeline .program-framing-bar .input-compact {
+    height: 20px;
+    min-height: 20px;
+    font-size: 10px;
+  }
+
+  #panel-timeline .transport-btn-group .btn-mini {
+    font-size: 0;
+    width: 28px;
+    min-width: 28px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border-color: transparent;
+    color: #c4c4ce;
+  }
+
+  #panel-timeline .transport-btn-group .btn-mini::before {
+    content: "";
+    width: 14px;
+    height: 14px;
+    background: currentColor;
+    -webkit-mask: var(--tp-icon) center / contain no-repeat;
+    mask: var(--tp-icon) center / contain no-repeat;
+  }
+
+  #panel-timeline .transport-btn-group .btn-mini:hover,
+  #panel-timeline .transport-btn-group .btn-mini[aria-pressed="true"] {
+    color: #ffffff;
+    background: #2c2c33;
+  }
+
+  #btn-tc-start {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3 2h2v12H3zM14 2.5v11L6 8z'/></svg>");
+  }
+
+  #btn-tc-prev {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M11.5 2.5v11L4 8z'/></svg>");
+  }
+
+  #btn-tc-shuttle-rev {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 3v10L1.5 8zM15 3v10L8.5 8z'/></svg>");
+  }
+
+  #btn-tc-play {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 2.5v11L13.5 8z'/></svg>");
+  }
+
+  #btn-tc-play[aria-pressed="true"] {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M3.5 3h3v10h-3zM9.5 3h3v10h-3z'/></svg>");
+  }
+
+  #btn-tc-shuttle-fwd {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1 3v10l6.5-5zM8 3v10l6.5-5z'/></svg>");
+  }
+
+  #btn-tc-next {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4.5 2.5v11L12 8z'/></svg>");
+  }
+
+  #btn-tc-end {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M11 2h2v12h-2zM2 2.5v11L10 8z'/></svg>");
+  }
+
+  #panel-timeline .transport-bar-stacked {
+    padding: 2px 8px;
+    gap: 1px;
+    border-top: 1px solid #121215;
+    background: #1d1d21;
+  }
+
+  #panel-timeline .transport-main-row,
+  #panel-timeline .transport-io-row {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  #panel-timeline .transport-io-row .btn-mini {
+    height: 20px;
+    min-height: 20px;
+    font-size: 10px;
+    padding: 0 7px;
+  }
+
+  #panel-timeline .three-point-action-group {
+    display: flex;
+    gap: 2px;
+  }
+
+  #panel-timeline .three-point-action-group .btn-mini {
+    width: 30px;
+    min-width: 30px;
+    height: 26px;
+    min-height: 26px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border-color: transparent;
+    color: #c4c4ce;
+  }
+
+  #panel-timeline .three-point-action-group .btn-mini > span {
+    display: none;
+  }
+
+  #panel-timeline .three-point-action-group .btn-mini::before {
+    content: "";
+    width: 18px;
+    height: 14px;
+    background: currentColor;
+    -webkit-mask: var(--tp-icon) center / contain no-repeat;
+    mask: var(--tp-icon) center / contain no-repeat;
+  }
+
+  #panel-timeline .three-point-action-group .btn-mini:hover {
+    background: #2c2c33;
+    color: #ffffff;
+  }
+
+  #btn-three-pt-insert {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'><path d='M1 6h6v6H1zM13 6h6v6h-6z' fill='none' stroke='black' stroke-width='1.4'/><path d='M8.5 6h3v6h-3zM10 0v4.5M8.2 3l1.8 1.8L11.8 3' stroke='black' stroke-width='1.3' fill='black'/></svg>");
+  }
+
+  #btn-three-pt-overwrite {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'><path d='M1 6h18v6H1z' fill='none' stroke='black' stroke-width='1.4'/><path d='M7 6h6v6H7zM10 0v4.5M8.2 3l1.8 1.8L11.8 3' stroke='black' stroke-width='1.3' fill='black'/></svg>");
+  }
+
+  #btn-three-pt-replace {
+    --tp-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'><path d='M1 6h18v6H1z' fill='none' stroke='black' stroke-width='1.4'/><path d='M6 7.5h8v3H6zM4 2.5h12M14 0.8l2 1.7-2 1.7' stroke='black' stroke-width='1.3' fill='black'/></svg>");
+  }
+
+  #panel-timeline .three-point-patch-group .input-compact {
+    height: 22px;
+    min-height: 22px;
+    font-size: 10px;
+  }
+
+  #panel-timeline #three-point-status-pill {
+    font-size: 9px;
+    color: #80808c;
+    background: transparent;
+    border-color: transparent;
+  }
+
+  /* ---- Media pool: Resolve 2-column 16:9 thumbnail bin ---- */
+  #panel-timeline .nle-left-dock > .pane-header {
+    min-height: 28px;
+    padding: 2px 10px;
+  }
+
+  #panel-timeline .media-pool-header-row {
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 4px 8px;
+  }
+
+  #panel-timeline .media-pool-header-controls,
+  #panel-timeline .media-pool-type-filter,
+  #panel-timeline .media-pool-cut-btns {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 3px;
+  }
+
+  #panel-timeline .media-pool-header-controls .btn-mini,
+  #panel-timeline .media-pool-type-filter .btn-mini,
+  #panel-timeline .media-pool-cut-btns .btn-mini {
+    flex: 0 0 auto;
+    height: 20px;
+    min-height: 20px;
+    padding: 0 7px;
+    font-size: 9.5px;
+  }
+
+  #panel-timeline .media-pool-type-filter {
+    padding: 2px 8px 4px;
+  }
+
+  #panel-timeline .media-pool-cut-toolbar {
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 3px 8px;
+  }
+
+  #panel-timeline .media-pool-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 8px;
+    padding: 8px;
+  }
+
+  #media-pool-list .media-pool-card {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    gap: 3px;
+    text-align: center;
+  }
+
+  #media-pool-list .media-pool-card:hover {
+    background: transparent;
+  }
+
+  #media-pool-list .media-pool-thumb,
+  #media-pool-list .media-pool-card.is-audio .media-pool-thumb {
+    aspect-ratio: 16 / 9;
+    height: auto;
+    min-height: 0;
+    border: 1.5px solid #24242b;
+    border-radius: 3px;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--pool-grad-a, #1f3352) 70%, #000000) 0%, #07080b 100%);
+  }
+
+  #media-pool-list .media-pool-card.is-audio .media-pool-thumb {
+    background: linear-gradient(180deg, #0c1a17 0%, #06090a 100%);
+  }
+
+  #media-pool-list .media-pool-card.is-selected .media-pool-thumb,
+  #media-pool-list .media-pool-card:hover .media-pool-thumb {
+    border-color: #e64b38;
+  }
+
+  #media-pool-list .media-pool-name {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 10.5px;
+    color: #d6d6de;
+  }
+
+  #media-pool-list .media-pool-meta {
+    justify-content: center;
+    font-size: 9px;
+    color: #74747e;
+  }
+
+  #panel-timeline .media-pool-header-row > span {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  #panel-timeline .media-pool-header-controls {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  /* ---- Inspector: matte Resolve graphite states instead of loud green/orange ---- */
+  #panel-timeline #timeline-right-inspector .btn-mini.is-active,
+  #panel-timeline #timeline-right-inspector .btn-mini[aria-pressed="true"] {
+    background: #34343c;
+    border-color: #4a4a55;
+    color: #ffffff;
+    box-shadow: inset 0 -2px 0 #e64b38;
+  }
+
+  #panel-timeline #timeline-right-inspector .nle-tag {
+    background: transparent;
+    border-color: #3a3a44;
+    color: #c4c4ce;
+  }
+
+  #panel-timeline #timeline-right-inspector .pane-header .btn-danger-mini {
+    background: transparent;
+    border-color: #4a2a2a;
+    color: #e8a39a;
+  }
+
+  /* Cut page lower detail timeline fills its dock like Resolve's zoomed timeline */
+  #panel-cut .resolve-cut-dual-timeline,
+  #panel-cut .cut-dual-tl-body,
+  #panel-cut .cut-tl-stack,
+  #panel-cut .cut-lower-detail-wrap {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #panel-cut .cut-detail-canvas {
+    height: auto;
+  }
+}

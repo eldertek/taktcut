@@ -612,7 +612,8 @@ function setupCanvas(canvas, cssHeight, explicitWidth = null) {
       : canvas.getBoundingClientRect();
     rawWidth = rect.width;
   }
-  const width = Math.max(260, Math.floor(rawWidth));
+  const hasExplicit = explicitWidth !== null && explicitWidth !== undefined && Number.isFinite(Number(explicitWidth)) && Number(explicitWidth) > 0;
+  const width = hasExplicit ? Math.max(28, Math.floor(rawWidth)) : Math.max(260, Math.floor(rawWidth));
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.floor(width * dpr);
   canvas.height = Math.floor(cssHeight * dpr);
@@ -5128,12 +5129,27 @@ function drawDveTransformOverlay(ctx, fx, fy, frameW, frameH, clip, playheadFram
   };
 }
 
+// Deterministic 0..1 hash used for clean-room procedural clip thumbnails and waveforms
+function tlHash01(str, salt = 0) {
+  let h = 2166136261 ^ salt;
+  const s = String(str || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 10000) / 10000;
+}
+
 export function drawTimelineCanvas(canvas, doc, validation, opts) {
   const tracks = doc ? doc.tracks || [] : [];
   const rowCount = Math.max(1, tracks.length);
   const rulerHeight = 36;
-  const trackHeight = 44;
   const padBottom = 12;
+  const fillHeight = opts && Number(opts.fillHeight) > 0 ? Number(opts.fillHeight) : 0;
+  // DaVinci Resolve UiEditTimelineWidgetImp: track lanes expand to fill the docked timeline height
+  const trackHeight = fillHeight > 0
+    ? Math.max(44, Math.min(88, Math.floor((fillHeight - rulerHeight - padBottom) / rowCount)))
+    : 44;
   const totalHeight = rulerHeight + rowCount * trackHeight + padBottom;
 
   const { ctx, width, height } = setupCanvas(canvas, totalHeight);
@@ -5159,7 +5175,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     };
   }
 
-  const labelColW = width < 480 ? 74 : 136;
+  const labelColW = width < 480 ? 74 : width >= 1100 ? 164 : 136;
   const timelineX = labelColW;
   const timelineW = Math.max(120, width - labelColW - 10);
   const zoom = opts && opts.zoom ? opts.zoom : 1;
@@ -5196,8 +5212,8 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   const xToFrame = (x) =>
     Math.max(startFrame, Math.min(maxFrame, Math.round(xToRawFrame(x))));
 
-  // Ruler header background
-  ctx.fillStyle = "#1e1e22";
+  // Ruler header background (DaVinci Resolve 21 ultra-clean matte dark)
+  ctx.fillStyle = "#19191d";
   ctx.fillRect(0, 0, width, rulerHeight);
   ctx.strokeStyle = "#101013";
   ctx.lineWidth = 1;
@@ -5208,9 +5224,41 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   ctx.lineTo(labelColW, height);
   ctx.stroke();
 
-  ctx.fillStyle = "#8e8e98";
-  ctx.font = "600 10px ui-monospace, monospace";
-  ctx.fillText("TRACKS", 10, 22);
+  // Resolve UiTimeCodeLabel: large current-playhead timecode above the track headers
+  const headerPhFrame = opts && Number.isFinite(Number(opts.playheadFrame))
+    ? Math.round(Number(opts.playheadFrame))
+    : startFrame;
+  ctx.fillStyle = "#ececf2";
+  ctx.font = width < 480
+    ? "600 10px ui-monospace, monospace"
+    : "600 13.5px ui-monospace, SFMono-Regular, Consolas, monospace";
+  ctx.fillText(
+    width < 480 ? `${headerPhFrame}f` : framesToSmpte(headerPhFrame, doc.fps.num, doc.fps.den),
+    10,
+    23
+  );
+
+  // Subtle vertical second-grid lines across entire timeline like DaVinci Resolve
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(timelineX, rulerHeight, timelineW, height - rulerHeight);
+  ctx.clip();
+  const minTickPxGrid = width < 500 ? 68 : 94;
+  const rawStepGrid = Math.max(1, Math.ceil(minTickPxGrid / Math.max(0.01, pxPerFrame)));
+  const niceStepsGrid = [1, 5, 10, 25, 50, 100, 125, 250, 500, 1000, 2500, 5000];
+  const stepFramesGrid = niceStepsGrid.find((s) => s >= rawStepGrid) || rawStepGrid;
+  const firstGridTick = startFrame + Math.max(0, Math.floor((viewStart - startFrame) / stepFramesGrid)) * stepFramesGrid;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.032)";
+  ctx.lineWidth = 1;
+  for (let f = firstGridTick; f <= viewStart + visibleSpan + stepFramesGrid; f += stepFramesGrid) {
+    const gx = Math.round(frameToX(f)) + 0.5;
+    if (gx < timelineX || gx > timelineX + timelineW) continue;
+    ctx.beginPath();
+    ctx.moveTo(gx, rulerHeight);
+    ctx.lineTo(gx, height);
+    ctx.stroke();
+  }
+  ctx.restore();
 
   // Ruler ticks clipped to track area (upper band, clear of lower playhead cap)
   const minTickPx = width < 500 ? 68 : 94;
@@ -5266,14 +5314,26 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   for (let f = firstTick; f <= viewStart + visibleSpan + stepFrames; f += stepFrames) {
     const x = frameToX(f);
     if (x < timelineX || x > timelineX + timelineW - 4) continue;
-    ctx.strokeStyle = "#34343c";
+    ctx.strokeStyle = "#3c3c46";
     ctx.beginPath();
-    ctx.moveTo(x, 18);
+    ctx.moveTo(x, 19);
     ctx.lineTo(x, rulerHeight);
     ctx.stroke();
 
-    ctx.fillStyle = "#9696a0";
-    const label = width < 520 ? `${f}f` : `${framesToSmpte(f, doc.fps.num, doc.fps.den)} (${f}f)`;
+    // 4 minor DaVinci sub-ticks between major SMPTE marks
+    for (let sub = 1; sub < 5; sub++) {
+      const subX = frameToX(f + (stepFrames * sub) / 5);
+      if (subX > timelineX && subX < timelineX + timelineW) {
+        ctx.strokeStyle = "#292930";
+        ctx.beginPath();
+        ctx.moveTo(subX, 27);
+        ctx.lineTo(subX, rulerHeight);
+        ctx.stroke();
+      }
+    }
+
+    ctx.fillStyle = "#8e8e98";
+    const label = width < 520 ? `${f}f` : framesToSmpte(f, doc.fps.num, doc.fps.den);
     if (x + ctx.measureText(label).width + 6 <= timelineX + timelineW) {
       ctx.fillText(label, x + 4, 13);
     }
@@ -5313,16 +5373,16 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     const isSolo = Boolean(trk.solo);
     const trackAudiblyMuted = isDirectMuted || (anySolo && !isSolo);
 
-    // Track label rail
-    ctx.fillStyle = trackAudiblyMuted ? "#1f1f24" : "#252529";
+    // DaVinci Resolve matte flat track header rail
+    ctx.fillStyle = trackAudiblyMuted ? "#18181c" : "#1d1d21";
     ctx.fillRect(0, rowY, labelColW, trackHeight);
 
     // Track timeline surface
     ctx.fillStyle = trackAudiblyMuted
-      ? "#161619"
-      : idx % 2 === 0 ? "#1b1b1f" : "#1e1e22";
+      ? "#151518"
+      : idx % 2 === 0 ? "#18181b" : "#1a1a1e";
     ctx.fillRect(timelineX, rowY, width - timelineX, trackHeight);
-    ctx.strokeStyle = "#111114";
+    ctx.strokeStyle = "#101013";
     ctx.beginPath();
     ctx.moveTo(0, rowY + trackHeight);
     ctx.lineTo(width, rowY + trackHeight);
@@ -5371,60 +5431,71 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.restore();
     }
 
-    // Track tag
+    // Track header (Resolve UiTimeLineWidget: outline V1/A1 badge, full track name, M S L row)
     const tagX = width < 480 ? 4 : 6;
     const tagW = width < 480 ? 21 : 23;
-    ctx.fillStyle = isAudio ? "#255c4e" : "#2c4e7c";
-    roundRectPath(ctx, tagX, rowY + 12, tagW, 20, 2);
+    const twoLineHeader = width >= 480 && trackHeight >= 54;
+    const tagY = twoLineHeader ? rowY + 8 : rowY + 12;
+    const isPrimaryV1 = !isAudio && trk.index === 1;
+    ctx.fillStyle = isPrimaryV1 ? "rgba(230, 75, 56, 0.14)" : "#151518";
+    roundRectPath(ctx, tagX, tagY, tagW, 19, 2);
     ctx.fill();
-    ctx.strokeStyle = isAudio ? "#3d8c78" : "#4c74ab";
-    ctx.stroke();
-
-    ctx.fillStyle = "#d8d8de";
-    ctx.font = "700 9px ui-monospace, monospace";
-    const shortCode = `${isAudio ? "A" : "V"}${trk.index}`;
-    ctx.fillText(shortCode, tagX + 4, rowY + 25);
-
-    if (width >= 480) {
-      ctx.fillStyle = trackAudiblyMuted ? "#7a7a86" : "#b4b4be";
-      ctx.font = "500 10px system-ui, sans-serif";
-      const tName = (trk.name || shortCode).slice(0, 8);
-      ctx.fillText(tName, 33, rowY + 25);
-    }
-
-    // Track Mute (M), Solo (S), and Sync Lock (L) buttons on label rail
-    const msBtnW = width < 480 ? 13 : 16;
-    const msBtnH = 18;
-    const msBtnY = rowY + 13;
-    const muteX = width < 480 ? 27 : 79;
-    const soloX = width < 480 ? 42 : 97;
-    const syncX = width < 480 ? 57 : 115;
-    const isSyncLocked = Boolean(trk.sync_locked);
-
-    ctx.fillStyle = isDirectMuted ? "#e5534b" : "#19191c";
-    roundRectPath(ctx, muteX, msBtnY, msBtnW, msBtnH, 2);
-    ctx.fill();
-    ctx.strokeStyle = isDirectMuted ? "#f87171" : "#34343c";
+    ctx.strokeStyle = isPrimaryV1 ? "#e64b38" : "#3a3a44";
     ctx.lineWidth = 1;
     ctx.stroke();
-    ctx.fillStyle = isDirectMuted ? "#ffffff" : "#8e8e98";
-    ctx.font = "700 9px ui-monospace, monospace";
+
+    ctx.fillStyle = isPrimaryV1 ? "#f26c5b" : "#9e9ea8";
+    ctx.font = "600 9.5px 'Segoe UI', system-ui, sans-serif";
+    const shortCode = `${isAudio ? "A" : "V"}${trk.index}`;
+    ctx.fillText(shortCode, tagX + 5, tagY + 13);
+
+    const msBtnW = width < 480 ? 13 : 16;
+    const msBtnH = 18;
+    const msBtnY = twoLineHeader ? rowY + 31 : rowY + 13;
+    const muteX = width < 480 ? 27 : twoLineHeader ? 34 : labelColW - 57;
+    const soloX = width < 480 ? 42 : twoLineHeader ? 52 : labelColW - 39;
+    const syncX = width < 480 ? 57 : twoLineHeader ? 70 : labelColW - 21;
+    const isSyncLocked = Boolean(trk.sync_locked);
+
+    if (width >= 480) {
+      ctx.fillStyle = trackAudiblyMuted ? "#666672" : "#d6d6de";
+      ctx.font = "500 11px 'Segoe UI', system-ui, sans-serif";
+      const maxNameW = twoLineHeader ? labelColW - 42 : muteX - 38;
+      let tName = String(trk.name || shortCode);
+      while (tName.length > 1 && ctx.measureText(tName).width > maxNameW) {
+        tName = tName.slice(0, -1);
+      }
+      if (tName !== String(trk.name || shortCode) && tName.length > 2) {
+        tName = `${tName.slice(0, -1)}\u2026`;
+      }
+      ctx.fillText(tName, 34, tagY + 13);
+      if (twoLineHeader) {
+        const clipCount = (trk.clips || []).length;
+        ctx.fillStyle = "#70707c";
+        ctx.font = "9.5px 'Segoe UI', system-ui, sans-serif";
+        const countLbl = `${clipCount} ${clipCount === 1 ? "Clip" : "Clips"}`;
+        ctx.fillText(countLbl, labelColW - 8 - ctx.measureText(countLbl).width, msBtnY + 12);
+      }
+    }
+
+    if (isDirectMuted) {
+      ctx.fillStyle = "#b91c1c";
+      roundRectPath(ctx, muteX, msBtnY, msBtnW, msBtnH, 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = isDirectMuted ? "#ffffff" : "#72727e";
+    ctx.font = "600 9px 'Segoe UI', system-ui, sans-serif";
     ctx.fillText("M", muteX + (width < 480 ? 3.5 : 4.5), msBtnY + 12);
 
-    ctx.fillStyle = isSolo ? "#d29922" : "#19191c";
-    roundRectPath(ctx, soloX, msBtnY, msBtnW, msBtnH, 2);
-    ctx.fill();
-    ctx.strokeStyle = isSolo ? "#ffd166" : "#34343c";
-    ctx.stroke();
-    ctx.fillStyle = isSolo ? "#111114" : "#8e8e98";
+    if (isSolo) {
+      ctx.fillStyle = "#ca8a04";
+      roundRectPath(ctx, soloX, msBtnY, msBtnW, msBtnH, 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = isSolo ? "#111114" : "#72727e";
     ctx.fillText("S", soloX + (width < 480 ? 3.5 : 4.5), msBtnY + 12);
 
-    ctx.fillStyle = isSyncLocked ? "rgba(57, 197, 207, 0.24)" : "#19191c";
-    roundRectPath(ctx, syncX, msBtnY, msBtnW, msBtnH, 2);
-    ctx.fill();
-    ctx.strokeStyle = isSyncLocked ? "#39c5cf" : "#34343c";
-    ctx.stroke();
-    ctx.fillStyle = isSyncLocked ? "#8de8ef" : "#6e6e78";
+    ctx.fillStyle = isSyncLocked ? "#9e9ea8" : "#565662";
     ctx.fillText("L", syncX + (width < 480 ? 3.8 : 4.8), msBtnY + 12);
 
     hitboxes.push({
@@ -5516,17 +5587,17 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           : isMulticam && clip.enabled
             ? "#182438"
             : isAudio
-              ? clip.enabled ? "#1d4a40" : "#252529"
-              : clip.enabled ? "#264066" : "#252529";
+              ? clip.enabled ? "#1c4a40" : "#242428"
+              : clip.enabled ? "#2b466b" : "#242428";
       const borderCol = isSelected
-        ? "#e68442"
+        ? "#e64b38"
         : trackAudiblyMuted
-          ? "#3b3b44"
+          ? "#34343c"
           : isCompound
             ? cmpPal.border
             : isMulticam
               ? "#38bdf8"
-              : isAudio ? "#347867" : "#446a9c";
+              : isAudio ? "#286658" : "#395c8a";
 
       ctx.fillStyle = baseFill;
       roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
@@ -5613,6 +5684,59 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         ctx.clip();
         ctx.fillStyle = trackAudiblyMuted ? labelMeta.mutedHex : labelMeta.hex;
         ctx.fillRect(drawX, clipY, drawW, 4);
+        ctx.restore();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+      }
+
+      // Resolve "Thumbnail" video view (head/tail frames) & audio waveform in tall track lanes
+      if (clipH >= 40 && drawW > 18) {
+        const bodyY = clipY + 19;
+        const bodyH = clipH - 21;
+        ctx.save();
+        roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
+        ctx.clip();
+        if (!isAudio && !isCompound && !isMulticam && bodyH >= 14) {
+          const thumbH = bodyH;
+          const thumbW = Math.max(12, Math.round((thumbH * 16) / 9));
+          const hue = Math.floor(tlHash01(clip.name, 1) * 360);
+          const sunX = 0.25 + 0.5 * tlHash01(clip.name, 2);
+          const drawThumb = (tx) => {
+            const g = ctx.createLinearGradient(tx, bodyY, tx, bodyY + thumbH);
+            g.addColorStop(0, `hsl(${hue}, 26%, ${trackAudiblyMuted ? 16 : 30}%)`);
+            g.addColorStop(0.58, `hsl(${(hue + 28) % 360}, 20%, ${trackAudiblyMuted ? 10 : 17}%)`);
+            g.addColorStop(1, `hsl(${(hue + 52) % 360}, 16%, 8%)`);
+            ctx.fillStyle = g;
+            ctx.fillRect(tx, bodyY, thumbW, thumbH);
+            const glow = ctx.createRadialGradient(
+              tx + thumbW * sunX, bodyY + thumbH * 0.38, 1,
+              tx + thumbW * sunX, bodyY + thumbH * 0.38, Math.max(4, thumbH * 0.7)
+            );
+            glow.addColorStop(0, `hsla(${(hue + 160) % 360}, 30%, 70%, 0.34)`);
+            glow.addColorStop(1, "hsla(0, 0%, 0%, 0)");
+            ctx.fillStyle = glow;
+            ctx.fillRect(tx, bodyY, thumbW, thumbH);
+            ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+            ctx.fillRect(tx, bodyY + thumbH * 0.7, thumbW, thumbH * 0.3);
+            ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(tx + 0.5, bodyY + 0.5, thumbW - 1, thumbH - 1);
+          };
+          drawThumb(cx + 1);
+          if (cw > thumbW * 2 + 24) drawThumb(cx + cw - thumbW - 1);
+        } else if (isAudio && bodyH >= 10) {
+          const midY = bodyY + bodyH / 2;
+          const amp = bodyH * 0.46;
+          const seed = tlHash01(clip.name, 3) * 1000;
+          const srcOffPx = (clip.source_in_frame || 0) * pxPerFrame;
+          ctx.fillStyle = trackAudiblyMuted ? "rgba(120, 140, 136, 0.35)" : "rgba(110, 228, 198, 0.62)";
+          for (let px = Math.floor(drawX) + 1; px < drawX + drawW - 1; px += 2) {
+            const tPx = px - cx + srcOffPx;
+            const env = 0.32 + 0.68 * Math.abs(Math.sin(tPx * 0.012 + seed));
+            const detail = 0.4 + 0.6 * Math.abs(Math.sin(tPx * 0.23 + seed * 0.37) * Math.cos(tPx * 0.061 + seed));
+            const hh = Math.max(1, env * detail * amp);
+            ctx.fillRect(px, midY - hh, 1.25, hh * 2);
+          }
+        }
         ctx.restore();
         roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
       }
@@ -5928,7 +6052,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         const textClipW = Math.max(0, textMaxRight - textStartX);
         // Subtle DaVinci clip title header band
         if (clipH >= 28 && drawW > 8) {
-          ctx.fillStyle = "rgba(10, 11, 15, 0.28)";
+          ctx.fillStyle = clipH >= 40 ? "rgba(10, 11, 15, 0.46)" : "rgba(10, 11, 15, 0.28)";
           ctx.fillRect(drawX + 1, clipY + 4, Math.max(0, drawW - 2), 14);
         }
         if (textClipW > 14) {
@@ -5943,7 +6067,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         }
 
         const subClipW = Math.max(0, drawX + drawW - 6 - rightTransInset - textStartX);
-        if (subClipW > 24) {
+        if (subClipW > 24 && clipH < 40) {
           ctx.save();
           ctx.beginPath();
           ctx.rect(textStartX, clipY + 19, subClipW, clipH - 19);
@@ -6384,6 +6508,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       const gx = Math.round(gxRaw) + 0.5;
       const isBeatSnap = opts.snapGuideKind === "beat";
       const isTransientSnap = opts.snapGuideKind === "transient";
+      const isMarkerSnap = opts.snapGuideKind === "marker";
       const guideCol = isBeatSnap ? "#e6b842" : isTransientSnap ? "#3fb950" : "#39c5cf";
       const textCol = isBeatSnap ? "#ffe394" : isTransientSnap ? "#7ee787" : "#8de8ef";
       ctx.save();
@@ -6532,7 +6657,7 @@ export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
     };
   }
 
-  const labelColW = width < 480 ? 74 : 136;
+  const labelColW = width < 480 ? 74 : width >= 1100 ? 164 : 136;
   const timelineX = labelColW;
   const timelineW = Math.max(120, width - labelColW - 10);
   const tracks = Array.isArray(doc.tracks) ? doc.tracks : [];
@@ -6554,10 +6679,10 @@ export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
   const xToFrame = (x) =>
     Math.max(startFrame, Math.min(maxFrame, Math.round(startFrame + (x - timelineX) / pxPerFrame)));
 
-  // Left overview label rail
-  ctx.fillStyle = "#222227";
+  // Left overview label rail (DaVinci Cut Overview V1 marker)
+  ctx.fillStyle = "#1b1b1f";
   ctx.fillRect(0, 0, labelColW, height);
-  ctx.strokeStyle = "#111114";
+  ctx.strokeStyle = "#101013";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(labelColW, 0);
@@ -6566,9 +6691,9 @@ export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
   ctx.lineTo(width, height - 0.5);
   ctx.stroke();
 
-  ctx.fillStyle = "#8e8e98";
-  ctx.font = "600 9px ui-monospace, monospace";
-  ctx.fillText(width < 480 ? "OVW" : "OVERVIEW", 8, 17);
+  ctx.fillStyle = "#e64b38";
+  ctx.font = "600 9.5px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("V1", labelColW - 22, 18);
 
   // I/O Range Highlight
   const ioMetrics = computeInOutRangeMetrics(
@@ -7954,26 +8079,89 @@ export function drawFramesCanvas(canvas, samples) {
 
 export function drawStereoVuMeterCanvas(canvas, meterState = {}) {
   if (!canvas) return;
-  const { ctx, width, height } = setupCanvas(canvas, 56);
+  const boxRect = canvas.getBoundingClientRect();
+  const isVertical = Boolean(meterState.vertical) || (boxRect.height > boxRect.width * 1.45);
+  const targetW = isVertical ? Math.max(36, Math.round(boxRect.width || 42)) : null;
+  const targetH = isVertical ? Math.max(160, Math.round(boxRect.height || 220)) : 56;
+  const { ctx, width, height } = setupCanvas(canvas, targetH, targetW);
   ctx.fillStyle = "#141416";
   ctx.fillRect(0, 0, width, height);
 
   const minDb = -60;
   const maxDb = 0;
+  const dbToFrac = (db) => clamp01((db - minDb) / (maxDb - minDb));
+  const leftDb = Number.isFinite(Number(meterState.leftDb)) ? Number(meterState.leftDb) : minDb;
+  const rightDb = Number.isFinite(Number(meterState.rightDb)) ? Number(meterState.rightDb) : minDb;
+  const holdL = Number.isFinite(Number(meterState.holdL)) ? Number(meterState.holdL) : minDb;
+  const holdR = Number.isFinite(Number(meterState.holdR)) ? Number(meterState.holdR) : minDb;
+  const allMuted = Boolean(meterState.allMuted);
+
+  if (isVertical) {
+    const padT = 8;
+    const padB = 18;
+    const barH = Math.max(48, height - padT - padB);
+    const barW = 7;
+    const xL = width - barW * 2 - 7;
+    const xR = width - barW - 4;
+    const dbToY = (db) => padT + (1 - dbToFrac(db)) * barH;
+
+    const vGrad = ctx.createLinearGradient(0, padT + barH, 0, padT);
+    vGrad.addColorStop(0.0, "#1d7a3e");
+    vGrad.addColorStop(0.72, "#2ea853");
+    vGrad.addColorStop(0.84, "#d29922");
+    vGrad.addColorStop(0.95, "#e68442");
+    vGrad.addColorStop(1.0, "#e5534b");
+
+    for (const ch of [
+      { label: "L", db: leftDb, hold: holdL, x: xL },
+      { label: "R", db: rightDb, hold: holdR, x: xR }
+    ]) {
+      ctx.fillStyle = "#222229";
+      ctx.fillRect(ch.x, padT, barW, barH);
+      ctx.strokeStyle = "#2e2e38";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(ch.x + 0.5, padT + 0.5, barW - 1, barH - 1);
+
+      const activeFrac = dbToFrac(ch.db);
+      if (activeFrac > 0.005 && !allMuted) {
+        const fillH = Math.max(2, activeFrac * barH);
+        ctx.fillStyle = vGrad;
+        ctx.fillRect(ch.x + 1, padT + barH - fillH, barW - 2, fillH);
+      }
+      ctx.fillStyle = "#16161b";
+      for (let db = -57; db < 0; db += 3) {
+        const sy = Math.round(dbToY(db));
+        ctx.fillRect(ch.x + 1, sy, barW - 2, 1);
+      }
+      if (!allMuted && ch.hold > minDb + 0.5) {
+        const hy = Math.max(padT + 1, Math.min(padT + barH - 2, dbToY(ch.hold)));
+        ctx.fillStyle = ch.hold >= -3 ? "#ff8e88" : ch.hold >= -12 ? "#ffd166" : "#e6edf3";
+        ctx.fillRect(ch.x + 1, hy, barW - 2, 2);
+      }
+      ctx.fillStyle = "#9494a0";
+      ctx.font = "600 8px ui-monospace, monospace";
+      ctx.fillText(ch.label, ch.x + 1, height - 5);
+    }
+
+    const vTicks = [0, -5, -10, -15, -20, -30, -40, -50];
+    ctx.font = "8.5px ui-monospace, monospace";
+    ctx.fillStyle = "#92929e";
+    for (const tick of vTicks) {
+      const y = Math.round(dbToY(tick));
+      const txt = tick === 0 ? "0" : String(tick).replace("-", "");
+      ctx.fillText(txt, 3, y + 3);
+    }
+    return;
+  }
+
   const labelW = 18;
   const padR = 8;
   const padT = 7;
   const barW = Math.max(80, width - labelW - padR);
   const barH = 10;
   const gapY = 5;
-  const dbToFrac = (db) => clamp01((db - minDb) / (maxDb - minDb));
   const dbToX = (db) => labelW + dbToFrac(db) * barW;
 
-  const leftDb = Number.isFinite(Number(meterState.leftDb)) ? Number(meterState.leftDb) : minDb;
-  const rightDb = Number.isFinite(Number(meterState.rightDb)) ? Number(meterState.rightDb) : minDb;
-  const holdL = Number.isFinite(Number(meterState.holdL)) ? Number(meterState.holdL) : minDb;
-  const holdR = Number.isFinite(Number(meterState.holdR)) ? Number(meterState.holdR) : minDb;
-  const allMuted = Boolean(meterState.allMuted);
   const duckEnabled = Boolean(meterState.duckEnabled);
   const duckThreshDb = Number.isFinite(Number(meterState.duckThresholdDb))
     ? Number(meterState.duckThresholdDb)

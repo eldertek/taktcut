@@ -1,6 +1,8 @@
 // DaVinci Resolve Workstation Shell, 14-Menu Bar, and 7-Page NLE Controllers for taktcut.
 // Clean-room MIT implementation: safe DOM API only, zero inline style attributes, zero proprietary assets.
 
+import { DEMO_TRAINING_PROJECTS } from "./demo_training_projects.js";
+
 const FUSION_DEFAULT_NODES = [
   { id: "mediain1", label: "MediaIn1", kind: "io", x: 36, y: 34, enabled: true, v1: true, v2: false, action: null },
   { id: "deltakeyer1", label: "DeltaKeyer1", kind: "matte", x: 186, y: 34, enabled: true, v1: false, v2: false, action: "keyer" },
@@ -32,8 +34,21 @@ function clickIfPresent(byId, id) {
   if (target) target.click();
 }
 
+export function fairlightDbToNorm(db) {
+  const val = Number(db);
+  if (!Number.isFinite(val) || val <= -60) return 0.0;
+  if (val >= 12) return 1.0;
+  // Calibrated piecewise DaVinci Fairlight fader taper (0 dB anchored at 72%)
+  if (val >= 0) return 0.72 + (val / 12.0) * 0.28;
+  if (val >= -10) return 0.50 + ((val + 10) / 10.0) * 0.22;
+  if (val >= -20) return 0.32 + ((val + 20) / 10.0) * 0.18;
+  if (val >= -40) return 0.12 + ((val + 40) / 20.0) * 0.20;
+  return Math.max(0.0, 0.12 * ((val + 60) / 20.0));
+}
+
 export function createWorkstationController(ctx) {
   const {
+    api,
     state,
     byId,
     t,
@@ -41,6 +56,8 @@ export function createWorkstationController(ctx) {
     redrawActiveCanvases,
     showBanner,
     loadSampleTimeline,
+    setTimelineData,
+    renderColorNodeTreeUI,
     setTimelineTool,
     setLanguage,
     toggleDualMonitorAction,
@@ -103,7 +120,9 @@ export function createWorkstationController(ctx) {
     fairlightTargetStd: "ebu_r128",
     projectLibraryTab: "local",
     projectSearchQuery: "",
-    projectSettingsTab: "master"
+    projectSettingsTab: "master",
+    localResolveProjects: [],
+    localResolveLoaded: false
   };
 
   function svgEl(tag, attrs = {}) {
@@ -213,10 +232,14 @@ export function createWorkstationController(ctx) {
           { label: "Project Manager...", shortcut: "Shift+1", run: () => openProjectManagerDialog() },
           { label: "Project Settings...", shortcut: "Shift+9", run: () => openProjectSettingsDialog("master") },
           { sep: true },
-          { label: "Open Project (.taktcut.json)...", shortcut: "Ctrl+O", run: () => clickIfPresent(byId, "btn-open-project") },
-          { label: "Save Project", shortcut: "Ctrl+S", run: () => clickIfPresent(byId, "btn-save-project") },
-          { sep: true },
-          { label: "Import Timeline (.drp / .drt / .fcpxml / .otio)...", shortcut: "Ctrl+I", run: () => { switchTab("timeline"); clickIfPresent(byId, "timeline-file-input"); } },
+          ...(api && api.isStaticDemo()
+            ? []
+            : [
+                { label: "Open Project (.taktcut.json)...", shortcut: "Ctrl+O", run: () => clickIfPresent(byId, "btn-open-project") },
+                { label: "Save Project", shortcut: "Ctrl+S", run: () => clickIfPresent(byId, "btn-save-project") },
+                { sep: true },
+                { label: "Import Timeline (.drp / .drt / .fcpxml / .otio)...", shortcut: "Ctrl+I", run: () => { switchTab("timeline"); clickIfPresent(byId, "timeline-file-input"); } }
+              ]),
           { label: "Media Pool Pro (Proxies / Relink / Sync)...", shortcut: "Shift+P", run: () => openMediaPoolProDialog("proxy") },
           { sep: true },
           { label: "Export Timeline (.otio)", shortcut: "", run: () => clickIfPresent(byId, "btn-timeline-download") },
@@ -546,10 +569,159 @@ export function createWorkstationController(ctx) {
   // =========================================================================
   // PROJECT MANAGER & PROJECT SETTINGS DIALOGS (UiProjectManager / Settings)
   // =========================================================================
+  async function refreshLocalResolveProjects() {
+    if (!api || typeof api.listLocalResolveProjects !== "function") return;
+    try {
+      const res = await api.listLocalResolveProjects();
+      if (res && Array.isArray(res.projects)) {
+        ws.localResolveProjects = res.projects;
+        ws.localResolveLoaded = true;
+        renderProjectManagerCards();
+      }
+    } catch {
+      ws.localResolveLoaded = true;
+    }
+  }
+
+  async function loadLocalResolveProject(proj) {
+    if (!api || typeof api.openLocalResolveProject !== "function" || !setTimelineData) return;
+    try {
+      const res = await api.openLocalResolveProject({
+        project_name: proj.project_name,
+        timeline_name: proj.active_timeline || null
+      });
+      if (!res || !res.document) return;
+      setTimelineData(res);
+      const doc = res.document;
+      const topProj = byId("topbar-project-name");
+      if (topProj) topProj.textContent = proj.project_name;
+      const aspectSel = byId("program-aspect-select");
+      if (aspectSel && doc.height > doc.width) {
+        aspectSel.value = "9:16";
+        aspectSel.dispatchEvent(new Event("change", { bubbles: true }));
+      } else if (aspectSel && doc.width && doc.height && doc.width >= doc.height) {
+        aspectSel.value = "16:9";
+        aspectSel.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      if (Array.isArray(proj.node_labels) && proj.node_labels.length > 0 && state.colorNodeTree && Array.isArray(state.colorNodeTree.nodes)) {
+        const baseNode = state.colorNodeTree.nodes[0];
+        if (baseNode) {
+          while (state.colorNodeTree.nodes.length < Math.min(8, proj.node_labels.length)) {
+            if (typeof addColorNodeAction === "function") addColorNodeAction();
+            else break;
+          }
+          proj.node_labels.slice(0, state.colorNodeTree.nodes.length).forEach((lbl, idx) => {
+            state.colorNodeTree.nodes[idx].label = lbl;
+          });
+          if (typeof renderColorNodeTreeUI === "function") renderColorNodeTreeUI();
+        }
+      }
+      if (Array.isArray(doc.tracks)) {
+        const audioTracks = doc.tracks.filter((tr) => tr.kind === "audio").slice(0, 4);
+        if (audioTracks.length > 0) {
+          ws.fairlightStrips = [
+            ...audioTracks.map((tr, i) => ({
+              id: `a${i + 1}`,
+              code: `A${i + 1}`,
+              name: tr.name || `Audio ${i + 1}`,
+              bus: "Bus 1",
+              faderDb: i === 0 ? 0.0 : -4.5,
+              pan: 0,
+              mute: false,
+              solo: false,
+              rec: false,
+              eq: true,
+              dyn: i === 0
+            })),
+            { id: "bus1", code: "M1", name: "Bus 1 Main", bus: "Out 1/2", faderDb: 0.0, pan: 0, mute: false, solo: false, rec: false, eq: true, dyn: true }
+          ];
+          renderFairlightMixerConsole();
+        }
+      }
+      redrawWorkstationCanvases();
+      const dlg = byId("project-manager-dialog");
+      if (dlg && dlg.open) dlg.close();
+      const totalClips = (res.validation && res.validation.total_clips) || 0;
+      const nodeInfo = proj.node_labels && proj.node_labels.length ? ` | Nodes: ${proj.node_labels.slice(0, 4).join(", ")}` : "";
+      showBanner(`Resolve 21 DB: ${proj.project_name} (${doc.width}x${doc.height} @ ${proj.fps}fps, ${doc.tracks.length} tracks, ${totalClips} clips${nodeInfo})`, "success");
+    } catch (err) {
+      showBanner(err && err.message ? err.message : "Failed to open Resolve Project.db", "error");
+    }
+  }
+
+  async function loadTrainingDemoProject(proj) {
+    if (!setTimelineData || !proj || !proj.document) return;
+    try {
+      const docCopy = structuredClone(proj.document);
+      let res = null;
+      if (api && typeof api.validateTimeline === "function") {
+        res = await api.validateTimeline({ document: docCopy });
+      }
+      if (!res || !res.document) {
+        res = { document: docCopy, validation: { timeline_name: docCopy.name, valid: true, total_tracks: docCopy.tracks.length, total_clips: 0, issues: [] } };
+      }
+      setTimelineData(res);
+      const topProj = byId("topbar-project-name");
+      if (topProj) topProj.textContent = proj.name;
+
+      const aspectSel = byId("program-aspect-select");
+      if (aspectSel && proj.aspectPreset) {
+        aspectSel.value = proj.aspectPreset;
+        aspectSel.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      if (proj.colorPreset) {
+        const presetBtn = document.querySelector(`[data-grade-preset="${proj.colorPreset}"]`);
+        if (presetBtn) presetBtn.click();
+      }
+      if (Array.isArray(proj.nodeLabels) && proj.nodeLabels.length > 0 && state.colorNodeTree && Array.isArray(state.colorNodeTree.nodes)) {
+        while (state.colorNodeTree.nodes.length < Math.min(8, proj.nodeLabels.length)) {
+          if (typeof addColorNodeAction === "function") addColorNodeAction();
+          else break;
+        }
+        proj.nodeLabels.slice(0, state.colorNodeTree.nodes.length).forEach((lbl, idx) => {
+          state.colorNodeTree.nodes[idx].label = lbl;
+        });
+        if (typeof renderColorNodeTreeUI === "function") renderColorNodeTreeUI();
+      }
+      if (Array.isArray(docCopy.tracks)) {
+        const audioTracks = docCopy.tracks.filter((tr) => tr.kind === "audio").slice(0, 4);
+        if (audioTracks.length > 0) {
+          ws.fairlightStrips = [
+            ...audioTracks.map((tr, i) => ({
+              id: `a${i + 1}`,
+              code: `A${i + 1}`,
+              name: tr.name || `Audio ${i + 1}`,
+              bus: "Bus 1",
+              faderDb: i === 0 ? 0.0 : -4.5,
+              pan: 0,
+              mute: false,
+              solo: false,
+              rec: false,
+              eq: true,
+              dyn: i === 0
+            })),
+            { id: "bus1", code: "M1", name: "Bus 1 Main", bus: "Out 1/2", faderDb: 0.0, pan: 0, mute: false, solo: false, rec: false, eq: true, dyn: true }
+          ];
+          renderFairlightMixerConsole();
+        }
+      }
+      if (proj.recommendedTab && typeof switchTab === "function") {
+        switchTab(proj.recommendedTab);
+      }
+      redrawWorkstationCanvases();
+      const dlg = byId("project-manager-dialog");
+      if (dlg && dlg.open) dlg.close();
+      showBanner(`Demo Training Project: ${proj.name} (${proj.description})`, "success");
+    } catch (err) {
+      showBanner(err && err.message ? err.message : "Failed to load demo project", "error");
+    }
+  }
+
   function openProjectManagerDialog() {
     const dlg = byId("project-manager-dialog");
     if (!dlg) return;
     renderProjectManagerCards();
+    if (!ws.localResolveLoaded) refreshLocalResolveProjects();
     if (!dlg.open && typeof dlg.showModal === "function") dlg.showModal();
   }
 
@@ -577,7 +749,56 @@ export function createWorkstationController(ctx) {
       grid.appendChild(newCard);
     }
 
-    const projects = [
+    for (const rproj of ws.localResolveProjects) {
+      if (ws.projectLibraryTab !== "local") continue;
+      if (q && !rproj.project_name.toLowerCase().includes(q)) continue;
+      const card = el("button", "pm-project-card");
+      card.type = "button";
+      const thumb = el("div", "pm-project-thumb is-preview");
+      if (rproj.thumbnail_data_url) {
+        const img = document.createElement("img");
+        img.className = "pm-thumb-img";
+        img.src = rproj.thumbnail_data_url;
+        img.alt = rproj.project_name;
+        thumb.appendChild(img);
+      }
+      thumb.appendChild(el("span", "pm-resolve-badge mono", "RESOLVE 21"));
+      thumb.appendChild(el("span", "pm-active-slate mono", `${rproj.fps}p ${rproj.track_count}T ${rproj.clip_count}C`));
+      card.appendChild(thumb);
+      card.appendChild(el("div", "pm-project-title", rproj.project_name));
+      card.addEventListener("click", () => {
+        loadLocalResolveProject(rproj);
+      });
+      grid.appendChild(card);
+    }
+
+    for (const dproj of DEMO_TRAINING_PROJECTS) {
+      if (ws.projectLibraryTab !== "local") continue;
+      if (q && !`${dproj.name} ${dproj.category} ${dproj.description}`.toLowerCase().includes(q)) continue;
+      const card = el("button", "pm-project-card");
+      card.type = "button";
+      card.title = dproj.description;
+      const thumb = el("div", "pm-project-thumb is-preview");
+      if (dproj.thumbnailUrl) {
+        const img = document.createElement("img");
+        img.className = "pm-thumb-img";
+        img.src = dproj.thumbnailUrl;
+        img.alt = dproj.name;
+        thumb.appendChild(img);
+      }
+      thumb.appendChild(el("span", "pm-demo-badge mono", dproj.category));
+      thumb.appendChild(el("span", "pm-active-slate mono", dproj.specs));
+      card.appendChild(thumb);
+      card.appendChild(el("div", "pm-project-title", dproj.name));
+      card.addEventListener("click", () => {
+        loadTrainingDemoProject(dproj);
+      });
+      grid.appendChild(card);
+    }
+
+    const projects = (api && api.isStaticDemo()
+      ? []
+      : [
       {
         name: curName,
         isFolder: false,
@@ -627,7 +848,7 @@ export function createWorkstationController(ctx) {
         lib: "cloud",
         run: () => loadSampleTimeline("clean")
       }
-    ].filter((p) => {
+    ]).filter((p) => {
       const matchLib = ws.projectLibraryTab === "local" ? p.lib === "local" : p.lib === ws.projectLibraryTab;
       const matchQ = !q || p.name.toLowerCase().includes(q);
       return matchLib && matchQ;
@@ -816,8 +1037,6 @@ export function createWorkstationController(ctx) {
         }
         const badge = el("span", "cut-clip-badge mono", ws.cutBinTab === "sync" ? `CAM ${c.trackIndex + 1}` : c.trackName);
         frame.appendChild(badge);
-        const tcTag = el("span", "cut-clip-tc mono", formatTc(c.startFrame));
-        frame.appendChild(tcTag);
         card.appendChild(frame);
         card.appendChild(el("div", "cut-clip-label", c.name));
         card.addEventListener("click", () => {
@@ -895,22 +1114,14 @@ export function createWorkstationController(ctx) {
     g.save();
     g.scale(dpr, dpr);
 
-    // Resolve Fusion dark grid background
-    g.fillStyle = "#17171a";
+    // Resolve Fusion matte dark dot-grid flow background
+    g.fillStyle = "#161619";
     g.fillRect(0, 0, w, h);
-    g.strokeStyle = "#222227";
-    g.lineWidth = 1;
-    for (let x = 0; x < w; x += 24) {
-      g.beginPath();
-      g.moveTo(x + 0.5, 0);
-      g.lineTo(x + 0.5, h);
-      g.stroke();
-    }
-    for (let y = 0; y < h; y += 24) {
-      g.beginPath();
-      g.moveTo(0, y + 0.5);
-      g.lineTo(w, y + 0.5);
-      g.stroke();
+    g.fillStyle = "#26262e";
+    for (let x = 12; x < w; x += 20) {
+      for (let y = 12; y < h; y += 20) {
+        g.fillRect(x, y, 1, 1);
+      }
     }
 
     const scaleX = w / 1110;
@@ -1039,7 +1250,7 @@ export function createWorkstationController(ctx) {
         state.playheadFrame < c.startFrame + Math.max(1, c.durationFrames);
       const item = el("button", inPlayhead ? "color-shot-card is-active" : "color-shot-card");
       item.type = "button";
-      const preview = el("div", "color-shot-thumb");
+      const preview = el("div", `color-shot-thumb is-shot-${i % 4}`);
       preview.appendChild(el("span", "color-shot-idx mono", String(i + 1).padStart(2, "0")));
       preview.appendChild(el("span", "color-shot-badge mono", c.trackName));
       item.appendChild(preview);
@@ -1150,7 +1361,7 @@ export function createWorkstationController(ctx) {
       const faderWell = el("div", "fl-fader-well");
       const faderCap = el("div", "fl-fader-cap");
       const updateCapPos = () => {
-        const norm = (strip.faderDb - (-48)) / 60;
+        const norm = fairlightDbToNorm(strip.faderDb);
         const pct = Math.max(4, Math.min(94, Math.round((1 - norm) * 100)));
         faderCap.style.setProperty("--cap-top", `${pct}%`);
       };
@@ -1248,44 +1459,66 @@ export function createWorkstationController(ctx) {
       if (i < steps) g.fillText(formatTc(f), x + 3, 14);
     }
 
+    const docAudioTracks = state.timelineDoc && Array.isArray(state.timelineDoc.tracks)
+      ? state.timelineDoc.tracks.filter((t) => t.kind === "audio")
+      : [];
+
     tracks.forEach((tr, idx) => {
       const y0 = rulerH + idx * rowH;
       const midY = y0 + rowH / 2;
-      g.fillStyle = idx % 2 === 0 ? "#1b1b1f" : "#18181c";
+      g.fillStyle = idx % 2 === 0 ? "#18181b" : "#161619";
       g.fillRect(hdrW, y0, w - hdrW, rowH - 1);
-      g.fillStyle = "#25252a";
+      g.fillStyle = "#1e1e22";
       g.fillRect(0, y0, hdrW - 1, rowH - 1);
 
-      g.fillStyle = "#e4e4ea";
-      g.font = "600 11px system-ui, sans-serif";
+      g.fillStyle = "#dcdce4";
+      g.font = "600 11px 'Segoe UI', system-ui, sans-serif";
       g.fillText(`${tr.code} ${tr.name}`, 8, y0 + 16);
-      g.fillStyle = tr.mute ? "#ef4444" : "#2bb3a3";
+      g.fillStyle = tr.mute ? "#ef4444" : "#35b8a6";
       g.font = "10px ui-monospace, monospace";
       g.fillText(tr.mute ? "MUTED" : `${tr.faderDb.toFixed(1)} dB`, 8, y0 + 31);
 
-      // Clip container box & synthetic deterministic sample waveform
       const gainScale = tr.mute ? 0.08 : Math.min(1.0, Math.pow(10, tr.faderDb / 28));
-      g.fillStyle = tr.mute ? "rgba(90, 90, 100, 0.22)" : "rgba(38, 128, 114, 0.25)";
-      g.fillRect(hdrW + 2, y0 + 4, plotW - 4, rowH - 8);
-      g.strokeStyle = tr.mute ? "#52525b" : "#2bb3a3";
-      g.lineWidth = 1;
-      g.beginPath();
-      for (let px = 0; px < plotW - 6; px += 2) {
-        const phase = (px * 0.13) + (idx * 1.9);
-        const env = 0.35 + 0.65 * Math.abs(Math.sin(px * 0.027 + idx));
-        const amp = Math.sin(phase) * env * (rowH * 0.36) * gainScale;
-        const x = hdrW + 3 + px;
-        g.moveTo(x, midY - Math.abs(amp));
-        g.lineTo(x, midY + Math.abs(amp));
-      }
-      g.stroke();
+      const matchedTrack = docAudioTracks[idx];
+      const clipSegments = matchedTrack && Array.isArray(matchedTrack.clips) && matchedTrack.clips.length
+        ? matchedTrack.clips.map((c) => ({
+            start: c.start_frame || 0,
+            dur: Math.max(8, c.duration_frames || 25),
+            name: c.name || tr.name
+          }))
+        : [{ start: 0, dur: maxF, name: tr.name }];
 
-      // 0 dB unity line
-      g.strokeStyle = "rgba(255, 255, 255, 0.16)";
-      g.beginPath();
-      g.moveTo(hdrW, midY + 0.5);
-      g.lineTo(w, midY + 0.5);
-      g.stroke();
+      for (const seg of clipSegments) {
+        const sx = hdrW + 2 + Math.round((seg.start / maxF) * (plotW - 4));
+        const sw = Math.max(12, Math.round((seg.dur / maxF) * (plotW - 4)) - 2);
+        g.fillStyle = tr.mute ? "rgba(70, 70, 80, 0.22)" : "rgba(28, 84, 73, 0.42)";
+        g.fillRect(sx, y0 + 4, sw, rowH - 8);
+        g.strokeStyle = tr.mute ? "#464652" : "#2b7365";
+        g.lineWidth = 1;
+        g.strokeRect(sx + 0.5, y0 + 4.5, sw - 1, rowH - 9);
+
+        // Clip header strip + title inside audio clip like DaVinci Fairlight
+        g.fillStyle = tr.mute ? "rgba(30, 30, 36, 0.65)" : "rgba(18, 52, 46, 0.85)";
+        g.fillRect(sx + 1, y0 + 5, Math.max(0, sw - 2), 12);
+        if (sw > 44) {
+          g.fillStyle = "#d8d8e2";
+          g.font = "500 9.5px 'Segoe UI', system-ui, sans-serif";
+          g.fillText(seg.name, sx + 5, y0 + 14, sw - 10);
+        }
+
+        // Waveform centered in clip lower lane
+        const waveMid = y0 + 17 + (rowH - 22) * 0.5;
+        g.strokeStyle = tr.mute ? "#52525b" : "#42c7b3";
+        g.beginPath();
+        for (let px = 3; px < sw - 3; px += 2) {
+          const phase = ((sx + px) * 0.17) + (idx * 2.1);
+          const env = 0.25 + 0.75 * Math.abs(Math.sin((sx + px) * 0.031 + idx));
+          const amp = Math.sin(phase) * env * ((rowH - 24) * 0.44) * gainScale;
+          g.moveTo(sx + px, waveMid - Math.abs(amp));
+          g.lineTo(sx + px, waveMid + Math.abs(amp));
+        }
+        g.stroke();
+      }
     });
 
     // Red DaVinci Playhead
@@ -1384,11 +1617,17 @@ export function createWorkstationController(ctx) {
       const maxF = Math.max(1, state.timelineMaxFrame || 250);
       const span = Math.max(25, Math.round(maxF / cutZoom));
       const viewStart = Math.max(0, Math.min(maxF - span, Math.round(state.playheadFrame - span / 2)));
+      const cutDualSection = document.querySelector("#panel-cut .resolve-cut-dual-timeline");
+      const cutUpperWrap = document.querySelector("#panel-cut .cut-upper-ruler-wrap");
+      const cutFillHeight = window.innerWidth >= 1181 && cutDualSection
+        ? Math.max(0, cutDualSection.clientHeight - (cutUpperWrap ? cutUpperWrap.offsetHeight : 0) - 4)
+        : 0;
       drawTimelineCanvas(
         byId("cut-detail-canvas"),
         state.timelineDoc,
         state.timelineValidation,
         {
+          fillHeight: cutFillHeight,
           zoom: cutZoom,
           viewStartFrame: viewStart,
           selected: state.timelineSelected,

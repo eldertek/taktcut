@@ -234,7 +234,31 @@ def _extract_resolve_sequence(
 
 
 def parse_drp(path: Path, timeline_name: str | None = None) -> TimelineDocument:
-    """Parse a clean-room .drp ZIP/XML project archive into a normalized TimelineDocument."""
+    """Parse a .drp ZIP archive (XML or SQLite project.db) into TimelineDocument."""
+    with path.open("rb") as fh:
+        magic = fh.read(16)
+    if magic == b"SQLite format 3\x00":
+        from taktcut.resolve_db import parse_resolve_project_db
+
+        return parse_resolve_project_db(path, timeline_name=timeline_name)
+
+    with zipfile.ZipFile(path, "r") as zf:
+        for info in zf.infolist():
+            norm = info.filename.replace("\\", "/")
+            if norm.startswith("/") or ".." in norm.split("/"):
+                raise ValueError(f"Unsafe archive path detected: {info.filename}")
+            if Path(norm).name.lower() in {"project.db", "timeline.db"}:
+                if info.file_size > MAX_ARCHIVE_BYTES:
+                    raise ValueError("Archive Project.db exceeds uncompressed safety limit")
+                import tempfile
+
+                from taktcut.resolve_db import parse_resolve_project_db
+
+                with tempfile.TemporaryDirectory(prefix="taktcut_drp_db_") as tmp_dir:
+                    db_tmp = Path(tmp_dir) / "project.db"
+                    db_tmp.write_bytes(zf.read(info.filename))
+                    return parse_resolve_project_db(db_tmp, timeline_name=timeline_name)
+
     entries = _read_zip_xml_entries(path)
     if not entries:
         raise ValueError(f"No XML entries found in archive: {path}")
@@ -500,6 +524,10 @@ def load_timeline(path: Path, timeline_name: str | None = None) -> TimelineDocum
         return parse_drp(path, timeline_name=timeline_name)
     if suffix == ".drt":
         return parse_drt(path)
+    if suffix == ".db":
+        from taktcut.resolve_db import parse_resolve_project_db
+
+        return parse_resolve_project_db(path, timeline_name=timeline_name)
     if suffix in {".fcpxml", ".xml"}:
         return parse_fcpxml(path)
     if suffix in {".otio", ".otioz"}:

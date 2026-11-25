@@ -376,6 +376,7 @@ from taktcut.render import (
     validate_review_watermark_text,
     validate_timecode_burnin,
 )
+from taktcut.resolve_db import discover_local_resolve_projects, parse_resolve_project_db
 from taktcut.retime_studio import (
     ALLOWED_RETIME_STUDIO_DIRECTIONS,
     ALLOWED_RETIME_STUDIO_EASINGS,
@@ -539,6 +540,10 @@ STATIC_ROUTE_MAP: dict[str, tuple[str, str]] = {
     "/color_wheels.js": ("color_wheels.js", "application/javascript; charset=utf-8"),
     "/timeline_ops.js": ("timeline_ops.js", "application/javascript; charset=utf-8"),
     "/demo_adapter.js": ("demo_adapter.js", "application/javascript; charset=utf-8"),
+    "/demo_training_projects.js": (
+        "demo_training_projects.js",
+        "application/javascript; charset=utf-8",
+    ),
     "/workstation.js": ("workstation.js", "application/javascript; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
 }
@@ -1885,6 +1890,16 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if route == "/api/resolve/local-projects":
+            projects = discover_local_resolve_projects()
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "projects": [p.model_dump(mode="json") for p in projects],
+                },
+            )
+            return
+
         if route == "/api/render/capabilities":
             verify_nvenc = query.get("verify_nvenc", ["false"])[0].lower() == "true"
             refresh = query.get("refresh", ["false"])[0].lower() == "true"
@@ -2416,6 +2431,32 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 {
                     "document": doc.model_dump(mode="json"),
                     "validation": val.model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/resolve/open-project":
+            raw_proj = payload.get("project_name")
+            if not isinstance(raw_proj, str) or not raw_proj.strip():
+                raise ValueError("project_name is required")
+            target_name = raw_proj.strip()
+            raw_tl = payload.get("timeline_name")
+            clean_tl = raw_tl.strip() if isinstance(raw_tl, str) and raw_tl.strip() else None
+            discovered = discover_local_resolve_projects()
+            matched = next(
+                (p for p in discovered if p.project_name.lower() == target_name.lower()),
+                None,
+            )
+            if matched is None:
+                raise ValueError(f"Local Resolve project not found: {target_name}")
+            doc = parse_resolve_project_db(Path(matched.db_path), timeline_name=clean_tl)
+            val = validate_timeline(doc)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "document": doc.model_dump(mode="json"),
+                    "validation": val.model_dump(mode="json"),
+                    "resolve_project": matched.model_dump(mode="json"),
                 },
             )
             return

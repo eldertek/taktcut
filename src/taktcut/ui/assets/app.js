@@ -1665,11 +1665,17 @@ function redrawActiveCanvases() {
         ioRange: state.ioRange
       }
     );
+    const tlPaneBody = document.querySelector("#panel-timeline .nle-timeline-dock .pane-body-tight");
+    const tlOverviewEl = byId("timeline-overview-canvas");
+    const tlFillHeight = window.innerWidth >= 1181 && tlPaneBody
+      ? Math.max(0, tlPaneBody.clientHeight - (tlOverviewEl ? tlOverviewEl.offsetHeight : 0) - 2)
+      : 0;
     const tlDraw = drawTimelineCanvas(
       byId("timeline-canvas"),
       state.timelineDoc,
       state.timelineValidation,
       {
+        fillHeight: tlFillHeight,
         zoom: state.timelineZoom,
         viewStartFrame: state.timelineViewStartFrame,
         selected: state.timelineSelected,
@@ -17307,8 +17313,19 @@ function wireEvents() {
   const openProjBtn = byId("btn-open-project");
   const projFileInput = byId("project-file-input");
   if (openProjBtn && projFileInput) {
-    openProjBtn.addEventListener("click", () => projFileInput.click());
+    openProjBtn.addEventListener("click", () => {
+      if (api.isStaticDemo()) {
+        showBanner("Local file upload is disabled in the online Eclipse demo. Choose a Training Project in Project Manager.", "info");
+        return;
+      }
+      projFileInput.click();
+    });
     projFileInput.addEventListener("change", async (ev) => {
+      if (api.isStaticDemo()) {
+        ev.target.value = "";
+        showBanner("Local file upload is disabled in the online Eclipse demo.", "info");
+        return;
+      }
       const file = ev.target.files && ev.target.files[0];
       if (!file) return;
       await openProjectFromFile(file);
@@ -17412,6 +17429,11 @@ function wireEvents() {
   });
 
   byId("timeline-file-input").addEventListener("change", async (ev) => {
+    if (api.isStaticDemo()) {
+      ev.target.value = "";
+      showBanner("Local file upload is disabled in the online Eclipse demo. Open Project Manager to pick one of 8 Demo Projects.", "info");
+      return;
+    }
     const file = ev.target.files && ev.target.files[0];
     if (!file) return;
     try {
@@ -18908,6 +18930,11 @@ function wireEvents() {
   byId("btn-download-cube").addEventListener("click", downloadCubeLut);
 
   byId("cdl-file-input").addEventListener("change", async (ev) => {
+    if (api.isStaticDemo()) {
+      ev.target.value = "";
+      showBanner("Local .cdl upload is disabled in the online Eclipse demo.", "info");
+      return;
+    }
     const file = ev.target.files && ev.target.files[0];
     if (!file) return;
     try {
@@ -19545,6 +19572,11 @@ function wireEvents() {
   });
 
   byId("cube-file-input")?.addEventListener("change", async (ev) => {
+    if (api.isStaticDemo()) {
+      ev.target.value = "";
+      showBanner("Local .cube LUT upload is disabled in the online Eclipse demo.", "info");
+      return;
+    }
     const file = ev.target.files && ev.target.files[0];
     if (!file) return;
     try {
@@ -20457,6 +20489,7 @@ let workstationCtrl = null;
 
 function initResolveWorkstationBridge() {
   workstationCtrl = createWorkstationController({
+    api,
     state,
     byId,
     t,
@@ -20464,6 +20497,8 @@ function initResolveWorkstationBridge() {
     redrawActiveCanvases,
     showBanner,
     loadSampleTimeline,
+    setTimelineData,
+    renderColorNodeTreeUI,
     setTimelineTool,
     setLanguage,
     toggleDualMonitorAction,
@@ -20999,6 +21034,7 @@ async function bootstrap() {
 
   try {
     const health = await api.initHealth();
+    document.documentElement.classList.toggle("is-static-demo-mode", Boolean(api.isStaticDemo()));
     byId("version-badge").textContent = `v${health.version}`;
     byId("workspace-path-label").textContent = health.workspace_dir;
     byId("workspace-pill").title = health.workspace_dir;

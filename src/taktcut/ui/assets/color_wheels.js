@@ -162,8 +162,13 @@ export function bindColorWheelEvents(canvas, group, getRgb, onChange) {
     const cx = rect.width / 2;
     const cy = rect.height / 2;
     const usableR = Math.max(20, rect.width / 2 - 14);
-    const nx = (ev.clientX - rect.left - cx) / usableR;
-    const ny = (ev.clientY - rect.top - cy) / usableR;
+    const rawX = (ev.clientX - rect.left - cx) / usableR;
+    const rawY = (ev.clientY - rect.top - cy) / usableR;
+    const rawMag = Math.hypot(rawX, rawY);
+    // Resolve trackball fine-response taper near neutral center (gamma 1.25)
+    const adjScale = rawMag > 1e-4 ? Math.pow(Math.min(1, rawMag), 1.25) / rawMag : 1.0;
+    const nx = rawX * adjScale;
+    const ny = rawY * adjScale;
     const cur = getRgb();
     const mean = (cur[0] + cur[1] + cur[2]) / 3;
     const next = normToWheelRgb(group, nx, ny, mean);

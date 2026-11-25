@@ -62,12 +62,11 @@
         <div class="project-action-group" role="group" aria-label="Project file actions">
           <button type="button" id="btn-open-project" class="btn btn-mini btn-project-action" title="Open Project (.taktcut.json)">
             <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M2 4.5h4l1.4 1.5H14v6H2z"/></svg>
-            <span data-i18n="topbar.btn.openProject">Open Project</span>
+            <span class="sr-label" data-i18n="topbar.btn.openProject">Open Project</span>
           </button>
           <button type="button" id="btn-save-project" class="btn btn-mini btn-project-primary" title="Save Project (.taktcut.json, Ctrl+S)">
             <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M8 2.5v7.5M5.2 5.2L8 2.4l2.8 2.8M3 10.5v2.8h10v-2.8"/></svg>
-            <span data-i18n="topbar.btn.saveProject">Save Project</span>
-            <span class="kbd-chip mono">Ctrl+S</span>
+            <span class="sr-label" data-i18n="topbar.btn.saveProject">Save Project</span>
           </button>
           <input type="file" id="project-file-input" class="is-hidden" accept=".taktcut.json,.json,application/json">
         </div>
@@ -285,15 +284,36 @@
               </div>
               <div class="cut-transport-deck">
                 <div class="cut-quick-tools-bar" role="toolbar" aria-label="Cut Viewer Tools">
-                  <button type="button" id="btn-cut-tool-crop" class="btn btn-mini">Transform</button>
-                  <button type="button" id="btn-cut-tool-dzoom" class="btn btn-mini">Dynamic Zoom</button>
-                  <button type="button" id="btn-cut-tool-stab" class="btn btn-mini">Stabilize</button>
-                  <button type="button" id="btn-cut-tool-speed" class="btn btn-mini">Speed</button>
-                  <button type="button" id="btn-cut-tool-audio" class="btn btn-mini">Audio</button>
+                  <button type="button" id="btn-cut-tool-crop" class="btn btn-mini" title="Transform">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="3" y="3" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="currentColor" d="M2 2h2.5v2.5H2zm9.5 0H14v2.5h-2.5zM2 11.5h2.5V14H2zm9.5 0H14V14h-2.5z"/></svg>
+                    <span class="sr-label">Transform</span>
+                  </button>
+                  <button type="button" id="btn-cut-tool-dzoom" class="btn btn-mini" title="Dynamic Zoom">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="5" y="5" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="1.5 1"/></svg>
+                    <span class="sr-label">Dynamic Zoom</span>
+                  </button>
+                  <button type="button" id="btn-cut-tool-stab" class="btn btn-mini" title="Stabilize">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="4" width="11" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.8" fill="currentColor"/></svg>
+                    <span class="sr-label">Stabilize</span>
+                  </button>
+                  <button type="button" id="btn-cut-tool-speed" class="btn btn-mini" title="Speed">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="9" r="5" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.3" d="M8 9l3-2.5M6.5 2h3"/></svg>
+                    <span class="sr-label">Speed</span>
+                  </button>
+                  <button type="button" id="btn-cut-tool-audio" class="btn btn-mini" title="Audio">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M2.5 8v2M5 5.5v5M7.5 3.5v9M10 6v4M12.5 4.5v7"/></svg>
+                    <span class="sr-label">Audio</span>
+                  </button>
                 </div>
                 <div class="cut-transport-btns">
-                  <button type="button" id="btn-cut-play" class="btn btn-mini mono">Play / Pause</button>
-                  <button type="button" id="btn-cut-split" class="btn btn-mini mono">Split</button>
+                  <button type="button" id="btn-cut-play" class="btn btn-mini mono" title="Play / Pause (Space)">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><polygon points="4,3 13,8 4,13" fill="currentColor"/></svg>
+                    <span class="sr-label">Play / Pause</span>
+                  </button>
+                  <button type="button" id="btn-cut-split" class="btn btn-mini mono" title="Split Clip (Ctrl+B)">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M8 2v12M3.5 5l3 3-3 3M12.5 5l-3 3 3 3"/></svg>
+                    <span class="sr-label">Split</span>
+                  </button>
                 </div>
                 <span class="cut-tcg-readout mono">TCG 01:00:00:00</span>
               </div>
@@ -544,7 +564,7 @@
                 <div class="form-row-two">
                   <div class="form-row">
                     <label for="timeline-file-input" data-i18n="timeline.label.upload">Import Local File</label>
-                    <input type="file" id="timeline-file-input" class="input-control file-input" accept=".drp,.drt,.fcpxml,.xml,.otio,.otioz">
+                    <input type="file" id="timeline-file-input" class="input-control file-input" accept=".drp,.drt,.fcpxml,.xml,.otio,.otioz,.db">
                   </div>
                   <div class="form-row">
                     <label for="timeline-name-filter" data-i18n="timeline.label.seqName">Sequence (.drp)</label>

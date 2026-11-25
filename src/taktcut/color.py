@@ -374,6 +374,49 @@ class ColorGradeParams(BaseModel):
         return (_clamp_unit(sr), _clamp_unit(sg), _clamp_unit(sb))
 
 
+RESOLVE_CONTRAST_PIVOT_REC709: float = 0.435
+
+
+def apply_resolve_grade_rgb(
+    r: float,
+    g: float,
+    b: float,
+    grade: ColorGradeParams,
+    *,
+    pivot: float = RESOLVE_CONTRAST_PIVOT_REC709,
+    offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    tint: float = 0.0,
+) -> tuple[float, float, float]:
+    """Evaluate DaVinci Resolve YRGB primaries (LGG, Offset, 0.435 Pivot Contrast, Temp/Tint)."""
+    pv = _clamp_unit(float(pivot))
+    temp_r = grade.temperature * 0.22
+    temp_g = -float(tint) * 0.14 + grade.temperature * 0.02
+    temp_b = -grade.temperature * 0.24
+
+    out: list[float] = []
+    for idx, ch_raw in enumerate((r, g, b)):
+        v = _clamp_unit(ch_raw) + offset[idx] + (temp_r, temp_g, temp_b)[idx] * 0.35
+        v = _clamp_unit(v)
+        lift_v = grade.lift[idx] * 0.45
+        gain_v = max(0.05, 1.0 + grade.gain[idx] * 0.65)
+        gamma_exp = max(0.25, min(4.0, 1.0 - grade.gamma[idx] * 0.55))
+
+        # Lift pivots white at 1.0; Gain pivots black at 0.0; Gamma applies midtone power curve
+        lifted = v * (1.0 - lift_v) + lift_v
+        gained = _clamp_unit(lifted) * gain_v
+        midtoned = math.pow(_clamp_unit(gained), gamma_exp)
+        contrasted = (midtoned - pv) * grade.contrast + pv
+        out.append(_clamp_unit(contrasted))
+
+    sr, sg, sb = out[0], out[1], out[2]
+    if not math.isclose(grade.saturation, 1.0, abs_tol=1e-6):
+        luma = 0.2126 * sr + 0.7152 * sg + 0.0722 * sb
+        sr = luma + grade.saturation * (sr - luma)
+        sg = luma + grade.saturation * (sg - luma)
+        sb = luma + grade.saturation * (sb - luma)
+    return (_clamp_unit(sr), _clamp_unit(sg), _clamp_unit(sb))
+
+
 class ColorGradePreset(BaseModel):
     """Instant cinematic LUT/grade preset."""
 

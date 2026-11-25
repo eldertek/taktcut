@@ -20,7 +20,7 @@ CONTENT_SECURITY_POLICY: str = (
 )
 
 TIMELINE_SUFFIXES: frozenset[str] = frozenset(
-    {".drp", ".drt", ".fcpxml", ".xml", ".otio", ".otioz"}
+    {".drp", ".drt", ".fcpxml", ".xml", ".otio", ".otioz", ".db"}
 )
 OTIO_EXPORT_SUFFIXES: frozenset[str] = frozenset({".otio", ".otioz"})
 LUT_SUFFIXES: frozenset[str] = frozenset({".cube"})

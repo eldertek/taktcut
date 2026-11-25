@@ -1,4 +1,5 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
+import { DEMO_TRAINING_PROJECTS, getDemoTrainingProject } from "./demo_training_projects.js";
 import {
   ALLOWED_CST_GAMUT_MAPPING_MODES,
   ALLOWED_CST_TONE_MAPPING_MODES,
@@ -2056,45 +2057,22 @@ export function createApiClient() {
     },
     async getSampleTimeline(preset) {
       if (resolvedMode === "static-demo") {
-        const doc = buildDemoTimeline(preset);
-        return { document: doc, validation: validateTimelineClient(doc) };
+        const training = DEMO_TRAINING_PROJECTS.find((p) => p.id === preset);
+        const doc = training ? structuredClone(training.document) : buildDemoTimeline(preset);
+        return { document: doc, validation: validateTimelineClient(doc), training_project: training || null };
       }
       return requestJson(`/api/sample?preset=${encodeURIComponent(preset)}`);
     },
+    async listDemoTrainingProjects() {
+      return { projects: DEMO_TRAINING_PROJECTS };
+    },
     async inspectTimeline(payload) {
       if (resolvedMode === "static-demo") {
-        if (payload.content_base64 && payload.filename && payload.filename.toLowerCase().endsWith(".otio")) {
-          const text = atob(payload.content_base64);
-          const raw = JSON.parse(text);
-          const rate = raw.global_start_time?.rate || 25;
-          const doc = {
-            name: raw.name || payload.filename,
-            source_format: "otio",
-            fps: { num: Math.round(rate), den: 1 },
-            width: 1920,
-            height: 1080,
-            start_frame: 0,
-            tracks: (raw.tracks?.children || []).map((t, i) => ({
-              index: i + 1,
-              kind: t.kind === "Audio" ? "audio" : "video",
-              name: t.name || `T${i + 1}`,
-              clips: (t.children || []).filter((c) => c.OTIO_SCHEMA?.startsWith("Clip")).map((c, ci) => ({
-                name: c.name || `clip_${ci}`,
-                track_index: i + 1,
-                media_type: t.kind === "Audio" ? "audio" : "video",
-                start_frame: ci * 50,
-                duration_frames: Math.round(c.source_range?.duration?.value || 50),
-                source_in_frame: Math.round(c.source_range?.start_time?.value || 0),
-                source_path: c.media_reference?.target_url || "",
-                enabled: true
-              }))
-            })),
-            markers: [],
-            lut_refs: []
-          };
-          return { document: doc, validation: validateTimelineClient(doc) };
+        if (payload && payload.content_base64) {
+          throw new Error("Local file upload is disabled on the Eclipse web demo. Open Project Manager to test any of the 8 Demo Projects, or download taktcut.");
         }
-        const doc = buildDemoTimeline("clean");
+        const training = getDemoTrainingProject(payload && payload.project_id);
+        const doc = payload && payload.project_id ? structuredClone(training.document) : buildDemoTimeline("clean");
         return { document: doc, validation: validateTimelineClient(doc) };
       }
       return requestJson("/api/timeline/inspect", { method: "POST", body: payload });
@@ -4940,6 +4918,19 @@ export function createApiClient() {
         };
       }
       return requestJson("/api/fx/camera-shake/apply", { method: "POST", body: payload });
+    },
+    async listLocalResolveProjects() {
+      if (resolvedMode === "static-demo") {
+        return { projects: [] };
+      }
+      return requestJson("/api/resolve/local-projects");
+    },
+    async openLocalResolveProject(payload) {
+      if (resolvedMode === "static-demo") {
+        const doc = buildDemoTimeline("clean");
+        return { document: doc, validation: validateTimelineClient(doc), resolve_project: null };
+      }
+      return requestJson("/api/resolve/open-project", { method: "POST", body: payload || {} });
     }
   };
 }
