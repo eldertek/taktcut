@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 import re
 import struct
+import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -135,6 +136,31 @@ class ResolveArchive:
     timelines: list[ArchiveTimelineInfo] = field(default_factory=list)
     containers: dict[str, bytes] = field(default_factory=dict)
     media_root: Path | None = None
+    media_index: dict[str, list[str]] = field(default_factory=dict)
+    media_dirs: dict[str, list[str]] = field(default_factory=dict)
+
+
+_IMAGE_SEQ_RE = re.compile(r"^(.*)\[(\d+)-(\d+)\]([^/\\]+)$")
+
+
+def _norm_key(text: str) -> str:
+    return unicodedata.normalize("NFC", text).lower()
+
+
+def _build_media_index(media_root: Path) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Recursively index all files and folders under a .dra archive MediaFiles directory."""
+    by_name: dict[str, list[str]] = {}
+    by_dir: dict[str, list[str]] = {}
+    for item in media_root.rglob("*"):
+        if item.name.startswith("."):
+            continue
+        rel = item.relative_to(media_root).as_posix()
+        key = _norm_key(item.name)
+        if item.is_file():
+            by_name.setdefault(key, []).append(rel)
+        elif item.is_dir():
+            by_dir.setdefault(key, []).append(rel)
+    return by_name, by_dir
 
 
 def _read_entries(drp_path: Path) -> dict[str, bytes]:
@@ -208,7 +234,11 @@ def load_resolve_archive(path: Path) -> ResolveArchive:
 
     archive = ResolveArchive(project_name=project_name, width=width, height=height)
     media_dir = drp_path.parent / "MediaFiles"
-    archive.media_root = media_dir if media_dir.is_dir() else None
+    if media_dir.is_dir():
+        archive.media_root = media_dir
+        archive.media_index, archive.media_dirs = _build_media_index(media_dir)
+    else:
+        archive.media_root = None
 
     timelines: dict[str, ArchiveTimelineInfo] = {}
     for key in sorted(entries):
@@ -292,12 +322,56 @@ def _pick_timeline(archive: ResolveArchive, timeline_name: str | None) -> Archiv
     return max(main, key=lambda t: (t.video_clip_count + t.audio_clip_count, -len(t.name)))
 
 
+def _pick_best_rel_candidate(media_path: str, candidates: list[str]) -> str:
+    """Pick the archive MediaFiles relative path whose trailing segments best match media_path."""
+    if len(candidates) == 1:
+        return candidates[0]
+    src_parts = [_norm_key(p) for p in PurePosixPath(media_path.replace("\\", "/")).parts if p]
+
+    def _score(rel: str) -> tuple[int, int]:
+        rel_parts = [_norm_key(p) for p in PurePosixPath(rel).parts if p]
+        matched = 0
+        for a, b in zip(reversed(src_parts), reversed(rel_parts), strict=False):
+            if a == b:
+                matched += 1
+            else:
+                break
+        return (matched, -len(rel_parts))
+
+    return max(candidates, key=_score)
+
+
 def _media_relpath(archive: ResolveArchive, media_path: str) -> str:
     if not media_path:
         return ""
-    base = PurePosixPath(media_path.replace("\\", "/")).name
-    if archive.media_root is not None and (archive.media_root / base).is_file():
+    norm = media_path.replace("\\", "/")
+    posix = PurePosixPath(norm)
+    base = posix.name
+    if archive.media_root is None:
+        return media_path
+
+    # 1. Exact flat match in MediaFiles/
+    if (archive.media_root / base).is_file():
         return f"MediaFiles/{base}"
+
+    # 2. Recursive suffix/filename match inside MediaFiles/** subdirectories (NFC normalized)
+    cands = archive.media_index.get(_norm_key(base))
+    if cands:
+        best = _pick_best_rel_candidate(norm, cands)
+        return f"MediaFiles/{best}"
+
+    # 3. DaVinci Resolve image sequence notation: prefix[0000-0349].png
+    seq_m = _IMAGE_SEQ_RE.match(base)
+    if seq_m:
+        prefix, start_s, _end_s, ext = seq_m.groups()
+        first_frame = f"{prefix}{start_s}{ext}"
+        seq_cands = archive.media_index.get(_norm_key(first_frame))
+        if seq_cands:
+            best_first = _pick_best_rel_candidate(norm, seq_cands)
+            parent_rel = PurePosixPath(best_first).parent.as_posix()
+            if parent_rel and parent_rel != ".":
+                return f"MediaFiles/{parent_rel}/{base}"
+            return f"MediaFiles/{base}"
     return media_path
 
 
@@ -364,7 +438,15 @@ def parse_resolve_archive(path: Path, timeline_name: str | None = None) -> Timel
                 min_start = start if min_start is None else min(min_start, start)
             raw_tracks.append((kind, idx, items, transitions))
 
-    offset = _hour_offset(min_start or 0, fps)
+    video_positive_starts = [
+        entry["start"]
+        for (k, _idx, items, _tr) in raw_tracks
+        if k == "video"
+        for entry in items
+        if entry["start"] > 0
+    ]
+    offset_ref = min(video_positive_starts) if video_positive_starts else (min_start or 0)
+    offset = _hour_offset(offset_ref, fps)
     tracks: list[TimelineTrack] = []
     warnings: list[str] = []
     for kind, idx, items, transitions in raw_tracks:

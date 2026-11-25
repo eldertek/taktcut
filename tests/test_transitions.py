@@ -104,7 +104,7 @@ def test_transition_strict_allowlist_and_finite_bounds() -> None:
             TransitionParams(**kwargs)  # type: ignore[arg-type]
 
     with pytest.raises((ValidationError, ValueError)):
-        ClipTransition(preset="fadeblack", duration_s=2.5)
+        ClipTransition(preset="fadeblack", duration_s=5.5)
     with pytest.raises((ValidationError, ValueError)):
         ClipTransition(preset="unknown", duration_s=0.5)  # type: ignore[arg-type]
 

@@ -223,6 +223,33 @@ def _hex_to_ffmpeg(hex_color: str) -> str:
     return "0x" + _sanitize_hex_color(hex_color).lstrip("#")
 
 
+_RESOLVE_SEQ_NAME_RE = re.compile(r"^(.*)\[(\d+)-(\d+)\]([^/\\]+)$")
+
+
+def _resolve_image_sequence(
+    clip: TimelineClip,
+    *,
+    workspace_root: Path | None = None,
+) -> tuple[Path, int, int] | None:
+    """Resolve DaVinci image sequence bracket syntax into (printf_path, start, end)."""
+    raw = (clip.source_path or "").strip()
+    if not raw or "[" not in raw or "]" not in raw:
+        return None
+    cand = Path(raw)
+    if not cand.is_absolute() and workspace_root is not None:
+        cand = workspace_root / raw
+    m = _RESOLVE_SEQ_NAME_RE.match(cand.name)
+    if not m or not cand.parent.is_dir():
+        return None
+    prefix, start_s, end_s, ext = m.groups()
+    first_file = cand.parent / f"{prefix}{start_s}{ext}"
+    if not first_file.is_file():
+        return None
+    pad = len(start_s)
+    printf_pattern = cand.parent / f"{prefix}%0{pad}d{ext}"
+    return (printf_pattern, int(start_s), int(end_s))
+
+
 def _resolve_clip_source(
     clip: TimelineClip,
     *,
@@ -883,16 +910,23 @@ def build_timeline_render_plan(
                     )
                 )
             else:
-                src_path = _resolve_clip_source(
-                    clip, workspace_root=workspace_root, media_lookup=media_lookup
+                seq_spec = _resolve_image_sequence(clip, workspace_root=workspace_root)
+                src_path = (
+                    None
+                    if seq_spec is not None
+                    else _resolve_clip_source(
+                        clip, workspace_root=workspace_root, media_lookup=media_lookup
+                    )
                 )
-                if src_path is None:
+                if seq_spec is None and src_path is None:
                     warnings.append(
                         f"Video clip '{clip.name}' missing source ({clip.source_path}); skipped"
                     )
                     continue
 
-                is_image = src_path.suffix.lower() in IMAGE_SUFFIXES
+                is_image = seq_spec is None and src_path is not None and (
+                    src_path.suffix.lower() in IMAGE_SUFFIXES
+                )
                 src_fps = clip.source_fps.as_float if clip.source_fps else fps
                 speed = max(0.25, min(4.0, float(clip.speed_rate or 1.0)))
                 src_in_s = (clip.source_in_frame / max(1.0, src_fps)) + trim_head * speed
@@ -900,9 +934,28 @@ def build_timeline_render_plan(
 
                 in_i = input_idx
                 input_idx += 1
-                if is_image:
+                if seq_spec is not None:
+                    seq_pattern, seq_start, seq_end = seq_spec
+                    start_f_num = min(
+                        seq_end,
+                        seq_start + max(0, round(src_in_s * max(1.0, src_fps))),
+                    )
+                    inputs.extend(
+                        [
+                            "-framerate",
+                            f"{max(1.0, src_fps):.4f}",
+                            "-start_number",
+                            str(start_f_num),
+                            "-t",
+                            f"{max(0.08, src_read_s):.4f}",
+                            "-i",
+                            str(seq_pattern),
+                        ]
+                    )
+                elif is_image and src_path is not None:
                     inputs.extend(["-loop", "1", "-t", f"{eff_dur:.4f}", "-i", str(src_path)])
                 else:
+                    assert src_path is not None
                     inputs.extend(
                         [
                             "-ss",
@@ -1429,7 +1482,7 @@ def execute_timeline_render_plan(
     job_label: str = "Timeline Render",
 ) -> RenderResult:
     """Execute a multi-track TimelineRenderPlan via FFmpeg with live progress callbacks."""
-    out_file = Path(plan.output_path)
+    out_file = Path(plan.output_path).resolve()
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Write filter_complex to a temporary UTF-8 script file so Windows CLI length limits
@@ -1448,6 +1501,29 @@ def execute_timeline_render_plan(
             continue
         run_argv.append(tok)
         i += 1
+
+    # Ensure output path stays absolute even if we shorten -i paths via cwd
+    run_argv[-1] = str(out_file)
+
+    # Shorten -i input paths relative to their common parent directory via cwd so large
+    # multi-track timelines (200+ clips) stay safely under the Win32 32,767-char CLI limit.
+    input_positions: list[int] = [
+        idx + 1
+        for idx in range(len(run_argv) - 1)
+        if run_argv[idx] == "-i" and Path(run_argv[idx + 1]).is_absolute()
+    ]
+    run_cwd: str | None = None
+    if input_positions:
+        try:
+            parents = [str(Path(run_argv[pos]).parent) for pos in input_positions]
+            common_dir = Path(os.path.commonpath(parents))
+            if common_dir.is_dir():
+                run_cwd = str(common_dir)
+                for pos in input_positions:
+                    with contextlib.suppress(ValueError):
+                        run_argv[pos] = os.path.relpath(run_argv[pos], run_cwd)
+        except ValueError:
+            run_cwd = None
 
     # Insert -progress pipe:1 before output path
     run_argv = [*run_argv[:-1], "-progress", "pipe:1", "-nostats", run_argv[-1]]
@@ -1472,6 +1548,7 @@ def execute_timeline_render_plan(
         with stderr_log.open("w+", encoding="utf-8", errors="replace") as err_fh:
             proc = subprocess.Popen(
                 run_argv,
+                cwd=run_cwd,
                 stdout=subprocess.PIPE,
                 stderr=err_fh,
                 text=True,

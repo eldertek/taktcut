@@ -99,8 +99,10 @@ def test_ui_health_and_sample_endpoints(ui_server: tuple[str, Path]) -> None:
     assert status == 200
     assert headers["cache-control"] == "no-store"
     health = json.loads(raw.decode("utf-8"))
+    from taktcut import __version__
+
     assert health["status"] == "ok"
-    assert health["version"] == "0.1.27"
+    assert health["version"] == __version__
     assert Path(health["workspace_dir"]).resolve() == workspace.resolve()
 
     s_status, _, s_raw = _http_call(f"{base_url}/api/sample")

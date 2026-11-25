@@ -528,3 +528,115 @@ def test_cinema_pack_transitions_blanking_dynamic_zoom_tracking_tapestop(tmp_pat
     assert res.success, f"Cinema Pack render failed: {res.stderr_tail}"
     assert out_mp4.is_file() and res.bytes_written > 4000
 
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg/ffprobe required")
+def test_resolve_archive_nested_media_nfc_and_image_sequence(tmp_path: Path) -> None:
+    """Verify .dra nested MediaFiles/** resolution, NFD/NFC accents, and [start-end] sequences."""
+    import unicodedata
+    import zipfile
+
+    from taktcut.resolve_archive import parse_resolve_archive
+
+    dra_dir = tmp_path / "SampleClip.dra"
+    nested_video_dir = dra_dir / "MediaFiles" / "0-Rush" / "Vid\u00e9o_A"
+    nested_seq_dir = dra_dir / "MediaFiles" / "VFX" / "Orage"
+    nested_video_dir.mkdir(parents=True)
+    nested_seq_dir.mkdir(parents=True)
+
+    _make_sample_video(nested_video_dir / "plan_01.mp4", duration_s=1.2, color="0x182838")
+    for idx in range(6):
+        frame_path = nested_seq_dir / f"ORAGE_4K.{idx:04d}.png"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=0x223355:s=320x180:d=0.04",
+                "-frames:v",
+                "1",
+                str(frame_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+    # Simulate macOS NFD accented path in project.drp XML
+    nfd_video_path = unicodedata.normalize("NFD", "/Volumes/Disk/0-Rush/Vid\u00e9o_A/plan_01.mp4")
+    seq_id = "11111111-2222-3333-4444-555555555555"
+    # 25.0 fps LE IEEE double hex = 0000000000003940; 320x180 BE 2xuint64 hex
+    fps_hex = "0000000000003940"
+    res_hex = f"{320:016x}{180:016x}"
+    mp_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Sm2MpFolder>
+  <Sm2MpTimelineClip DbId="tl-clip-1">
+    <Name>Assemblage</Name>
+    <Sm2Timeline><Name>Assemblage</Name></Sm2Timeline>
+    <Sm2Sequence DbId="{seq_id}">
+      <FrameRate>{fps_hex}</FrameRate>
+      <Resolution>{res_hex}</Resolution>
+    </Sm2Sequence>
+  </Sm2MpTimelineClip>
+</Sm2MpFolder>"""
+    seq_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Sm2SequenceContainer>
+  <Sequence>{seq_id}</Sequence>
+  <VideoTrackVec>
+    <Element>
+      <Sm2TiTrack>
+        <Items>
+          <Sm2TiVideoClip>
+            <Name>plan_01.mp4</Name>
+            <Start>90000</Start>
+            <Duration>20</Duration>
+            <In>0</In>
+            <MediaFilePath>{nfd_video_path}</MediaFilePath>
+            <MediaFrameRate>{fps_hex}</MediaFrameRate>
+          </Sm2TiVideoClip>
+          <Sm2TiVideoClip>
+            <Name>ORAGE_4K.[0000-0005].png</Name>
+            <Start>90020</Start>
+            <Duration>6</Duration>
+            <In>0</In>
+            <MediaFilePath>/Volumes/Disk/VFX/Orage/ORAGE_4K.[0000-0005].png</MediaFilePath>
+            <MediaFrameRate>{fps_hex}</MediaFrameRate>
+          </Sm2TiVideoClip>
+        </Items>
+      </Sm2TiTrack>
+    </Element>
+  </VideoTrackVec>
+</Sm2SequenceContainer>"""
+
+    drp_path = dra_dir / "project.drp"
+    with zipfile.ZipFile(drp_path, "w") as zf:
+        zf.writestr("MediaPool/Master/MpFolder.xml", mp_xml)
+        zf.writestr(f"SeqContainer/{seq_id}.xml", seq_xml)
+
+    doc = parse_resolve_archive(dra_dir)
+    assert doc.name == "Assemblage"
+    clips = doc.tracks[0].clips
+    assert len(clips) == 2
+    assert not clips[0].media_offline
+    assert clips[0].source_path.startswith("MediaFiles/")
+    assert not clips[1].media_offline
+    assert clips[1].source_path == "MediaFiles/VFX/Orage/ORAGE_4K.[0000-0005].png"
+
+    out_mp4 = tmp_path / "renders" / "dra_seq_out.mp4"
+    plan = build_timeline_render_plan(
+        TimelineRenderRequest(
+            document=doc,
+            output_path=str(out_mp4),
+            width=320,
+            height=180,
+            profile=RenderProfile.WEB_H264,
+            prefer_hw=False,
+        ),
+        workspace_root=dra_dir,
+    )
+    assert "%04d.png" in " ".join(plan.argv)
+    res = execute_timeline_render_plan(plan, job_label="sentinel-dra-seq")
+    assert res.success, f"DRA image sequence render failed: {res.stderr_tail}"
+    assert out_mp4.is_file() and res.bytes_written > 2000
+
+
