@@ -63,6 +63,11 @@ export function createWorkstationController(ctx) {
     showBanner,
     addFxNode,
     applyLibraryTransition,
+    onHoverPreview,
+    onDragStart,
+    onDragEnd,
+    onApplyItem,
+    bindExternalDropCanvas,
     loadSampleTimeline,
     openWebDemoProject,
     setTimelineData,
@@ -132,7 +137,8 @@ export function createWorkstationController(ctx) {
     projectSearchQuery: "",
     projectSettingsTab: "master",
     localResolveProjects: [],
-    localResolveLoaded: false
+    localResolveLoaded: false,
+    cutTimelineGeom: null
   };
 
   function svgEl(tag, attrs = {}) {
@@ -986,9 +992,42 @@ export function createWorkstationController(ctx) {
           }
           well.appendChild(el("span", "mp-thumb-badge mono", c.trackName));
           well.appendChild(el("span", "mp-thumb-dur mono", `${c.durationFrames}f`));
+          const scrubBar = el("span", "mp-hover-scrub-bar");
+          const scrubNeedle = el("span", "mp-hover-scrub-needle");
+          scrubBar.appendChild(scrubNeedle);
+          well.appendChild(scrubBar);
+          card.draggable = true;
           card.appendChild(well);
           card.appendChild(el("div", "mp-thumb-name", c.name));
           card.appendChild(el("div", "mp-thumb-tc mono", formatTc(c.startFrame)));
+          card.addEventListener("mousemove", (ev) => {
+            if (c.trackKind === "audio") return;
+            const rect = well.getBoundingClientRect();
+            if (!rect || rect.width <= 4) return;
+            const prog = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+            scrubNeedle.style.left = `${(prog * 100).toFixed(1)}%`;
+            card.classList.add("is-hover-scrub");
+            const previewFrame = Math.round(c.startFrame + prog * Math.max(1, c.durationFrames - 1));
+            drawProgramMonitorCanvas(
+              byId("media-page-viewer-canvas"),
+              state.timelineDoc,
+              previewFrame,
+              getActiveColorChainState(),
+              getEffectiveFxState(),
+              getEffectiveTitleState(false),
+              getEffectiveFramingState(),
+              getEffectiveSubtitleState(false),
+              null,
+              null,
+              { liveHoverPreview: { name: `${c.name} (Scrub)`, dropKind: "media_scrub", progress: prog } }
+            );
+          });
+          card.addEventListener("mouseleave", () => {
+            if (card.classList.contains("is-hover-scrub")) {
+              card.classList.remove("is-hover-scrub");
+              redrawWorkstationCanvases();
+            }
+          });
           card.addEventListener("click", () => selectMediaPageClip(c));
           card.addEventListener("dblclick", () => {
             selectMediaPageClip(c);
@@ -1076,8 +1115,64 @@ export function createWorkstationController(ctx) {
         }
         const badge = el("span", "cut-clip-badge mono", ws.cutBinTab === "sync" ? `CAM ${c.trackIndex + 1}` : c.trackName);
         frame.appendChild(badge);
+        const scrubBar = el("span", "mp-hover-scrub-bar");
+        const scrubNeedle = el("span", "mp-hover-scrub-needle");
+        scrubBar.appendChild(scrubNeedle);
+        frame.appendChild(scrubBar);
+        card.draggable = true;
         card.appendChild(frame);
         card.appendChild(el("div", "cut-clip-label", c.name));
+        card.addEventListener("mousemove", (ev) => {
+          if (c.trackKind === "audio") return;
+          const rect = frame.getBoundingClientRect();
+          if (!rect || rect.width <= 4) return;
+          const prog = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+          scrubNeedle.style.left = `${(prog * 100).toFixed(1)}%`;
+          card.classList.add("is-hover-scrub");
+          const previewFrame = Math.round(c.startFrame + prog * Math.max(1, c.durationFrames - 1));
+          drawProgramMonitorCanvas(
+            byId("cut-viewer-canvas"),
+            state.timelineDoc,
+            previewFrame,
+            getActiveColorChainState(),
+            getEffectiveFxState(),
+            getEffectiveTitleState(false),
+            getEffectiveFramingState(),
+            getEffectiveSubtitleState(false),
+            null,
+            null,
+            { dveOverlay: false, liveHoverPreview: { name: `${c.name} (Scrub)`, dropKind: "media_scrub", progress: prog } }
+          );
+        });
+        card.addEventListener("mouseleave", () => {
+          if (card.classList.contains("is-hover-scrub")) {
+            card.classList.remove("is-hover-scrub");
+            redrawWorkstationCanvases();
+          }
+        });
+        card.addEventListener("dragstart", (ev) => {
+          const payload = {
+            source: "cut_bin",
+            dropKind: "media",
+            name: c.name,
+            mediaType: c.trackKind,
+            durationFrames: c.durationFrames || 125,
+            clipTemplate: c.clipRef || { name: c.name, media_type: c.trackKind, duration_frames: c.durationFrames || 125, enabled: true }
+          };
+          if (onDragStart) onDragStart(payload);
+          if (ev.dataTransfer) {
+            ev.dataTransfer.effectAllowed = "copy";
+            try {
+              ev.dataTransfer.setData("application/x-taktcut-drag", JSON.stringify(payload));
+              ev.dataTransfer.setData("text/plain", c.name);
+            } catch {
+              // Ignore synthetic drag events
+            }
+          }
+        });
+        card.addEventListener("dragend", () => {
+          if (onDragEnd) onDragEnd();
+        });
         card.addEventListener("click", () => {
           ws.cutSelectedClipIdx = c.idx;
           setPlayhead(c.startFrame);
@@ -1108,7 +1203,11 @@ export function createWorkstationController(ctx) {
       showBanner,
       addFxNode,
       applyTransition: applyLibraryTransition,
-      openStudio: openLibraryStudio
+      openStudio: openLibraryStudio,
+      onHoverPreview,
+      onDragStart,
+      onDragEnd,
+      onApplyItem
     };
   }
 
@@ -1625,7 +1724,7 @@ export function createWorkstationController(ctx) {
         getEffectiveSubtitleState(false),
         null,
         null,
-        { dveOverlay: false }
+        { dveOverlay: false, liveHoverPreview: state.liveHoverPreview }
       );
       // Signature Cut Dual Timeline: Upper = 100% Full Timeline Overview, Lower = Zoomed Detail
       drawTimelineOverviewCanvas(
@@ -1647,7 +1746,7 @@ export function createWorkstationController(ctx) {
       const cutFillHeight = window.innerWidth >= 1181 && cutDualSection
         ? Math.max(0, cutDualSection.clientHeight - (cutUpperWrap ? cutUpperWrap.offsetHeight : 0) - 4)
         : 0;
-      drawTimelineCanvas(
+      const cutDraw = drawTimelineCanvas(
         byId("cut-detail-canvas"),
         state.timelineDoc,
         state.timelineValidation,
@@ -1658,9 +1757,11 @@ export function createWorkstationController(ctx) {
           selected: state.timelineSelected,
           playheadFrame: state.playheadFrame,
           tool: state.timelineTool,
+          dropPreview: state.timelineDropPreview,
           ioRange: state.ioRange
         }
       );
+      ws.cutTimelineGeom = cutDraw;
       drawStereoVuMeterCanvas(byId("cut-vu-canvas"), {
         leftDb: state.vuMeter.leftDb,
         rightDb: state.vuMeter.rightDb,
@@ -2013,6 +2114,9 @@ export function createWorkstationController(ctx) {
 
     // Fairlight Page events
     wireCanvasScrub("fairlight-waveform-canvas");
+    if (typeof bindExternalDropCanvas === "function") {
+      bindExternalDropCanvas(byId("cut-detail-canvas"), () => ws.cutTimelineGeom);
+    }
     const flPlay = byId("btn-fl-play");
     if (flPlay) flPlay.addEventListener("click", () => clickIfPresent(byId, "btn-tc-play"));
     const flDim = byId("btn-fl-dim");

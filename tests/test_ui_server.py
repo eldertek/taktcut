@@ -16276,3 +16276,157 @@ def test_resolve_workstation_seven_pages_and_menus_playwright(
             assert console_errors == [], f"Console errors: {console_errors}"
         finally:
             browser.close()
+
+
+def test_resolve_hover_preview_and_timeline_drag_drop_playwright(
+    ui_server: tuple[str, Path],
+) -> None:
+    sync_api = pytest.importorskip("playwright.sync_api")
+    base_url, _ = ui_server
+
+    with sync_api.sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            console_errors: list[str] = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text)
+                if msg.type == "error"
+                else None,
+            )
+            page.on("pageerror", lambda err: console_errors.append(str(err)))
+
+            page.goto(base_url, wait_until="networkidle")
+            page.wait_for_selector("#resolve-inspector-root .insp-tab-btn")
+
+            # Open Effects Library panel on Edit page
+            page.click('[data-ws-toggle="effects-library-section"]')
+            page.wait_for_selector('#effects-library-section .fxlib-row[draggable="true"]')
+
+            def drag_lib_to_timeline(item_name: str, off_x: int, off_y: int) -> None:
+                page.evaluate(
+                    """([name, ox, oy]) => {
+                        const sel = `#effects-library-section .fxlib-row[data-lib-item="${name}"]`;
+                        const src = document.querySelector(sel);
+                        const dst = document.getElementById('timeline-canvas');
+                        const r = dst.getBoundingClientRect();
+                        const dt = new DataTransfer();
+                        const base = { bubbles: true, cancelable: true, dataTransfer: dt };
+                        src.dispatchEvent(new DragEvent('dragstart', base));
+                        const pt = { ...base, clientX: r.left + ox, clientY: r.top + oy };
+                        dst.dispatchEvent(new DragEvent('dragover', pt));
+                        dst.dispatchEvent(new DragEvent('drop', pt));
+                        src.dispatchEvent(new DragEvent('dragend', base));
+                    }""",
+                    [item_name, off_x, off_y],
+                )
+
+            # 1. Live Hover Preview on Resolve FX changes Program Monitor & reverts on leave
+            base_png = page.evaluate(
+                "() => document.getElementById('timeline-program-canvas').toDataURL()"
+            )
+            fc_row = page.locator(
+                '#effects-library-section .fxlib-row[data-lib-item="False Color"]'
+            )
+            fc_row.scroll_into_view_if_needed()
+            fc_box = fc_row.bounding_box()
+            assert fc_box is not None
+            page.mouse.move(
+                fc_box["x"] + fc_box["width"] * 0.6,
+                fc_box["y"] + fc_box["height"] / 2,
+            )
+            page.wait_for_timeout(120)
+            hover_png = page.evaluate(
+                "() => document.getElementById('timeline-program-canvas').toDataURL()"
+            )
+            assert hover_png != base_png, "Hovering False Color did not render live preview"
+            assert fc_row.evaluate("el => el.classList.contains('is-hover-scrub')")
+
+            # Move mouse off Effects Library -> Program Monitor reverts cleanly
+            page.mouse.move(720, 200)
+            page.wait_for_timeout(120)
+            reverted_png = page.evaluate(
+                "() => document.getElementById('timeline-program-canvas').toDataURL()"
+            )
+            assert reverted_png == base_png, "Program Monitor did not revert after hover leave"
+
+            # 2. Live Hover Scrub on Video Transitions updates viewer smoothly across scrub width
+            page.locator(
+                "#effects-library-section .fxlib-tree-leaf",
+                has_text="Video Transitions",
+            ).click()
+            tr_row = page.locator(
+                '#effects-library-section .fxlib-row[data-lib-item="Clock Wipe"]'
+            )
+            tr_row.scroll_into_view_if_needed()
+            tr_box = tr_row.bounding_box()
+            assert tr_box is not None
+            page.mouse.move(
+                tr_box["x"] + tr_box["width"] * 0.2,
+                tr_box["y"] + tr_box["height"] / 2,
+            )
+            page.wait_for_timeout(120)
+            tr_png_20 = page.evaluate(
+                "() => document.getElementById('timeline-program-canvas').toDataURL()"
+            )
+            page.mouse.move(
+                tr_box["x"] + tr_box["width"] * 0.8,
+                tr_box["y"] + tr_box["height"] / 2,
+            )
+            page.wait_for_timeout(120)
+            tr_png_80 = page.evaluate(
+                "() => document.getElementById('timeline-program-canvas').toDataURL()"
+            )
+            assert tr_png_20 != base_png and tr_png_80 != tr_png_20
+            page.mouse.move(720, 200)
+            page.wait_for_timeout(80)
+
+            # 3. Drag & Drop Video Transition onto timeline cut point
+            drag_lib_to_timeline("Clock Wipe", 420, 62)
+            page.wait_for_timeout(120)
+            tr_insp_txt = page.locator("#resolve-inspector-root").inner_text()
+            assert "Video Transition" in tr_insp_txt
+
+            # 4. Drag & Drop a Resolve FX filter directly onto a timeline clip
+            page.locator(
+                "#effects-library-section .fxlib-tree-leaf",
+                has_text="Filters",
+            ).first.click()
+            tl_box = page.locator("#timeline-canvas").bounding_box()
+            assert tl_box is not None
+            drag_lib_to_timeline("False Color", 260, 62)
+            page.wait_for_timeout(150)
+            insp_fx_text = page.locator("#resolve-inspector-root").inner_text()
+            assert "False Color" in insp_fx_text
+
+            # 5. Drag & Drop a Title (Text+) onto the timeline -> creates real Title clip
+            page.locator(
+                "#effects-library-section .fxlib-tree-leaf",
+                has_text="Titles",
+            ).click()
+            drag_lib_to_timeline("Text+", 320, 62)
+            page.wait_for_timeout(150)
+            insp_title_text = page.locator("#resolve-inspector-root").inner_text()
+            assert "Text+" in insp_title_text and "Rich Text" in insp_title_text
+
+            # 6. Drag & Drop a Generator (SMPTE Color Bar) onto the timeline
+            page.locator(
+                "#effects-library-section .fxlib-tree-leaf",
+                has_text="Generators",
+            ).first.click()
+            drag_lib_to_timeline("SMPTE Color Bar", 520, 62)
+            page.wait_for_timeout(150)
+            insp_gen_text = page.locator("#resolve-inspector-root").inner_text()
+            assert "SMPTE Color Bar" in insp_gen_text
+
+            # 7. Right-click timeline opens Resolve context menu
+            page.mouse.click(tl_box["x"] + 260, tl_box["y"] + 62, button="right")
+            page.wait_for_selector("#nle-timeline-context-menu:not(.is-hidden)")
+            ctx_txt = page.locator("#nle-timeline-context-menu").inner_text()
+            assert "Duplicate Clip" in ctx_txt or "Insert Text+ Title Here" in ctx_txt
+            page.keyboard.press("Escape")
+
+            assert console_errors == [], f"Console errors: {console_errors}"
+        finally:
+            browser.close()

@@ -16493,4 +16493,187 @@ pre, code, .code-box, textarea.code-box {
   font-size: var(--font-punisher);
 }
 
+/* ============================================================================
+   RESOLVE INTERACTIVE BEHAVIORS: HOVER SCRUB, DRAG-DROP, EDIT OVERLAY, CTX MENU
+   ============================================================================ */
+.fxlib-row,
+.fxlib-tile {
+  position: relative;
+  cursor: grab;
+  user-select: none;
+}
+.fxlib-row.is-dragging,
+.fxlib-tile.is-dragging {
+  opacity: 0.48;
+  cursor: grabbing;
+}
+.fxlib-scrub-track {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.08s ease;
+}
+.fxlib-row.is-hover-scrub .fxlib-scrub-track,
+.fxlib-tile.is-hover-scrub .fxlib-scrub-track {
+  opacity: 1;
+}
+.fxlib-scrub-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: var(--color-coral-red);
+}
+.fxlib-scrub-needle {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 7px;
+  background: #ffffff;
+  transform: translateX(-50%);
+}
+.fxlib-tile .fxlib-scrub-track {
+  top: 56px;
+  bottom: auto;
+  height: 3px;
+}
+
+.media-pool-thumb,
+.mp-thumb-well,
+.cut-clip-frame {
+  position: relative;
+}
+.mp-hover-scrub-bar {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 4;
+}
+.media-pool-card.is-hover-scrub .mp-hover-scrub-bar,
+.mp-thumb-card.is-hover-scrub .mp-hover-scrub-bar,
+.cut-clip-tile.is-hover-scrub .mp-hover-scrub-bar {
+  opacity: 1;
+}
+.mp-hover-scrub-needle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-coral-red);
+  box-shadow: 0 0 4px rgba(230, 75, 61, 0.9);
+  transform: translateX(-50%);
+}
+
+/* DaVinci Resolve Program Viewer 7-Zone Edit Overlay (UiPlayerDropAssistant) */
+#timeline-viewer-well {
+  position: relative;
+}
+.viewer-drop-assistant {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  bottom: 8px;
+  width: 176px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 4px;
+  background: rgba(20, 21, 26, 0.9);
+  border: 1px solid rgba(230, 75, 61, 0.72);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+}
+.vda-title {
+  font: 700 9px var(--font-sans);
+  letter-spacing: 0.08em;
+  color: var(--color-coral-red);
+  text-align: center;
+  padding-bottom: 3px;
+  border-bottom: 1px solid #2e2e36;
+}
+.vda-zone {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  border-radius: 3px;
+  background: rgba(40, 40, 46, 0.72);
+  border: 1px solid #34343d;
+  color: #dcdce4;
+  font: 600 10.5px var(--font-sans);
+  transition: background 0.08s ease, border-color 0.08s ease;
+}
+.vda-zone.is-hot {
+  background: rgba(230, 75, 61, 0.85);
+  border-color: #ff9c92;
+  color: #ffffff;
+}
+.vda-zone-kbd {
+  font-size: 9px;
+  color: #8e8e9a;
+}
+.vda-zone.is-hot .vda-zone-kbd {
+  color: #ffe2de;
+}
+
+/* DaVinci Resolve Dark Matte Timeline Context Menu */
+.nle-context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 215px;
+  padding: 4px;
+  border-radius: 4px;
+  background: var(--color-orca-gray);
+  border: 1px solid #393944;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nle-ctx-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: #e0e0e8;
+  font: 11px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.nle-ctx-item:hover {
+  background: var(--color-abalone-blue);
+  color: #ffffff;
+}
+.nle-ctx-item.is-danger {
+  color: #f48c84;
+}
+.nle-ctx-item.is-danger:hover {
+  background: #8a2822;
+  color: #ffffff;
+}
+.nle-ctx-kbd {
+  font-size: 9.5px;
+  color: #888896;
+}
+.nle-ctx-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: #2f2f38;
+}
+
 

@@ -431,6 +431,79 @@ export function createResolveInspectorController(ctx) {
       }
     };
 
+    // 0. Title or Generator Properties (when a Resolve Title or Generator clip is selected)
+    if (clip.clip_kind === "title") {
+      if (!clip.title_props) clip.title_props = { text: clip.name || "Title", subtitle: "", font_size: 46, color: "#ffffff", accent: "#e64b3d" };
+      const tp = clip.title_props;
+      if (uiState.expanded.clip_title === undefined) uiState.expanded.clip_title = true;
+      const tSec = makeAccordion("clip_title", "Title", {
+        onReset: () => {
+          tp.text = clip.name || "Title";
+          tp.subtitle = "";
+          tp.font_size = 46;
+          tp.color = "#ffffff";
+          render();
+          redrawActiveCanvases();
+        }
+      });
+      const rTxt = el("div", "insp-param-row");
+      rTxt.appendChild(el("span", "insp-param-label", "Rich Text"));
+      const inpTxt = document.createElement("input");
+      inpTxt.type = "text";
+      inpTxt.className = "insp-text-input";
+      inpTxt.value = tp.text || "";
+      inpTxt.addEventListener("input", () => { tp.text = inpTxt.value; redrawActiveCanvases(); });
+      rTxt.appendChild(inpTxt);
+      tSec.body.appendChild(rTxt);
+
+      const rSub = el("div", "insp-param-row");
+      rSub.appendChild(el("span", "insp-param-label", "Subtitle"));
+      const inpSub = document.createElement("input");
+      inpSub.type = "text";
+      inpSub.className = "insp-text-input";
+      inpSub.value = tp.subtitle || "";
+      inpSub.addEventListener("input", () => { tp.subtitle = inpSub.value; redrawActiveCanvases(); });
+      rSub.appendChild(inpSub);
+      tSec.body.appendChild(rSub);
+
+      tSec.body.appendChild(makeSliderRow({
+        label: "Size",
+        value: tp.font_size || 46,
+        min: 14,
+        max: 140,
+        step: 1,
+        decimals: 0,
+        defaultValue: 46,
+        onChange: (v) => { tp.font_size = v; redrawActiveCanvases(); }
+      }));
+
+      const rCol = el("div", "insp-param-row");
+      rCol.appendChild(el("span", "insp-param-label", "Color"));
+      const inpCol = document.createElement("input");
+      inpCol.type = "color";
+      inpCol.value = tp.color || "#ffffff";
+      inpCol.addEventListener("input", () => { tp.color = inpCol.value; redrawActiveCanvases(); });
+      rCol.appendChild(inpCol);
+      tSec.body.appendChild(rCol);
+      host.appendChild(tSec.section);
+    } else if (clip.clip_kind === "generator") {
+      if (!clip.generator_params) clip.generator_params = { color: "#1e3a5f", color2: "#8a2c52" };
+      const gp = clip.generator_params;
+      if (uiState.expanded.clip_gen === undefined) uiState.expanded.clip_gen = true;
+      const gSec = makeAccordion("clip_gen", "Generator", {
+        onReset: () => { gp.color = "#1e3a5f"; gp.color2 = "#8a2c52"; render(); redrawActiveCanvases(); }
+      });
+      const rCol = el("div", "insp-param-row");
+      rCol.appendChild(el("span", "insp-param-label", "Color"));
+      const inpCol = document.createElement("input");
+      inpCol.type = "color";
+      inpCol.value = gp.color || "#1e3a5f";
+      inpCol.addEventListener("input", () => { gp.color = inpCol.value; redrawActiveCanvases(); });
+      rCol.appendChild(inpCol);
+      gSec.body.appendChild(rCol);
+      host.appendChild(gSec.section);
+    }
+
     // 1. Transform
     const tr = makeAccordion("transform", "Transform", {
       switchChecked: true,
@@ -784,9 +857,47 @@ export function createResolveInspectorController(ctx) {
     });
     eq.body.appendChild(el("div", "insp-note", "6-Band Clip Parametric EQ syncs with Fairlight Console Mixer."));
     host.appendChild(eq.section);
+
+    if (clip && Array.isArray(clip.audio_fx) && clip.audio_fx.length > 0) {
+      clip.audio_fx.forEach((afx, idx) => {
+        const key = `clip_afx_${idx}_${afx.id || idx}`;
+        if (uiState.expanded[key] === undefined) uiState.expanded[key] = true;
+        const sec = makeAccordion(key, `Fairlight FX: ${afx.name}`, {
+          switchChecked: afx.enabled !== false,
+          onSwitch: (v) => { afx.enabled = v; render(); redrawActiveCanvases(); }
+        });
+        const delRow = el("div", "insp-fx-node-bar");
+        const delBtn = el("button", "insp-danger-btn", "Remove");
+        delBtn.type = "button";
+        delBtn.addEventListener("click", () => {
+          clip.audio_fx.splice(idx, 1);
+          render();
+          redrawActiveCanvases();
+        });
+        delRow.appendChild(delBtn);
+        sec.body.appendChild(delRow);
+        for (const [k, v] of Object.entries(afx.params || {})) {
+          if (typeof v === "number") {
+            sec.body.appendChild(makeSliderRow({
+              label: k,
+              value: v,
+              min: Math.min(-24, v - 10),
+              max: Math.max(24, v * 2 + 1),
+              step: 0.1,
+              decimals: 2,
+              defaultValue: v,
+              onChange: (nv) => { afx.params[k] = nv; redrawActiveCanvases(); }
+            }));
+          }
+        }
+        host.appendChild(sec.section);
+      });
+    }
   }
 
-  function renderEffectsTab(host) {
+  function renderEffectsTab(host, selInfo) {
+    const selClip = selInfo && selInfo.clip ? selInfo.clip : null;
+    const clipFx = selClip && Array.isArray(selClip.clip_fx) ? selClip.clip_fx : [];
     const stack = Array.isArray(state.fxStack) ? state.fxStack : [];
     const quickBar = el("div", "insp-fx-quickbar");
     const addSel = document.createElement("select");
@@ -824,45 +935,51 @@ export function createResolveInspectorController(ctx) {
     quickBar.appendChild(addSel);
     host.appendChild(quickBar);
 
-    if (stack.length === 0) {
+    if (clipFx.length === 0 && stack.length === 0) {
       host.appendChild(el("div", "insp-empty", "Drag any Resolve FX filter from Effects Library onto a clip, or add one above."));
       return;
     }
 
-    stack.forEach((node, idx) => {
-      const key = `fx_${idx}_${node.effect}`;
+    const renderFxNodeAccordion = (node, idx, listRef, scopePrefix, scopeLabel) => {
+      const key = `${scopePrefix}_${idx}_${node.fxStyle || node.effect}`;
       if (uiState.expanded[key] === undefined) uiState.expanded[key] = true;
-      const title = ctx.getFxDisplayTitle ? ctx.getFxDisplayTitle(node.effect) : node.effect;
+      const baseTitle = node.displayName || (ctx.getFxDisplayTitle ? ctx.getFxDisplayTitle(node.effect) : node.effect);
+      const title = scopeLabel ? `${baseTitle} (${scopeLabel})` : baseTitle;
       const sec = makeAccordion(key, title, {
         switchChecked: node.enabled !== false,
         onSwitch: (v) => {
           node.enabled = v;
-          if (renderFxStack) renderFxStack();
+          if (listRef === state.fxStack && renderFxStack) renderFxStack();
           redrawActiveCanvases();
           render();
         },
         onReset: () => {
-          if (ctx.resetFxNodeAtIndex) ctx.resetFxNodeAtIndex(idx);
+          if (listRef === state.fxStack && ctx.resetFxNodeAtIndex) {
+            ctx.resetFxNodeAtIndex(idx);
+          } else if (node.defaultParams) {
+            node.params = { ...node.defaultParams };
+            redrawActiveCanvases();
+          }
           render();
         }
       });
       const actRow = el("div", "insp-fx-node-bar");
       const studioBtn = el("button", "insp-action-btn", "Open Studio");
       studioBtn.type = "button";
-      studioBtn.addEventListener("click", () => openFxStudioByKey && openFxStudioByKey(node.effect));
+      studioBtn.addEventListener("click", () => openFxStudioByKey && openFxStudioByKey(node.effect || node.fxStyle));
       const delBtn = el("button", "insp-danger-btn", "Remove");
       delBtn.type = "button";
       delBtn.addEventListener("click", () => {
-        state.fxStack.splice(idx, 1);
-        if (renderFxStack) renderFxStack();
+        listRef.splice(idx, 1);
+        if (listRef === state.fxStack && renderFxStack) renderFxStack();
         redrawActiveCanvases();
         render();
       });
       actRow.append(studioBtn, delBtn);
       sec.body.appendChild(actRow);
 
-      const params = node.params || {};
-      const specs = (ctx.getFxSpecsForEffect ? ctx.getFxSpecsForEffect(node.effect) : []) || [];
+      const params = node.params || (node.params = {});
+      const specs = (node.effect && ctx.getFxSpecsForEffect ? ctx.getFxSpecsForEffect(node.effect) : []) || [];
       if (specs.length > 0) {
         for (const sp of specs) {
           if (sp.kind === "float" || sp.kind === "int") {
@@ -876,12 +993,12 @@ export function createResolveInspectorController(ctx) {
               defaultValue: sp.default,
               onChange: (v) => {
                 params[sp.name] = sp.kind === "int" ? Math.round(v) : v;
-                if (renderFxStack) renderFxStack();
+                if (listRef === state.fxStack && renderFxStack) renderFxStack();
                 redrawActiveCanvases();
               },
               onReset: () => {
                 params[sp.name] = sp.default;
-                if (renderFxStack) renderFxStack();
+                if (listRef === state.fxStack && renderFxStack) renderFxStack();
                 redrawActiveCanvases();
                 render();
               }
@@ -889,20 +1006,22 @@ export function createResolveInspectorController(ctx) {
           } else if (sp.kind === "enum" && Array.isArray(sp.options)) {
             sec.body.appendChild(makeSelectRow(sp.label || sp.name, sp.options.map(String), String(params[sp.name] ?? sp.default), (v) => {
               params[sp.name] = v;
-              if (renderFxStack) renderFxStack();
+              if (listRef === state.fxStack && renderFxStack) renderFxStack();
               redrawActiveCanvases();
             }));
           }
         }
       } else {
+        const entries = Object.entries(params);
+        if (entries.length === 0) params.strength = 0.85;
         for (const [k, v] of Object.entries(params)) {
           if (typeof v === "number") {
             sec.body.appendChild(makeSliderRow({
               label: k,
               value: v,
               min: 0,
-              max: Math.max(10, v * 2),
-              step: 0.1,
+              max: Math.max(2, v * 2),
+              step: 0.05,
               decimals: 2,
               defaultValue: v,
               onChange: (nv) => { params[k] = nv; redrawActiveCanvases(); }
@@ -911,7 +1030,13 @@ export function createResolveInspectorController(ctx) {
         }
       }
       host.appendChild(sec.section);
-    });
+    };
+
+    if (clipFx.length > 0) {
+      const clipTag = selClip.clip_kind === "adjustment" ? "Adjustment" : "Clip";
+      clipFx.forEach((node, idx) => renderFxNodeAccordion(node, idx, clipFx, "clip_fx", clipTag));
+    }
+    stack.forEach((node, idx) => renderFxNodeAccordion(node, idx, stack, "fx", ""));
   }
 
   function renderTransitionTab(host, selInfo) {
@@ -924,8 +1049,29 @@ export function createResolveInspectorController(ctx) {
       host.appendChild(sec.section);
       return;
     }
-    sec.body.appendChild(makeSelectRow("Transition", ["Cross Dissolve", "Additive Dissolve", "Blur Dissolve", "Dip to Color Dissolve", "Wipe", "Iris"], tr.preset || "Cross Dissolve", (v) => {
-      tr.preset = v.toLowerCase().replace(/\s+/g, "");
+    const trMap = [
+      ["Cross Dissolve", "fade", "cross"],
+      ["Additive Dissolve", "fade", "additive"],
+      ["Blur Dissolve", "fade", "blur"],
+      ["Dip To Color Dissolve", "fadeblack", "dip_color"],
+      ["Smooth Cut", "fade", "smooth"],
+      ["Oval Iris", "zoomin", "iris_oval"],
+      ["Diamond Iris", "zoomin", "iris_diamond"],
+      ["Barn Door", "wipeleft", "wipe_barn"],
+      ["Clock Wipe", "wipeleft", "wipe_clock"],
+      ["Edge Wipe", "wipeleft", "wipe_edge"],
+      ["Slide Right", "slideright", "slide_right"],
+      ["Slide Left", "slideright", "slide_left"],
+      ["Crash Zoom", "zoomin", "crash_zoom"],
+      ["Brightness Flash", "fade", "brightness_flash"],
+      ["Burn Away", "fade", "burn_away"]
+    ];
+    const currentLabel = tr.label || (trMap.find((m) => m[2] === tr.trans_style || m[1] === tr.preset) || trMap[0])[0];
+    sec.body.appendChild(makeSelectRow("Transition", trMap.map((m) => m[0]), currentLabel, (v) => {
+      const found = trMap.find((m) => m[0] === v) || trMap[0];
+      tr.label = found[0];
+      tr.preset = found[1];
+      tr.trans_style = found[2];
       redrawActiveCanvases();
     }));
     sec.body.appendChild(makeSliderRow({
@@ -944,6 +1090,18 @@ export function createResolveInspectorController(ctx) {
       { id: "center", label: "Center" },
       { id: "end", label: "End" }
     ], tr.alignment || "center", (id) => { tr.alignment = id; render(); redrawActiveCanvases(); }));
+    const delRow = el("div", "insp-fx-node-bar");
+    const delBtn = el("button", "insp-danger-btn", "Remove Transition");
+    delBtn.type = "button";
+    delBtn.addEventListener("click", () => {
+      if (selInfo && selInfo.clip) {
+        delete selInfo.clip.transition_out;
+        render();
+        redrawActiveCanvases();
+      }
+    });
+    delRow.appendChild(delBtn);
+    sec.body.appendChild(delRow);
     host.appendChild(sec.section);
   }
 
@@ -1048,7 +1206,7 @@ export function createResolveInspectorController(ctx) {
     const body = el("div", "insp-scroll-body");
     if (uiState.activeTab === "video") renderVideoTab(body, selInfo);
     else if (uiState.activeTab === "audio") renderAudioTab(body, selInfo);
-    else if (uiState.activeTab === "effects") renderEffectsTab(body);
+    else if (uiState.activeTab === "effects") renderEffectsTab(body, selInfo);
     else if (uiState.activeTab === "transition") renderTransitionTab(body, selInfo);
     else if (uiState.activeTab === "image") renderImageTab(body);
     else renderFileTab(body, selInfo);

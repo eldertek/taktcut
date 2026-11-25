@@ -1,4 +1,12 @@
 import {
+  applyResolveFxStylePass,
+  drawResolveLivePreviewHud,
+  drawTimelineDropPreview,
+  renderResolveGenerator,
+  renderResolveTitle,
+  renderResolveTransition
+} from "./resolve_effects_engine.js";
+import {
   CLIP_LABEL_COLORS,
   COLORCHECKER_24_PATCHES_CLIENT,
   COLOR_WARPER_BOUNDS,
@@ -954,6 +962,24 @@ function applyGradeLutToRegion(ctx, w, h, colorState) {
 
 function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   const topClip = activeClips.length > 0 ? activeClips[activeClips.length - 1] : null;
+  if (topClip && topClip.clip) {
+    const ck = topClip.clip.clip_kind;
+    const clipDur = Math.max(1, topClip.clip.duration_frames || 125);
+    const localProg = Math.max(0, Math.min(1, (playheadFrame - (topClip.clip.start_frame || 0)) / clipDur));
+    if (ck === "adjustment") {
+      // Adjustment Clip applies its clip_fx to lower tracks without drawing an opaque plate
+      return;
+    }
+    if (ck === "title") {
+      renderResolveTitle(ctx, w, h, topClip.clip.title_style || "text", localProg, topClip.clip.title_props || { text: topClip.clip.name });
+      return;
+    }
+    if (ck === "generator") {
+      renderResolveGenerator(ctx, w, h, topClip.clip.generator_style || "solid", localProg, topClip.clip.generator_params || {});
+      applyGradeLutToRegion(ctx, w, h, cdl);
+      return;
+    }
+  }
   if (_clipMediaProviders && _clipMediaProviders.isActive()) {
     const src = topClip ? _clipMediaProviders.frameSource(topClip.clip, playheadFrame, doc) : null;
     if (src) {
@@ -3084,10 +3110,61 @@ export function drawProgramMonitorCanvas(
 
   const fps = doc && doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
   const tSec = playheadFrame / fps;
-  const activeTrans = findActiveTransitionAtFrame(doc, playheadFrame);
+  const livePreview = renderOpts && renderOpts.liveHoverPreview ? renderOpts.liveHoverPreview : null;
+  let activeTrans = findActiveTransitionAtFrame(doc, playheadFrame);
+  if (livePreview && livePreview.dropKind === "transition") {
+    const primaryClip = activeClips.length > 0 ? activeClips[0].clip : null;
+    let nextClip = null;
+    if (doc && Array.isArray(doc.tracks)) {
+      const vTrk = doc.tracks.find((t) => t.kind === "video" && Array.isArray(t.clips) && t.clips.length > 0);
+      if (vTrk) {
+        const sorted = [...vTrk.clips].sort((a, b) => a.start_frame - b.start_frame);
+        const curIdx = primaryClip ? sorted.indexOf(primaryClip) : 0;
+        nextClip = sorted[(Math.max(0, curIdx) + 1) % sorted.length] || null;
+        if (nextClip === primaryClip) {
+          nextClip = { name: "Incoming Clip", start_frame: 0, duration_frames: 100, clip_kind: "generator", generator_style: "four_color" };
+        }
+      }
+    }
+    activeTrans = {
+      trackIndex: 1,
+      clipA: primaryClip || { name: "Clip A", start_frame: 0, duration_frames: 100, clip_kind: "generator", generator_style: "solid", generator_params: { color: "#1e3a5f" } },
+      clipB: nextClip || { name: "Clip B", start_frame: 0, duration_frames: 100, clip_kind: "generator", generator_style: "four_color" },
+      progress: clamp01(livePreview.progress ?? 0.5),
+      transition: {
+        preset: livePreview.transition || "fade",
+        trans_style: livePreview.transStyle || livePreview.transition || "cross",
+        duration_s: livePreview.duration_s || 1.0
+      }
+    };
+  }
 
-  const rawNodes = fxState && Array.isArray(fxState.nodes) ? fxState.nodes : [];
-  const bypassAll = Boolean(fxState && fxState.bypassAll);
+  // Merge global FX stack + per-clip FX (and Adjustment Clip FX on higher tracks) + live hover preview FX
+  const perClipFxNodes = [];
+  for (const entry of activeClips) {
+    if (entry && entry.clip && Array.isArray(entry.clip.clip_fx)) {
+      for (const n of entry.clip.clip_fx) {
+        if (n && n.enabled !== false) perClipFxNodes.push(n);
+      }
+    }
+  }
+  const hoverFxNodes = [];
+  if (livePreview && livePreview.dropKind === "clip-fx") {
+    hoverFxNodes.push({
+      effect: livePreview.fx || "__resolve_style__",
+      fxStyle: livePreview.fxStyle || livePreview.fx || "",
+      enabled: true,
+      params: { ...(livePreview.defaultParams || {}) },
+      _previewProgress: clamp01(livePreview.progress ?? 0.65)
+    });
+  }
+
+  const rawNodes = [
+    ...(fxState && Array.isArray(fxState.nodes) ? fxState.nodes : []),
+    ...perClipFxNodes,
+    ...hoverFxNodes
+  ];
+  const bypassAll = Boolean(fxState && fxState.bypassAll) && hoverFxNodes.length === 0;
   const activeFx = bypassAll ? [] : rawNodes.filter((n) => n && n.enabled !== false);
   const ckRaw = chromaKeyState || (fxState && fxState.chromaKey) || null;
   const ckActive = !bypassAll && Boolean(ckRaw && ckRaw.enabled);
@@ -3099,8 +3176,12 @@ export function drawProgramMonitorCanvas(
   const wipeActive = Boolean(splitWipeState && splitWipeState.enabled);
 
   const renderScenePass = (passCdl, passFxState, passTitleState, passSubState, passCkState) => {
-    const pRawNodes = passFxState && Array.isArray(passFxState.nodes) ? passFxState.nodes : [];
-    const pBypassAll = Boolean(passFxState && passFxState.bypassAll);
+    const pRawNodes = [
+      ...(passFxState && Array.isArray(passFxState.nodes) ? passFxState.nodes : []),
+      ...perClipFxNodes,
+      ...hoverFxNodes
+    ];
+    const pBypassAll = Boolean(passFxState && passFxState.bypassAll) && hoverFxNodes.length === 0;
     const pActiveFx = pBypassAll ? [] : pRawNodes.filter((n) => n && n.enabled !== false);
     const pCkRaw = passCkState || (passFxState && passFxState.chromaKey) || null;
     const pCkActive = !pBypassAll && Boolean(pCkRaw && pCkRaw.enabled);
@@ -3172,12 +3253,18 @@ export function drawProgramMonitorCanvas(
         ctxB.clearRect(0, 0, bw, bh);
 
         const trkTag = `V${activeTrans.trackIndex}`;
+        const clipAFrame = livePreview && livePreview.dropKind === "transition"
+          ? Math.max(activeTrans.clipA.start_frame || 0, Math.min((activeTrans.clipA.start_frame || 0) + Math.max(0, (activeTrans.clipA.duration_frames || 1) - 1), playheadFrame))
+          : playheadFrame;
+        const clipBFrame = livePreview && livePreview.dropKind === "transition"
+          ? (activeTrans.clipB.start_frame || 0) + Math.min(12, Math.floor((activeTrans.clipB.duration_frames || 25) * 0.25))
+          : playheadFrame;
         drawFramedBaseScene(
           ctxA,
           bw,
           bh,
           doc,
-          playheadFrame,
+          clipAFrame,
           passCdl,
           [{ track: trkTag, clip: activeTrans.clipA }],
           framingMode,
@@ -3189,7 +3276,7 @@ export function drawProgramMonitorCanvas(
           bw,
           bh,
           doc,
-          playheadFrame,
+          clipBFrame,
           passCdl,
           [{ track: trkTag, clip: activeTrans.clipB }],
           framingMode,
@@ -3198,72 +3285,17 @@ export function drawProgramMonitorCanvas(
         );
 
         const u = clamp01(activeTrans.progress);
-        const preset = activeTrans.transition.preset;
-        bctx.fillStyle = "#000000";
-        bctx.fillRect(0, 0, bw, bh);
-
-        if (preset === "fadeblack") {
-          if (u < 0.5) {
-            bctx.save();
-            bctx.globalAlpha = clamp01(1 - u * 2);
-            bctx.drawImage(_transScratchA, 0, 0, bw, bh);
-            bctx.restore();
-          } else {
-            bctx.save();
-            bctx.globalAlpha = clamp01((u - 0.5) * 2);
-            bctx.drawImage(_transScratchB, 0, 0, bw, bh);
-            bctx.restore();
-          }
-        } else if (preset === "wipeleft") {
-          const seamX = bw * (1 - u);
-          bctx.drawImage(_transScratchA, 0, 0, bw, bh);
-          bctx.save();
-          bctx.beginPath();
-          bctx.rect(seamX, 0, bw - seamX, bh);
-          bctx.clip();
-          bctx.drawImage(_transScratchB, 0, 0, bw, bh);
-          bctx.restore();
-          bctx.strokeStyle = "#e68442";
-          bctx.lineWidth = 2;
-          bctx.beginPath();
-          bctx.moveTo(seamX, 0);
-          bctx.lineTo(seamX, bh);
-          bctx.stroke();
-        } else if (preset === "slideright") {
-          const slideX = bw * u;
-          bctx.drawImage(_transScratchA, slideX, 0, bw, bh);
-          bctx.drawImage(_transScratchB, slideX - bw, 0, bw, bh);
-          bctx.strokeStyle = "#e68442";
-          bctx.lineWidth = 2;
-          bctx.beginPath();
-          bctx.moveTo(slideX, 0);
-          bctx.lineTo(slideX, bh);
-          bctx.stroke();
-        } else if (preset === "zoomin") {
-          const eased = u * u * (3 - 2 * u);
-          const scaleA = 1 + eased * 0.34;
-          const wA = bw * scaleA;
-          const hA = bh * scaleA;
-          bctx.save();
-          bctx.globalAlpha = clamp01(1 - eased);
-          bctx.drawImage(_transScratchA, (bw - wA) / 2, (bh - hA) / 2, wA, hA);
-          bctx.restore();
-
-          const scaleB = 0.84 + eased * 0.16;
-          const wB = bw * scaleB;
-          const hB = bh * scaleB;
-          bctx.save();
-          bctx.globalAlpha = clamp01(eased);
-          bctx.drawImage(_transScratchB, (bw - wB) / 2, (bh - hB) / 2, wB, hB);
-          bctx.restore();
-        } else {
-          // Cross Dissolve (fade)
-          bctx.drawImage(_transScratchA, 0, 0, bw, bh);
-          bctx.save();
-          bctx.globalAlpha = u;
-          bctx.drawImage(_transScratchB, 0, 0, bw, bh);
-          bctx.restore();
-        }
+        const transStyle = activeTrans.transition.trans_style || activeTrans.transition.preset || "cross";
+        renderResolveTransition(bctx, _transScratchA, _transScratchB, bw, bh, transStyle, u);
+      } else if (livePreview && livePreview.dropKind === "generator") {
+        renderResolveGenerator(
+          bctx,
+          bw,
+          bh,
+          livePreview.genStyle || "solid",
+          clamp01(livePreview.progress ?? 0.5),
+          { color: livePreview.defaultColor || "#1e3a5f" }
+        );
       } else {
         drawFramedBaseScene(
           bctx,
@@ -3774,6 +3806,30 @@ export function drawProgramMonitorCanvas(
               bctx.putImageData(dryImg, 0, 0);
             });
           }
+        }
+      }
+
+      // Apply custom Resolve FX & Toolbox Effect shaders on frame buffer
+      const BUILTIN_DIRECT_ONLY = new Set([
+        "glow", "lens_flare", "flicker", "film_damage", "vignette", "film_grain",
+        "optical_glow", "halation", "pro_mist", "prism_leak", "scanlines", "letterbox",
+        "camera_shake", "shake", "lens_distortion", "directional_blur", "tilt_shift",
+        "mosaic_pixelate", "unsharp_mask", "hue_shift", "invert_negative", "mirror_flip", "chroma_aberration"
+      ]);
+      if (!(pCkActive && pCkMatteView === "alpha_matte")) {
+        for (const rNode of pActiveFx) {
+          const styleKey = rNode.fxStyle || "";
+          if (!styleKey) continue;
+          if (BUILTIN_DIRECT_ONLY.has(styleKey) && rNode.effect === styleKey) continue;
+          applyResolveFxStylePass(
+            bctx,
+            bw,
+            bh,
+            styleKey,
+            rNode.params || {},
+            rNode._previewProgress !== undefined ? rNode._previewProgress : 0.65,
+            tSec
+          );
         }
       }
 
@@ -4409,7 +4465,9 @@ export function drawProgramMonitorCanvas(
   }
 
   // FX, Chroma Key, Stabilizer & Planar Tracker telemetry pill inside Program Monitor corner
-  if (rawNodes.length > 0 || (ckRaw && ckRaw.enabled) || stabActive || trkActive) {
+  const persistedRawNodes = rawNodes.filter((n) => n && n._previewProgress === undefined);
+  const persistedActiveFx = activeFx.filter((n) => n && n._previewProgress === undefined);
+  if (persistedRawNodes.length > 0 || (ckRaw && ckRaw.enabled) || stabActive || trkActive) {
     const parts = [];
     if (stabActive && stabRaw) {
       parts.push(`STAB ${Math.round(stabRaw.auto_zoom_pct)}%`);
@@ -4427,9 +4485,12 @@ export function drawProgramMonitorCanvas(
       const hexTag = String(ckRaw.key_color || "#00b140").toUpperCase();
       parts.push(ckMatteView === "alpha_matte" ? `KEY ${hexTag} (ALPHA)` : `KEY ${hexTag}`);
     }
-    if (activeFx.length > 0) {
+    if (persistedActiveFx.length > 0) {
       parts.push(
-        `${activeFx.map((n) => n.effect.toUpperCase()).slice(0, 2).join(" + ")}${activeFx.length > 2 ? " +" : ""}`
+        `${persistedActiveFx
+          .map((n) => String(n.displayName || n.fxStyle || n.effect).toUpperCase())
+          .slice(0, 2)
+          .join(" + ")}${persistedActiveFx.length > 2 ? " +" : ""}`
       );
     }
     const label = bypassAll
@@ -4708,6 +4769,19 @@ export function drawProgramMonitorCanvas(
     applyBroadcastMonitorPixelPass(ctx, fx, fy, frameW, frameH, renderOpts.broadcastMonitor, {
       drawLegend: true
     });
+  }
+
+  if (livePreview) {
+    if (livePreview.dropKind === "title") {
+      ctx.save();
+      ctx.translate(fx, fy);
+      renderResolveTitle(ctx, frameW, frameH, livePreview.titleStyle || "text", clamp01(livePreview.progress ?? 0.5), {
+        text: livePreview.defaultText || livePreview.name,
+        subtitle: livePreview.defaultSub || ""
+      });
+      ctx.restore();
+    }
+    drawResolveLivePreviewHud(ctx, fx, fy, frameW, frameH, livePreview);
   }
 
   ctx.restore();
@@ -5502,10 +5576,19 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   const selected = opts ? opts.selected : null;
   const anySolo = tracks.some((t) => Boolean(t && t.solo));
   const fpsFloat = doc.fps ? Math.max(1, doc.fps.num / Math.max(1, doc.fps.den)) : 25;
+  const trackRows = [];
 
   tracks.forEach((trk, idx) => {
     const rowY = rulerHeight + idx * trackHeight;
     const isAudio = trk.kind === "audio";
+    trackRows.push({
+      kind: trk.kind,
+      index: trk.index,
+      rowIdx: idx,
+      y: rowY,
+      h: trackHeight,
+      name: trk.name || `${isAudio ? "A" : "V"}${trk.index}`
+    });
     const isDirectMuted = Boolean(trk.muted);
     const isSolo = Boolean(trk.solo);
     const trackAudiblyMuted = isDirectMuted || (anySolo && !isSolo);
@@ -5717,15 +5800,28 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           : "amber";
       const cmpPal = cmpTagColors[cmpTagKey];
 
+      const clipKind = clip.clip_kind || "";
+      const isTitleClip = clipKind === "title";
+      const isGenClip = clipKind === "generator";
+      const isAdjClip = clipKind === "adjustment";
+      const isFusionClip = clipKind === "fusion_comp";
       const baseFill = trackAudiblyMuted
         ? (isAudio ? "#1a2925" : "#1c2533")
         : isCompound && clip.enabled
           ? cmpPal.fill
           : isMulticam && clip.enabled
             ? "#182438"
-            : isAudio
-              ? clip.enabled ? "#1c4a40" : "#242428"
-              : clip.enabled ? "#2b466b" : "#242428";
+            : isTitleClip && clip.enabled
+              ? "#53315e"
+              : isGenClip && clip.enabled
+                ? "#224d5c"
+                : isAdjClip && clip.enabled
+                  ? "#37466e"
+                  : isFusionClip && clip.enabled
+                    ? "#49376e"
+                    : isAudio
+                      ? clip.enabled ? "#1c4a40" : "#242428"
+                      : clip.enabled ? "#2b466b" : "#242428";
       const borderCol = isSelected
         ? "#e64b38"
         : trackAudiblyMuted
@@ -5734,7 +5830,15 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
             ? cmpPal.border
             : isMulticam
               ? "#38bdf8"
-              : isAudio ? "#286658" : "#395c8a";
+              : isTitleClip
+                ? "#a855f7"
+                : isGenClip
+                  ? "#38bdf8"
+                  : isAdjClip
+                    ? "#85d5f7"
+                    : isFusionClip
+                      ? "#a78bfa"
+                      : isAudio ? "#286658" : "#395c8a";
 
       ctx.fillStyle = baseFill;
       roundRectPath(ctx, drawX, clipY, drawW, clipH, 2);
@@ -6178,6 +6282,30 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         }
       }
 
+      const clipFxCount = !isAudio && Array.isArray(clip.clip_fx) ? clip.clip_fx.filter((n) => n && n.enabled !== false).length : 0;
+      const clipAfxCount = isAudio && Array.isArray(clip.audio_fx) ? clip.audio_fx.filter((n) => n && n.enabled !== false).length : 0;
+      const kindTag = clipKind === "title" ? "T" : clipKind === "generator" ? "GEN" : clipKind === "adjustment" ? "ADJ" : clipKind === "fusion_comp" ? "FUS" : "";
+      let fxBadgeW = 0;
+      const activeFxTag = clipFxCount > 0 ? (clipFxCount > 1 ? `FX ${clipFxCount}` : "FX") : clipAfxCount > 0 ? (clipAfxCount > 1 ? `AFX ${clipAfxCount}` : "AFX") : kindTag;
+      if (activeFxTag && drawW >= 36) {
+        ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
+        const measuredFxW = Math.ceil(ctx.measureText(activeFxTag).width) + 8;
+        const usedRight = rightReserve + (speedBadgeW > 0 ? speedBadgeW + 4 : 0) + (transformBadgeW > 0 ? transformBadgeW + 4 : 0) + (fadeBadgeW > 0 ? fadeBadgeW + 4 : 0);
+        if (measuredFxW + usedRight + 16 <= drawW) {
+          fxBadgeW = measuredFxW + 4;
+          const bx = drawX + drawW - usedRight - measuredFxW;
+          const by = clipY + 3;
+          ctx.fillStyle = clipFxCount > 0 ? "rgba(230, 75, 61, 0.34)" : clipAfxCount > 0 ? "rgba(46, 164, 97, 0.32)" : "rgba(133, 213, 247, 0.22)";
+          roundRectPath(ctx, bx, by, measuredFxW, 14, 2);
+          ctx.fill();
+          ctx.strokeStyle = clipFxCount > 0 ? "#e64b3d" : clipAfxCount > 0 ? "#2ea461" : "#85d5f7";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(activeFxTag, bx + 4, by + 10);
+        }
+      }
+
       if (drawW > 34) {
         // Reserve horizontal inset where bowtie transition badges straddle incoming/outgoing cuts
         let leftTransInset = 0;
@@ -6203,7 +6331,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
             }
           }
         }
-        const badgesOffset = speedBadgeW + transformBadgeW + fadeBadgeW;
+        const badgesOffset = speedBadgeW + transformBadgeW + fadeBadgeW + fxBadgeW;
         const textStartX = drawX + 5 + leftTransInset;
         const textMaxRight = drawX + drawW - 5 - rightTransInset - (badgesOffset > 0 ? badgesOffset + 8 : 0);
         const textClipW = Math.max(0, textMaxRight - textStartX);
@@ -6780,8 +6908,20 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.restore();
   }
 
+  if (opts && opts.dropPreview) {
+    drawTimelineDropPreview(
+      ctx,
+      { timelineX, timelineW, rulerHeight, height, frameToX, pxPerFrame },
+      opts.dropPreview
+    );
+  }
+
   return {
     hitboxes,
+    trackRows,
+    trackHeight,
+    timelineX,
+    timelineW,
     frameToX,
     xToFrame,
     xToRawFrame,

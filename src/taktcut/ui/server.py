@@ -543,6 +543,14 @@ STATIC_ROUTE_MAP: dict[str, tuple[str, str]] = {
     "/demo_projects.js": ("demo_projects.js", "application/javascript; charset=utf-8"),
     "/media_engine.js": ("media_engine.js", "application/javascript; charset=utf-8"),
     "/effects_library.js": ("effects_library.js", "application/javascript; charset=utf-8"),
+    "/resolve_effects_engine.js": (
+        "resolve_effects_engine.js",
+        "application/javascript; charset=utf-8",
+    ),
+    "/resolve_interactions.js": (
+        "resolve_interactions.js",
+        "application/javascript; charset=utf-8",
+    ),
     "/inspector.js": ("inspector.js", "application/javascript; charset=utf-8"),
     "/fonts/open-sans-latin-400-normal.woff2": (
         "fonts/open-sans-latin-400-normal.woff2",
