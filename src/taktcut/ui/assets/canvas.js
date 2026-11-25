@@ -2436,13 +2436,42 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
       continue;
     }
 
+    const compositeOpMap = {
+      Normal: "source-over",
+      Add: "lighter",
+      Color: "color",
+      "Color Burn": "color-burn",
+      "Color Dodge": "color-dodge",
+      Darken: "darken",
+      Difference: "difference",
+      Exclusion: "exclusion",
+      "Hard Light": "hard-light",
+      Hue: "hue",
+      Lighten: "lighten",
+      Luminosity: "luminosity",
+      Multiply: "multiply",
+      Overlay: "overlay",
+      Saturation: "saturation",
+      Screen: "screen",
+      "Soft Light": "soft-light"
+    };
+    const compMode = tf.composite_mode || "Normal";
+    const gco = compositeOpMap[compMode] || "source-over";
+    const scaleX = ((tf.zoom_pct ?? 100) / 100.0) * (tf.flip_h ? -1 : 1);
+    const scaleY = ((tf.zoom_y_pct ?? tf.zoom_pct ?? 100) / 100.0) * (tf.flip_v ? -1 : 1);
+    const skewPitch = Number(tf.pitch || 0) * 0.35;
+    const skewYaw = Number(tf.yaw || 0) * 0.35;
     const hasDve = hasClipDveStyling(tf);
     const hasActiveTf =
       !isClipTransformIdentity(layer && layer.clip ? layer.clip : null) ||
-      Math.abs(tf.zoom_pct - 100.0) > 1e-4 ||
+      Math.abs(scaleX - 1.0) > 1e-4 ||
+      Math.abs(scaleY - 1.0) > 1e-4 ||
       Math.abs(tf.pos_x_pct) > 1e-4 ||
       Math.abs(tf.pos_y_pct) > 1e-4 ||
       Math.abs(tf.rotation_deg) > 1e-4 ||
+      Math.abs(skewPitch) > 1e-4 ||
+      Math.abs(skewYaw) > 1e-4 ||
+      gco !== "source-over" ||
       hasDve;
 
     if (!hasDve) {
@@ -2451,19 +2480,25 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
       targetCtx.rect(0, 0, bufW, bufH);
       targetCtx.clip();
       targetCtx.globalAlpha *= alpha;
+      targetCtx.globalCompositeOperation = gco;
 
       if (hasActiveTf) {
-        const cx = bufW * 0.5 + (tf.pos_x_pct / 100.0) * bufW;
-        const cy = bufH * 0.5 + (tf.pos_y_pct / 100.0) * bufH;
+        const cx = bufW * 0.5 + (tf.pos_x_pct / 100.0) * bufW + ((tf.anchor_x_pct || 0) / 100.0) * bufW;
+        const cy = bufH * 0.5 + (tf.pos_y_pct / 100.0) * bufH + ((tf.anchor_y_pct || 0) / 100.0) * bufH;
         targetCtx.translate(cx, cy);
         if (Math.abs(tf.rotation_deg) > 1e-4) {
           targetCtx.rotate((tf.rotation_deg * Math.PI) / 180.0);
         }
-        const scale = tf.zoom_pct / 100.0;
-        if (Math.abs(scale - 1.0) > 1e-4) {
-          targetCtx.scale(scale, scale);
+        if (Math.abs(skewPitch) > 1e-4 || Math.abs(skewYaw) > 1e-4) {
+          targetCtx.transform(1, skewPitch, skewYaw, 1, 0, 0);
         }
-        targetCtx.translate(-bufW * 0.5, -bufH * 0.5);
+        if (Math.abs(scaleX - 1.0) > 1e-4 || Math.abs(scaleY - 1.0) > 1e-4) {
+          targetCtx.scale(scaleX, scaleY);
+        }
+        targetCtx.translate(
+          -bufW * 0.5 - ((tf.anchor_x_pct || 0) / 100.0) * bufW,
+          -bufH * 0.5 - ((tf.anchor_y_pct || 0) / 100.0) * bufH
+        );
       }
 
       renderSceneLayer(clips.slice(0, idx + 1), isTop);

@@ -757,8 +757,10 @@
             </div>
           </section>
 
-          <!-- RIGHT DOCK: DAVINCI CLIP INSPECTOR & CONTINUITY -->
+          <!-- RIGHT DOCK: DAVINCI RESOLVE INSPECTOR (UiPlayerInspectorContainer) -->
           <aside id="timeline-right-inspector" class="nle-pane nle-right-inspector">
+            <div id="resolve-inspector-root" class="resolve-inspector-root"></div>
+            <div id="legacy-inspector-backing" class="resolve-inspector-extended">
             <div class="pane-header">
               <h2 data-i18n="timeline.inspector.title">Inspector &amp; Markers</h2>
               <div class="viewer-controls">
@@ -1649,6 +1651,7 @@
                 <div id="timeline-issues-list" class="issue-list"></div>
               </div>
             </div>
+            </div>
           </aside>
         </div>
 
@@ -1934,7 +1937,7 @@
           <!-- LEFT DOCK: 1-CLICK PRESETS & SAPPHIRE NODE LIBRARY -->
           <aside class="nle-pane">
             <div class="pane-header">
-              <h2 data-i18n="fx.library.title">Sapphire FX Library &amp; 1-Click Presets</h2>
+              <h2 data-i18n="fx.library.title">Effects Library &amp; Resolve FX</h2>
               <span class="nle-tag mono">24 FX</span>
             </div>
             <div class="pane-body">
@@ -1944,27 +1947,27 @@
               <div id="fx-preset-grid" class="fx-preset-grid">
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="dreamy_glow">
                   <span class="fx-preset-name">Dreamy Glow</span>
-                  <span class="fx-preset-meta mono">S_Glow</span>
+                  <span class="fx-preset-meta mono">Glow</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="music_video_shake">
                   <span class="fx-preset-name">Music Video Shake</span>
-                  <span class="fx-preset-meta mono">S_Shake + RGB</span>
+                  <span class="fx-preset-meta mono">Camera Shake + Prism</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="vintage_35mm_film">
                   <span class="fx-preset-name">Vintage 35mm Film</span>
-                  <span class="fx-preset-meta mono">S_FilmDamage</span>
+                  <span class="fx-preset-meta mono">Film Damage</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="anamorphic_flare">
                   <span class="fx-preset-name">Anamorphic Flare</span>
-                  <span class="fx-preset-meta mono">S_LensFlare</span>
+                  <span class="fx-preset-meta mono">Lens Flare</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="rgb_glitch_split">
                   <span class="fx-preset-name">RGB Glitch Split</span>
-                  <span class="fx-preset-meta mono">Chroma + Shake</span>
+                  <span class="fx-preset-meta mono">Prism + Shake</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="strobe_flicker">
                   <span class="fx-preset-name">Strobe Flicker</span>
-                  <span class="fx-preset-meta mono">S_Flicker + Glow</span>
+                  <span class="fx-preset-meta mono">Flicker + Glow</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="35mm_cinema">
                   <span class="fx-preset-name">35mm Cinema</span>
@@ -1972,15 +1975,15 @@
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="moody_vignette">
                   <span class="fx-preset-name">Moody Vignette</span>
-                  <span class="fx-preset-meta mono">S_Vignette + Grain</span>
+                  <span class="fx-preset-meta mono">Vignette + Grain</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="cyberpunk_glow">
                   <span class="fx-preset-name">Cyberpunk Glow</span>
-                  <span class="fx-preset-meta mono">Optical Glow + RGB</span>
+                  <span class="fx-preset-meta mono">Aperture + Prism</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="anamorphic_dream">
                   <span class="fx-preset-name">Anamorphic Dream</span>
-                  <span class="fx-preset-meta mono">Glow + RGB + Vig</span>
+                  <span class="fx-preset-meta mono">Glow + Prism + Vig</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="cinema_35mm">
                   <span class="fx-preset-name" data-i18n="fx.preset.cinema35mm">35mm Cinema Halation</span>
@@ -1988,11 +1991,11 @@
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="action_handheld">
                   <span class="fx-preset-name" data-i18n="fx.preset.actionHandheld">Action Handheld</span>
-                  <span class="fx-preset-meta mono">CamShake + RGB + Vig</span>
+                  <span class="fx-preset-meta mono">CamShake + Prism + Vig</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="retro_vhs">
                   <span class="fx-preset-name" data-i18n="fx.preset.retroVhs">Retro VHS CRT</span>
-                  <span class="fx-preset-meta mono">Scanlines + RGB + Grain</span>
+                  <span class="fx-preset-meta mono">Scanlines + Prism + Grain</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="neon_shift">
                   <span class="fx-preset-name" data-i18n="fx.preset.neonShift">Neon Hue Shift</span>
@@ -2000,26 +2003,26 @@
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="retro_arcade">
                   <span class="fx-preset-name" data-i18n="fx.preset.retroArcade">Retro Arcade Pixel</span>
-                  <span class="fx-preset-meta mono">Mosaic + Scan + RGB</span>
+                  <span class="fx-preset-meta mono">Mosaic + Scan + Prism</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="black_promist_cinema">
-                  <span class="fx-preset-name" data-i18n="fx.preset.blackPromist">Black Pro-Mist 1/4</span>
-                  <span class="fx-preset-meta mono">Pro-Mist + Grain</span>
+                  <span class="fx-preset-name" data-i18n="fx.preset.blackPromist">Light Diffusion 1/4</span>
+                  <span class="fx-preset-meta mono">Light Rays + Grain</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="miniature_tilt_shift">
                   <span class="fx-preset-name" data-i18n="fx.preset.miniatureTiltShift">Tilt-Shift Toy World</span>
-                  <span class="fx-preset-meta mono">Tilt-Shift + Sharp</span>
+                  <span class="fx-preset-meta mono">Tilt-Shift + Sharpen</span>
                 </button>
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="anamorphic_prism_leak">
-                  <span class="fx-preset-name" data-i18n="fx.preset.anamorphicPrismLeak">Prism Light Leak</span>
-                  <span class="fx-preset-meta mono">Prism + Optical Glow</span>
+                  <span class="fx-preset-name" data-i18n="fx.preset.anamorphicPrismLeak">Lens Reflections</span>
+                  <span class="fx-preset-meta mono">Reflections + Glow</span>
                 </button>
               </div>
 
               <div class="pane-divider"></div>
 
               <div class="pane-subheader">
-                <span data-i18n="fx.library.addEffect">Add OpenFX / Sapphire Node</span>
+                <span data-i18n="fx.library.addEffect">Add Resolve FX / OpenFX Node</span>
               </div>
               <div id="fx-ofx-filterbar" class="fx-ofx-filterbar" role="group" aria-label="OpenFX Categories">
                 <button type="button" class="btn btn-chip fx-ofx-tab is-active" data-fx-cat-filter="all" aria-pressed="true" data-i18n="fx.ofx.cat.all">All (24)</button>
@@ -2110,7 +2113,7 @@
                   <span class="kbd-chip mono">Shift+E</span>
                 </button>
                 <button type="button" id="btn-fx-optical-glow-studio" class="btn btn-secondary og-studio-btn" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">
-                  <span data-i18n="ogStudio.btn.fx">Halation / S_Glow</span>
+                  <span data-i18n="ogStudio.btn.fx">Halation / Glow</span>
                   <span class="kbd-chip mono">Shift+A</span>
                 </button>
                 <button type="button" id="btn-fx-power-window-studio" class="btn btn-secondary pw-studio-btn" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">
@@ -2420,10 +2423,10 @@
               </div>
             </section>
 
-            <!-- LEFT: EFFECT CONTROLS STACK (PREMIERE / AE STYLE) -->
+            <!-- LEFT: RESOLVE FX & FUSION EFFECTS CONTROLS -->
             <section class="nle-pane">
               <div class="pane-header">
-                <h2 data-i18n="fx.controls.title">Effect Controls (Premiere / AE Stack)</h2>
+                <h2 data-i18n="fx.controls.title">Inspector &gt; Effects</h2>
                 <span id="fx-stack-count" class="nle-tag mono">0 nodes</span>
               </div>
               <div class="pane-body">
@@ -2982,7 +2985,7 @@
                 <button type="button" id="btn-open-qk-studio" class="btn btn-chip qk-studio-btn" data-i18n="qk.btn.studio" title="Open Qualifier Keyer, Despill &amp; Light-Wrap Studio (Shift+Q)">Keyer Studio</button>
                 <span id="color-qk-badge" class="nle-tag mono" aria-live="polite">KEYER OFF</span>
                 <span class="broadcast-quick-sep" aria-hidden="true"></span>
-                <button type="button" id="btn-color-optical-glow-studio" class="btn btn-chip og-studio-btn" data-i18n="ogStudio.btn.color" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">Halation / S_Glow</button>
+                <button type="button" id="btn-color-optical-glow-studio" class="btn btn-chip og-studio-btn" data-i18n="ogStudio.btn.color" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">Halation / Glow</button>
                 <span id="color-og-badge" class="nle-tag mono" aria-live="polite">GLOW OFF</span>
                 <span class="broadcast-quick-sep" aria-hidden="true"></span>
                 <button type="button" id="btn-color-power-window-studio" class="btn btn-chip pw-studio-btn" data-i18n="pwStudio.btn.color" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">Power Window</button>
@@ -4461,7 +4464,7 @@
     <div class="nle-dialog-header">
       <div class="nle-dialog-title-group">
         <h2 id="nle-shortcuts-title" data-i18n="shortcuts.title">NLE Keyboard Shortcuts</h2>
-        <p id="nle-shortcuts-subtitle" class="nle-dialog-subtitle" data-i18n="shortcuts.subtitle">DaVinci Resolve / Premiere Pro transport, I/O range &amp; editing keys</p>
+        <p id="nle-shortcuts-subtitle" class="nle-dialog-subtitle" data-i18n="shortcuts.subtitle">DaVinci Resolve Studio 21 transport, I/O range &amp; editing keys</p>
       </div>
       <button type="button" id="btn-close-shortcuts-dialog" class="btn btn-mini" data-i18n="shortcuts.close">Close</button>
     </div>
@@ -5681,7 +5684,7 @@
   <dialog id="og-studio-dialog" class="nle-dialog og-studio-dialog" aria-labelledby="og-studio-title" aria-describedby="og-studio-subtitle">
     <div class="nle-dialog-header">
       <div class="nle-dialog-title-group">
-        <h2 id="og-studio-title" data-i18n="ogStudio.dialog.title">Boris FX S_Glow / 35mm Optical Halation &amp; Anamorphic Streak Studio</h2>
+        <h2 id="og-studio-title" data-i18n="ogStudio.dialog.title">Resolve FX 35mm Optical Halation, Glow &amp; Streak Studio</h2>
         <p id="og-studio-subtitle" class="nle-dialog-subtitle" data-i18n="ogStudio.dialog.subtitle">DaVinci Resolve 35mm Silver-Halide Emulsion Halation, Multi-Octave Inverse-Square Bloom &amp; Anamorphic Streak</p>
       </div>
       <div class="og-header-actions">
@@ -5695,7 +5698,7 @@
       <div class="og-preset-strip" id="og-preset-strip" role="group" aria-label="Optical Glow presets">
         <span class="pill-label" data-i18n="ogStudio.presetsLabel">OPTICAL PRESETS</span>
         <button type="button" class="btn btn-chip og-preset-btn is-active" data-og-preset="kodak_2383_halation" aria-pressed="true" data-i18n="ogStudio.preset.kodak_2383_halation">Kodak 2383 35mm</button>
-        <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="sapphire_dream_bloom" aria-pressed="false" data-i18n="ogStudio.preset.sapphire_dream_bloom">Sapphire S_Glow</button>
+        <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="sapphire_dream_bloom" aria-pressed="false" data-i18n="ogStudio.preset.sapphire_dream_bloom">Aperture Glow</button>
         <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="anamorphic_blue_streak" aria-pressed="false" data-i18n="ogStudio.preset.anamorphic_blue_streak">Anamorphic Streak</button>
         <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="neon_night_club" aria-pressed="false" data-i18n="ogStudio.preset.neon_night_club">Neon Night Club</button>
         <button type="button" class="btn btn-chip og-preset-btn" data-og-preset="subtle_cinema_aura" aria-pressed="false" data-i18n="ogStudio.preset.subtle_cinema_aura">Subtle Aura</button>
@@ -5736,7 +5739,7 @@
         <div class="og-viewport-col">
           <div class="og-card">
             <div class="pane-subheader">
-              <span data-i18n="ogStudio.previewTitle">Optical Halation &amp; S_Glow Viewport (Interactive Split Wipe)</span>
+              <span data-i18n="ogStudio.previewTitle">Optical Halation &amp; Glow Viewport (Interactive Split Wipe)</span>
               <span id="og-headroom-badge" class="nle-tag mono">HEADROOM 0.00</span>
             </div>
             <div class="viewer-well">
@@ -5778,7 +5781,7 @@
               </div>
             </div>
             <div class="og-param-field">
-              <label for="og-glow-intensity-num" data-i18n="ogStudio.param.glowIntensity">Glow Intensity (S_Glow)</label>
+              <label for="og-glow-intensity-num" data-i18n="ogStudio.param.glowIntensity">Glow Strength</label>
               <div class="og-range-pair">
                 <input type="range" id="og-glow-intensity" min="0" max="2" step="0.02" value="0.45" aria-label="Glow intensity slider">
                 <input type="number" id="og-glow-intensity-num" class="input-control input-num mono" min="0" max="2" step="0.02" value="0.45">
@@ -6948,7 +6951,7 @@
     <div class="nle-pane-header">
       <div class="cs-header-left">
         <span class="nle-pane-title" id="camera-shake-studio-title" data-i18n="csStudio.title">Camera Shake, Handheld Motion &amp; Lens Distortion Studio</span>
-        <span class="cs-subtitle mono" data-i18n="csStudio.subtitle">Sapphire S_Shake / ResolveFX Camera Shake &amp; Lens Distortion</span>
+        <span class="cs-subtitle mono" data-i18n="csStudio.subtitle">Resolve FX Transform : Camera Shake &amp; Lens Distortion</span>
       </div>
       <div class="cs-header-actions">
         <span class="kbd-chip mono">Shift+J</span>

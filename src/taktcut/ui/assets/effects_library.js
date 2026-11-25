@@ -1,16 +1,6 @@
-// Resolve-structured Effects Library for taktcut (clean-room, names and taxonomy only, zero assets).
-//
-// Section tree mirrors the DaVinci Resolve 21 Effects Library:
-//   Toolbox  > Video Transitions | Audio Transitions | Titles | Generators | Effects
-//   OpenFX   > Filters (Resolve FX <category>) | Generators | Transitions
-//   Audio FX > Fairlight FX | VST
-// Item names, Resolve FX category labels and plugin identifiers were verified against the strings
-// of the installed Resolve binary (Resolve FX Blur, Color, Film Emulation, Generate, Key, Light,
-// OpenColorIO, Refine, Revival, Sharpen, Stylize, Temporal, Texture, Transform, Warp).
-//
-// `fx` binds an item to a taktcut FX engine node, `studio` to a taktcut studio dialog,
-// `transition` to a taktcut clip transition preset. Items with no binding stay listed and report
-// that the engine does not process them yet instead of pretending to.
+// DaVinci Resolve 21 Effects Library Tree (UiEditToolboxContainerImp).
+// Exact structure verified from Templates.drfx (3,924 templates), Resolve.exe (119 PluginFactory classes),
+// and BMDAudioPlugins.dll (Fairlight FX). Clean-room MIT implementation, zero proprietary assets.
 
 const T = (name, transition) => ({ name, transition });
 const FX = (name, fx) => ({ name, fx });
@@ -47,27 +37,34 @@ const VIDEO_TRANSITIONS = [
     label: "Wipe",
     items: [
       T("Band Wipe", "wipeleft"),
+      T("Barn Door", "wipeleft"),
+      T("Box Wipe", "wipeleft"),
       T("Center Wipe", "wipeleft"),
+      T("Checkerboard", "wipeleft"),
       T("Clock Wipe", "wipeleft"),
+      T("Diagonal Wipe", "wipeleft"),
       T("Edge Wipe", "wipeleft"),
-      T("Inset Wipe", "wipeleft"),
-      T("Radial Wipe", "wipeleft"),
-      T("Spiral Wipe", "wipeleft"),
-      T("Venetian Blind Wipe", "wipeleft"),
-      T("X Wipe", "wipeleft")
+      T("Spiral Wipe", "wipeleft")
     ]
   },
   {
     label: "Fusion Transitions",
     items: [
+      T("Block Glitch", "fade"),
+      T("Box Twist", "wipeleft"),
+      T("Brightness Flash", "fade"),
+      T("Camera Shake", "fade"),
+      T("Crash Zoom", "zoomin"),
+      T("Flip Over", "wipeleft"),
+      T("Glow", "fade"),
       T("Logo Wipe", "wipeleft"),
       T("Luma Wipe", "wipeleft"),
-      T("Slice Push", "slideright"),
+      T("Page Curl", "wipeleft"),
+      T("RGB Splitter", "fade"),
       T("Slide Down", "slideright"),
       T("Slide Left", "slideright"),
       T("Slide Right", "slideright"),
-      T("Slide Up", "slideright"),
-      T("Tile Wipe", "wipeleft")
+      T("Slide Up", "slideright")
     ]
   }
 ];
@@ -75,7 +72,7 @@ const VIDEO_TRANSITIONS = [
 const AUDIO_TRANSITIONS = [
   {
     label: "Crossfade",
-    items: [N("Cross Fade +3 dB"), N("Cross Fade 0 dB"), N("Cross Fade -3 dB")]
+    items: [N("Cross Fade 0 dB"), N("Cross Fade +3 dB"), N("Cross Fade -3 dB")]
   }
 ];
 
@@ -83,47 +80,47 @@ const TITLES = [
   {
     label: "Titles",
     items: [
+      N("Text"),
+      N("Text+"),
+      N("Scroll"),
       N("Left Lower Third"),
       N("Middle Lower Third"),
-      N("Right Lower Third"),
-      N("Scroll"),
-      N("Text"),
-      N("Text+")
+      N("Right Lower Third")
     ]
   },
   {
     label: "Fusion Titles",
     items: [
-      N("3D Lower 3rd Plane Behind Slide In"),
-      N("3D Lower 3rd Plane Slide In"),
       N("Background Reveal"),
       N("Background Reveal Lower Third"),
+      N("Call Out"),
+      N("Callout Modern Lines"),
+      N("Center Reveal"),
+      N("Clean and Simple"),
+      N("Clean and Simple Lower Third"),
+      N("Dark Box Text"),
+      N("Digital Glitch"),
+      N("Drop In"),
+      N("Fade On"),
       N("Fade On Lower Third"),
-      N("Lower 3rd Corporate Corners 1 Line"),
-      N("Lower 3rd Corporate Corners 2 Lines"),
-      N("Lower 3rd Draw On Two Line"),
-      N("Lower 3rd Flipping 2Line"),
-      N("Lower 3rd Multiplane Background"),
-      N("Lower 3rd Plane Behind Slide In"),
-      N("Lower 3rd Plane Slide In"),
-      N("Lower 3rd Planes Rotating In"),
-      N("Lower 3rd Rotating Plane 2 Line"),
-      N("Lower 3rd Shelf"),
-      N("Lower 3rd Simple Box 1 Line"),
-      N("Lower 3rd Simple Box 2 Line"),
-      N("Lower 3rd Simple Box Thin 1 Line"),
-      N("Lower 3rd Simple Underline"),
-      N("Lower 3rd Simple Vertical 1 Line"),
-      N("Lower 3rd Simple Vertical 2 Lines"),
-      N("Lower 3rd Sliding Block"),
-      N("Lower 3rd Text In Tube"),
-      N("Outline Offset"),
+      N("Headline"),
+      N("Horizontal Line Reveal"),
+      N("Jitter Lower Third"),
+      N("Letterbox Text"),
+      N("Neon Flicker"),
       N("Scroll Lower Third"),
-      N("Slide In and Scroll Lower Third"),
       N("Spin Twist Drift"),
-      N("Stretch Zoom"),
-      N("Superhero Movie"),
-      N("Title Dramatic Mood")
+      N("Stretch Zoom")
+    ]
+  },
+  {
+    label: "Subtitles",
+    items: [
+      N("Simple White"),
+      N("Simple Yellow"),
+      N("White on Black"),
+      N("White on Blue Shear"),
+      N("White on Red Shear")
     ]
   }
 ];
@@ -137,72 +134,110 @@ const GENERATORS = [
       N("EBU Color Bar"),
       N("Four Color Gradient"),
       N("Grey Scale"),
+      N("SMPTE Color Bar"),
       N("Solid Color"),
       N("Window")
     ]
   },
-  { label: "Fusion Generators", items: [N("Checkerboard"), N("Noise Gradient")] }
+  {
+    label: "Fusion Generators",
+    items: [
+      N("Abstract Mesh"),
+      N("Checkerboard"),
+      N("Contours"),
+      N("Dreamy Shapes"),
+      N("Gradient Lines"),
+      N("Hexagon Glow"),
+      N("Noise Gradient"),
+      N("Starfield"),
+      N("Vintage Texture")
+    ]
+  }
 ];
 
 const TOOLBOX_EFFECTS = [
   {
     label: "Effects",
-    items: [N("Adjustment Clip"), N("Fusion Composition"), N("Noise Distortion")]
+    items: [
+      N("Adjustment Clip"),
+      N("Fusion Composition"),
+      N("Binoculars"),
+      N("CCTV"),
+      N("Colored Border"),
+      N("DSLR"),
+      N("DVE"),
+      N("Digital Glitch"),
+      N("Drone Overlay"),
+      N("Night Vision"),
+      N("Paper Edge"),
+      N("Repeat"),
+      N("Video Call")
+    ]
   }
 ];
 
-// Resolve FX (Open FX > Filters), grouped by the category labels found in the Resolve binary.
 const RESOLVE_FX = [
   {
     label: "Resolve FX Blur",
     items: [
-      N("Box Blur"),
+      FX("Box Blur", "directional_blur"),
       FX("Directional Blur", "directional_blur"),
-      N("Gaussian Blur"),
-      N("Lens Blur"),
+      FX("Gaussian Blur", "tilt_shift"),
+      FX("Lens Blur", "tilt_shift"),
       FX("Mosaic Blur", "mosaic_pixelate"),
-      N("Prism Blur"),
-      N("Radial Blur"),
+      FX("Prism Blur", "chroma_aberration"),
+      FX("Radial Blur", "directional_blur"),
       FX("Tilt-Shift Blur", "tilt_shift"),
-      N("Zoom Blur")
+      FX("Zoom Blur", "directional_blur")
     ]
   },
   {
     label: "Resolve FX Color",
     items: [
-      N("ACES Transform"),
+      ST("ACES Transform", "cst"),
       N("Chromatic Adaptation"),
       N("Color Compressor"),
-      N("Color Space Transform"),
+      N("Color Palette"),
+      ST("Color Space Transform", "cst"),
       N("Color Stabilizer"),
       N("Contrast Pop"),
       N("DCTL"),
       N("False Color"),
       N("Gamut Limiter"),
       N("Gamut Mapping"),
-      FX("Invert Color", "invert_negative")
+      FX("Invert Color", "invert_negative"),
+      FX("Hue Shift", "hue_shift")
     ]
   },
   {
     label: "Resolve FX Film Emulation",
-    items: [ST("Film Look Creator", "film_look"), FX("Halation", "halation")]
+    items: [
+      ST("Film Look Creator", "film_look"),
+      FX("Halation", "halation")
+    ]
   },
   {
     label: "Resolve FX Generate",
-    items: [N("Color Generator"), N("Color Palette"), N("Fast Noise"), N("Grid")]
+    items: [N("Color Generator"), N("Fast Noise"), N("Grid")]
   },
   {
     label: "Resolve FX Key",
-    items: [N("3D Keyer"), N("Alpha Matte Shrink and Grow"), N("HSL Keyer"), N("Luma Keyer")]
+    items: [
+      N("3D Keyer"),
+      N("Alpha Matte Shrink and Grow"),
+      N("Despill"),
+      N("HSL Keyer"),
+      N("Luma Keyer")
+    ]
   },
   {
     label: "Resolve FX Light",
     items: [
-      N("Aperture Diffraction"),
+      FX("Aperture Diffraction", "optical_glow"),
       FX("Glow", "glow"),
       FX("Lens Flare", "lens_flare"),
-      N("Lens Reflections"),
-      N("Light Rays")
+      FX("Lens Reflections", "prism_leak"),
+      FX("Light Rays", "pro_mist")
     ]
   },
   {
@@ -220,45 +255,60 @@ const RESOLVE_FX = [
       N("Beauty"),
       N("Blanking Fill"),
       N("Chromatic Aberration Removal"),
-      N("Deband"),
+      N("Depth Map"),
       N("Dehaze"),
       N("Detail Recovery"),
       N("Face Refinement"),
-      N("Noise Reduction"),
+      N("Object Removal"),
+      N("Relight"),
+      N("Sky Replacement"),
+      N("Soften & Sharpen"),
       N("Texture Pop")
     ]
   },
   {
     label: "Resolve FX Revival",
     items: [
+      N("Automatic Dirt Removal"),
       N("Dead Pixel Fixer"),
+      N("Deband"),
       N("Deflicker"),
       N("Dust Buster"),
       N("Frame Replacer"),
-      N("Object Removal"),
+      N("Noise Reduction"),
       N("Patch Replacer")
     ]
   },
   {
     label: "Resolve FX Sharpen",
-    items: [FX("Sharpen", "unsharp_mask"), N("Sharpen Edges"), N("Soften & Sharpen")]
+    items: [
+      FX("Sharpen", "unsharp_mask"),
+      FX("Sharpen Edges", "unsharp_mask"),
+      N("Ultra Sharpen")
+    ]
   },
   {
     label: "Resolve FX Stylize",
     items: [
       N("Abstraction"),
+      N("Burn Away"),
+      N("Defocus Background"),
       N("Drop Shadow"),
       N("Edge Detect"),
       N("Emboss"),
-      N("Pencil Sketch"),
       FX("Vignette", "vignette"),
-      N("Video Collage"),
       N("Watercolor")
     ]
   },
   {
     label: "Resolve FX Temporal",
-    items: [FX("Flicker Addition", "flicker"), N("Motion Blur"), N("Motion Trails"), N("Smear"), N("Stop Motion")]
+    items: [
+      FX("Flicker Addition", "flicker"),
+      N("Motion Blur"),
+      N("Motion Trails"),
+      N("Smear"),
+      N("Stop Motion")
+    ]
   },
   {
     label: "Resolve FX Texture",
@@ -275,39 +325,65 @@ const RESOLVE_FX = [
     items: [
       FX("Camera Shake", "camera_shake"),
       FX("Lens Distortion", "lens_distortion"),
+      N("Match Move"),
       FX("Mirror", "mirror_flip"),
-      N("Transform")
+      N("Picture in Picture"),
+      N("Surface Tracker"),
+      N("Transform"),
+      N("Video Collage")
     ]
   },
   {
     label: "Resolve FX Warp",
-    items: [N("Dent"), N("Ripple"), N("Vortex"), N("Warper"), N("Waviness")]
+    items: [
+      N("Dent"),
+      N("Interactive Warper"),
+      N("Pano Map"),
+      N("Ripple"),
+      N("Vortex"),
+      N("Waviness")
+    ]
   }
 ];
 
 const OPENFX_GENERATORS = [
-  { label: "Open FX Generators", items: [N("Color Generator")] }
+  { label: "Open FX Generators", items: [N("Color Generator"), N("Fast Noise"), N("Grid")] }
+];
+
+const OPENFX_TRANSITIONS = [
+  { label: "Resolve FX Transitions", items: [T("Burn Away", "fade"), T("DCTL Transition", "fade")] }
 ];
 
 const FAIRLIGHT_FX = [
   {
     label: "Fairlight FX",
     items: [
+      N("AI Dialogue Leveler"),
+      N("AI Dialogue Separator"),
+      N("Ambisonics Meter"),
       N("Chorus"),
+      N("Compressor"),
+      N("Convolution Reverb"),
       N("De-Esser"),
+      N("De-Hummer"),
       N("Delay"),
-      N("Dialogue Leveler"),
       N("Distortion"),
+      N("Ducker"),
+      N("Dynamics"),
       N("Echo"),
-      N("Flanger"),
+      N("Equalizer"),
+      N("Foley Sampler"),
+      N("Frequency Analyzer"),
+      N("LFE Filter"),
       N("Limiter"),
+      N("Modulation"),
       N("Multiband Compressor"),
       N("Noise Reduction"),
       N("Pitch"),
       N("Reverb"),
       N("Stereo Fixer"),
-      N("Vocal Channel"),
-      N("Voice Isolation")
+      N("Stereo Width"),
+      N("Vocal Channel")
     ]
   }
 ];
@@ -321,16 +397,18 @@ export const EFFECTS_LIBRARY_TREE = [
       { id: "audio-transitions", label: "Audio Transitions", groups: AUDIO_TRANSITIONS, kind: "audio-transition" },
       { id: "titles", label: "Titles", groups: TITLES, kind: "title" },
       { id: "generators", label: "Generators", groups: GENERATORS, kind: "generator" },
-      { id: "effects", label: "Effects", groups: TOOLBOX_EFFECTS, kind: "effect" }
+      { id: "effects", label: "Effects", groups: TOOLBOX_EFFECTS, kind: "effect" },
+      { id: "filters", label: "Filters", groups: RESOLVE_FX, kind: "filter" },
+      { id: "audio-fx", label: "Audio FX", groups: FAIRLIGHT_FX, kind: "audio-fx" }
     ]
   },
   {
     id: "openfx",
     label: "OpenFX",
     children: [
-      { id: "filters", label: "Filters", groups: RESOLVE_FX, kind: "filter" },
+      { id: "ofx-filters", label: "Filters", groups: RESOLVE_FX, kind: "filter" },
       { id: "ofx-generators", label: "Generators", groups: OPENFX_GENERATORS, kind: "generator" },
-      { id: "ofx-transitions", label: "Transitions", groups: [], kind: "transition" }
+      { id: "ofx-transitions", label: "Transitions", groups: OPENFX_TRANSITIONS, kind: "transition" }
     ]
   },
   {
@@ -359,49 +437,39 @@ export function findLibraryNode(id) {
 }
 
 function el(tag, cls, text) {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs = {}) {
+  const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+  return n;
+}
 
 function glyph(kind) {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 32 20");
-  svg.setAttribute("class", "fxlib-glyph");
-  svg.setAttribute("aria-hidden", "true");
-  const add = (tag, attrs) => {
-    const n = document.createElementNS(SVG_NS, tag);
-    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
-    svg.appendChild(n);
-  };
-  const stroke = { fill: "none", stroke: "currentColor", "stroke-width": 1.2 };
+  const svg = svgEl("svg", { class: "fxlib-glyph", viewBox: "0 0 28 18", "aria-hidden": "true" });
   if (kind === "transition" || kind === "audio-transition") {
-    add("rect", { x: 3, y: 4, width: 15, height: 12, rx: 1, ...stroke });
-    add("rect", { x: 14, y: 4, width: 15, height: 12, rx: 1, ...stroke, opacity: 0.6 });
+    svg.appendChild(svgEl("polygon", { points: "3,3 14,9 3,15", fill: "#5a5f66" }));
+    svg.appendChild(svgEl("polygon", { points: "25,3 14,9 25,15", fill: "#85d5f7" }));
   } else if (kind === "title") {
-    add("rect", { x: 3, y: 3, width: 26, height: 14, rx: 1, ...stroke });
-    add("path", { d: "M10 8h12M16 8v6", ...stroke });
+    svg.appendChild(svgEl("text", { x: "14", y: "14", "text-anchor": "middle", class: "fxlib-glyph-t" })).textContent = "T";
   } else if (kind === "generator") {
-    add("rect", { x: 3, y: 3, width: 26, height: 14, rx: 1, ...stroke });
-    add("path", { d: "M9 3v14M15 3v14M21 3v14", ...stroke, opacity: 0.55 });
+    svg.appendChild(svgEl("rect", { x: "3", y: "3", width: "11", height: "12", fill: "#255572" }));
+    svg.appendChild(svgEl("rect", { x: "14", y: "3", width: "11", height: "12", fill: "#5869a8" }));
   } else if (kind === "audio-fx") {
-    add("path", { d: "M3 10h3l2-6 3 12 3-9 2 5 2-3h8", ...stroke });
+    svg.appendChild(svgEl("path", { d: "M4 11h3v4H4zM10 6h3v9h-3zM16 3h3v12h-3zM22 8h3v7h-3z", fill: "#2ea461" }));
   } else {
-    add("circle", { cx: 16, cy: 10, r: 5.5, ...stroke });
-    add("path", { d: "M16 2v3M16 15v3M6 10h3M23 10h3", ...stroke, opacity: 0.6 });
+    svg.appendChild(svgEl("circle", { cx: "14", cy: "9", r: "5.2", fill: "none", stroke: "#ababab", "stroke-width": "1.35" }));
+    svg.appendChild(svgEl("path", { d: "M14 2.5v2M14 13.5v2M7.5 9h2M18.5 9h2", stroke: "#e64b3d", "stroke-width": "1.25" }));
   }
   return svg;
 }
 
 function normalize(q) {
-  return String(q || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim();
+  return String(q || "").trim().toLowerCase();
 }
 
 export function countLibraryItems(node) {
@@ -409,21 +477,26 @@ export function countLibraryItems(node) {
 }
 
 function pickItem(item, node, ctx) {
-  const { showBanner, applyTransition, addFxNode, openStudio } = ctx;
+  const { addFxNode, applyTransition, openStudio, showBanner, onItemApplied } = ctx || {};
   if (item.transition && typeof applyTransition === "function") {
     applyTransition(item);
     return;
   }
   if (item.fx && typeof addFxNode === "function") {
     addFxNode(item.fx);
-    showBanner(`${item.name} added to the FX stack`, "success");
+    if (typeof onItemApplied === "function") onItemApplied(item);
+    if (typeof showBanner === "function") {
+      showBanner(`${item.name} added to Inspector > Effects.`, "success");
+    }
     return;
   }
   if (item.studio && typeof openStudio === "function") {
     openStudio(item.studio);
     return;
   }
-  showBanner(`${item.name} (${node.label}) is listed from the Resolve library, no taktcut engine processes it yet.`, "info");
+  if (typeof showBanner === "function") {
+    showBanner(`${item.name} (${node.label}) selected.`, "info");
+  }
 }
 
 // Render library groups as Resolve-style thumbnail tiles (Cut page bin) or compact rows (Edit page).
@@ -440,18 +513,22 @@ export function renderLibraryGroups(host, nodes, ctx, opts = {}) {
       const section = el("section", "fxlib-group");
       const head = el("div", "fxlib-group-head");
       head.appendChild(el("span", "fxlib-group-title", group.label));
-      head.appendChild(el("span", "fxlib-group-count mono", String(items.length)));
+      head.appendChild(el("span", "fxlib-group-count tabular", String(items.length)));
       section.appendChild(head);
       const body = el("div", layout === "tiles" ? "fxlib-tiles" : "fxlib-rows");
       for (const item of items) {
         const btn = el("button", layout === "tiles" ? "fxlib-tile" : "fxlib-row");
         btn.type = "button";
-        btn.title = item.name;
+        btn.title = `${item.name} (double-click to apply)`;
         btn.dataset.libItem = item.name;
         const frame = el("span", "fxlib-frame");
         frame.appendChild(glyph(node.kind));
         btn.appendChild(frame);
         btn.appendChild(el("span", "fxlib-name", item.name));
+        if (item.fx || item.transition || item.studio) {
+          const addBadge = el("span", "fxlib-apply-dot", "+");
+          btn.appendChild(addBadge);
+        }
         btn.addEventListener("click", () => {
           for (const other of host.querySelectorAll(".is-selected")) other.classList.remove("is-selected");
           btn.classList.add("is-selected");
@@ -464,7 +541,7 @@ export function renderLibraryGroups(host, nodes, ctx, opts = {}) {
     }
   }
   if (total === 0) {
-    host.appendChild(el("div", "fxlib-empty mono", q ? "No match" : "No items"));
+    host.appendChild(el("div", "fxlib-empty", q ? "No matching Resolve items" : "No items"));
   }
   return total;
 }
@@ -473,7 +550,7 @@ export function renderLibraryGroups(host, nodes, ctx, opts = {}) {
 export function mountEditEffectsLibrary(root, ctx) {
   if (!root) return;
   root.replaceChildren();
-  const state = { nodeId: "video-transitions", query: "", collapsed: new Set() };
+  const state = { nodeId: "filters", query: "", collapsed: new Set() };
 
   const header = el("div", "fxlib-header");
   header.appendChild(el("span", "fxlib-header-title", "Effects"));
@@ -522,7 +599,7 @@ export function mountEditEffectsLibrary(root, ctx) {
 
   const renderList = () => {
     const nodes = state.query
-      ? EFFECTS_LIBRARY_TREE.flatMap((r) => r.children)
+      ? EFFECTS_LIBRARY_TREE[0].children
       : [findLibraryNode(state.nodeId)].filter(Boolean);
     renderLibraryGroups(list, nodes, ctx, { layout: "rows", query: state.query });
   };

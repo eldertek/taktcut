@@ -107,7 +107,8 @@ export function createWorkstationController(ctx) {
     getEffectiveFxState,
     getEffectiveTitleState,
     getEffectiveFramingState,
-    getEffectiveSubtitleState
+    getEffectiveSubtitleState,
+    getClipThumbnail
   } = ctx;
 
   const ws = {
@@ -369,7 +370,7 @@ export function createWorkstationController(ctx) {
           { label: "Open Fusion Page", shortcut: "Shift+5", run: () => switchTab("fx") },
           { sep: true },
           { label: "Keyframe Spline & Motion Blur Studio...", shortcut: "Shift+E", run: () => openMotionSplineStudioDialog() },
-          { label: "Optical Halation & S_Glow Studio...", shortcut: "Shift+A", run: () => openOpticalGlowStudioDialog() },
+          { label: "Resolve FX Optical Glow & Halation Studio...", shortcut: "Shift+A", run: () => openOpticalGlowStudioDialog() },
           { label: "Anamorphic Lens Flare Studio...", shortcut: "Shift+U", run: () => openOpticalFlareStudioDialog() },
           { label: "Camera Shake & Lens Distortion Studio...", shortcut: "Shift+J", run: () => openCameraShakeStudioDialog() },
           { label: "Focus Chroma / Delta Keyer", shortcut: "", run: () => { switchTab("fx"); const p = byId("fx-keyer-pane"); if (p) p.scrollIntoView({ behavior: "smooth" }); } },
@@ -975,6 +976,14 @@ export function createWorkstationController(ctx) {
           const card = el("button", isSel ? "mp-thumb-card is-selected" : "mp-thumb-card");
           card.type = "button";
           const well = el("div", `mp-thumb-well is-${c.trackKind}`);
+          const thumbImg = getClipThumbnail && c.clipRef ? getClipThumbnail(c.clipRef) : null;
+          if (thumbImg && thumbImg.src) {
+            const img = document.createElement("img");
+            img.className = "mp-thumb-img";
+            img.src = thumbImg.src;
+            img.alt = c.name;
+            well.appendChild(img);
+          }
           well.appendChild(el("span", "mp-thumb-badge mono", c.trackName));
           well.appendChild(el("span", "mp-thumb-dur mono", `${c.durationFrames}f`));
           card.appendChild(well);
@@ -1053,6 +1062,14 @@ export function createWorkstationController(ctx) {
         const card = el("button", isSel ? "cut-clip-tile is-selected" : "cut-clip-tile");
         card.type = "button";
         const frame = el("div", `cut-clip-frame is-${c.trackKind}`);
+        const thumbImg = getClipThumbnail && c.clipRef ? getClipThumbnail(c.clipRef) : null;
+        if (thumbImg && thumbImg.src) {
+          const img = document.createElement("img");
+          img.className = "cut-clip-img";
+          img.src = thumbImg.src;
+          img.alt = c.name;
+          frame.appendChild(img);
+        }
         if (isSel) {
           const checkCorner = el("span", "cut-clip-corner-check", "\u2713");
           frame.appendChild(checkCorner);
@@ -1251,6 +1268,14 @@ export function createWorkstationController(ctx) {
       const item = el("button", inPlayhead ? "color-shot-card is-active" : "color-shot-card");
       item.type = "button";
       const preview = el("div", `color-shot-thumb is-shot-${i % 4}`);
+      const thumbImg = getClipThumbnail && c.clipRef ? getClipThumbnail(c.clipRef) : null;
+      if (thumbImg && thumbImg.src) {
+        const img = document.createElement("img");
+        img.className = "color-shot-img";
+        img.src = thumbImg.src;
+        img.alt = c.name;
+        preview.appendChild(img);
+      }
       preview.appendChild(el("span", "color-shot-idx mono", String(i + 1).padStart(2, "0")));
       preview.appendChild(el("span", "color-shot-badge mono", c.trackName));
       item.appendChild(preview);

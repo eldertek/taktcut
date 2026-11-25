@@ -1946,7 +1946,15 @@ export function createApiClient() {
     : "";
   const configuredMode = cfg.mode || metaMode || "auto";
   const customAdapter = cfg.adapter || null;
-  let resolvedMode = configuredMode === "static-demo" ? "static-demo" : "server";
+  const isPathStaticDemo =
+    typeof window !== "undefined" &&
+    window.location &&
+    typeof window.location.pathname === "string" &&
+    window.location.pathname.includes("/demos/");
+  let resolvedMode =
+    configuredMode === "static-demo" || (configuredMode === "auto" && isPathStaticDemo)
+      ? "static-demo"
+      : "server";
 
   async function requestJson(route, options = {}) {
     const init = {
@@ -1974,7 +1982,7 @@ export function createApiClient() {
     if (customAdapter && typeof customAdapter.health === "function") {
       return customAdapter.health();
     }
-    if (configuredMode === "static-demo") {
+    if (resolvedMode === "static-demo") {
       resolvedMode = "static-demo";
     } else {
       try {

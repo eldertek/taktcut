@@ -80,6 +80,7 @@ import { WEB_DEMO_PROJECTS } from "./demo_projects.js";
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
 import { createApiClient } from "./demo_adapter.js";
 import { TRANSLATIONS } from "./i18n.js";
+import { createResolveInspectorController, normalizeInspectorMeta } from "./inspector.js";
 import { createWorkstationController } from "./workstation.js";
 import {
   AUDIO_FADE_S_MAX,
@@ -4151,6 +4152,7 @@ function renderTimelineSelection() {
     renderTimelineRetimeInspector();
     renderTimelineTransitionInspector();
     syncTimelineIndexSelection();
+    if (resolveInspectorCtrl) resolveInspectorCtrl.render();
     return;
   }
   const mkInfo = getSelectedMarkerInfo();
@@ -4171,6 +4173,7 @@ function renderTimelineSelection() {
   renderTimelineRetimeInspector();
   renderTimelineTransitionInspector();
   syncTimelineIndexSelection();
+  if (resolveInspectorCtrl) resolveInspectorCtrl.render();
 }
 
 function getSelectedTimelineClipId() {
@@ -5994,30 +5997,30 @@ const FX_PRESET_FALLBACK = {
 };
 
 const FX_DISPLAY_TITLES = {
-  glow: "S_Glow",
-  shake: "S_Shake",
-  flicker: "S_Flicker",
-  lens_flare: "S_LensFlare",
-  film_damage: "S_FilmDamage",
-  chroma_aberration: "S_ChromaAberration",
-  vignette: "S_Vignette",
-  film_grain: "S_FilmGrain",
-  optical_glow: "S_OpticalGlow",
-  rgb_split: "S_RGBSplit",
-  halation: "S_Halation",
-  letterbox: "S_Letterbox",
-  camera_shake: "S_Shake Handheld",
-  lens_distortion: "S_LensDistortion",
-  scanlines: "S_ScanLines",
-  unsharp_mask: "S_Sharpen",
-  hue_shift: "S_HueSatBright",
-  mirror_flip: "S_FlipFlop",
-  mosaic_pixelate: "S_Mosaic",
-  invert_negative: "S_Invert",
-  pro_mist: "S_ProMist",
-  directional_blur: "S_DirectionalBlur",
-  tilt_shift: "S_TiltShift",
-  prism_leak: "S_PrismLeak"
+  glow: "Resolve FX Light : Glow",
+  shake: "Resolve FX Transform : Camera Shake",
+  flicker: "Resolve FX Temporal : Flicker Addition",
+  lens_flare: "Resolve FX Light : Lens Flare",
+  film_damage: "Resolve FX Texture : Film Damage",
+  chroma_aberration: "Resolve FX Blur : Prism Blur",
+  vignette: "Resolve FX Stylize : Vignette",
+  film_grain: "Resolve FX Texture : Film Grain",
+  optical_glow: "Resolve FX Light : Aperture Diffraction",
+  rgb_split: "Resolve FX Warp : Chromatic Aberration",
+  halation: "Resolve FX Film : Halation",
+  letterbox: "Output Blanking : Letterbox",
+  camera_shake: "Resolve FX Transform : Camera Shake",
+  lens_distortion: "Resolve FX Transform : Lens Distortion",
+  scanlines: "Resolve FX Texture : Scanline",
+  unsharp_mask: "Resolve FX Sharpen : Sharpen",
+  hue_shift: "Resolve FX Color : Hue Shift",
+  mirror_flip: "Resolve FX Transform : Mirror",
+  mosaic_pixelate: "Resolve FX Blur : Mosaic Blur",
+  invert_negative: "Resolve FX Color : Invert Color",
+  pro_mist: "Resolve FX Light : Light Rays",
+  directional_blur: "Resolve FX Blur : Directional Blur",
+  tilt_shift: "Resolve FX Blur : Tilt-Shift Blur",
+  prism_leak: "Resolve FX Light : Lens Reflections"
 };
 
 function getFxParamLabel(spec) {
@@ -6717,6 +6720,7 @@ function renderFxStack() {
 
   if (state.fxStack.length === 0) {
     container.replaceChildren(dom("div", "fx-empty-note", t("fx.controls.empty")));
+    if (resolveInspectorCtrl) resolveInspectorCtrl.render();
     return;
   }
 
@@ -7199,6 +7203,7 @@ function renderFxStack() {
 
   container.replaceChildren(...cards);
   window.requestAnimationFrame(redrawFxKeyframeCanvases);
+  if (resolveInspectorCtrl) resolveInspectorCtrl.render();
 }
 
 function applyFxPreset(presetId) {
@@ -20518,6 +20523,7 @@ function wireEvents() {
 }
 
 let workstationCtrl = null;
+let resolveInspectorCtrl = null;
 
 // =========================================================================
 // REAL DAVINCI RESOLVE DEMO PROJECTS (.dra archive -> web proxies manifest)
@@ -20637,6 +20643,69 @@ function applyLibraryTransition(item) {
 
 function initResolveWorkstationBridge() {
   bindProjectTimelineSelect();
+  resolveInspectorCtrl = createResolveInspectorController({
+    state,
+    byId,
+    showBanner,
+    redrawActiveCanvases,
+    getSelectedClipTrack,
+    syncTransformFieldFromExternal: (field, val, commit = true) => {
+      const info = getSelectedClipTrack();
+      if (!info || !info.clip || info.clip.media_type === "audio") return;
+      const res = updateClipTransformInDocument(
+        state.timelineDoc,
+        info.ref.trackKind,
+        info.ref.trackIndex,
+        info.ref.clipIndex,
+        { [field]: val }
+      );
+      if (!res.changed) return;
+      if (commit) {
+        commitTimelineMutation(res.doc, { kind: "clip", data: res.clip });
+      } else {
+        state.timelineDoc = res.doc;
+        state.timelineSelected = { kind: "clip", data: res.clip };
+        redrawActiveCanvases();
+      }
+    },
+    updateAudioRackField: (field, val) => {
+      if (field === "gain_db") {
+        const gNum = byId("clip-audio-gain-num");
+        if (gNum) {
+          gNum.value = String(val);
+          gNum.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } else if (field === "voice_iso") {
+        const b = byId("btn-fairlight-voice-iso");
+        if (b && b.getAttribute("aria-pressed") !== String(Boolean(val))) b.click();
+      }
+    },
+    addFxNode,
+    renderFxStack,
+    getFxDisplayTitle: (eff) => FX_DISPLAY_TITLES[eff] || eff,
+    getFxSpecsForEffect: getFxSpecs,
+    resetFxNodeAtIndex: (idx) => {
+      const node = state.fxStack[idx];
+      if (!node) return;
+      const def = createDefaultFxNode(node.effect);
+      node.params = { ...def.params };
+      renderFxStack();
+      redrawActiveCanvases();
+      compileFxNow();
+    },
+    openFxStudioByKey: (eff) => {
+      if (eff === "glow" || eff === "optical_glow" || eff === "halation") openOpticalGlowStudioDialog();
+      else if (eff === "lens_flare") openOpticalFlareStudioDialog();
+      else if (eff === "camera_shake" || eff === "shake" || eff === "lens_distortion") openCameraShakeStudioDialog();
+      else if (eff === "film_grain" || eff === "film_damage") openFilmLookStudioDialog();
+      else switchTab("fx");
+    },
+    openStabilizationStudioDialog,
+    openRetimeStudioDialog,
+    getFpsFloat: getTimelineFps,
+    framesToSmpte
+  });
+  resolveInspectorCtrl.render();
   workstationCtrl = createWorkstationController({
     api,
     state,
@@ -20645,7 +20714,14 @@ function initResolveWorkstationBridge() {
     switchTab,
     redrawActiveCanvases,
     showBanner,
-    addFxNode,
+    addFxNode: (eff) => {
+      addFxNode(eff);
+      if (resolveInspectorCtrl) resolveInspectorCtrl.setTab("effects");
+      const rightInsp = byId("timeline-right-inspector");
+      if (rightInsp) rightInsp.classList.remove("is-collapsed-dock");
+      const tog = document.querySelector('[data-ws-toggle="timeline-right-inspector"]');
+      if (tog) tog.classList.add("is-active");
+    },
     applyLibraryTransition,
     loadSampleTimeline,
     openWebDemoProject,
@@ -20691,7 +20767,8 @@ function initResolveWorkstationBridge() {
     getEffectiveFxState,
     getEffectiveTitleState,
     getEffectiveFramingState,
-    getEffectiveSubtitleState
+    getEffectiveSubtitleState,
+    getClipThumbnail
   });
   workstationCtrl.init();
 }
