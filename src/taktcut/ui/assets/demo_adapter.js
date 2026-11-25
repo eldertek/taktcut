@@ -1,5 +1,5 @@
 import { applyAscCdlRgb, applyColorGradeRgb } from "./canvas.js";
-import { DEMO_TRAINING_PROJECTS, getDemoTrainingProject } from "./demo_training_projects.js";
+import { WEB_DEMO_PROJECTS } from "./demo_projects.js";
 import {
   ALLOWED_CST_GAMUT_MAPPING_MODES,
   ALLOWED_CST_TONE_MAPPING_MODES,
@@ -2057,22 +2057,20 @@ export function createApiClient() {
     },
     async getSampleTimeline(preset) {
       if (resolvedMode === "static-demo") {
-        const training = DEMO_TRAINING_PROJECTS.find((p) => p.id === preset);
-        const doc = training ? structuredClone(training.document) : buildDemoTimeline(preset);
-        return { document: doc, validation: validateTimelineClient(doc), training_project: training || null };
+        const doc = buildDemoTimeline(preset);
+        return { document: doc, validation: validateTimelineClient(doc) };
       }
       return requestJson(`/api/sample?preset=${encodeURIComponent(preset)}`);
     },
-    async listDemoTrainingProjects() {
-      return { projects: DEMO_TRAINING_PROJECTS };
+    async listDemoProjects() {
+      return { projects: WEB_DEMO_PROJECTS };
     },
     async inspectTimeline(payload) {
       if (resolvedMode === "static-demo") {
         if (payload && payload.content_base64) {
-          throw new Error("Local file upload is disabled on the Eclipse web demo. Open Project Manager to test any of the 8 Demo Projects, or download taktcut.");
+          throw new Error("Local file upload is disabled on the Eclipse web demo. Open Project Manager to test the real DaVinci Resolve demo project, or download taktcut.");
         }
-        const training = getDemoTrainingProject(payload && payload.project_id);
-        const doc = payload && payload.project_id ? structuredClone(training.document) : buildDemoTimeline("clean");
+        const doc = buildDemoTimeline("clean");
         return { document: doc, validation: validateTimelineClient(doc) };
       }
       return requestJson("/api/timeline/inspect", { method: "POST", body: payload });

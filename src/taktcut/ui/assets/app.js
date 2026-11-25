@@ -62,8 +62,21 @@ import {
   sampleColorViewerInputRgb,
   sampleDataUrlRgbGrid,
   sampleQualifierKeyerCanvasRgb,
-  trackPointSequenceCanvas
+  trackPointSequenceCanvas,
+  setClipMediaProviders
 } from "./canvas.js";
+import {
+  fetchDemoProject,
+  getClipFrameSource,
+  getClipThumbnail,
+  getMediaEntry,
+  getMediaUrl,
+  hasProjectMedia,
+  registerProjectMedia,
+  setMediaRedrawCallback,
+  syncProjectAudio
+} from "./media_engine.js";
+import { WEB_DEMO_PROJECTS } from "./demo_projects.js";
 import { bindColorWheelEvents, drawColorWheel } from "./color_wheels.js";
 import { createApiClient } from "./demo_adapter.js";
 import { TRANSLATIONS } from "./i18n.js";
@@ -5003,7 +5016,17 @@ function renderMediaPool() {
 
     const visual = dom("div", `media-pool-visual${isAudio ? " is-wave" : " is-film"}`);
     visual.setAttribute("aria-hidden", "true");
-    if (isAudio) {
+    const realThumbUrl = rawClip && !isAudio ? getMediaUrl(rawClip, "thumb") : "";
+    if (realThumbUrl) {
+      visual.classList.add("has-real-thumb");
+      const img = document.createElement("img");
+      img.className = "media-pool-real-thumb";
+      img.src = realThumbUrl;
+      img.alt = "";
+      img.loading = "lazy";
+      img.decoding = "async";
+      visual.appendChild(img);
+    } else if (isAudio) {
       for (let i = 0; i < 7; i++) {
         const bar = dom("span", "media-pool-wave-bar");
         const pct = 28 + ((pal.seed >> (i * 4)) & 0x3f) % 68;
@@ -13002,6 +13025,9 @@ function rippleDeleteSelectedClipAction() {
 
 function setPlayhead(frame) {
   state.playheadFrame = Math.max(0, Math.min(state.timelineMaxFrame, Math.round(frame)));
+  if (hasProjectMedia()) {
+    syncProjectAudio(state.timelineDoc, state.playheadFrame, state.playbackSpeed);
+  }
   if (state.timelineZoom > 1 && state.timelineDoc) {
     const startFrame = state.timelineDoc.start_frame || 0;
     const vp = computeTimelineZoomViewport(
@@ -13105,6 +13131,9 @@ function stopPlayback() {
   state.playbackSpeed = 0;
   state.playbackLastTs = 0;
   state.playbackAccumFrames = 0;
+  if (hasProjectMedia()) {
+    syncProjectAudio(state.timelineDoc, state.playheadFrame, 0);
+  }
   updateTransportStatusUI();
   renderFairlightAnalyzerReadout(state.fairlightAnalyzer.spectrum);
   startVuMeterDecay();
@@ -13174,6 +13203,9 @@ function startShuttle(speed) {
   state.playbackSpeed = speed;
   state.playbackLastTs = 0;
   state.playbackAccumFrames = 0;
+  if (hasProjectMedia()) {
+    syncProjectAudio(state.timelineDoc, state.playheadFrame, speed);
+  }
   updateTransportStatusUI();
   renderFairlightAnalyzerReadout(state.fairlightAnalyzer.spectrum);
   updateVuMeterInstant(performance.now(), true);
@@ -20487,7 +20519,124 @@ function wireEvents() {
 
 let workstationCtrl = null;
 
+// =========================================================================
+// REAL DAVINCI RESOLVE DEMO PROJECTS (.dra archive -> web proxies manifest)
+// =========================================================================
+
+setClipMediaProviders({
+  isActive: hasProjectMedia,
+  frameSource: getClipFrameSource,
+  thumbnail: getClipThumbnail,
+  hasEntry: (clip) => Boolean(getMediaEntry(clip))
+});
+setMediaRedrawCallback(() => redrawActiveCanvases());
+
+function renderProjectTimelineSelect() {
+  const sel = byId("project-timeline-select");
+  if (!sel) return;
+  const proj = state.webDemoProject;
+  if (!proj || !Array.isArray(proj.manifest.timelines) || proj.manifest.timelines.length === 0) {
+    sel.classList.add("is-hidden");
+    sel.replaceChildren();
+    return;
+  }
+  const opts = [];
+  const groups = new Map();
+  for (const tl of proj.manifest.timelines) {
+    const groupLabel = tl.is_compound ? "Compound Clips" : tl.folder || "Master";
+    if (!groups.has(groupLabel)) groups.set(groupLabel, []);
+    groups.get(groupLabel).push(tl);
+  }
+  for (const [label, items] of groups.entries()) {
+    const og = document.createElement("optgroup");
+    og.label = label;
+    for (const tl of items) {
+      const o = document.createElement("option");
+      o.value = tl.id;
+      o.textContent = tl.name;
+      og.appendChild(o);
+    }
+    opts.push(og);
+  }
+  sel.replaceChildren(...opts);
+  sel.value = proj.activeTimelineId || "";
+  sel.classList.remove("is-hidden");
+}
+
+async function openWebDemoTimeline(timelineId) {
+  const proj = state.webDemoProject;
+  if (!proj) return;
+  const tl = proj.manifest.timelines.find((x) => x.id === timelineId) || proj.manifest.timelines[0];
+  if (!tl) return;
+  proj.activeTimelineId = tl.id;
+  const docCopy = structuredClone(tl.document);
+  const res = await api.validateTimeline({ document: docCopy });
+  state.playheadFrame = 0;
+  setTimelineData(res && res.document ? res : { document: docCopy, validation: null });
+  const aspectSel = byId("program-aspect-select");
+  if (aspectSel && docCopy.width > 0 && docCopy.height > 0) {
+    const ratio = docCopy.width / docCopy.height;
+    const wanted = ratio > 2.1 ? "21:9" : ratio < 0.7 ? "9:16" : ratio < 1.1 ? "1:1" : "16:9";
+    if (aspectSel.value !== wanted) {
+      aspectSel.value = wanted;
+      aspectSel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+  renderProjectTimelineSelect();
+  redrawActiveCanvases();
+}
+
+async function openWebDemoProject(project) {
+  const { manifest, base } = await fetchDemoProject(project.manifest);
+  registerProjectMedia(base, manifest.media || {});
+  state.webDemoProject = { project, manifest, base, activeTimelineId: "" };
+  // A real Resolve project carries its own titles: drop the procedural showreel overlays.
+  if (state.titleOverlay) state.titleOverlay.enabled = false;
+  if (state.subtitleTrack) state.subtitleTrack.enabled = false;
+  if (state.lowerThird && typeof state.lowerThird === "object") state.lowerThird.enabled = false;
+  const main = manifest.timelines.find((x) => x.name === manifest.main_timeline) || manifest.timelines[0];
+  await openWebDemoTimeline(main ? main.id : "");
+  const projLabel = byId("topbar-project-name");
+  if (projLabel) projLabel.title = `${manifest.project_name} (${manifest.archive_name})`;
+  return manifest;
+}
+
+function bindProjectTimelineSelect() {
+  const sel = byId("project-timeline-select");
+  if (!sel || sel.dataset.bound === "1") return;
+  sel.dataset.bound = "1";
+  sel.addEventListener("change", () => {
+    openWebDemoTimeline(sel.value).catch((err) => showBanner(err.message || String(err), "error"));
+  });
+}
+
+function applyLibraryTransition(item) {
+  const junction = getSelectedTransitionTarget();
+  if (!junction) {
+    showBanner(`${item.name}: select a clip next to a cut on the timeline first.`, "info");
+    return false;
+  }
+  const res = updateClipTransitionInDocument(
+    state.timelineDoc,
+    junction.trackKind,
+    junction.trackIndex,
+    junction.clipAIndex,
+    {
+      preset: item.transition,
+      duration_s: junction.transition ? junction.transition.duration_s : TRANSITION_DURATION_DEFAULT_S,
+      include_audio: junction.transition ? junction.transition.include_audio : true
+    }
+  );
+  if (!res.changed) return false;
+  const selKind =
+    state.timelineSelected && state.timelineSelected.kind === "transition" ? "transition" : "clip";
+  commitTimelineMutation(res.doc, { kind: selKind, data: res.clip });
+  showBanner(`${item.name} applied at the selected cut`, "success");
+  return true;
+}
+
 function initResolveWorkstationBridge() {
+  bindProjectTimelineSelect();
   workstationCtrl = createWorkstationController({
     api,
     state,
@@ -20496,7 +20645,10 @@ function initResolveWorkstationBridge() {
     switchTab,
     redrawActiveCanvases,
     showBanner,
+    addFxNode,
+    applyLibraryTransition,
     loadSampleTimeline,
+    openWebDemoProject,
     setTimelineData,
     renderColorNodeTreeUI,
     setTimelineTool,
@@ -21032,6 +21184,13 @@ async function bootstrap() {
   else if (savedLang === "fr" || savedLang === "en") state.lang = savedLang;
   setLanguage(state.lang);
 
+  if (document.fonts) {
+    for (const spec of ['400 12px "Open Sans"', '600 12px "Open Sans"', '700 12px "Open Sans"']) {
+      document.fonts.load(spec).catch(() => {});
+    }
+    document.fonts.addEventListener("loadingdone", () => redrawActiveCanvases());
+  }
+
   try {
     const health = await api.initHealth();
     document.documentElement.classList.toggle("is-static-demo-mode", Boolean(api.isStaticDemo()));
@@ -21049,7 +21208,9 @@ async function bootstrap() {
   await Promise.allSettled([
     refreshWorkspaceFiles(),
     refreshRenderQueue(),
-    loadSampleTimeline("clean"),
+    api.isStaticDemo() && WEB_DEMO_PROJECTS.length > 0
+      ? openWebDemoProject(WEB_DEMO_PROJECTS[0]).catch(() => loadSampleTimeline("clean"))
+      : loadSampleTimeline("clean"),
     checkForStudioUpdate(),
     loadFxCatalog(),
     loadColorCatalog(),

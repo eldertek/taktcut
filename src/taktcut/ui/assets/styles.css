@@ -1,3 +1,31 @@
+@font-face {
+  font-family: "Open Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/open-sans-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Open Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/open-sans-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Open Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/open-sans-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Open Sans";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/open-sans-latin-400-italic.woff2") format("woff2");
+}
 :root {
   --bg-hairline: #111113;
   --bg-viewer: #050507;
@@ -22,8 +50,9 @@
   --status-warn-soft: rgba(210, 153, 34, 0.15);
   --status-fail: #f87171;
   --status-fail-soft: rgba(229, 83, 75, 0.16);
-  --font-sans: "Segoe UI", Inter, system-ui, -apple-system, Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-sans: "Open Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Open Sans", "Segoe UI", system-ui, sans-serif;
+  --font-code: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 *,
@@ -15585,7 +15614,7 @@ input[type="range"]:hover::-webkit-slider-thumb {
   }
 
   #media-pool-list .media-pool-name {
-    font-family: "Segoe UI", system-ui, sans-serif;
+    font-family: var(--font-sans);
     font-size: 10.5px;
     color: #d6d6de;
   }
@@ -15640,3 +15669,266 @@ input[type="range"]:hover::-webkit-slider-thumb {
     height: auto;
   }
 }
+
+/* Real DaVinci Resolve demo project: timeline selector and real media thumbnails */
+.viewer-timeline-select {
+  height: 20px;
+  max-width: 220px;
+  margin-left: 8px;
+  padding: 0 18px 0 6px;
+  border: 1px solid #2c2c31;
+  border-radius: 2px;
+  background: #1a1a1d;
+  color: #d0d0d6;
+  font-size: 11px;
+  line-height: 18px;
+}
+.viewer-timeline-select.is-hidden {
+  display: none;
+}
+.viewer-timeline-select:focus-visible {
+  outline: 1px solid #e64b38;
+  outline-offset: 0;
+}
+.media-pool-thumb:has(.has-real-thumb) {
+  position: relative;
+}
+#media-pool-list .media-pool-visual.has-real-thumb,
+.media-pool-visual.has-real-thumb {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  padding: 0;
+  opacity: 1;
+  background: #000;
+}
+.media-pool-visual.has-real-thumb .media-pool-real-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.media-pool-thumb:has(.has-real-thumb) .media-pool-thumb-top {
+  position: relative;
+  z-index: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* Resolve-structured Effects Library (Edit page panel and Cut page bin) */
+.effects-library-section {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  height: 300px;
+  border-bottom: 1px solid #0c0c0e;
+  background: #1c1c1f;
+}
+.effects-library-section.is-collapsed-dock {
+  display: none;
+}
+.fxlib-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  background: #212125;
+  border-bottom: 1px solid #0c0c0e;
+  flex: 0 0 auto;
+}
+.fxlib-header-title {
+  font: 600 12px var(--font-sans);
+  color: #e4e4ea;
+}
+.fxlib-search {
+  margin-left: auto;
+  width: 120px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid #323238;
+  border-radius: 10px;
+  background: #151517;
+  color: #d6d6de;
+  font: 11px var(--font-sans);
+}
+.fxlib-search:focus-visible {
+  outline: 1px solid #e64b38;
+  outline-offset: 0;
+}
+.fxlib-body {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.fxlib-tree {
+  overflow-y: auto;
+  padding: 4px 0;
+  border-right: 1px solid #0c0c0e;
+  background: #19191c;
+}
+.fxlib-tree-root,
+.fxlib-tree-leaf {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: #b4b4be;
+  text-align: left;
+  font: 11px var(--font-sans);
+  cursor: pointer;
+}
+.fxlib-tree-root {
+  color: #e4e4ea;
+  font-weight: 600;
+}
+.fxlib-tree-leaf {
+  padding-left: 20px;
+}
+.fxlib-tree-leaf:hover {
+  background: #232327;
+}
+.fxlib-tree-leaf.is-active {
+  background: #2c2c33;
+  color: #ffffff;
+  box-shadow: inset 2px 0 0 #e64b38;
+}
+.fxlib-chevron {
+  width: 10px;
+  color: #8a8a94;
+  font-size: 9px;
+}
+.fxlib-list {
+  overflow-y: auto;
+  padding: 4px 6px 8px;
+  background: #1c1c1f;
+}
+.fxlib-group + .fxlib-group {
+  margin-top: 6px;
+}
+.fxlib-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 18px;
+  padding: 0 4px;
+  color: #8e8e98;
+  font: 600 10px var(--font-sans);
+  text-transform: none;
+  border-bottom: 1px solid #2a2a30;
+}
+.fxlib-group-count {
+  font-size: 9px;
+  color: #6c6c76;
+}
+.fxlib-rows {
+  display: flex;
+  flex-direction: column;
+}
+.fxlib-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #d2d2da;
+  text-align: left;
+  font: 11px var(--font-sans);
+  cursor: default;
+}
+.fxlib-row:hover {
+  background: #26262b;
+}
+.fxlib-row.is-selected,
+.fxlib-tile.is-selected .fxlib-frame {
+  background-color: #2f2f37;
+}
+.fxlib-row .fxlib-frame {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 18px;
+  border-radius: 2px;
+  background: #101012;
+  border: 1px solid #26262c;
+  color: #8e8e9a;
+}
+.fxlib-glyph {
+  width: 22px;
+  height: 14px;
+}
+.fxlib-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fxlib-empty {
+  padding: 14px 6px;
+  color: #6c6c76;
+  font-size: 10px;
+}
+.cut-bin-grid.is-library {
+  display: block;
+}
+.fxlib-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 10px 12px;
+  padding: 8px 0 4px;
+}
+.fxlib-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #dcdce4;
+  text-align: center;
+  font: 11px var(--font-sans);
+  cursor: default;
+}
+.fxlib-tile .fxlib-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  border: 1.5px solid #151519;
+  border-radius: 4px;
+  background: linear-gradient(160deg, #1b1b20 0%, #07080b 100%);
+  color: #7c7c88;
+}
+.fxlib-tile:hover .fxlib-frame,
+.fxlib-tile.is-selected .fxlib-frame {
+  border-color: #e64b38;
+}
+.fxlib-tile .fxlib-glyph {
+  width: 44px;
+  height: 28px;
+}
+.cut-bin-grid.is-library .fxlib-group-head {
+  margin-top: 4px;
+  padding-left: 0;
+  color: #9a9aa6;
+  font-size: 11px;
+}
+
+/* Resolve UI typography parity: Open Sans everywhere (timecodes included), tabular digits */
+html, body, button, input, select, textarea {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+pre, code, .code-box, textarea.code-box {
+  font-family: var(--font-code);
+  font-variant-numeric: normal;
+}
+.fxlib-tree-root, .fxlib-tree-leaf { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fxlib-tree-root > span:last-child { overflow: hidden; text-overflow: ellipsis; }

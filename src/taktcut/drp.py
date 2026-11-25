@@ -28,7 +28,9 @@ MAX_ARCHIVE_BYTES = 128 * 1024 * 1024  # 128 MiB uncompressed guard against zip 
 
 def _parse_xml_bytes(raw: bytes) -> Element:
     """Parse XML strictly via defusedxml (blocks DTD, external entities, entity expansion)."""
-    return DefusedET.fromstring(raw)
+    from taktcut.resolve_archive import sanitize_resolve_xml
+
+    return DefusedET.fromstring(sanitize_resolve_xml(raw))
 
 
 def _parse_fcpxml_time(raw: str | None) -> Fraction:
@@ -262,6 +264,11 @@ def parse_drp(path: Path, timeline_name: str | None = None) -> TimelineDocument:
     entries = _read_zip_xml_entries(path)
     if not entries:
         raise ValueError(f"No XML entries found in archive: {path}")
+
+    from taktcut.resolve_archive import is_resolve_archive_drp, parse_resolve_archive
+
+    if is_resolve_archive_drp(entries):
+        return parse_resolve_archive(path, timeline_name=timeline_name)
 
     project_xml_bytes = entries.get("project.xml")
     project_name = path.stem
@@ -520,6 +527,10 @@ def parse_otio_file(path: Path) -> TimelineDocument:
 def load_timeline(path: Path, timeline_name: str | None = None) -> TimelineDocument:
     """Dispatch parser cleanly based on file extension."""
     suffix = path.suffix.lower()
+    if suffix == ".dra" or path.is_dir():
+        from taktcut.resolve_archive import parse_resolve_archive
+
+        return parse_resolve_archive(path, timeline_name=timeline_name)
     if suffix == ".drp":
         return parse_drp(path, timeline_name=timeline_name)
     if suffix == ".drt":

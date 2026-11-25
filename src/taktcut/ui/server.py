@@ -540,9 +540,24 @@ STATIC_ROUTE_MAP: dict[str, tuple[str, str]] = {
     "/color_wheels.js": ("color_wheels.js", "application/javascript; charset=utf-8"),
     "/timeline_ops.js": ("timeline_ops.js", "application/javascript; charset=utf-8"),
     "/demo_adapter.js": ("demo_adapter.js", "application/javascript; charset=utf-8"),
-    "/demo_training_projects.js": (
-        "demo_training_projects.js",
-        "application/javascript; charset=utf-8",
+    "/demo_projects.js": ("demo_projects.js", "application/javascript; charset=utf-8"),
+    "/media_engine.js": ("media_engine.js", "application/javascript; charset=utf-8"),
+    "/effects_library.js": ("effects_library.js", "application/javascript; charset=utf-8"),
+    "/fonts/open-sans-latin-400-normal.woff2": (
+        "fonts/open-sans-latin-400-normal.woff2",
+        "font/woff2",
+    ),
+    "/fonts/open-sans-latin-600-normal.woff2": (
+        "fonts/open-sans-latin-600-normal.woff2",
+        "font/woff2",
+    ),
+    "/fonts/open-sans-latin-700-normal.woff2": (
+        "fonts/open-sans-latin-700-normal.woff2",
+        "font/woff2",
+    ),
+    "/fonts/open-sans-latin-400-italic.woff2": (
+        "fonts/open-sans-latin-400-italic.woff2",
+        "font/woff2",
     ),
     "/workstation.js": ("workstation.js", "application/javascript; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),

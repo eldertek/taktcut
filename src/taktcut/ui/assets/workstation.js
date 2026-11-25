@@ -1,7 +1,13 @@
 // DaVinci Resolve Workstation Shell, 14-Menu Bar, and 7-Page NLE Controllers for taktcut.
 // Clean-room MIT implementation: safe DOM API only, zero inline style attributes, zero proprietary assets.
 
-import { DEMO_TRAINING_PROJECTS } from "./demo_training_projects.js";
+import { WEB_DEMO_PROJECTS } from "./demo_projects.js";
+import {
+  CUT_PAGE_LIBRARY,
+  findLibraryNode,
+  mountEditEffectsLibrary,
+  renderLibraryGroups
+} from "./effects_library.js";
 
 const FUSION_DEFAULT_NODES = [
   { id: "mediain1", label: "MediaIn1", kind: "io", x: 36, y: 34, enabled: true, v1: true, v2: false, action: null },
@@ -55,7 +61,10 @@ export function createWorkstationController(ctx) {
     switchTab,
     redrawActiveCanvases,
     showBanner,
+    addFxNode,
+    applyLibraryTransition,
     loadSampleTimeline,
+    openWebDemoProject,
     setTimelineData,
     renderColorNodeTreeUI,
     setTimelineTool,
@@ -772,26 +781,34 @@ export function createWorkstationController(ctx) {
       grid.appendChild(card);
     }
 
-    for (const dproj of DEMO_TRAINING_PROJECTS) {
+    for (const dproj of WEB_DEMO_PROJECTS) {
       if (ws.projectLibraryTab !== "local") continue;
-      if (q && !`${dproj.name} ${dproj.category} ${dproj.description}`.toLowerCase().includes(q)) continue;
+      if (q && !`${dproj.name} ${dproj.archive} ${dproj.credit}`.toLowerCase().includes(q)) continue;
       const card = el("button", "pm-project-card");
       card.type = "button";
-      card.title = dproj.description;
+      card.title = `${dproj.archive} | ${dproj.credit}`;
       const thumb = el("div", "pm-project-thumb is-preview");
-      if (dproj.thumbnailUrl) {
+      if (dproj.poster) {
         const img = document.createElement("img");
         img.className = "pm-thumb-img";
-        img.src = dproj.thumbnailUrl;
+        img.src = dproj.poster;
         img.alt = dproj.name;
         thumb.appendChild(img);
       }
-      thumb.appendChild(el("span", "pm-demo-badge mono", dproj.category));
-      thumb.appendChild(el("span", "pm-active-slate mono", dproj.specs));
+      thumb.appendChild(el("span", "pm-demo-badge mono", "DRA"));
       card.appendChild(thumb);
       card.appendChild(el("div", "pm-project-title", dproj.name));
-      card.addEventListener("click", () => {
-        loadTrainingDemoProject(dproj);
+      card.addEventListener("click", async () => {
+        if (typeof openWebDemoProject !== "function") return;
+        try {
+          const manifest = await openWebDemoProject(dproj);
+          const dlg = byId("project-manager-dialog");
+          if (dlg && dlg.open) dlg.close();
+          if (typeof switchTab === "function") switchTab("timeline");
+          showBanner(`${manifest.project_name}: ${manifest.timelines.length} timelines, ${Object.keys(manifest.media || {}).length} media`, "success");
+        } catch (err) {
+          showBanner(err && err.message ? err.message : "Failed to open demo project", "error");
+        }
       });
       grid.appendChild(card);
     }
@@ -1023,6 +1040,11 @@ export function createWorkstationController(ctx) {
     const host = byId("cut-bin-content");
     if (!host) return;
     host.replaceChildren();
+    host.classList.remove("is-library");
+    if (ws.cutBinTab === "pool" || ws.cutBinTab === "sync") {
+      const crumb = document.querySelector(".cut-master-crumb");
+      if (crumb) crumb.textContent = "Master";
+    }
     const clips = getTimelineClipsFlat();
 
     if (ws.cutBinTab === "pool" || ws.cutBinTab === "sync") {
@@ -1046,53 +1068,31 @@ export function createWorkstationController(ctx) {
         });
         host.appendChild(card);
       });
-    } else if (ws.cutBinTab === "transitions") {
-      const trans = [
-        ["Cross Dissolve", "fade"],
-        ["Additive Dissolve", "fadewhite"],
-        ["Dip to Color", "fadeblack"],
-        ["Wipe Left", "wipeleft"],
-        ["Smooth Slide", "slideleft"],
-        ["Circle Iris", "circleopen"]
-      ];
-      for (const [label, kind] of trans) {
-        const btn = el("button", "cut-preset-tile");
-        btn.type = "button";
-        btn.appendChild(el("span", "cut-preset-name", label));
-        btn.appendChild(el("span", "nle-tag mono", kind));
-        btn.addEventListener("click", () => {
-          showBanner(`Cut Transition selected: ${label} (${kind})`, "info");
-        });
-        host.appendChild(btn);
-      }
-    } else if (ws.cutBinTab === "titles") {
-      const titles = ["Text+ Clean Lower Third", "Center Bold Headline", "Timecode Burn-In", "Subtitles Track (.srt)"];
-      for (const label of titles) {
-        const btn = el("button", "cut-preset-tile");
-        btn.type = "button";
-        btn.appendChild(el("span", "cut-preset-name", label));
-        btn.appendChild(el("span", "nle-tag mono", "TITLE"));
-        btn.addEventListener("click", () => switchTab("titles"));
-        host.appendChild(btn);
-      }
-    } else if (ws.cutBinTab === "effects") {
-      const effects = [
-        ["Optical Glow / Halation", () => openOpticalGlowStudioDialog()],
-        ["Camera Shake Handheld", () => openCameraShakeStudioDialog()],
-        ["Anamorphic Lens Flare", () => openOpticalFlareStudioDialog()],
-        ["35mm Film Look", () => openFilmLookStudioDialog()],
-        ["Camera Stabilization", () => openStabilizationStudioDialog()],
-        ["Auto Reframe 9:16", () => openAutoReframeDialog()]
-      ];
-      for (const [label, fn] of effects) {
-        const btn = el("button", "cut-preset-tile");
-        btn.type = "button";
-        btn.appendChild(el("span", "cut-preset-name", label));
-        btn.appendChild(el("span", "nle-tag mono", "OFX"));
-        btn.addEventListener("click", fn);
-        host.appendChild(btn);
-      }
+    } else if (CUT_PAGE_LIBRARY[ws.cutBinTab]) {
+      host.classList.add("is-library");
+      const nodes = CUT_PAGE_LIBRARY[ws.cutBinTab].map((id) => findLibraryNode(id)).filter(Boolean);
+      const crumb = document.querySelector(".cut-master-crumb");
+      if (crumb) crumb.textContent = nodes.length === 1 ? nodes[0].label : "Effects";
+      renderLibraryGroups(host, nodes, libraryCtx(), { layout: "tiles" });
+      return;
     }
+    host.classList.remove("is-library");
+  }
+
+  function openLibraryStudio(key) {
+    if (key === "film_look") openFilmLookStudioDialog();
+    else if (key === "optical_glow") openOpticalGlowStudioDialog();
+    else if (key === "lens_flare") openOpticalFlareStudioDialog();
+    else if (key === "camera_shake") openCameraShakeStudioDialog();
+  }
+
+  function libraryCtx() {
+    return {
+      showBanner,
+      addFxNode,
+      applyTransition: applyLibraryTransition,
+      openStudio: openLibraryStudio
+    };
   }
 
   // =========================================================================
@@ -1472,10 +1472,10 @@ export function createWorkstationController(ctx) {
       g.fillRect(0, y0, hdrW - 1, rowH - 1);
 
       g.fillStyle = "#dcdce4";
-      g.font = "600 11px 'Segoe UI', system-ui, sans-serif";
+      g.font = "600 11px 'Open Sans', 'Segoe UI', sans-serif";
       g.fillText(`${tr.code} ${tr.name}`, 8, y0 + 16);
       g.fillStyle = tr.mute ? "#ef4444" : "#35b8a6";
-      g.font = "10px ui-monospace, monospace";
+      g.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
       g.fillText(tr.mute ? "MUTED" : `${tr.faderDb.toFixed(1)} dB`, 8, y0 + 31);
 
       const gainScale = tr.mute ? 0.08 : Math.min(1.0, Math.pow(10, tr.faderDb / 28));
@@ -1502,7 +1502,7 @@ export function createWorkstationController(ctx) {
         g.fillRect(sx + 1, y0 + 5, Math.max(0, sw - 2), 12);
         if (sw > 44) {
           g.fillStyle = "#d8d8e2";
-          g.font = "500 9.5px 'Segoe UI', system-ui, sans-serif";
+          g.font = "500 9.5px 'Open Sans', 'Segoe UI', sans-serif";
           g.fillText(seg.name, sx + 5, y0 + 14, sw - 10);
         }
 
@@ -1835,6 +1835,9 @@ export function createWorkstationController(ctx) {
         if (pane) {
           const hidden = pane.classList.toggle("is-collapsed-dock");
           pToggle.classList.toggle("is-active", !hidden);
+          if (targetId === "effects-library-section" && !hidden) {
+            mountEditEffectsLibrary(pane, libraryCtx());
+          }
           redrawActiveCanvases();
         }
       });

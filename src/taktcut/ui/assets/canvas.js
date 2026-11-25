@@ -180,7 +180,7 @@ export function drawKeyframeCurveCanvas(canvas, keyframes, durationSec, currentT
   }
 
   ctx.fillStyle = "#8e8e98";
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText(maxVal > 1 ? `${Math.round(maxVal * 100)}%` : "100%", 2, padT + 4);
   ctx.fillText("0%", 6, padT + plotH + 3);
 
@@ -235,7 +235,7 @@ export function drawKeyframeCurveCanvas(canvas, keyframes, durationSec, currentT
   ctx.stroke();
 
   ctx.fillStyle = "#d8d8de";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   const tag = `t=${curT.toFixed(2)}s | ${(curV * 100).toFixed(0)}%`;
   const tw = ctx.measureText(tag).width;
   ctx.fillText(tag, Math.max(padL, padL + plotW - tw - 2), padT + 2);
@@ -346,7 +346,7 @@ export function drawTransformGraphCanvas(
 
   // Axis labels
   ctx.fillStyle = "#8e91a0";
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   const fmtAxis = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
   ctx.fillText(fmtAxis(yMax), 3, padT + 6);
   ctx.fillText(fmtAxis((yMin + yMax) * 0.5), 3, padT + plotH * 0.5 + 3);
@@ -475,7 +475,7 @@ export function drawTransformGraphCanvas(
       ? `SPEED t=${curT.toFixed(2)}s | ${curVal >= 0 ? "+" : ""}${curVal.toFixed(1)} ${unitTag}`
       : `VALUE t=${curT.toFixed(2)}s | ${curVal.toFixed(1)}${unitTag}`;
   ctx.fillStyle = "#d8d8de";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   const tw = ctx.measureText(tag).width;
   ctx.fillText(tag, Math.max(padL, padL + plotW - tw - 2), padT - 4);
 
@@ -700,7 +700,7 @@ function drawSplitWipeOverlay(ctx, fx, fy, frameW, frameH, geom, opts = {}) {
   ctx.stroke();
 
   // Corner BEFORE / AFTER pills
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   const pillH = 18;
   const pillY = fy + 8;
   const beforeW = Math.min(Math.max(44, Math.ceil(ctx.measureText(beforeLabel).width) + 14), Math.max(44, frameW * 0.44));
@@ -867,8 +867,110 @@ function getClipScenePalette(clipName) {
   return CLIP_SCENE_PALETTES[hash % CLIP_SCENE_PALETTES.length];
 }
 
+// Real project media providers (web demo projects and local archives with browser proxies).
+let _clipMediaProviders = null;
+
+export function setClipMediaProviders(providers) {
+  _clipMediaProviders = providers || null;
+}
+
+function drawMediaContain(ctx, src, w, h) {
+  const sw = src.videoWidth || src.naturalWidth || src.width || 16;
+  const sh = src.videoHeight || src.naturalHeight || src.height || 9;
+  const scale = Math.min(w / sw, h / sh);
+  const dw = sw * scale;
+  const dh = sh * scale;
+  ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+// 33^3 RGB cube sampled from the active grade (CDL, primaries or node chain), cached per grade state.
+const GRADE_LUT_SIZE = 33;
+let _gradeLutCache = { key: "", lut: null, identity: true };
+const _gradeLutIndex = (() => {
+  const t = new Uint8Array(256);
+  for (let i = 0; i < 256; i += 1) t[i] = Math.round((i / 255) * (GRADE_LUT_SIZE - 1));
+  return t;
+})();
+
+function getGradeLut(colorState) {
+  let key = "";
+  try {
+    key = colorState ? JSON.stringify(colorState) : "";
+  } catch {
+    key = "";
+  }
+  if (key === _gradeLutCache.key) return _gradeLutCache;
+  const n = GRADE_LUT_SIZE;
+  const lut = new Uint8ClampedArray(n * n * n * 3);
+  let maxDev = 0;
+  let o = 0;
+  for (let ri = 0; ri < n; ri += 1) {
+    for (let gi = 0; gi < n; gi += 1) {
+      for (let bi = 0; bi < n; bi += 1) {
+        const r = ri / (n - 1);
+        const g = gi / (n - 1);
+        const b = bi / (n - 1);
+        const out = colorState ? applyGradeOrCdlRgb(r, g, b, colorState) : [r, g, b];
+        maxDev = Math.max(maxDev, Math.abs(out[0] - r), Math.abs(out[1] - g), Math.abs(out[2] - b));
+        lut[o] = out[0] * 255;
+        lut[o + 1] = out[1] * 255;
+        lut[o + 2] = out[2] * 255;
+        o += 3;
+      }
+    }
+  }
+  _gradeLutCache = { key, lut, identity: maxDev < 0.5 / 255 };
+  return _gradeLutCache;
+}
+
+function applyGradeLutToRegion(ctx, w, h, colorState) {
+  if (!colorState) return;
+  const cache = getGradeLut(colorState);
+  if (cache.identity || !cache.lut) return;
+  const m = ctx.getTransform();
+  const x0 = Math.max(0, Math.floor(m.e));
+  const y0 = Math.max(0, Math.floor(m.f));
+  const pw = Math.max(1, Math.floor(w * Math.abs(m.a)));
+  const ph = Math.max(1, Math.floor(h * Math.abs(m.d)));
+  let img;
+  try {
+    img = ctx.getImageData(x0, y0, Math.min(pw, ctx.canvas.width - x0), Math.min(ph, ctx.canvas.height - y0));
+  } catch {
+    return;
+  }
+  const d = img.data;
+  const lut = cache.lut;
+  const idx = _gradeLutIndex;
+  const n = GRADE_LUT_SIZE;
+  const n2 = n * n;
+  for (let p = 0; p < d.length; p += 4) {
+    const li = (idx[d[p]] * n2 + idx[d[p + 1]] * n + idx[d[p + 2]]) * 3;
+    d[p] = lut[li];
+    d[p + 1] = lut[li + 1];
+    d[p + 2] = lut[li + 2];
+  }
+  ctx.putImageData(img, x0, y0);
+}
+
 function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   const topClip = activeClips.length > 0 ? activeClips[activeClips.length - 1] : null;
+  if (_clipMediaProviders && _clipMediaProviders.isActive()) {
+    const src = topClip ? _clipMediaProviders.frameSource(topClip.clip, playheadFrame, doc) : null;
+    if (src) {
+      drawMediaContain(ctx, src, w, h);
+      applyGradeLutToRegion(ctx, w, h, cdl);
+      return;
+    }
+    if (!topClip || !_clipMediaProviders.hasEntry(topClip.clip)) {
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, w, h);
+      if (!topClip) return;
+    } else {
+      ctx.fillStyle = "#050507";
+      ctx.fillRect(0, 0, w, h);
+      return;
+    }
+  }
   const pal = topClip ? getClipScenePalette(topClip.clip.name) : CLIP_SCENE_PALETTES[0];
   const grad = ctx.createLinearGradient(0, 0, w, h);
   const c0 = applyGradeOrCdlRgb(pal.bg0[0], pal.bg0[1], pal.bg0[2], cdl);
@@ -920,7 +1022,7 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
   // Compact top-right clip HUD pill (kept clear of bottom-left lower-thirds & bottom-center subtitles)
   const hudPad = Math.min(10, Math.max(5, Math.floor(w * 0.02)));
   ctx.save();
-  ctx.font = "600 9.5px ui-monospace, monospace";
+  ctx.font = "600 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   let hudText = "BLACK / NO VIDEO AT PLAYHEAD";
   if (activeClips.length > 0) {
     const top = activeClips[activeClips.length - 1];
@@ -1154,7 +1256,7 @@ export function drawTitleOverlayOnFrame(
         ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), tx, yPos);
       }
       if (rawSub) {
-        ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+        ctx.font = `600 ${subPx}px 'Open Sans', 'Segoe UI', sans-serif`;
         ctx.fillStyle = accentCss;
         const yPos = rawTitle ? fy + frameH * 0.86 : fy + frameH * 0.83;
         ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), tx, yPos);
@@ -1181,7 +1283,7 @@ export function drawTitleOverlayOnFrame(
         ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cxLegacy, yPos);
       }
       if (rawSub) {
-        ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+        ctx.font = `600 ${subPx}px 'Open Sans', 'Segoe UI', sans-serif`;
         ctx.fillStyle = accentCss;
         const yPos = rawTitle ? fy + frameH * 0.56 : fy + frameH * 0.5;
         ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cxLegacy, yPos);
@@ -1208,7 +1310,7 @@ export function drawTitleOverlayOnFrame(
         ctx.fillText(fitCanvasText(ctx, rawTitle, maxTextW), cxLegacy, yPos);
       }
       if (rawSub) {
-        ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+        ctx.font = `600 ${subPx}px 'Open Sans', 'Segoe UI', sans-serif`;
         ctx.fillStyle = accentCss;
         const yPos = rawTitle ? fy + frameH * 0.885 : fy + frameH * 0.865;
         ctx.fillText(fitCanvasText(ctx, rawSub, maxTextW), cxLegacy, yPos);
@@ -1261,7 +1363,7 @@ export function drawTitleOverlayOnFrame(
 
     if (rawBug) {
       const bugPx = Math.max(8, Math.round(frameH * 0.017));
-      ctx.font = `800 ${bugPx}px ui-monospace, monospace`;
+      ctx.font = `800 ${bugPx}px 'Open Sans', 'Segoe UI', sans-serif`;
       const bugTw = ctx.measureText(rawBug).width;
       const bugW = Math.min(pwBase, Math.max(frameW * 0.06, bugTw + 14));
       const bugH = Math.max(14, frameH * 0.036);
@@ -1297,7 +1399,7 @@ export function drawTitleOverlayOnFrame(
       drawTextPlusLine(ctx, titleWithCursor, txLocal, yPos, align, maxTextW, trackingPx, strokePx, strokeCol);
     }
     if (rawSub) {
-      ctx.font = `600 ${subPx}px ui-monospace, monospace`;
+      ctx.font = `600 ${subPx}px 'Open Sans', 'Segoe UI', sans-serif`;
       ctx.fillStyle = accentCss;
       const subCursor =
         curve === "typewriter" &&
@@ -1373,7 +1475,7 @@ export function drawTitleMotionCurveCanvas(canvas, titleState, tSec = 0) {
   ctx.stroke();
 
   ctx.fillStyle = "#7a7d8a";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("1.0", 3, yOne + 3);
   ctx.fillText("0.0", 3, yZero + 3);
 
@@ -1724,7 +1826,7 @@ export function drawSafeAreaGuides(ctx, fx, fy, frameW, frameH, framingState) {
   if (!guides || !guides.enabled) return;
 
   ctx.save();
-  ctx.font = "700 8px ui-monospace, monospace";
+  ctx.font = "700 8px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textBaseline = "top";
 
   if (guides.socialHud) {
@@ -1947,7 +2049,7 @@ export function drawReframeOverlayOnFrame(ctx, fx, fy, frameW, frameH, reframeSt
   const pillText = reframeState.tracked
     ? `AUTO REFRAME ${ratioKey.toUpperCase()} (${Math.round((Number(reframeState.confidence) || 0.9) * 100)}%)`
     : `REFRAME ${ratioKey.toUpperCase()}`;
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   const pillW = Math.min(Math.max(36, cropW - 8), ctx.measureText(pillText).width + 10);
   ctx.fillStyle = "rgba(230, 132, 66, 0.92)";
   ctx.fillRect(cropX + 4, cropY + 4, pillW, 15);
@@ -2023,7 +2125,7 @@ export function drawFilmGrainOverlayOnFrame(ctx, fx, fy, frameW, frameH, filmGra
   }
 
   const label = `GRAIN ${presetTag} ${strength} ${temporal ? "T+U" : "U"}`;
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   const pillW = Math.min(Math.max(48, frameW - 16), ctx.measureText(label).width + 10);
   const pillX = fx + frameW - pillW - 8;
   const pillY = fy + frameH - 23;
@@ -2083,7 +2185,7 @@ export function drawCinematicVignetteOverlayOnFrame(ctx, fx, fy, frameW, frameH,
   ctx.fillRect(fx, fy, frameW, frameH);
 
   const label = `VIG ${presetTag} ${angleDeg.toFixed(0)}deg ${mode === "backward" ? "BRIGHT" : "DARK"}`;
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   const pillW = Math.min(Math.max(48, frameW - 16), ctx.measureText(label).width + 10);
   const pillX = fx + 8;
   const pillY = fy + frameH - 23;
@@ -2658,7 +2760,7 @@ export function drawPlanarTrackerOverlay(ctx, fx, fy, frameW, frameH, trackerSta
       { id: "bl", label: "BL", pt: cBl },
       { id: "br", label: "BR", pt: cBr }
     ];
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     for (const item of pinItems) {
       ctx.fillStyle = "#141416";
       ctx.strokeStyle = "#e68442";
@@ -4222,7 +4324,7 @@ export function drawProgramMonitorCanvas(
       : titleOnAir
         ? "TITLE: ON AIR"
         : `TITLE: ${Number(titleState.start_s ?? 0).toFixed(1)}s-${Number(titleState.end_s ?? 0).toFixed(1)}s`;
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
     const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
     ctx.fillStyle = titleOnAir ? "rgba(63, 185, 80, 0.90)" : "rgba(20, 20, 22, 0.84)";
     ctx.fillRect(fx + 8, leftPillY, tw, 17);
@@ -4233,7 +4335,7 @@ export function drawProgramMonitorCanvas(
 
   if (lowerThirdOnAir) {
     const ltLabel = "LT: ON AIR";
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
     const tw = Math.min(frameW - 20, ctx.measureText(ltLabel).width + 12);
     ctx.fillStyle = "rgba(230, 132, 66, 0.92)";
     ctx.fillRect(fx + 8, leftPillY, tw, 17);
@@ -4251,7 +4353,7 @@ export function drawProgramMonitorCanvas(
         : cuesLen > 0
           ? `SUB: STANDBY (${cuesLen})`
           : "SUB: EMPTY";
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
     const tw = Math.min(frameW - 20, ctx.measureText(subLabel).width + 12);
     ctx.fillStyle = activeSubCue ? "rgba(104, 156, 255, 0.92)" : "rgba(20, 20, 22, 0.84)";
     ctx.fillRect(fx + 8, leftPillY, tw, 17);
@@ -4263,7 +4365,7 @@ export function drawProgramMonitorCanvas(
   if (activeTrans) {
     const pct = Math.round(clamp01(activeTrans.progress) * 100);
     const label = `TRANS: ${getTransitionPresetName(activeTrans.transition.preset).toUpperCase()} ${pct}% (${activeTrans.transition.duration_s.toFixed(2)}s)`;
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
     const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
     ctx.fillStyle = "rgba(230, 132, 66, 0.94)";
     ctx.fillRect(fx + 8, leftPillY, tw, 17);
@@ -4300,7 +4402,7 @@ export function drawProgramMonitorCanvas(
       : parts.length > 0
         ? `FX: ${parts.join(" + ")}`
         : "FX: ALL OFF";
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
     const tw = Math.min(frameW - 20, ctx.measureText(label).width + 12);
     const fxPillY = fy + topPillOffset;
     ctx.fillStyle = bypassAll || parts.length === 0
@@ -4502,7 +4604,7 @@ export function drawProgramMonitorCanvas(
     const hud = renderOpts.trimHud;
     const hudText = hud.detail ? `${hud.label}  |  ${hud.detail}` : hud.label;
     ctx.save();
-    ctx.font = "700 10.5px ui-monospace, monospace";
+    ctx.font = "700 10.5px 'Open Sans', 'Segoe UI', sans-serif";
     const textW = ctx.measureText(hudText).width;
     const boxW = Math.min(frameW - 16, Math.max(110, textW + 20));
     const boxH = 22;
@@ -4530,12 +4632,12 @@ export function drawProgramMonitorCanvas(
     ctx.lineWidth = 2;
     ctx.strokeRect(fx + 2, fy + 2, frameW - 4, frameH - 4);
     ctx.fillStyle = "#fca5a5";
-    ctx.font = "800 14px ui-monospace, monospace";
+    ctx.font = "800 14px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("MEDIA OFFLINE", fx + frameW * 0.5, fy + frameH * 0.5 - 10);
     ctx.fillStyle = "#f87171";
-    ctx.font = "600 10px ui-monospace, monospace";
+    ctx.font = "600 10px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText(
       String(offlineActive.clip.source_path || offlineActive.clip.name || ""),
       fx + frameW * 0.5,
@@ -4549,7 +4651,7 @@ export function drawProgramMonitorCanvas(
       const scaleLbl = pxyClip.clip.proxy_scale === "quarter" ? "1/4" : "1/2";
       const pxyText = `PROXY ON (${scaleLbl})`;
       ctx.save();
-      ctx.font = "700 9.5px ui-monospace, monospace";
+      ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
       const pw = ctx.measureText(pxyText).width + 14;
       const px = fx + frameW - pw - 8;
       const py = fy + 8;
@@ -4629,7 +4731,7 @@ function drawFourUpTrimMonitorOverlay(
       ? ` ${trimState.deltaFrames > 0 ? `+${trimState.deltaFrames}` : trimState.deltaFrames}f`
       : "";
   ctx.fillStyle = "#e68442";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText(`${modeTitle} | ${opTag}${deltaStr}`, fx + 8, fy + 13.5);
 
   const sp = trimState.splitInfo;
@@ -4650,7 +4752,7 @@ function drawFourUpTrimMonitorOverlay(
       syncPillColor = "#ffd166";
     }
   }
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   const pillW = Math.ceil(ctx.measureText(syncPillText).width) + 12;
   const pillX = fx + frameW - pillW - 6;
   ctx.fillStyle = "rgba(18, 20, 26, 0.92)";
@@ -4702,7 +4804,7 @@ function drawFourUpTrimMonitorOverlay(
       ctx.lineTo(cx, cy + cellH);
       ctx.stroke();
       ctx.fillStyle = "#7a7a86";
-      ctx.font = "700 9.5px ui-monospace, monospace";
+      ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("NO ADJACENT CLIP", cx + cellW * 0.5, cy + cellH * 0.5 + 3);
       ctx.textAlign = "left";
@@ -4711,7 +4813,7 @@ function drawFourUpTrimMonitorOverlay(
     // Role Badge top-left
     const accent = (tile && tile.accent) || "#8e8e98";
     const roleLabel = (tile && tile.role) || `PANE ${i + 1}`;
-    ctx.font = "700 8.5px ui-monospace, monospace";
+    ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
     const rW = Math.ceil(ctx.measureText(roleLabel).width) + 10;
     ctx.fillStyle = "rgba(12, 13, 18, 0.88)";
     roundRectPath(ctx, cx + 5, cy + 5, rW, 14, 2);
@@ -4727,10 +4829,10 @@ function drawFourUpTrimMonitorOverlay(
     if (tile && tile.clip) {
       const tcStr = framesToSmpte(tile.frame, doc.fps?.num || Math.round(fps), doc.fps?.den || 1);
       ctx.fillStyle = "#e4e4ea";
-      ctx.font = "600 9px system-ui, sans-serif";
+      ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText(String(tile.clip.name || "").slice(0, 18), cx + 6, cy + cellH - 6);
       ctx.fillStyle = accent;
-      ctx.font = "700 8.5px ui-monospace, monospace";
+      ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
       const rightLabel = `${tcStr} | SRC ${tile.sourceFrame}f`;
       const rlW = ctx.measureText(rightLabel).width;
       if (cellW > 130) {
@@ -4779,7 +4881,7 @@ function drawMulticamActiveAngleBadge(ctx, fx, fy, frameW, clip, bank, playheadF
   const offStr = `${angle.sync_offset_frames >= 0 ? "+" : ""}${angle.sync_offset_frames || 0}f`;
   const text = `MC A${angle.angle_index} ${angle.name.slice(0, 18)} | ${offStr}`;
   ctx.save();
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   const bw = Math.min(frameW - 16, Math.ceil(ctx.measureText(text).width) + 14);
   const bx = fx + frameW - bw - 8;
   const by = fy + 8;
@@ -4900,7 +5002,7 @@ function drawMulticamQuadSwitcherOverlay(
 
       // Top-left angle badge
       const labelTxt = `${angle.angle_index}  ${angle.name.slice(0, 16)}`;
-      ctx.font = "700 9.5px ui-monospace, monospace";
+      ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
       const tw = Math.min(cellW - 54, ctx.measureText(labelTxt).width + 10);
       ctx.fillStyle = "rgba(12, 13, 18, 0.86)";
       roundRectPath(ctx, cx + 6, cy + 6, tw, 16, 2);
@@ -4911,7 +5013,7 @@ function drawMulticamQuadSwitcherOverlay(
       // Sync offset + slate pill bottom-left
       const offVal = Number(angle.sync_offset_frames || 0);
       const offTxt = `${offVal >= 0 ? "+" : ""}${offVal}f | ${angle.timecode_start || "01:00:00:00"}`;
-      ctx.font = "600 8.5px ui-monospace, monospace";
+      ctx.font = "600 8.5px 'Open Sans', 'Segoe UI', sans-serif";
       const ow = Math.min(cellW - 48, ctx.measureText(offTxt).width + 8);
       ctx.fillStyle = "rgba(12, 13, 18, 0.80)";
       ctx.fillRect(cx + 6, cy + cellH - 20, ow, 14);
@@ -4924,14 +5026,14 @@ function drawMulticamQuadSwitcherOverlay(
         roundRectPath(ctx, cx + cellW - 42, cy + 6, 36, 16, 2);
         ctx.fill();
         ctx.fillStyle = "#ffffff";
-        ctx.font = "800 9px ui-monospace, monospace";
+        ctx.font = "800 9px 'Open Sans', 'Segoe UI', sans-serif";
         ctx.fillText("LIVE", cx + cellW - 36, cy + 17);
       } else {
         ctx.fillStyle = "rgba(17, 19, 26, 0.82)";
         roundRectPath(ctx, cx + cellW - 36, cy + 6, 30, 16, 2);
         ctx.fill();
         ctx.fillStyle = "#94a3b8";
-        ctx.font = "700 8.5px ui-monospace, monospace";
+        ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
         ctx.fillText(`KEY ${angle.angle_index}`, cx + cellW - 33, cy + 17);
       }
 
@@ -4951,7 +5053,7 @@ function drawMulticamQuadSwitcherOverlay(
       });
     } else {
       ctx.fillStyle = "#4b5563";
-      ctx.font = "700 10px ui-monospace, monospace";
+      ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText(`ANGLE ${i + 1} EMPTY`, cx + 10, cy + 20);
       ctx.restore();
       ctx.strokeStyle = "#262833";
@@ -5094,7 +5196,7 @@ function drawDveTransformOverlay(ctx, fx, fy, frameW, frameH, clip, playheadFram
 
   // Live compact HUD readout
   const hudText = `DVE ${Math.round(tf.zoom_pct)}% | ${tf.pos_x_pct >= 0 ? "+" : ""}${Math.round(tf.pos_x_pct)},${tf.pos_y_pct >= 0 ? "+" : ""}${Math.round(tf.pos_y_pct)}`;
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   const tw = Math.min(frameW - 16, ctx.measureText(hudText).width + 10);
   const hx = Math.max(fx + 6, Math.min(fx + frameW - tw - 6, cx - tw * 0.5));
   const hy = Math.max(fy + 6, Math.min(fy + frameH - 22, bl.y + 8));
@@ -5160,7 +5262,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 
   if (!doc) {
     ctx.fillStyle = "#8e8e98";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("No timeline loaded.", 14, 24);
     return {
       hitboxes,
@@ -5230,7 +5332,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     : startFrame;
   ctx.fillStyle = "#ececf2";
   ctx.font = width < 480
-    ? "600 10px ui-monospace, monospace"
+    ? "600 10px 'Open Sans', 'Segoe UI', sans-serif"
     : "600 13.5px ui-monospace, SFMono-Regular, Consolas, monospace";
   ctx.fillText(
     width < 480 ? `${headerPhFrame}f` : framesToSmpte(headerPhFrame, doc.fps.num, doc.fps.den),
@@ -5278,7 +5380,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
         ? 40
         : 0;
 
-  ctx.font = "10px ui-monospace, monospace";
+  ctx.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.save();
   ctx.beginPath();
   ctx.rect(timelineX, 0, timelineW, rulerHeight);
@@ -5302,12 +5404,12 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 
       if (bt.isDownbeat && bxRaw - lastBarLabelX >= 32) {
         ctx.fillStyle = "rgba(230, 184, 66, 0.88)";
-        ctx.font = "700 8.5px ui-monospace, monospace";
+        ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
         ctx.fillText(`B${bt.bar}`, bxRaw + 3, 28);
         lastBarLabelX = bxRaw;
       }
     }
-    ctx.font = "10px ui-monospace, monospace";
+    ctx.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
   }
 
   const firstTick = startFrame + Math.max(0, Math.floor((viewStart - startFrame) / stepFrames)) * stepFrames;
@@ -5445,7 +5547,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     ctx.stroke();
 
     ctx.fillStyle = isPrimaryV1 ? "#f26c5b" : "#9e9ea8";
-    ctx.font = "600 9.5px 'Segoe UI', system-ui, sans-serif";
+    ctx.font = "600 9.5px 'Open Sans', 'Segoe UI', sans-serif";
     const shortCode = `${isAudio ? "A" : "V"}${trk.index}`;
     ctx.fillText(shortCode, tagX + 5, tagY + 13);
 
@@ -5459,7 +5561,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
 
     if (width >= 480) {
       ctx.fillStyle = trackAudiblyMuted ? "#666672" : "#d6d6de";
-      ctx.font = "500 11px 'Segoe UI', system-ui, sans-serif";
+      ctx.font = "500 11px 'Open Sans', 'Segoe UI', sans-serif";
       const maxNameW = twoLineHeader ? labelColW - 42 : muteX - 38;
       let tName = String(trk.name || shortCode);
       while (tName.length > 1 && ctx.measureText(tName).width > maxNameW) {
@@ -5472,7 +5574,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       if (twoLineHeader) {
         const clipCount = (trk.clips || []).length;
         ctx.fillStyle = "#70707c";
-        ctx.font = "9.5px 'Segoe UI', system-ui, sans-serif";
+        ctx.font = "9.5px 'Open Sans', 'Segoe UI', sans-serif";
         const countLbl = `${clipCount} ${clipCount === 1 ? "Clip" : "Clips"}`;
         ctx.fillText(countLbl, labelColW - 8 - ctx.measureText(countLbl).width, msBtnY + 12);
       }
@@ -5484,7 +5586,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.fill();
     }
     ctx.fillStyle = isDirectMuted ? "#ffffff" : "#72727e";
-    ctx.font = "600 9px 'Segoe UI', system-ui, sans-serif";
+    ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("M", muteX + (width < 480 ? 3.5 : 4.5), msBtnY + 12);
 
     if (isSolo) {
@@ -5638,7 +5740,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           }
           if (sw >= 18) {
             ctx.fillStyle = pal.text;
-            ctx.font = "700 8px ui-monospace, monospace";
+            ctx.font = "700 8px 'Open Sans', 'Segoe UI', sans-serif";
             ctx.fillText(`A${cut.angle_index}`, sx + 3, clipY + clipH - 2);
           }
         }
@@ -5700,7 +5802,27 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           const thumbW = Math.max(12, Math.round((thumbH * 16) / 9));
           const hue = Math.floor(tlHash01(clip.name, 1) * 360);
           const sunX = 0.25 + 0.5 * tlHash01(clip.name, 2);
+          const realThumb =
+            _clipMediaProviders && _clipMediaProviders.isActive() ? _clipMediaProviders.thumbnail(clip) : null;
           const drawThumb = (tx) => {
+            if (realThumb) {
+              const iw = realThumb.naturalWidth || 16;
+              const ih = realThumb.naturalHeight || 9;
+              const s = Math.max(thumbW / iw, thumbH / ih);
+              const dw = iw * s;
+              const dh = ih * s;
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(tx, bodyY, thumbW, thumbH);
+              ctx.clip();
+              if (trackAudiblyMuted) ctx.globalAlpha = 0.45;
+              ctx.drawImage(realThumb, tx + (thumbW - dw) / 2, bodyY + (thumbH - dh) / 2, dw, dh);
+              ctx.restore();
+              ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+              ctx.lineWidth = 1;
+              ctx.strokeRect(tx + 0.5, bodyY + 0.5, thumbW - 1, thumbH - 1);
+              return;
+            }
             const g = ctx.createLinearGradient(tx, bodyY, tx, bodyY + thumbH);
             g.addColorStop(0, `hsl(${hue}, 26%, ${trackAudiblyMuted ? 16 : 30}%)`);
             g.addColorStop(0.58, `hsl(${(hue + 28) % 360}, 20%, ${trackAudiblyMuted ? 10 : 17}%)`);
@@ -5911,7 +6033,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           retimeNorm.retimeProcess,
           retimeNorm.rampPoints
         );
-        ctx.font = "700 9px ui-monospace, monospace";
+        ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
         const measuredW = Math.ceil(ctx.measureText(badgeText).width) + 8;
         if (measuredW + rightReserve + 18 <= drawW) {
           speedBadgeW = measuredW;
@@ -5952,7 +6074,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
             : dzTag
               ? `XF ${Math.round(transformNorm.zoom_pct)}% ${dzTag}`
               : `XF ${Math.round(transformNorm.zoom_pct)}%`;
-        ctx.font = "700 9px ui-monospace, monospace";
+        ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
         const measuredTfW = Math.ceil(ctx.measureText(tfText).width) + 8;
         const usedRight = rightReserve + (speedBadgeW > 0 ? speedBadgeW + 4 : 0);
         if (measuredTfW + usedRight + 18 <= drawW) {
@@ -6002,7 +6124,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
             : hasFadeIn
               ? `FI ${fadeInS.toFixed(1)}s`
               : `FO ${fadeOutS.toFixed(1)}s`;
-        ctx.font = "700 9px ui-monospace, monospace";
+        ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
         const measuredFadeW = Math.ceil(ctx.measureText(fadeBadgeText).width) + 8;
         const usedRight = rightReserve + (speedBadgeW > 0 ? speedBadgeW + 4 : 0) + transformBadgeW;
         if (measuredFadeW + usedRight + 24 <= drawW) {
@@ -6061,7 +6183,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           ctx.rect(textStartX, clipY, textClipW, clipH);
           ctx.clip();
           ctx.fillStyle = trackAudiblyMuted ? "#9696a0" : "#ebebf0";
-          ctx.font = "600 10.5px system-ui, sans-serif";
+          ctx.font = "600 10.5px 'Open Sans', 'Segoe UI', sans-serif";
           ctx.fillText(clip.name, textStartX + 2, rowY + 17);
           ctx.restore();
         }
@@ -6073,7 +6195,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
           ctx.rect(textStartX, clipY + 19, subClipW, clipH - 19);
           ctx.clip();
           ctx.fillStyle = "#a2a2ad";
-          ctx.font = "9.5px ui-monospace, monospace";
+          ctx.font = "9.5px 'Open Sans', 'Segoe UI', sans-serif";
           const gainTag = Math.abs(gainDb) >= 0.05
             ? ` | ${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)}dB`
             : "";
@@ -6326,7 +6448,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       if (showBadgeText) {
         const tag = getTransitionShortTag(trans.preset);
         const label = badgeW >= 78 ? `${tag} ${trans.duration_s.toFixed(1)}s` : tag;
-        ctx.font = "700 8.5px ui-monospace, monospace";
+        ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
         const tw = ctx.measureText(label).width;
         if (tw + 4 <= badgeW) {
           ctx.fillStyle = isTransSelected || isTransHovered ? "#ffd166" : "#ffd8a8";
@@ -6399,7 +6521,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       ctx.stroke();
 
       ctx.fillStyle = "#5eead4";
-      ctx.font = "700 8.5px ui-monospace, monospace";
+      ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
       const tag = isIn ? "I" : "O";
       const tagX = isIn ? bx + 3 : bx - 9;
       if (tagX >= timelineX && tagX <= timelineX + timelineW - 8) {
@@ -6532,7 +6654,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
       // Compact SNAP / BEAT / MKR frame pill
       const snapPrefix = isBeatSnap ? "BEAT" : isMarkerSnap ? "MKR" : "SNAP";
       const snapLabel = `${snapPrefix} ${opts.snapGuideFrame}f`;
-      ctx.font = "700 9px ui-monospace, monospace";
+      ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
       const tw = ctx.measureText(snapLabel).width + 8;
       const pillX = Math.min(timelineX + timelineW - tw - 2, Math.max(timelineX + 2, gx + 5));
       ctx.fillStyle = "rgba(17, 17, 20, 0.9)";
@@ -6587,7 +6709,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
   if (opts && opts.activeFade && typeof opts.activeFade.seconds === "number") {
     const label = `${opts.activeFade.edge === "in" ? "FADE IN" : "FADE OUT"} ${opts.activeFade.seconds.toFixed(2)}s`;
     ctx.save();
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     const tw = ctx.measureText(label).width + 10;
     const pillX = Math.max(timelineX + 4, Math.min(timelineX + timelineW - tw - 4, opts.activeFade.x - tw / 2));
     const pillY = Math.max(rulerHeight + 2, (opts.activeFade.y || rulerHeight + 10) - 16);
@@ -6606,7 +6728,7 @@ export function drawTimelineCanvas(canvas, doc, validation, opts) {
     const hud = opts.activeEditHud;
     const text = hud.detail ? `${hud.label} | ${hud.detail}` : hud.label;
     ctx.save();
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     const tw = Math.min(timelineW - 8, ctx.measureText(text).width + 12);
     const pillX = Math.max(
       timelineX + 4,
@@ -6692,7 +6814,7 @@ export function drawTimelineOverviewCanvas(canvas, doc, opts = {}) {
   ctx.stroke();
 
   ctx.fillStyle = "#e64b38";
-  ctx.font = "600 9.5px 'Segoe UI', system-ui, sans-serif";
+  ctx.font = "600 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("V1", labelColW - 22, 18);
 
   // I/O Range Highlight
@@ -6862,7 +6984,7 @@ function drawColorPreviewSwatchLabels(ctx, width, height) {
     ctx.fillStyle = "rgba(17, 17, 20, 0.78)";
     ctx.fillRect(i * swW + 3, row2Y + row2H - 18, Math.max(8, swW - 6), 15);
     ctx.fillStyle = "#d8d8de";
-    ctx.font = "10px ui-monospace, monospace";
+    ctx.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText(sw.label, i * swW + 6, row2Y + row2H - 7);
   });
 }
@@ -7151,7 +7273,7 @@ function drawColorChartOverlay(ctx, width, height, cdl, splitOpts) {
   ctx.stroke();
 
   ctx.fillStyle = "#d8d8de";
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("COLORCHECKER 24 (TGT / OUT)", px + 8, py + 13);
 
   const gx0 = px + 8;
@@ -7352,7 +7474,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
     ctx.fillRect(width - 122, 8, 114, 20);
     ctx.strokeRect(width - 122, 8, 114, 20);
     ctx.fillStyle = "#f4a46b";
-    ctx.font = "10px ui-monospace, monospace";
+    ctx.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("HIGHLIGHT MATTE", width - 115, 21);
     ctx.restore();
   }
@@ -7468,7 +7590,7 @@ export function drawQualifierSpectrumCanvas(canvas, rawQualifier) {
   ctx.fillRect(barX, rows[2].y, barW, rows[2].h);
 
   // Row labels & borders
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   rows.forEach((row) => {
     ctx.fillStyle = q.enabled ? "#d8d8de" : "#6c6c75";
     ctx.fillText(row.key, 8, row.y + 9);
@@ -7656,7 +7778,7 @@ function getGradedPreviewImageData(previewCanvas, cdl) {
 
 function drawIreGraticule(ctx, padL, padT, plotW, plotH, highlightLevels) {
   const ireLevels = [100, 75, 50, 25, 0];
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textBaseline = "middle";
   ctx.textAlign = "right";
   for (const ire of ireLevels) {
@@ -7697,7 +7819,7 @@ function drawRgbParadeScope(ctx, width, height, srcImageData) {
 
   ctx.strokeStyle = "#2b2b33";
   ctx.lineWidth = 1;
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   for (const ch of chMeta) {
     ctx.strokeRect(ch.x0 + 0.5, padT + 0.5, chW - 1, plotH - 1);
@@ -7758,7 +7880,7 @@ function drawRgbParadeScope(ctx, width, height, srcImageData) {
   ctx.drawImage(traceCanvas, padL, padT, totalTraceW, plotH);
 
   ctx.fillStyle = "#8e8e98";
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("RGB PARADE", padL, 12);
 }
 
@@ -7820,7 +7942,7 @@ function drawLumaWaveformScope(ctx, width, height, srcImageData) {
   ctx.drawImage(traceCanvas, padL, padT, plotW, plotH);
 
   ctx.fillStyle = "#8e8e98";
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("LUMA WAVEFORM (REC.709 Y)", padL, 12);
 }
 
@@ -7875,7 +7997,7 @@ function drawVectorscope(ctx, width, height, srcImageData) {
   ctx.stroke();
 
   ctx.fillStyle = "#e68442";
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("I", skinEndX - 9, skinEndY + 9);
 
   // Real pixel Cb/Cr distribution cloud from graded ImageData
@@ -7940,7 +8062,7 @@ function drawVectorscope(ctx, width, height, srcImageData) {
     { label: "Mg", rgb: [0.75, 0.0, 0.75], col: "#c678dd" }
   ];
 
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const tgt of targets) {
@@ -7961,7 +8083,7 @@ function drawVectorscope(ctx, width, height, srcImageData) {
   ctx.textBaseline = "alphabetic";
 
   ctx.fillStyle = "#8e8e98";
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("VECTORSCOPE (Cb / Cr)", 12, 14);
 }
 
@@ -8000,7 +8122,7 @@ export function drawLoudnessCanvas(canvas, loudness) {
 
   if (!loudness) {
     ctx.fillStyle = "#8e8e98";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("No audio loudness data.", 12, 54);
     return;
   }
@@ -8034,7 +8156,7 @@ export function drawLoudnessCanvas(canvas, loudness) {
   ctx.stroke();
 
   ctx.fillStyle = "#d8d8de";
-  ctx.font = "11px ui-monospace, monospace";
+  ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText(`I: ${loudness.integrated_lufs.toFixed(1)} LUFS`, padX, 68);
   ctx.fillStyle = "#8e8e98";
   ctx.fillText(`Target: ${loudness.target_lufs.toFixed(1)} +/- ${loudness.tolerance_lu.toFixed(1)}`, padX, 86);
@@ -8049,7 +8171,7 @@ export function drawFramesCanvas(canvas, samples) {
 
   if (!samples || samples.length === 0) {
     ctx.fillStyle = "#8e8e98";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("No frame samples.", 12, 54);
     return;
   }
@@ -8072,7 +8194,7 @@ export function drawFramesCanvas(canvas, samples) {
     ctx.fillRect(avgX - 1, y + 4, 2, 14);
 
     ctx.fillStyle = "#b4b4be";
-    ctx.font = "10px ui-monospace, monospace";
+    ctx.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText(`${s.timestamp_s}s  Y:${s.y_min}..${s.y_avg.toFixed(1)}..${s.y_max}`, padX, y + 4);
   });
 }
@@ -8139,12 +8261,12 @@ export function drawStereoVuMeterCanvas(canvas, meterState = {}) {
         ctx.fillRect(ch.x + 1, hy, barW - 2, 2);
       }
       ctx.fillStyle = "#9494a0";
-      ctx.font = "600 8px ui-monospace, monospace";
+      ctx.font = "600 8px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText(ch.label, ch.x + 1, height - 5);
     }
 
     const vTicks = [0, -5, -10, -15, -20, -30, -40, -50];
-    ctx.font = "8.5px ui-monospace, monospace";
+    ctx.font = "8.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillStyle = "#92929e";
     for (const tick of vTicks) {
       const y = Math.round(dbToY(tick));
@@ -8181,7 +8303,7 @@ export function drawStereoVuMeterCanvas(canvas, meterState = {}) {
 
   for (const ch of channels) {
     ctx.fillStyle = allMuted ? "#6e6e78" : "#d8d8de";
-    ctx.font = "700 9.5px ui-monospace, monospace";
+    ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText(ch.label, 5, ch.y + 8.5);
 
     ctx.fillStyle = "#1b1b20";
@@ -8239,7 +8361,7 @@ export function drawStereoVuMeterCanvas(canvas, meterState = {}) {
   // dBFS scale ticks below channels
   const scaleY = padT + barH * 2 + gapY + 12;
   const ticks = width < 320 ? [-48, -24, -12, -6, 0] : [-48, -36, -24, -18, -12, -6, -3, 0];
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#8e8e98";
   for (const tick of ticks) {
     const x = dbToX(tick);
@@ -8302,7 +8424,7 @@ export function drawRetimeRampEditorCanvas(canvas, opts = {}) {
   const xToPos = (x) => clamp01((x - padL) / plotW);
 
   // Horizontal speed grid lines (0.25x, 0.5x, 1x, 2x, 4x)
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   const speedTicks = [0.25, 0.5, 1.0, 2.0, 4.0];
   for (const tick of speedTicks) {
     const gy = Math.round(speedToY(tick)) + 0.5;
@@ -8342,7 +8464,7 @@ export function drawRetimeRampEditorCanvas(canvas, opts = {}) {
 
   if (!hasClip) {
     ctx.fillStyle = "#6e6e78";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("Select a clip to edit Speed Ramp curve", padL + 10, padT + plotH / 2 + 4);
     return {
       padL,
@@ -8766,7 +8888,7 @@ export function drawHslCurvesCanvas(
 
   // 6 interactive vector anchor handles + labels
   const points = [];
-  ctx.font = "600 9px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   for (const vec of HSL_HUE_VECTORS) {
@@ -8849,7 +8971,7 @@ export function renderFairlightEqCurveCanvas(canvas, rawRackParams, selectedBand
   ctx.fillRect(padL, padT, plotW, plotH);
 
   // Horizontal dB graticule
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const db of [18, 12, 6, 0, -6, -12, -18]) {
@@ -8989,7 +9111,7 @@ export function renderFairlightEqCurveCanvas(canvas, rawRackParams, selectedBand
     ctx.stroke();
 
     ctx.fillStyle = "#0f1115";
-    ctx.font = "700 8px ui-monospace, monospace";
+    ctx.font = "700 8px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(spec ? spec.shortLabel : "?", nx, ny + 0.5);
@@ -9028,7 +9150,7 @@ export function renderFairlightDynamicsCanvas(canvas, rawRackParams, liveInputDb
   ctx.fillStyle = "#14161c";
   ctx.fillRect(padL, padT, plotW, plotH);
 
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   for (const db of [0, -12, -24, -36, -48, -60]) {
     const x = Math.round(dbToX(db)) + 0.5;
     const y = Math.round(dbToY(db)) + 0.5;
@@ -9121,7 +9243,7 @@ export function renderFairlightDynamicsCanvas(canvas, rawRackParams, liveInputDb
     ctx.fillRect(barX + 1, padT + 1, barW - 2, Math.max(2, grH - 2));
   }
   ctx.fillStyle = "#9ca3af";
-  ctx.font = "700 8.5px ui-monospace, monospace";
+  ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.fillText("GR", barX + barW * 0.5, padT + plotH + 4);
@@ -9258,7 +9380,7 @@ export function drawColorWarperCanvas(canvas, rawWarper, selectedPoint = null, o
     // Outer hue label
     const lblPos = warperPolarToXy(cx, cy, maxR, hIdx * 60, 1.18);
     ctx.fillStyle = COLOR_WARPER_AXIS_HEX[hIdx];
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(COLOR_WARPER_HUE_LABELS[hIdx] || "", lblPos.x, lblPos.y);
@@ -9316,13 +9438,13 @@ export function drawColorWarperCanvas(canvas, rawWarper, selectedPoint = null, o
   // Subtle status badge in corner
   if (!isColorWarperIdentity(warper)) {
     ctx.fillStyle = "rgba(230, 132, 66, 0.92)";
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillText("6x3 WARP", 8, 7);
   } else {
     ctx.fillStyle = "rgba(148, 163, 184, 0.65)";
-    ctx.font = "600 9px ui-monospace, monospace";
+    ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillText("6x3 GRID", 8, 7);
@@ -9435,7 +9557,7 @@ export function renderFairlightFftCanvas(canvas, spectrum, rawRackParams, option
     ctx.fillRect(markerX, corrY + 2, Math.max(2, midX - markerX), corrH - 4);
   }
   ctx.fillStyle = "#9ca3af";
-  ctx.font = "600 8.5px ui-monospace, monospace";
+  ctx.font = "600 8.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   ctx.fillText(`PHASE ${corr >= 0 ? "+" : ""}${corr.toFixed(2)}`, corrX + corrW + 6, corrY + corrH * 0.5);
@@ -9460,7 +9582,7 @@ export function renderFairlightFftCanvas(canvas, spectrum, rawRackParams, option
   }
 
   // dB graticule
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const db of [0, -12, -24, -36, -48, -60, -72]) {
@@ -9588,7 +9710,7 @@ export function renderFairlightFftCanvas(canvas, spectrum, rawRackParams, option
     const hb = barBoxes[hoverIdx].band;
     const tag = `${hb.label}Hz ${Number(hb.post_db).toFixed(1)}dB`;
     ctx.fillStyle = "#e2e8f0";
-    ctx.font = "600 8.5px ui-monospace, monospace";
+    ctx.font = "600 8.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     ctx.fillText(tag, padL + plotW, corrY + corrH * 0.5);
@@ -9596,7 +9718,7 @@ export function renderFairlightFftCanvas(canvas, spectrum, rawRackParams, option
     const dom = Number(spectrum.dominant_hz);
     const domStr = dom >= 1000 ? `${(dom / 1000).toFixed(1)}kHz` : `${Math.round(dom)}Hz`;
     ctx.fillStyle = "#7ee8f0";
-    ctx.font = "600 8.5px ui-monospace, monospace";
+    ctx.font = "600 8.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     ctx.fillText(`DOM ${domStr}`, padL + plotW, corrY + corrH * 0.5);
@@ -9636,7 +9758,7 @@ export function drawCompoundMiniMapCanvas(canvas, clip, opts = {}) {
     ctx.lineWidth = 1;
     ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
     ctx.fillStyle = "#7a7b88";
-    ctx.font = "10.5px ui-monospace, monospace";
+    ctx.font = "10.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(
@@ -9662,7 +9784,7 @@ export function drawCompoundMiniMapCanvas(canvas, clip, opts = {}) {
   ctx.fillStyle = accent;
   ctx.fillRect(0, 0, width, 2);
 
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#e5e7eb";
@@ -9680,7 +9802,7 @@ export function drawCompoundMiniMapCanvas(canvas, clip, opts = {}) {
 
   if (tracks.length === 0) {
     ctx.fillStyle = "#7a7b88";
-    ctx.font = "10px ui-monospace, monospace";
+    ctx.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("(empty subsequence)", plotX, bodyTop + bodyH * 0.5);
     return { width, height };
   }
@@ -9691,7 +9813,7 @@ export function drawCompoundMiniMapCanvas(canvas, clip, opts = {}) {
     if (ry + rowH > height - 2) return;
     const isAud = trk.kind === "audio";
     ctx.fillStyle = isAud ? "#5eead4" : "#93c5fd";
-    ctx.font = "700 8.5px ui-monospace, monospace";
+    ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillText(`${isAud ? "A" : "V"}${trk.index}`, 6, ry + rowH * 0.5);
@@ -9750,7 +9872,7 @@ export function drawSourceMonitorCanvas(
 
   if (!sourceClip) {
     ctx.fillStyle = "#7a7b88";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(
@@ -9818,7 +9940,7 @@ export function drawSourceMonitorCanvas(
     }
 
     ctx.fillStyle = "#5eead4";
-    ctx.font = "700 10.5px ui-monospace, monospace";
+    ctx.font = "700 10.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillText(`AUDIO SRC: ${sourceClip.name || "Audio"}`, fx + 8, fy + 8);
@@ -9856,7 +9978,7 @@ export function drawSourceMonitorCanvas(
   ctx.lineWidth = 1;
   ctx.strokeRect(fx + 6.5, fy + 6.5, 69, 16);
   ctx.fillStyle = "#39c5cf";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(opts.badgeLabel || "SOURCE", fx + 41, fy + 15);
@@ -9869,7 +9991,7 @@ export function drawSourceMonitorCanvas(
     ctx.lineWidth = 2;
     ctx.strokeRect(fx + 2, fy + 2, bw - 4, bh - 4);
     ctx.fillStyle = "#fca5a5";
-    ctx.font = "800 13px ui-monospace, monospace";
+    ctx.font = "800 13px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("MEDIA OFFLINE", fx + bw * 0.5, fy + bh * 0.5);
@@ -9878,7 +10000,7 @@ export function drawSourceMonitorCanvas(
     const scaleLbl = sourceClip.proxy_scale === "quarter" ? "1/4" : "1/2";
     const pxyText = `PROXY (${scaleLbl})`;
     ctx.save();
-    ctx.font = "700 9.5px ui-monospace, monospace";
+    ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
     const pw = ctx.measureText(pxyText).width + 12;
     const px = fx + bw - pw - 6;
     const py = fy + 6;
@@ -9926,7 +10048,7 @@ export function drawSourceMonitorCanvas(
   ctx.stroke();
 
   ctx.fillStyle = "#d4d4dc";
-  ctx.font = "10px ui-monospace, monospace";
+  ctx.font = "10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   const durSpan = rangeEnd - rangeStart;
@@ -9947,7 +10069,7 @@ export function drawAvSyncWaveformCanvas(canvas, analysis, labels = {}) {
 
   if (!analysis || !Array.isArray(analysis.video_envelope) || analysis.video_envelope.length === 0) {
     ctx.fillStyle = "#7a7b88";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(
@@ -9995,7 +10117,7 @@ export function drawAvSyncWaveformCanvas(canvas, analysis, labels = {}) {
     drawEnv(aEnv, "#38bdf8", 6);
   }
 
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#f59e0b";
@@ -10064,7 +10186,7 @@ export function drawSceneCutConfidenceCanvas(canvas, analysis, opts = {}) {
     analysis && Array.isArray(analysis.frame_scores) ? analysis.frame_scores : [];
   if (scores.length === 0) {
     ctx.fillStyle = "#7a7b88";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(
@@ -10090,7 +10212,7 @@ export function drawSceneCutConfidenceCanvas(canvas, analysis, opts = {}) {
   ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
 
   // Percentage gridlines (25%, 50%, 75%)
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const pct of [0.25, 0.5, 0.75]) {
@@ -10192,7 +10314,7 @@ export function drawSceneCutConfidenceCanvas(canvas, analysis, opts = {}) {
   }
 
   // Header & Footer labels
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#e2e8f0";
@@ -10206,7 +10328,7 @@ export function drawSceneCutConfidenceCanvas(canvas, analysis, opts = {}) {
   ctx.fillStyle = "#fb7185";
   ctx.fillText(`THR ${Math.round(thr * 100)}%`, padL + plotW, 5);
 
-  ctx.font = "9.5px ui-monospace, monospace";
+  ctx.font = "9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   ctx.textAlign = "left";
   ctx.textBaseline = "bottom";
@@ -10232,7 +10354,7 @@ export function drawTextEditWaveformCanvas(canvas, analysis, opts = {}) {
   const segments = analysis && Array.isArray(analysis.segments) ? analysis.segments : [];
   if (peaks.length === 0 && segments.length === 0) {
     ctx.fillStyle = "#7a7b88";
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = "11px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(
@@ -10335,7 +10457,7 @@ export function drawTextEditWaveformCanvas(canvas, analysis, opts = {}) {
   }
 
   // Header & Footer labels
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   ctx.fillStyle = "#e2e8f0";
@@ -10349,7 +10471,7 @@ export function drawTextEditWaveformCanvas(canvas, analysis, opts = {}) {
   ctx.fillStyle = "#fb7185";
   ctx.fillText(`FLOOR ${noiseDb.toFixed(1)} dB`, padL + plotW, 5);
 
-  ctx.font = "9.5px ui-monospace, monospace";
+  ctx.font = "9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   ctx.textAlign = "left";
   ctx.textBaseline = "bottom";
@@ -10485,7 +10607,7 @@ export function applyBroadcastMonitorPixelPass(ctx, x0, y0, width, height, rawCo
     if (limiterActive) badges.push(`LEGAL:${cfg.luma_min_8bit}-${cfg.luma_max_8bit}`);
     if (badges.length > 0) {
       const label = badges.join(" | ");
-      ctx.font = "700 9.5px ui-monospace, monospace";
+      ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
       const bw = Math.min(rw - 12, ctx.measureText(label).width + 12);
       const bx = rx + 6;
       const by = ry + rh - 22;
@@ -10614,7 +10736,7 @@ function drawIreHistogramScope(ctx, width, height, srcImageData, broadcastConfig
     cfg.broadcast_standard === "bypass" ? "BYPASS" : excPct >= 1.0 ? "FAIL" : excPct > 0.25 ? "WARN" : "PASS";
   const statusColor = statusLabel === "FAIL" ? "#ef4444" : statusLabel === "WARN" ? "#f59e0b" : "#22c55e";
 
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#cbd5e1";
   ctx.textAlign = "left";
   ctx.fillText(
@@ -10626,7 +10748,7 @@ function drawIreHistogramScope(ctx, width, height, srcImageData, broadcastConfig
   ctx.fillStyle = statusColor;
   ctx.fillText(`EBU R103: ${statusLabel} (${excPct.toFixed(1)}%)`, padL + plotW, 14);
 
-  ctx.font = "8.5px ui-monospace, monospace";
+  ctx.font = "8.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   ctx.textAlign = "center";
   for (const tick of [0, 25, 50, 75, 100]) {
@@ -10708,7 +10830,7 @@ export function drawBroadcastHistogramCanvas(canvas, report, rawConfig) {
   ctx.strokeStyle = "#2c2f3a";
   ctx.strokeRect(padL + 0.5, padT + 0.5, plotW - 1, plotH - 1);
 
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#e2e8f0";
   ctx.textAlign = "left";
   const minTxt = report ? Number(report.min_ire).toFixed(1) : "--";
@@ -10721,7 +10843,7 @@ export function drawBroadcastHistogramCanvas(canvas, report, rawConfig) {
   ctx.fillStyle = st === "FAIL" ? "#ef4444" : st === "WARN" ? "#f59e0b" : "#22c55e";
   ctx.fillText(`${String(cfg.broadcast_standard).toUpperCase()} : ${st}`, padL + plotW, 15);
 
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   ctx.textAlign = "center";
   for (const tick of [0, 25, 50, 75, 100]) {
@@ -10767,7 +10889,7 @@ export function drawAutoReframeCurveCanvas(canvas, analysis, opts = {}) {
   // Grid lines (-1.0, -0.5, 0.0, +0.5, +1.0)
   ctx.strokeStyle = "#1e222d";
   ctx.lineWidth = 1;
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#7c8599";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
@@ -10863,7 +10985,7 @@ export function drawAutoReframeCurveCanvas(canvas, analysis, opts = {}) {
   }
 
   // Header legend
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
   ctx.fillStyle = "#e68442";
@@ -10877,7 +10999,7 @@ export function drawAutoReframeCurveCanvas(canvas, analysis, opts = {}) {
   ctx.fillText(`${keyframes.length} KF | t=${localTimeS.toFixed(2)}s / ${durationS.toFixed(2)}s`, padL + plotW, 7);
 
   // Time ticks
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   ctx.textBaseline = "bottom";
   for (let idx = 0; idx <= 4; idx += 1) {
@@ -11141,7 +11263,7 @@ export function drawCstToneCurveCanvas(canvas, cstConfig, compiled = null, hover
     ctx.fill();
     ctx.stroke();
 
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillStyle = "#cbd5e1";
     ctx.textAlign = h.id === "toe" ? "left" : "right";
     ctx.textBaseline = "bottom";
@@ -11149,7 +11271,7 @@ export function drawCstToneCurveCanvas(canvas, cstConfig, compiled = null, hover
   }
 
   // Labels & telemetry
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#e2e8f0";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
@@ -11158,7 +11280,7 @@ export function drawCstToneCurveCanvas(canvas, cstConfig, compiled = null, hover
   ctx.fillStyle = "#38bdf8";
   ctx.fillText(`18% GREY -> ${(mgOut * 100).toFixed(1)}%`, padL + plotW, 6);
 
-  ctx.font = "9px ui-monospace, monospace";
+  ctx.font = "9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   ctx.textAlign = "left";
   ctx.textBaseline = "bottom";
@@ -11328,7 +11450,7 @@ export function drawCstGamutDiagramCanvas(canvas, compiled) {
   }
 
   // Legend
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
   ctx.fillStyle = "#f59e0b";
@@ -11619,7 +11741,7 @@ export function drawQualifierKeyerPreviewCanvas(canvas, rawQkConfig, opts = {}) 
   ctx.fillRect(width - badgeW - 8, 8, badgeW, 20);
   ctx.strokeRect(width - badgeW - 8, 8, badgeW, 20);
   ctx.fillStyle = cfg.enabled ? "#bae6fd" : "#94a3b8";
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(hlLabel, width - badgeW * 0.5 - 8, 18);
@@ -11691,7 +11813,7 @@ export function drawQualifierKeyerHslBarCanvas(canvas, rawQkConfig) {
   ctx.fillStyle = lumGrad;
   ctx.fillRect(barX, rows[2].y, barW, rows[2].h);
 
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textBaseline = "middle";
   rows.forEach((row) => {
     ctx.fillStyle = cfg.enabled ? "#cbd5e1" : "#64748b";
@@ -11813,7 +11935,7 @@ export function drawQualifierKeyerHistogramCanvas(canvas, metrics, rawQkConfig) 
   ctx.stroke();
   ctx.restore();
 
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   ctx.textAlign = "left";
   ctx.fillText("0% KEY", padL, height - 6);
@@ -11968,7 +12090,7 @@ export function drawMulticamStudioQuadCanvas(
       ctx.lineWidth = 1;
       ctx.strokeRect(tx + 0.5, ty + 0.5, cellW - 1, cellH - 1);
       ctx.fillStyle = "#64748b";
-      ctx.font = "700 10px ui-monospace, monospace";
+      ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText(`CAM ${slot + 1} UNASSIGNED`, tx + 10, ty + 20);
       continue;
     }
@@ -11982,7 +12104,7 @@ export function drawMulticamStudioQuadCanvas(
 
     // Top-left Angle pill
     const badgeTxt = `${angle.angle_index} ${String(angle.name || "").slice(0, 18)}`;
-    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
     const bw = Math.min(cellW - 66, ctx.measureText(badgeTxt).width + 12);
     ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
     roundRectPath(ctx, tx + 6, ty + 6, bw, 18, 2);
@@ -11996,14 +12118,14 @@ export function drawMulticamStudioQuadCanvas(
       roundRectPath(ctx, tx + cellW - 58, ty + 6, 48, 18, 2);
       ctx.fill();
       ctx.fillStyle = "#ffffff";
-      ctx.font = "800 9.5px ui-monospace, monospace";
+      ctx.font = "800 9.5px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText("ON AIR", tx + cellW - 53, ty + 18);
     } else {
       ctx.fillStyle = "rgba(15, 18, 25, 0.86)";
       roundRectPath(ctx, tx + cellW - 44, ty + 6, 34, 18, 2);
       ctx.fill();
       ctx.fillStyle = "#cbd5e1";
-      ctx.font = "700 9px ui-monospace, monospace";
+      ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText(`CAM ${angle.angle_index}`, tx + cellW - 40, ty + 18);
     }
 
@@ -12012,7 +12134,7 @@ export function drawMulticamStudioQuadCanvas(
     const confPct = syncEntry ? Math.round(Number(syncEntry.confidence || 0.95) * 100) : 95;
     const tcStr = framesToSmpte(Math.round(activeTimeS * fps) + offF, fps);
     const metaTxt = `${offF >= 0 ? "+" : ""}${offF}f (${confPct}%) ${isAudioMaster ? "[MIC]" : ""}`;
-    ctx.font = "600 9px ui-monospace, monospace";
+    ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
     const mw = Math.min(cellW - 22, ctx.measureText(metaTxt).width + 10);
     ctx.fillStyle = "rgba(10, 12, 18, 0.85)";
     ctx.fillRect(tx + 6, ty + cellH - 22, mw, 16);
@@ -12071,11 +12193,11 @@ export function drawMulticamStudioProgramCanvas(
   roundRectPath(ctx, pad + 8, pad + 8, 62, 20, 2);
   ctx.fill();
   ctx.fillStyle = "#ffffff";
-  ctx.font = "800 10px ui-monospace, monospace";
+  ctx.font = "800 10px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("PGM LIVE", pad + 14, pad + 21);
 
   const camLabel = activeAngle ? `CAM ${activeAngle.angle_index}: ${activeAngle.name}` : "CAM 1";
-  ctx.font = "700 10.5px ui-monospace, monospace";
+  ctx.font = "700 10.5px 'Open Sans', 'Segoe UI', sans-serif";
   const lw = Math.min(frameW - 170, ctx.measureText(camLabel).width + 14);
   ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
   roundRectPath(ctx, pad + 76, pad + 8, lw, 20, 2);
@@ -12088,14 +12210,14 @@ export function drawMulticamStudioProgramCanvas(
   roundRectPath(ctx, pad + frameW - 92, pad + 8, 84, 20, 2);
   ctx.fill();
   ctx.fillStyle = "#fbbf24";
-  ctx.font = "700 10.5px ui-monospace, monospace";
+  ctx.font = "700 10.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText(tc, pad + frameW - 86, pad + 21);
 
   // Bottom bar: Audio mode & Short-Cut Alert
   const afvTxt = config.audio_follow_video && config.cut_mode === "video_and_audio"
     ? `AUDIO: AFV (CAM ${activeSeg.audio_angle_index})`
     : `AUDIO: MASTER LOCK (CAM ${config.master_audio_angle})`;
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   const aw = Math.min(frameW - 20, ctx.measureText(afvTxt).width + 14);
   ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
   ctx.fillRect(pad + 8, pad + frameH - 26, aw, 18);
@@ -12149,7 +12271,7 @@ export function drawMulticamStudioTimelineCanvas(
   ctx.stroke();
 
   const tickStep = durationS <= 12 ? 2 : durationS <= 30 ? 4 : 8;
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillStyle = "#94a3b8";
   for (let t = 0; t <= durationS + 0.001; t += tickStep) {
     const tx = timeToX(t);
@@ -12166,7 +12288,7 @@ export function drawMulticamStudioTimelineCanvas(
   ctx.fillStyle = "#151924";
   ctx.fillRect(0, pgmY, labelW - 2, pgmH);
   ctx.fillStyle = "#f8fafc";
-  ctx.font = "800 9.5px ui-monospace, monospace";
+  ctx.font = "800 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("PGM CUTS", 8, pgmY + 16);
 
   const cutHitboxes = [];
@@ -12187,7 +12309,7 @@ export function drawMulticamStudioTimelineCanvas(
 
     if (sw > 24) {
       ctx.fillStyle = "#0b0d12";
-      ctx.font = "800 9.5px ui-monospace, monospace";
+      ctx.font = "800 9.5px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText(`C${seg.angle_index}`, sx + 4, pgmY + 16);
     }
 
@@ -12213,10 +12335,10 @@ export function drawMulticamStudioTimelineCanvas(
     ctx.fillStyle = angle.color_tag || "#3b82f6";
     ctx.fillRect(0, ly, 4, laneH - 2);
     ctx.fillStyle = "#e2e8f0";
-    ctx.font = "700 9.5px ui-monospace, monospace";
+    ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText(`CAM ${angle.angle_index}`, 8, ly + Math.min(14, laneH * 0.52));
     ctx.fillStyle = "#94a3b8";
-    ctx.font = "600 8.5px ui-monospace, monospace";
+    ctx.font = "600 8.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText(`${offF >= 0 ? "+" : ""}${offF}f`, 8, ly + Math.min(laneH - 4, 24));
 
     // Audio Waveform Bars
@@ -12333,7 +12455,7 @@ export function drawMotionSplineGraphCanvas(
 
   // Grid & Axes
   const ySteps = 4;
-  ctx.font = "600 9.5px ui-monospace, monospace";
+  ctx.font = "600 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   for (let i = 0; i <= ySteps; i += 1) {
     const frac = i / ySteps;
     const gy = padT + frac * plotH;
@@ -12367,7 +12489,7 @@ export function drawMotionSplineGraphCanvas(
   ctx.fillStyle = "#1a1f2b";
   ctx.fillRect(4, 3, padL - 10, 17);
   ctx.fillStyle = chColor;
-  ctx.font = "800 9px ui-monospace, monospace";
+  ctx.font = "800 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText(graphMode === "speed" ? `${spec.unit}/s` : spec.unit, 8, 15);
 
   // Subtle ghost reference curves for other channels in Value Graph mode
@@ -12561,7 +12683,7 @@ export function drawMotionSplineGraphCanvas(
   const pillTxt = graphMode === "speed"
     ? `${Math.abs(actVel).toFixed(1)} ${spec.unit}/s`
     : `${actVal.toFixed(1)}${spec.unit}`;
-  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.font = "700 10px 'Open Sans', 'Segoe UI', sans-serif";
   const pw = ctx.measureText(pillTxt).width + 12;
   const pxPill = Math.min(width - pw - 6, Math.max(padL + 4, phX + 6));
   ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
@@ -12663,10 +12785,10 @@ export function drawMotionSplinePreviewCanvas(
 
     if (!isGhost) {
       ctx.fillStyle = "#f8fafc";
-      ctx.font = "800 11px ui-monospace, monospace";
+      ctx.font = "800 11px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText("TAKTCUT FX", -cardW * 0.36, -2);
       ctx.fillStyle = "#fde68a";
-      ctx.font = "600 8.5px ui-monospace, monospace";
+      ctx.font = "600 8.5px 'Open Sans', 'Segoe UI', sans-serif";
       ctx.fillText("SPLINE + SHUTTER", -cardW * 0.36, 12);
 
       // Anchor crosshair
@@ -12727,7 +12849,7 @@ export function drawMotionSplinePreviewCanvas(
   ctx.fillStyle = "rgba(10, 12, 16, 0.86)";
   ctx.fillRect(fx + 6, fy + 6, Math.min(frameW - 12, 224), 18);
   ctx.fillStyle = blurPx > 2 ? "#fbbf24" : "#94a3b8";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   const shutterLabel = mb.enabled ? `${Number(mb.shutter_angle_deg || 0).toFixed(0)} deg` : "OFF";
   ctx.fillText(`SHUTTER ${shutterLabel} | BLUR ${blurPx.toFixed(1)}px`, fx + 12, fy + 18);
 }
@@ -13089,7 +13211,7 @@ export function drawOpticalGlowPreviewCanvas(canvas, rawConfig, analysisResult =
     ctx.fillRect(fx + 6, fy + frameH - 22, 54, 16);
     ctx.fillRect(fx + frameW - 56, fy + frameH - 22, 50, 16);
     ctx.fillStyle = "#94a3b8";
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.fillText("BEFORE", fx + 12, fy + frameH - 11);
     ctx.fillStyle = "#fbbf24";
     ctx.fillText("AFTER", fx + frameW - 48, fy + frameH - 11);
@@ -13109,7 +13231,7 @@ export function drawOpticalGlowPreviewCanvas(canvas, rawConfig, analysisResult =
   ctx.fillStyle = "rgba(10, 12, 16, 0.86)";
   ctx.fillRect(fx + 6, fy + 6, Math.min(frameW - 12, 232), 18);
   ctx.fillStyle = cfg.enabled ? "#38bdf8" : "#94a3b8";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText(`${viewTag} | TRIG ${trigPct}%`, fx + 12, fy + 18);
 }
 
@@ -13231,7 +13353,7 @@ export function drawOpticalGlowResponseCanvas(canvas, rawConfig, analysisResult 
 
   // Labels & legend
   ctx.fillStyle = "#94a3b8";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("1.0", 6, padT + 6);
   ctx.fillText("0.0", 6, padT + plotH);
   ctx.fillText("THRESH / RADIAL FALLOFF", padL, 13);
@@ -13643,7 +13765,7 @@ export function drawPowerWindowViewportCanvas(canvas, rawConfig, evalResult = nu
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = "#e2e8f0";
-        ctx.font = "700 8.5px ui-monospace, monospace";
+        ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
         ctx.fillText(labels[idx], pt.x + 8, pt.y - 6);
       });
       ctx.restore();
@@ -13781,7 +13903,7 @@ export function drawPowerWindowViewportCanvas(canvas, rawConfig, evalResult = nu
   ctx.fillStyle = "rgba(10, 12, 16, 0.86)";
   ctx.fillRect(fx + 6, fy + 6, Math.min(frameW - 12, 248), 18);
   ctx.fillStyle = cfg.enabled ? "#38bdf8" : "#94a3b8";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText(`${shapeTag}${invTag} | COV ${covPct}% | t=${geom.t_norm.toFixed(2)}`, fx + 12, fy + 18);
 }
 
@@ -13861,7 +13983,7 @@ export function drawPowerWindowTrackTimelineCanvas(canvas, rawConfig) {
   ctx.stroke();
 
   ctx.fillStyle = "#94a3b8";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("KF", 6, padT + plotH * 0.5 + 3);
   ctx.fillText(`TRACK KEYS (${kfs.length})`, padL, 11);
   ctx.fillStyle = "#38bdf8";
@@ -13918,7 +14040,7 @@ export function drawRetimeStudioCurveCanvas(canvas, rawConfig, opts = {}) {
   const gridSpeeds = maxSpeedPct > 800
     ? [10, 25, 50, 100, 200, 400, 800, 1200]
     : [10, 25, 50, 100, 200, 400, 800];
-  ctx.font = "600 9.5px ui-monospace, monospace";
+  ctx.font = "600 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const gs of gridSpeeds) {
@@ -13968,7 +14090,7 @@ export function drawRetimeStudioCurveCanvas(canvas, rawConfig, opts = {}) {
     ctx.setLineDash([]);
 
     ctx.fillStyle = "#7dd3fc";
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText(`HOLD ${cfg.freeze_duration_s.toFixed(1)}s`, fx, padT - 3);
@@ -14064,7 +14186,7 @@ export function drawRetimeStudioCurveCanvas(canvas, rawConfig, opts = {}) {
     }
 
     ctx.fillStyle = isSel ? "#fde68a" : "#cbd5e1";
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = idx === 0 ? "left" : (isEndpoint ? "right" : "center");
     ctx.textBaseline = py < padT + 18 ? "top" : "bottom";
     const labelY = py < padT + 18 ? py + 10 : py - 9;
@@ -14092,7 +14214,7 @@ export function drawRetimeStudioCurveCanvas(canvas, rawConfig, opts = {}) {
   ctx.fillStyle = "rgba(10, 12, 16, 0.88)";
   ctx.fillRect(padL + 4, 4, Math.min(plotW - 8, 360), 17);
   ctx.fillStyle = "#38bdf8";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   ctx.fillText(
@@ -14183,7 +14305,7 @@ export function drawRetimeStudioCadenceCanvas(canvas, rawConfig, evalResult) {
   ctx.stroke();
 
   ctx.fillStyle = "#94a3b8";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.fillText("FLOW", 8, padT + plotH * 0.5 + 3);
   ctx.fillText(
@@ -14323,7 +14445,7 @@ export function drawStabilizationViewportCanvas(canvas, rawConfig, opts = {}) {
     ctx.fillStyle = "rgba(9, 12, 18, 0.85)";
     ctx.fillRect(frameX + 6, frameY + 6, 42, 16);
     ctx.fillRect(frameX + frameW - 82, frameY + 6, 76, 16);
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     ctx.fillStyle = "#fb7185";
@@ -14403,7 +14525,7 @@ export function drawStabilizationViewportCanvas(canvas, rawConfig, opts = {}) {
   ctx.fillStyle = "rgba(10, 12, 16, 0.90)";
   ctx.fillRect(6, 4, w - 12, 18);
   ctx.fillStyle = "#38bdf8";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   const modeLbl = cfg.mode.toUpperCase().replace(/_/g, " ");
@@ -14496,7 +14618,7 @@ export function drawStabilizationTrajectoryCanvas(canvas, rawConfig, opts = {}) 
 
   // Axis labels & legend
   ctx.fillStyle = "#94a3b8";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   ctx.fillText("+28px", padL - 5, padT + 4);
@@ -14745,7 +14867,7 @@ export function drawFilmLookPreviewCanvas(canvas, rawConfig, opts = {}) {
     ctx.stroke();
 
     ctx.fillStyle = "#090c12";
-    ctx.font = "800 9px ui-monospace, monospace";
+    ctx.font = "800 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("<>", splitX, handleY + 0.5);
@@ -14753,7 +14875,7 @@ export function drawFilmLookPreviewCanvas(canvas, rawConfig, opts = {}) {
     ctx.fillStyle = "rgba(9, 12, 18, 0.85)";
     ctx.fillRect(frameX + 6, frameY + 6, 72, 16);
     ctx.fillRect(frameX + frameW - 96, frameY + 6, 90, 16);
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "left";
     ctx.fillStyle = "#94a3b8";
     ctx.fillText("LOG / RAW", frameX + 12, frameY + 14);
@@ -14777,7 +14899,7 @@ export function drawFilmLookPreviewCanvas(canvas, rawConfig, opts = {}) {
   ctx.fillStyle = "rgba(10, 12, 16, 0.92)";
   ctx.fillRect(6, 4, w - 12, 18);
   ctx.fillStyle = "#f59e0b";
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   const stockTag = cfg.print_stock.toUpperCase().replace(/_/g, " ");
@@ -14909,7 +15031,7 @@ export function drawFilmLookCurveCanvas(canvas, rawConfig, opts = {}) {
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = hnd.color;
-    ctx.font = "700 8.5px ui-monospace, monospace";
+    ctx.font = "700 8.5px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText(hnd.label, hnd.x, Math.max(padT + 10, hnd.y - 7));
@@ -14917,7 +15039,7 @@ export function drawFilmLookCurveCanvas(canvas, rawConfig, opts = {}) {
 
   // Axis labels & legend
   ctx.fillStyle = "#94a3b8";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   ctx.fillText("1.0", padL - 5, padT + 4);
@@ -15233,14 +15355,14 @@ export function drawOpticalFlarePreviewCanvas(canvas, config, evalResult) {
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = "#e0f2fe";
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("<>", splitX, hy + 3);
     ctx.textAlign = "left";
   }
 
   // Top corner badges
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   if (compareSplit && splitX > 66) {
     ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
     ctx.fillRect(8, 8, 56, 16);
@@ -15330,7 +15452,7 @@ export function drawOpticalFlareFalloffCanvas(canvas, config, evalResult) {
 
   // Axis labels & legend
   ctx.fillStyle = "#94a3b8";
-  ctx.font = "600 9px ui-monospace, monospace";
+  ctx.font = "600 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.fillText("1.4", 6, padT + 4);
   ctx.fillText("0.7", 6, padT + plotH * 0.5 + 3);
   ctx.fillText("0.0", 6, padT + plotH + 3);
@@ -15581,7 +15703,7 @@ export function renderCameraShakePreviewCanvas(canvas, config, evalResult, optio
     ctx.arc(splitX, height * 0.5, 8, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#0b0e14";
-    ctx.font = "700 9px ui-monospace, monospace";
+    ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("<>", splitX, height * 0.5 + 0.5);
@@ -15589,7 +15711,7 @@ export function renderCameraShakePreviewCanvas(canvas, config, evalResult, optio
   }
 
   // Corner labels
-  ctx.font = "700 9.5px ui-monospace, monospace";
+  ctx.font = "700 9.5px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textBaseline = "top";
   if (compareSplit) {
     ctx.fillStyle = "rgba(15, 23, 42, 0.75)";
@@ -15697,7 +15819,7 @@ export function renderCameraShakeWaveformCanvas(canvas, config, evalResult, opti
   ctx.restore();
 
   // Legend & axis labels
-  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.font = "700 9px 'Open Sans', 'Segoe UI', sans-serif";
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   ctx.fillStyle = "#f59e0b";

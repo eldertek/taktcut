@@ -40,6 +40,10 @@
             <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M1.8 4.2h4.2l1.4 1.6h6.8v6.5H1.8z"/></svg>
             <span>Media Pool</span>
           </button>
+          <button type="button" class="nle-panel-toggle" data-ws-toggle="effects-library-section" title="Toggle Effects Library">
+            <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M3 13L11.5 4.5M9.5 2.5v2M13.5 6.5h-2M12.5 3.5l-1.2 1.2"/></svg>
+            <span>Effects</span>
+          </button>
           <button type="button" class="nle-panel-toggle is-active" data-ws-toggle="timeline-index-panel" title="Toggle Edit Index">
             <svg class="menubar-svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.35" d="M2.5 4h11M2.5 8h11M2.5 12h7.5"/></svg>
             <span>Edit Index</span>
@@ -375,6 +379,7 @@
               <span id="timeline-validation-pill" class="nle-tag mono">--</span>
             </div>
             <div class="pane-body pane-scroll-dock">
+              <section id="effects-library-section" class="effects-library-section is-collapsed-dock" aria-label="Effects Library"></section>
               <section id="media-pool-section" class="media-pool-section" aria-label="Media Pool Master Bin">
                 <div class="pane-subheader media-pool-header-row">
                   <span data-i18n="timeline.mediapool.title">Master Bin</span>
@@ -599,6 +604,7 @@
             <div class="pane-header">
               <div class="viewer-header-left">
                 <h2 data-i18n="timeline.monitor.title">Program Monitor</h2>
+                <select id="project-timeline-select" class="viewer-timeline-select mono is-hidden" aria-label="Timeline" title="Timelines of the open DaVinci Resolve project"></select>
                 <button
                   type="button"
                   id="btn-dual-monitor-toggle"
