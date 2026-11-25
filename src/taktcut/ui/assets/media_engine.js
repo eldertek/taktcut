@@ -64,26 +64,46 @@ export function clearProjectMedia() {
   state.baseUrl = "";
 }
 
+function resolveMediaAssetUrl(rel) {
+  if (!rel) return "";
+  if (/^(https?:|blob:|data:|\/)/i.test(rel)) return rel;
+  return state.baseUrl + rel;
+}
+
 export function registerProjectMedia(baseUrl, mediaMap) {
   clearProjectMedia();
-  state.baseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-  state.media = mediaMap || {};
-  for (const [key, entry] of Object.entries(state.media)) {
+  state.baseUrl = !baseUrl ? "" : baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  state.media = {};
+  mergeProjectMedia(baseUrl, mediaMap);
+}
+
+export function mergeProjectMedia(baseUrl, mediaMap) {
+  if (baseUrl !== undefined && baseUrl !== null && !state.baseUrl) {
+    state.baseUrl = !baseUrl ? "" : baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  }
+  const incoming = mediaMap || {};
+  for (const [key, entry] of Object.entries(incoming)) {
+    state.media[key] = entry;
     if (entry.thumb) {
       const img = new Image();
       img.decoding = "async";
       img.onload = queueRedraw;
-      img.src = state.baseUrl + entry.thumb;
+      img.src = resolveMediaAssetUrl(entry.thumb);
       state.thumbs.set(key, img);
     }
     if (entry.kind === "image") {
       const img = new Image();
       img.decoding = "async";
       img.onload = queueRedraw;
-      img.src = state.baseUrl + entry.url;
+      img.src = resolveMediaAssetUrl(entry.url);
       state.images.set(key, img);
     }
   }
+  queueRedraw();
+}
+
+export function getRegisteredMediaEntries() {
+  return Object.entries(state.media).map(([key, entry]) => ({ key, ...entry }));
 }
 
 export function hasProjectMedia() {
@@ -99,7 +119,7 @@ export function getMediaUrl(clip, kind = "media") {
   const entry = getMediaEntry(clip);
   if (!entry) return "";
   const rel = kind === "thumb" ? entry.thumb : entry.url;
-  return rel ? state.baseUrl + rel : "";
+  return resolveMediaAssetUrl(rel);
 }
 
 function getVideo(key, entry) {
@@ -110,7 +130,7 @@ function getVideo(key, entry) {
   v.playsInline = true;
   v.preload = "auto";
   v.crossOrigin = "anonymous";
-  v.src = state.baseUrl + entry.url;
+  v.src = resolveMediaAssetUrl(entry.url);
   v.addEventListener("seeked", queueRedraw);
   v.addEventListener("loadeddata", queueRedraw);
   hiddenHost().appendChild(v);
@@ -218,7 +238,7 @@ export function syncProjectAudio(doc, frame, speed, trackMix = null) {
     }
     if (slot.key !== clip.source_path) {
       slot.key = clip.source_path;
-      slot.el.src = state.baseUrl + entry.url;
+      slot.el.src = resolveMediaAssetUrl(entry.url);
     }
     const gainDb = Number(clip.audio_gain_db || 0) + Number(trk.volume_db || 0);
     slot.el.volume = Math.max(0, Math.min(1, Math.pow(10, gainDb / 20)));

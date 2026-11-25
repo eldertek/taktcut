@@ -72,6 +72,7 @@ import {
   getMediaEntry,
   getMediaUrl,
   hasProjectMedia,
+  mergeProjectMedia,
   registerProjectMedia,
   setMediaRedrawCallback,
   syncProjectAudio
@@ -956,6 +957,9 @@ const state = {
   lastRenderCommand: "",
   lastRenderOutputPath: "",
   lastQaReport: null,
+  localMediaAssets: [],
+  deliverRenderMode: "single",
+  renderProgressTimer: null,
   updateInfo: null,
   fxSpecs: null,
   fxPresets: null,
@@ -1826,6 +1830,8 @@ function redrawActiveCanvases() {
     }
     const colorViewerChain = state.lutHoverChain || activeColorChain;
     drawColorPreviewCanvas(previewCanvas, colorViewerChain, state.wipeRatio, {
+      doc: state.timelineDoc,
+      playheadFrame: state.playheadFrame,
       enabled: Boolean(state.colorSplitWipe.enabled),
       positionPct: state.colorSplitWipe.positionPct,
       isHovered: Boolean(state.colorSplitWipe.isHovered),
@@ -1886,6 +1892,10 @@ function redrawActiveCanvases() {
     drawColorWheel(byId("wheel-lift"), "lift", state.colorGrade.lift);
     drawColorWheel(byId("wheel-gamma"), "gamma", state.colorGrade.gamma);
     drawColorWheel(byId("wheel-gain"), "gain", state.colorGrade.gain);
+    const offsetCanvas = byId("wheel-offset");
+    if (offsetCanvas) {
+      drawColorWheel(offsetCanvas, "offset", state.colorGrade.offset || [0, 0, 0]);
+    }
     if (state.cstStudio && state.cstStudio.isOpen && typeof renderCstStudioCanvases === "function") {
       renderCstStudioCanvases();
     }
@@ -5166,7 +5176,92 @@ function renderMediaPool() {
     });
     return card;
   });
-  list.replaceChildren(...cards);
+  const localCards = (Array.isArray(state.localMediaAssets) ? state.localMediaAssets : [])
+    .filter((asset) => {
+      if (state.mediaPoolType === "all") return true;
+      if (state.mediaPoolType === "audio") return asset.kind === "audio";
+      if (state.mediaPoolType === "video") return asset.kind === "video" || asset.kind === "image";
+      return false;
+    })
+    .map((asset) => {
+      const isAud = asset.kind === "audio";
+      const durS = Number(asset.duration_s || (asset.kind === "image" ? 5.0 : 4.0));
+      const fpsVal = getTimelineFps();
+      const durFrames = Math.max(12, Math.round(durS * fpsVal));
+      const card = dom("button", `media-pool-card is-local-asset ${isAud ? "is-audio" : "is-video"}`);
+      card.type = "button";
+      card.setAttribute("role", "listitem");
+      card.setAttribute("data-local-asset-id", asset.media_id || asset.rel_path || asset.name);
+      card.title = `${asset.name} (${asset.kind.toUpperCase()} | ${durS.toFixed(1)}s) - Click to append to timeline or drag onto track`;
+      const thumb = dom("div", "media-pool-thumb");
+      const thumbTop = dom("div", "media-pool-thumb-top");
+      thumbTop.appendChild(dom("span", "media-pool-track mono", isAud ? "AUD" : asset.kind === "image" ? "IMG" : "VID"));
+      thumbTop.appendChild(dom("span", "media-pool-dur mono", `${durS.toFixed(1)}s`));
+      const visual = dom("div", "media-pool-visual");
+      if (!isAud && asset.thumb_url) {
+        const img = document.createElement("img");
+        img.className = "media-pool-thumb-img";
+        img.src = asset.thumb_url;
+        img.alt = asset.name;
+        img.loading = "lazy";
+        visual.appendChild(img);
+      } else if (isAud) {
+        for (let i = 0; i < 7; i += 1) {
+          const bar = dom("span", "media-pool-wave-bar");
+          bar.style.height = `${30 + ((i * 23) % 62)}%`;
+          visual.appendChild(bar);
+        }
+      }
+      thumb.replaceChildren(thumbTop, visual);
+      const nameEl = dom("span", "media-pool-name mono", asset.name);
+      const metaEl = dom("div", "media-pool-meta mono");
+      metaEl.appendChild(dom("span", "media-pool-meta-tc", `${asset.width ? `${asset.width}x${asset.height}` : `${asset.sample_rate || 48000}Hz`} | ${durFrames}f`));
+      card.draggable = true;
+      card.replaceChildren(thumb, nameEl, metaEl);
+      const clipTemplate = {
+        name: asset.name,
+        source_path: asset.rel_path || asset.path,
+        media_type: isAud ? "audio" : "video",
+        duration_frames: durFrames,
+        source_in_frame: 0,
+        source_fps: { num: Number(asset.fps_num || Math.round(fpsVal)), den: Number(asset.fps_den || 1) },
+        enabled: true
+      };
+      card.addEventListener("dragstart", (ev) => {
+        const dragPayload = {
+          source: "media_pool",
+          dropKind: "media",
+          name: asset.name,
+          mediaType: isAud ? "audio" : "video",
+          durationFrames: durFrames,
+          clipTemplate
+        };
+        state.activeDragPayload = dragPayload;
+        if (ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = "copy";
+          try {
+            ev.dataTransfer.setData("application/x-taktcut-drag", JSON.stringify(dragPayload));
+            ev.dataTransfer.setData("text/plain", asset.name);
+          } catch {
+            // ignore synthetic drag
+          }
+        }
+      });
+      card.addEventListener("dragend", () => {
+        state.activeDragPayload = null;
+        state.timelineDropPreview = null;
+        redrawActiveCanvases();
+      });
+      card.addEventListener("click", () => {
+        appendLocalAssetToTimeline(asset, clipTemplate);
+      });
+      return card;
+    });
+
+  list.replaceChildren(...localCards, ...cards);
+  if (countEl && localCards.length > 0 && poolResult.activeType === "all") {
+    countEl.textContent = `${localCards.length + entries.length} CLIPS`;
+  }
 }
 
 function selectClipFromTimelineIndex(entry) {
@@ -9730,6 +9825,64 @@ function wireColorInputs() {
     });
   }
 
+  // 4th Primary Wheel: Offset (Master RGB shift mapped cleanly into lift/gamma/gain)
+  const offsetWheelCanvas = byId("wheel-offset");
+  if (offsetWheelCanvas) {
+    if (!Array.isArray(state.colorGrade.offset)) state.colorGrade.offset = [0, 0, 0];
+    const applyOffsetDelta = (nextRgb) => {
+      const prev = Array.isArray(state.colorGrade.offset) ? state.colorGrade.offset : [0, 0, 0];
+      const d = [nextRgb[0] - prev[0], nextRgb[1] - prev[1], nextRgb[2] - prev[2]];
+      state.colorGrade.offset = [...nextRgb];
+      for (const grp of ["lift", "gamma", "gain"]) {
+        state.colorGrade[grp] = state.colorGrade[grp].map((v, i) => clampColorNum(v + d[i] * 0.65, -1, 1));
+      }
+      for (const [idx, ch] of [[0, "r"], [1, "g"], [2, "b"]]) {
+        const rEl = byId(`offset-${ch}-range`);
+        const nEl = byId(`offset-${ch}-num`);
+        if (rEl) rEl.value = String(nextRgb[idx].toFixed(2));
+        if (nEl) nEl.value = nextRgb[idx].toFixed(2);
+      }
+      state.colorActivePresetId = "";
+      syncColorInputsFromState();
+      scheduleColorCompile();
+    };
+    bindColorWheelEvents(
+      offsetWheelCanvas,
+      "offset",
+      () => state.colorGrade.offset || [0, 0, 0],
+      applyOffsetDelta
+    );
+    for (const [idx, ch] of [[0, "r"], [1, "g"], [2, "b"]]) {
+      const rEl = byId(`offset-${ch}-range`);
+      const nEl = byId(`offset-${ch}-num`);
+      if (rEl) {
+        rEl.addEventListener("input", () => {
+          const val = Number.parseFloat(rEl.value);
+          if (!Number.isFinite(val)) return;
+          const next = [...(state.colorGrade.offset || [0, 0, 0])];
+          next[idx] = clampColorNum(val, -0.4, 0.4);
+          applyOffsetDelta(next);
+        });
+      }
+      if (nEl) {
+        nEl.addEventListener("change", () => {
+          const val = Number.parseFloat(nEl.value);
+          if (!Number.isFinite(val)) return;
+          const next = [...(state.colorGrade.offset || [0, 0, 0])];
+          next[idx] = clampColorNum(val, -0.4, 0.4);
+          applyOffsetDelta(next);
+        });
+      }
+    }
+    const rstOffBtn = byId("btn-reset-offset");
+    if (rstOffBtn) {
+      rstOffBtn.addEventListener("click", () => {
+        applyOffsetDelta([0, 0, 0]);
+        compileColorNow();
+      });
+    }
+  }
+
   for (const tb of COLOR_TONE_BINDINGS) {
     const rangeEl = byId(tb.range);
     const numEl = byId(tb.num);
@@ -11736,7 +11889,27 @@ function collectRenderRequestPayload(execute) {
   const audioOnlyEl = byId("render-audio-only-format");
   const audioOnlyFormat = audioOnlyEl ? audioOnlyEl.value : "off";
 
+  const isTimelineMode =
+    !api.isStaticDemo() &&
+    state.deliverRenderMode === "timeline" &&
+    state.timelineDoc &&
+    Array.isArray(state.timelineDoc.tracks) &&
+    state.timelineDoc.tracks.some((tr) => Array.isArray(tr.clips) && tr.clips.length > 0);
+  const rangeMode = byId("deliver-range-select") ? byId("deliver-range-select").value : "entire";
+  const useInOut =
+    rangeMode === "inout" &&
+    state.ioRange &&
+    state.ioRange.in_frame !== null &&
+    state.ioRange.out_frame !== null &&
+    state.ioRange.out_frame > state.ioRange.in_frame;
+
   return {
+    mode: isTimelineMode ? "timeline" : "single",
+    document: isTimelineMode ? state.timelineDoc : undefined,
+    width: state.renderConfig.targetWidth || (state.timelineDoc && state.timelineDoc.width) || 1920,
+    height: state.renderConfig.targetHeight || (state.timelineDoc && state.timelineDoc.height) || 1080,
+    in_frame: useInOut ? state.ioRange.in_frame : null,
+    out_frame: useInOut ? state.ioRange.out_frame : null,
     input_path: inputPath,
     output_path: outputPath,
     profile,
@@ -11746,8 +11919,9 @@ function collectRenderRequestPayload(execute) {
     encoder_preset: !isMezzanine ? state.renderConfig.encoderPreset || "medium" : null,
     fps,
     lut_path: lutPath,
-    color_grade: !lutPath && useStudioCdl ? state.colorGrade : null,
+    color_grade: !lutPath && (useStudioCdl || isTimelineMode) ? state.colorGrade : null,
     color_nodes: !lutPath && useStudioCdl ? getSerializedColorNodes() : null,
+    fusion_nodes: isTimelineMode && !state.fxBypassAll && state.fxStack.length > 0 ? serializeFxStackForApi(false) : [],
     chroma_key: chromaKeyPayload,
     stabilizer: stabilizerPayload,
     planar_tracker: planarTrackerPayload,
@@ -11783,11 +11957,89 @@ function collectRenderRequestPayload(execute) {
   };
 }
 
+function startRenderProgressPoll() {
+  stopRenderProgressPoll();
+  if (api.isStaticDemo()) return;
+  const poll = async () => {
+    try {
+      const p = await api.getRenderProgress();
+      if (!p) return;
+      const fill = byId("render-queue-progress-fill");
+      const tel = byId("render-queue-telemetry");
+      const pct = Math.max(0, Math.min(100, Math.round(Number(p.percent || 0))));
+      if (fill && (p.active || p.phase === "completed")) {
+        fill.style.width = `${pct}%`;
+      }
+      if (tel && p.active) {
+        tel.textContent = `Rendering ${p.job_label || "Timeline"}: ${pct}% (${Number(p.rendered_s || 0).toFixed(1)}s / ${Number(p.total_s || 0).toFixed(1)}s) | ${p.speed || "1.0x"} | ${p.encoder || ""}`;
+      }
+    } catch {
+      // Ignore transient poll errors
+    }
+  };
+  state.renderProgressTimer = window.setInterval(poll, 400);
+}
+
+function stopRenderProgressPoll() {
+  if (state.renderProgressTimer) {
+    window.clearInterval(state.renderProgressTimer);
+    state.renderProgressTimer = null;
+  }
+}
+
 async function buildOrExecuteRender(execute) {
   try {
     stopRemotePoll();
     const body = collectRenderRequestPayload(execute);
     const outputPath = body.output_path;
+
+    if (body.mode === "timeline" && state.renderEngine !== "remote") {
+      if (execute) startRenderProgressPoll();
+      try {
+        const data = await api.renderTimeline(body);
+        const plan = data.plan;
+        state.lastRenderCommand = data.shell_command || (plan.argv || []).join(" ");
+        byId("render-encoder-badge").textContent = `${plan.encoder} / TIMELINE`;
+        byId("render-encoder-badge").className = "nle-tag is-active mono";
+        renderKv(byId("render-plan-kv"), [
+          ["Mode", "Multi-Track Timeline Render"],
+          ["Encoder", plan.encoder],
+          ["Raster", `${plan.width}x${plan.height} @ ${plan.fps} fps`],
+          ["Duration", `${Number(plan.duration_s || 0).toFixed(2)} s`],
+          ["Video Inputs", String((plan.video_inputs || []).length)],
+          ["Audio Inputs", String((plan.audio_inputs || []).length)],
+          ["Output", plan.output_path]
+        ]);
+        byId("render-argv-output").textContent = state.lastRenderCommand;
+        const execBox = byId("render-exec-result");
+        if (data.result) {
+          execBox.classList.remove("is-hidden");
+          const res = data.result;
+          state.lastRenderOutputPath = outputPath;
+          byId("render-exec-output").textContent = [
+            `success: ${res.success}`,
+            `encoder: ${res.encoder}`,
+            `duration_s: ${Number(res.duration_s || 0).toFixed(2)}`,
+            `bytes_written: ${res.bytes_written}`,
+            `output_path: ${res.output_path}`,
+            `returncode: ${res.returncode}`,
+            res.stderr_tail ? `stderr_tail:\n${res.stderr_tail}` : ""
+          ].filter(Boolean).join("\n");
+          if (res.success) {
+            showBanner(`Timeline rendered to ${outputPath} (${formatQueueByteSize(res.bytes_written)} via ${res.encoder})`, "success");
+            await refreshWorkspaceFiles();
+          } else {
+            showBanner(`Timeline render failed (code ${res.returncode})`, "error");
+          }
+        } else {
+          execBox.classList.add("is-hidden");
+          showBanner(`Built multi-track timeline render plan (${plan.encoder}, ${Number(plan.duration_s || 0).toFixed(1)}s).`, "success");
+        }
+      } finally {
+        stopRenderProgressPoll();
+      }
+      return;
+    }
 
     if (execute && state.renderEngine === "remote") {
       const remote_url = byId("remote-node-url").value.trim();
@@ -12265,6 +12517,7 @@ async function runBatchRenderQueue(dryRun) {
   try {
     state.renderQueue.busy = true;
     renderQueueListUI();
+    if (!dryRun) startRenderProgressPoll();
     const data = await api.runRenderQueue({ dry_run: Boolean(dryRun) });
     state.renderQueue.jobs = Array.isArray(data.jobs) ? data.jobs : [];
     state.renderQueue.summary = data.summary || null;
@@ -12280,6 +12533,7 @@ async function runBatchRenderQueue(dryRun) {
   } catch (err) {
     showBanner(err.message, "error");
   } finally {
+    stopRenderProgressPoll();
     state.renderQueue.busy = false;
     renderQueueListUI();
   }
@@ -20779,6 +21033,140 @@ function wireEvents() {
   wireOpticalFlareStudioEvents();
   wireCameraShakeStudioEvents();
   initResolveWorkstationBridge();
+  wireLocalMediaImportEvents();
+}
+
+function appendLocalAssetToTimeline(asset, clipTemplate) {
+  if (!state.timelineDoc || !Array.isArray(state.timelineDoc.tracks)) return;
+  const docCopy = structuredClone(state.timelineDoc);
+  const kind = clipTemplate.media_type === "audio" ? "audio" : "video";
+  let trk = docCopy.tracks.find((tr) => tr.kind === kind && tr.index === 1);
+  if (!trk) {
+    trk = { index: 1, kind, name: kind === "audio" ? "A1 Audio" : "V1 Video", clips: [] };
+    docCopy.tracks.push(trk);
+  }
+  const endFrame = (trk.clips || []).reduce((acc, c) => Math.max(acc, (c.start_frame || 0) + (c.duration_frames || 0)), 0);
+  const newClip = {
+    ...clipTemplate,
+    track_index: trk.index,
+    start_frame: endFrame
+  };
+  trk.clips.push(newClip);
+  commitTimelineMutation(docCopy, { kind: "clip", data: newClip });
+  showBanner(`Appended ${asset.name} onto ${kind === "audio" ? "A" : "V"}${trk.index} @ ${endFrame}f`, "success");
+}
+
+function setDeliverRenderMode(mode) {
+  const next = mode === "timeline" ? "timeline" : "single";
+  state.deliverRenderMode = next;
+  for (const b of document.querySelectorAll("[data-deliver-mode]")) {
+    const on = b.getAttribute("data-deliver-mode") === next;
+    b.classList.toggle("is-active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+async function importLocalMediaFolderAction(folderPath) {
+  const statusEl = byId("local-media-import-status");
+  try {
+    if (statusEl) statusEl.textContent = `Scanning workspace folder '${folderPath}'...`;
+    const res = await api.importLocalMedia({ folder: folderPath });
+    state.localMediaAssets = Array.isArray(res.assets) ? res.assets : [];
+    if (state.localMediaAssets.length > 0) setDeliverRenderMode("timeline");
+    mergeProjectMedia("/", res.media_map || {});
+    renderMediaPool();
+    redrawActiveCanvases();
+    const count = (res.imported || []).length;
+    if (statusEl) statusEl.textContent = `Imported ${count} media files (${state.localMediaAssets.length} total in Media Pool).`;
+    showBanner(`Imported ${count} local media files from '${folderPath}'.`, "success");
+    return res;
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    if (statusEl) statusEl.textContent = `Import error: ${msg}`;
+    showBanner(msg, "error");
+    return null;
+  }
+}
+
+async function uploadLocalMediaFilesAction(files) {
+  if (!files || files.length === 0) return;
+  let importedCount = 0;
+  for (const f of Array.from(files)) {
+    try {
+      const buf = await f.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(buf);
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      const b64 = window.btoa(binary);
+      const res = await api.uploadLocalMedia({ filename: f.name, content_base64: b64 });
+      state.localMediaAssets = Array.isArray(res.assets) ? res.assets : [];
+      if (state.localMediaAssets.length > 0) setDeliverRenderMode("timeline");
+      mergeProjectMedia("/", res.media_map || {});
+      importedCount += 1;
+    } catch (err) {
+      showBanner(`Upload failed for ${f.name}: ${err.message}`, "error");
+    }
+  }
+  if (importedCount > 0) {
+    renderMediaPool();
+    redrawActiveCanvases();
+    showBanner(`Uploaded ${importedCount} media file(s) into Media Pool.`, "success");
+  }
+}
+
+function wireLocalMediaImportEvents() {
+  const dlg = byId("local-media-import-dialog");
+  const openFolderDlg = () => {
+    if (dlg && !dlg.open && typeof dlg.showModal === "function") {
+      dlg.showModal();
+      const inp = byId("local-media-folder-input");
+      if (inp) inp.focus();
+    }
+  };
+  for (const id of ["btn-pool-import-folder", "btn-media-import-folder"]) {
+    const b = byId(id);
+    if (b) b.addEventListener("click", openFolderDlg);
+  }
+  const fileInp = byId("local-media-file-input");
+  for (const id of ["btn-pool-import-media", "btn-media-import-files"]) {
+    const b = byId(id);
+    if (b && fileInp) b.addEventListener("click", () => fileInp.click());
+  }
+  if (fileInp) {
+    fileInp.addEventListener("change", () => {
+      if (fileInp.files && fileInp.files.length > 0) {
+        uploadLocalMediaFilesAction(fileInp.files);
+        fileInp.value = "";
+      }
+    });
+  }
+  const confirmBtn = byId("btn-confirm-import-folder");
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", async () => {
+      const folder = (byId("local-media-folder-input")?.value || "media").trim() || "media";
+      const res = await importLocalMediaFolderAction(folder);
+      if (res && dlg && dlg.open) dlg.close();
+    });
+  }
+  for (const closeId of ["btn-close-local-media-dialog", "btn-cancel-import-folder"]) {
+    const b = byId(closeId);
+    if (b && dlg) b.addEventListener("click", () => dlg.close());
+  }
+  // Restore already-indexed workspace media on desktop server startup
+  if (!api.isStaticDemo() && typeof api.listLocalMedia === "function") {
+    api.listLocalMedia().then((res) => {
+      if (res && Array.isArray(res.assets) && res.assets.length > 0) {
+        state.localMediaAssets = res.assets;
+        setDeliverRenderMode("timeline");
+        mergeProjectMedia("/", res.media_map || {});
+        renderMediaPool();
+        redrawActiveCanvases();
+      }
+    }).catch(() => {});
+  }
 }
 
 let workstationCtrl = null;

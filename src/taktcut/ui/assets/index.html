@@ -126,7 +126,9 @@
               </div>
               <div class="btn-row">
                 <button type="button" id="btn-media-clone-verify" class="btn btn-primary btn-mini">Clone &amp; Verify Checksum</button>
-                <button type="button" id="btn-media-import-tl" class="btn btn-secondary btn-mini">Import File</button>
+                <button type="button" id="btn-media-import-folder" class="btn btn-primary btn-mini">+ Import Folder</button>
+                <button type="button" id="btn-media-import-files" class="btn btn-secondary btn-mini">+ Import Media</button>
+                <button type="button" id="btn-media-import-tl" class="btn btn-secondary btn-mini">Import Timeline</button>
               </div>
               <div id="media-clone-status" class="telemetry-note mono" aria-live="polite">Ready for bit-exact camera offload verification.</div>
             </div>
@@ -413,6 +415,9 @@
                       title="Toggle DaVinci Cut Page Source Tape continuous strip"
                       data-i18n="timeline.mediapool.sourceTape"
                     >Source Tape</button>
+                    <button type="button" id="btn-pool-import-folder" class="btn btn-mini btn-primary" title="Import local media folder into Master Bin">+ Folder</button>
+                    <button type="button" id="btn-pool-import-media" class="btn btn-mini" title="Import local video/audio/image files">+ Media</button>
+                    <input type="file" id="local-media-file-input" class="is-hidden" multiple accept="video/*,audio/*,image/*,.mov,.mp4,.mkv,.wav,.mp3,.png,.jpg,.jpeg,.webp">
                     <span id="media-pool-count" class="nle-tag mono">0 CLIPS</span>
                   </div>
                 </div>
@@ -1931,20 +1936,64 @@
         </section>
       </section>
 
-      <!-- PAGE 04: FUSION (NODE FLOW GRAPH + EFFECTS LIBRARY + PROGRAM MONITOR) -->
-      <section id="panel-fx" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-fx">
-        <div class="nle-fx-top">
-          <!-- LEFT DOCK: 1-CLICK PRESETS & SAPPHIRE NODE LIBRARY -->
-          <aside class="nle-pane">
+      <!-- PAGE 04: FUSION (AUTHENTIC DAVINCI RESOLVE DUAL VIEWERS + TOOLBAR + NODE FLOW + INSPECTOR) -->
+      <section id="panel-fx" class="workspace-panel is-hidden resolve-fusion-page" role="tabpanel" aria-labelledby="tab-fx">
+        <div class="resolve-page-subbar fusion-subbar">
+          <div class="subbar-group">
+            <button type="button" id="btn-fusion-toggle-effects" class="subbar-toggle-btn is-active" aria-pressed="true" title="Toggle Effects Library">Effects</button>
+            <button type="button" id="btn-fusion-toggle-nodes" class="subbar-toggle-btn is-active" aria-pressed="true" title="Node Graph">Nodes</button>
+            <span class="subbar-sep"></span>
+            <span class="nle-tag mono">MediaIn1 -&gt; MediaOut1</span>
+            <span id="fx-active-badge" class="nle-tag mono">0 FX</span>
+          </div>
+          <div class="subbar-group fusion-studio-launchers">
+<button type="button" id="btn-fx-motion-spline-studio" class="btn btn-secondary ms-studio-btn" title="Open Keyframe Spline, Speed Graph &amp; Optical Motion Blur Studio (Shift+E)">
+                  <span data-i18n="msStudio.btn.fx">Spline Graph</span>
+                  <span class="kbd-chip mono">Shift+E</span>
+                </button>
+<button type="button" id="btn-fx-optical-glow-studio" class="btn btn-secondary og-studio-btn" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">
+                  <span data-i18n="ogStudio.btn.fx">Halation / Glow</span>
+                  <span class="kbd-chip mono">Shift+A</span>
+                </button>
+<button type="button" id="btn-fx-power-window-studio" class="btn btn-secondary pw-studio-btn" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">
+                  <span data-i18n="pwStudio.btn.fx">Power Windows</span>
+                  <span class="kbd-chip mono">Shift+W</span>
+                </button>
+<button type="button" id="btn-fx-retime-studio" class="btn btn-secondary rt-studio-btn" title="Open Optical-Flow Speed-Ramp, Freeze-Frame &amp; Pitch-Lock Retime Studio (Shift+Y)">
+                  <span data-i18n="rtStudio.btn.fx">Retime Studio</span>
+                  <span class="kbd-chip mono">Shift+Y</span>
+                </button>
+<button type="button" id="btn-fx-stabilization-studio" class="btn btn-secondary stab-studio-btn" title="Open Camera Stabilization, Perspective Lock &amp; Rolling-Shutter Jello Studio (Shift+X)">
+                  <span data-i18n="stabStudio.btn.fx">Stabilizer Studio</span>
+                  <span class="kbd-chip mono">Shift+X</span>
+                </button>
+<button type="button" id="btn-fx-film-look-studio" class="btn btn-secondary fl-studio-btn" title="Open 35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio (Shift+N)">
+                  <span data-i18n="flStudio.btn.fx">Film Look 35mm</span>
+                  <span class="kbd-chip mono">Shift+N</span>
+                </button>
+<button type="button" id="btn-fx-optical-flare-studio" class="btn btn-secondary of-studio-btn" title="Open Optical Glow, Halation &amp; Anamorphic Lens Flare Studio (Shift+U)">
+                  <span data-i18n="ofStudio.btn.fx">Optical Flare</span>
+                  <span class="kbd-chip mono">Shift+U</span>
+                </button>
+<button type="button" id="btn-fx-camera-shake-studio" class="btn btn-secondary cs-studio-btn" title="Open Camera Shake, Handheld Motion &amp; Lens Distortion Studio (Shift+J)">
+                  <span data-i18n="csStudio.entryBtn">Camera Shake</span>
+                  <span class="kbd-chip mono">Shift+J</span>
+                </button>
+          </div>
+          <div class="subbar-group">
+            <button type="button" id="btn-fusion-toggle-inspector" class="subbar-toggle-btn is-active" aria-pressed="true" title="Toggle Fusion Inspector">Inspector</button>
+          </div>
+        </div>
+
+        <div class="fusion-upper-stage">
+          <aside id="fusion-effects-dock" class="nle-pane fusion-effects-dock">
             <div class="pane-header">
-              <h2 data-i18n="fx.library.title">Effects Library &amp; Resolve FX</h2>
+              <h2 data-i18n="fx.library.title">Effects Library</h2>
               <span class="nle-tag mono">24 FX</span>
             </div>
             <div class="pane-body">
-              <div class="pane-subheader">
-                <span data-i18n="fx.library.presets">Studio Looks &amp; 1-Click Presets</span>
-              </div>
-              <div id="fx-preset-grid" class="fx-preset-grid">
+              <div class="pane-subheader"><span data-i18n="fx.library.presets">Studio Looks &amp; Presets</span></div>
+<div id="fx-preset-grid" class="fx-preset-grid">
                 <button type="button" class="btn fx-preset-btn" data-fx-preset="dreamy_glow">
                   <span class="fx-preset-name">Dreamy Glow</span>
                   <span class="fx-preset-meta mono">Glow</span>
@@ -2018,20 +2067,16 @@
                   <span class="fx-preset-meta mono">Reflections + Glow</span>
                 </button>
               </div>
-
               <div class="pane-divider"></div>
-
-              <div class="pane-subheader">
-                <span data-i18n="fx.library.addEffect">Add Resolve FX / OpenFX Node</span>
-              </div>
-              <div id="fx-ofx-filterbar" class="fx-ofx-filterbar" role="group" aria-label="OpenFX Categories">
+              <div class="pane-subheader"><span data-i18n="fx.library.addEffect">Resolve FX / OpenFX</span></div>
+<div id="fx-ofx-filterbar" class="fx-ofx-filterbar" role="group" aria-label="OpenFX Categories">
                 <button type="button" class="btn btn-chip fx-ofx-tab is-active" data-fx-cat-filter="all" aria-pressed="true" data-i18n="fx.ofx.cat.all">All (24)</button>
                 <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="light_glow" aria-pressed="false" data-i18n="fx.ofx.cat.lightGlow">Light &amp; Glow</button>
                 <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="lens_blur" aria-pressed="false" data-i18n="fx.ofx.cat.lensBlur">Lens &amp; Blur</button>
                 <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="film_retro" aria-pressed="false" data-i18n="fx.ofx.cat.filmRetro">Film &amp; Retro</button>
                 <button type="button" class="btn btn-chip fx-ofx-tab" data-fx-cat-filter="key_transform" aria-pressed="false" data-i18n="fx.ofx.cat.keyTransform">Key &amp; Transform</button>
               </div>
-              <div id="fx-ofx-groups" class="fx-ofx-groups">
+<div id="fx-ofx-groups" class="fx-ofx-groups">
                 <section class="fx-ofx-group" data-fx-category="light_glow">
                   <div class="fx-ofx-group-head">
                     <span class="fx-ofx-group-title" data-i18n="fx.ofx.cat.lightGlow">Light &amp; Glow</span>
@@ -2092,104 +2137,80 @@
             </div>
           </aside>
 
-          <!-- RIGHT DOCK: LIVE FX PROGRAM MONITOR -->
-          <section class="nle-pane">
-            <div class="pane-header">
-              <h2 data-i18n="fx.monitor.title">FX Program Monitor (Live Simulation)</h2>
-              <div class="viewer-controls">
-                <span id="fx-active-badge" class="nle-tag mono">0 FX</span>
-                <div class="keyer-matte-switch" role="group" aria-label="Keyer matte view">
+          <section class="nle-pane fusion-viewers-stage">
+            <div class="fusion-dual-viewers">
+              <div class="fusion-viewer-slot" id="fusion-viewer-1-pane">
+                <div class="fusion-viewer-bar">
+                  <div class="viewer-controls">
+                    <span class="fusion-viewer-dot is-on mono">1</span>
+                    <span id="fusion-v1-label" class="fusion-viewer-name mono">MediaIn1</span>
+                    <span class="fusion-viewer-pill mono">Fit</span>
+                    <span class="fusion-viewer-pill mono">Color</span>
+                  </div>
+                  <span id="fusion-v1-res" class="mono fusion-viewer-meta">1920x1080</span>
+                </div>
+                <div class="viewer-well fusion-viewer-well">
+                  <canvas id="fusion-viewer-1-canvas" class="studio-canvas" aria-label="Fusion Viewer 1 (Source)"></canvas>
+                </div>
+              </div>
+
+              <div class="fusion-viewer-slot" id="fusion-viewer-2-pane">
+                <div class="fusion-viewer-bar">
+                  <div class="viewer-controls">
+                    <span class="fusion-viewer-dot is-on mono">2</span>
+                    <span id="fusion-v2-label" class="fusion-viewer-name mono">MediaOut1</span>
+<div class="keyer-matte-switch" role="group" aria-label="Keyer matte view">
                   <button type="button" id="btn-fx-matte-final" class="btn btn-mini is-active" data-fx-matte="final" aria-pressed="true" data-i18n="fx.keyer.matteFinal">Final</button>
                   <button type="button" id="btn-fx-matte-alpha" class="btn btn-mini" data-fx-matte="alpha_matte" aria-pressed="false" data-i18n="fx.keyer.matteAlpha">Alpha Matte</button>
                 </div>
-                <div id="fx-split-wipe-group" class="split-wipe-group" role="group" aria-label="FX Split-Screen Wipe">
+<div id="fx-split-wipe-group" class="split-wipe-group" role="group" aria-label="FX Split-Screen Wipe">
                   <button type="button" id="btn-fx-split-wipe" class="btn btn-secondary btn-split-wipe" aria-pressed="false" data-i18n="wipe.btn.toggle" title="Split Wipe (W / Ctrl+W)">Split Wipe</button>
                   <label class="inline-label" for="fx-wipe-slider" data-i18n="color.preview.wipe">Wipe</label>
                   <input type="range" id="fx-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="FX split wipe position">
                   <span id="fx-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
                 </div>
-                <button type="button" id="btn-fx-motion-spline-studio" class="btn btn-secondary ms-studio-btn" title="Open Keyframe Spline, Speed Graph &amp; Optical Motion Blur Studio (Shift+E)">
-                  <span data-i18n="msStudio.btn.fx">Spline Graph</span>
-                  <span class="kbd-chip mono">Shift+E</span>
-                </button>
-                <button type="button" id="btn-fx-optical-glow-studio" class="btn btn-secondary og-studio-btn" title="Open Optical Halation, Bloom &amp; Anamorphic Streak Studio (Shift+A)">
-                  <span data-i18n="ogStudio.btn.fx">Halation / Glow</span>
-                  <span class="kbd-chip mono">Shift+A</span>
-                </button>
-                <button type="button" id="btn-fx-power-window-studio" class="btn btn-secondary pw-studio-btn" title="Open DaVinci Resolve Power Windows &amp; Planar Tracker Studio (Shift+W)">
-                  <span data-i18n="pwStudio.btn.fx">Power Windows</span>
-                  <span class="kbd-chip mono">Shift+W</span>
-                </button>
-                <button type="button" id="btn-fx-retime-studio" class="btn btn-secondary rt-studio-btn" title="Open Optical-Flow Speed-Ramp, Freeze-Frame &amp; Pitch-Lock Retime Studio (Shift+Y)">
-                  <span data-i18n="rtStudio.btn.fx">Retime Studio</span>
-                  <span class="kbd-chip mono">Shift+Y</span>
-                </button>
-                <button type="button" id="btn-fx-stabilization-studio" class="btn btn-secondary stab-studio-btn" title="Open Camera Stabilization, Perspective Lock &amp; Rolling-Shutter Jello Studio (Shift+X)">
-                  <span data-i18n="stabStudio.btn.fx">Stabilizer Studio</span>
-                  <span class="kbd-chip mono">Shift+X</span>
-                </button>
-                <button type="button" id="btn-fx-film-look-studio" class="btn btn-secondary fl-studio-btn" title="Open 35mm/16mm Film Look Creator, Print Stock Curve &amp; Bleach Bypass Studio (Shift+N)">
-                  <span data-i18n="flStudio.btn.fx">Film Look 35mm</span>
-                  <span class="kbd-chip mono">Shift+N</span>
-                </button>
-                <button type="button" id="btn-fx-optical-flare-studio" class="btn btn-secondary of-studio-btn" title="Open Optical Glow, Halation &amp; Anamorphic Lens Flare Studio (Shift+U)">
-                  <span data-i18n="ofStudio.btn.fx">Optical Flare</span>
-                  <span class="kbd-chip mono">Shift+U</span>
-                </button>
-                <button type="button" id="btn-fx-camera-shake-studio" class="btn btn-secondary cs-studio-btn" title="Open Camera Shake, Handheld Motion &amp; Lens Distortion Studio (Shift+J)">
-                  <span data-i18n="csStudio.entryBtn">Camera Shake</span>
-                  <span class="kbd-chip mono">Shift+J</span>
-                </button>
-                <button type="button" id="btn-fx-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
-                  <span data-i18n="stills.btn.grab">Grab Still</span>
-                  <span class="kbd-chip mono">Shift+S</span>
-                </button>
-                <button type="button" id="btn-fx-bypass-all" class="btn btn-secondary" aria-pressed="false" data-i18n="fx.btn.bypassAll">Bypass FX (A/B)</button>
-                <button type="button" id="btn-fx-reset-all" class="btn btn-secondary" data-i18n="fx.btn.resetAll">Clear FX</button>
-              </div>
-            </div>
-            <div class="pane-body">
-              <div class="viewer-well">
-                <canvas id="fx-program-canvas" class="studio-canvas" aria-label="FX Program Monitor preview"></canvas>
-              </div>
-              <div class="transport-bar">
-                <div class="btn-row">
-                  <button type="button" id="btn-fx-play" class="btn btn-mini mono" aria-pressed="false" data-i18n="timeline.transport.play">Play</button>
-                  <button type="button" id="btn-fx-step" class="btn btn-mini mono" title="+1 frame">+1f</button>
+                  </div>
+                  <div class="viewer-controls">
+                    <button type="button" id="btn-fx-grab-still" class="btn btn-mini btn-grab-still" title="Grab Still (Shift+S)"><span data-i18n="stills.btn.grab">Still</span></button>
+                    <button type="button" id="btn-fx-bypass-all" class="btn btn-mini" aria-pressed="false" data-i18n="fx.btn.bypassAll">Bypass</button>
+                    <button type="button" id="btn-fx-reset-all" class="btn btn-mini" data-i18n="fx.btn.resetAll">Clear</button>
+                  </div>
                 </div>
-                <input type="range" id="fx-playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="25" aria-label="FX preview frame">
-                <span id="fx-program-tc" class="tc-readout mono">00:00:01:00</span>
+                <div class="viewer-well fusion-viewer-well">
+                  <canvas id="fx-program-canvas" class="studio-canvas" aria-label="FX Program Monitor preview"></canvas>
+                </div>
               </div>
-              <div id="fx-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
             </div>
+
+            <div class="transport-bar fusion-transport-bar">
+              <div class="btn-row">
+                <button type="button" id="btn-fx-play" class="btn btn-mini mono" aria-pressed="false" data-i18n="timeline.transport.play">Play</button>
+                <button type="button" id="btn-fx-step" class="btn btn-mini mono" title="+1 frame">+1f</button>
+              </div>
+              <input type="range" id="fx-playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="25" aria-label="FX preview frame">
+              <span id="fx-program-tc" class="tc-readout mono">00:00:01:00</span>
+            </div>
+            <div id="fx-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
           </section>
-        </div>
 
-        <section id="fusion-flow-pane" class="nle-pane fusion-flow-pane" aria-label="Fusion Node Flow Editor">
-          <div class="pane-header">
-            <div class="viewer-controls">
-              <h2>Fusion Node Flow (2D / OFX Pipeline)</h2>
-              <span class="nle-tag mono">MediaIn1 -&gt; MediaOut1</span>
+          <aside id="fusion-inspector-dock" class="nle-pane fusion-inspector-dock">
+            <div class="pane-header">
+              <h2 id="fusion-insp-node-title" data-i18n="fx.controls.title">Inspector</h2>
+              <span id="fx-stack-count" class="nle-tag mono">0 nodes</span>
             </div>
-            <div class="fusion-tool-shelf" role="toolbar" aria-label="Fusion Node Shelf">
-              <button type="button" class="btn btn-mini" data-fusion-tool="keyer">DeltaKeyer</button>
-              <button type="button" class="btn btn-mini" data-fusion-tool="tracker">PlanarTracker</button>
-              <button type="button" class="btn btn-mini" data-fusion-tool="spline">Spline / Blur</button>
-              <button type="button" class="btn btn-mini" data-fusion-tool="glow">OpticalGlow</button>
-              <button type="button" class="btn btn-mini" data-fusion-tool="flare">LensFlare</button>
-              <button type="button" class="btn btn-mini" data-fusion-tool="shake">CameraShake</button>
-              <button type="button" class="btn btn-mini" data-fusion-tool="bypass">Bypass Selected</button>
+            <div class="resolve-subtabs fusion-insp-tabs" role="tablist" aria-label="Fusion Inspector Tabs">
+              <button type="button" class="resolve-subtab-btn is-active" data-fusion-insp-tab="tools" aria-selected="true">Tools</button>
+              <button type="button" class="resolve-subtab-btn" data-fusion-insp-tab="keyer" aria-selected="false">Keyer</button>
+              <button type="button" class="resolve-subtab-btn" data-fusion-insp-tab="tracker" aria-selected="false">Tracker</button>
+              <button type="button" class="resolve-subtab-btn" data-fusion-insp-tab="compiler" aria-selected="false">Compiler</button>
             </div>
-          </div>
-          <div class="fusion-flow-body">
-            <canvas id="fusion-flow-canvas" class="studio-canvas fusion-flow-canvas" aria-label="Interactive Fusion Node Graph"></canvas>
-          </div>
-        </section>
-
-        <div class="nle-fx-bottom">
-          <div class="nle-fx-left-col">
-            <!-- CHROMA KEY / GREEN SCREEN STUDIO (RESOLVE DELTA KEYER / AE KEYLIGHT) -->
-            <section id="fx-keyer-pane" class="nle-pane">
+            <div class="pane-body fusion-insp-body">
+              <div id="fusion-insp-pane-tools" class="fusion-insp-pane">
+                <div id="fusion-selected-node-meta" class="fusion-node-inspector-card mono">Selected: DeltaKeyer1 (Click node dots 1 / 2 to route viewers)</div>
+                <div id="fx-controls-stack" class="fx-stack"></div>
+              </div>
+              <div id="fusion-insp-pane-keyer" class="fusion-insp-pane">
+<section id="fx-keyer-pane" class="nle-pane">
               <div class="pane-header">
                 <h2 data-i18n="fx.keyer.title">Chroma Key / Green Screen Studio</h2>
                 <div class="viewer-controls">
@@ -2256,9 +2277,9 @@
                 </div>
               </div>
             </section>
-
-            <!-- 2D PLANAR TRACKER / 4-CORNER PIN & MOTION STABILIZER (MOCHA / FUSION / DESHAKE) -->
-            <section id="fx-tracker-pane" class="nle-pane">
+              </div>
+              <div id="fusion-insp-pane-tracker" class="fusion-insp-pane">
+<section id="fx-tracker-pane" class="nle-pane">
               <div class="pane-header">
                 <h2 data-i18n="fx.tracker.title">Planar Tracker, Corner-Pin &amp; Stabilizer</h2>
                 <div class="viewer-controls">
@@ -2422,21 +2443,9 @@
                 </div>
               </div>
             </section>
-
-            <!-- LEFT: RESOLVE FX & FUSION EFFECTS CONTROLS -->
-            <section class="nle-pane">
-              <div class="pane-header">
-                <h2 data-i18n="fx.controls.title">Inspector &gt; Effects</h2>
-                <span id="fx-stack-count" class="nle-tag mono">0 nodes</span>
               </div>
-              <div class="pane-body">
-                <div id="fx-controls-stack" class="fx-stack"></div>
-              </div>
-            </section>
-          </div>
-
-          <!-- RIGHT: FFMPEG FILTERGRAPH COMPILER & RENDER TIME ESTIMATOR -->
-          <aside class="nle-pane">
+              <div id="fusion-insp-pane-compiler" class="fusion-insp-pane">
+<aside class="nle-pane">
             <div class="pane-header">
               <h2 data-i18n="fx.compiler.title">FFmpeg Filtergraph Compiler</h2>
               <span id="fx-compile-badge" class="nle-tag mono">IDLE</span>
@@ -2479,9 +2488,38 @@
               </details>
             </div>
           </aside>
+              </div>
+            </div>
+          </aside>
         </div>
-      </section>
 
+        <div class="fusion-node-toolbar" role="toolbar" aria-label="Fusion Node Toolbar">
+          <div class="fusion-tool-shelf">
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="bg" title="Background (BG)">BG</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="fastnoise" title="FastNoise (FN)">FN</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="textplus" title="Text+ (T+)">T+</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="merge" title="Merge (Mrg)">Mrg</button>
+            <span class="subbar-sep"></span>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="spline" title="Transform / Spline">XF</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="glow" title="SoftGlow / OpticalGlow">Glow</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="flare" title="LensFlare">Flare</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="shake" title="CameraShake">Shake</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="glitch" title="Digital Glitch / RGB Split">Glitch</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="vhs" title="Analog Damage / VHS">VHS</button>
+            <span class="subbar-sep"></span>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="keyer" title="DeltaKeyer">Key</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="tracker" title="PlanarTracker">Trk</button>
+            <button type="button" class="fusion-tb-btn" data-fusion-tool="bypass" title="Bypass Selected Node (Ctrl+P)">Bypass</button>
+          </div>
+          <span class="mono fusion-tb-hint">Dots 1 / 2 route to Viewers | Drag nodes in Flow</span>
+        </div>
+
+        <section id="fusion-flow-pane" class="nle-pane fusion-flow-pane" aria-label="Fusion Node Flow Editor">
+          <div class="fusion-flow-body">
+            <canvas id="fusion-flow-canvas" class="studio-canvas fusion-flow-canvas" aria-label="Interactive Fusion Node Graph"></canvas>
+          </div>
+        </section>
+      </section>
       <!-- PAGE 3: TITLES & LOWER-THIRDS (DAVINCI FUSION TITLES / PREMIERE ESSENTIAL GRAPHICS) -->
       <section id="panel-titles" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-titles">
         <div class="nle-titles-top">
@@ -2930,41 +2968,15 @@
         </div>
       </section>
 
-      <!-- PAGE 4: COLOR (DAVINCI COLOR WHEELS + LUMETRI TONE + SCOPES + FFMPEG + .CUBE) -->
-      <section id="panel-color" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-color">
-        <div class="nle-color-top">
-          <section class="nle-pane">
-            <div class="pane-header">
-              <h2 data-i18n="color.preview.title">Color Viewer (Rec.709 Before / After)</h2>
-              <div class="viewer-controls">
-                <div id="color-split-wipe-group" class="split-wipe-group is-enabled" role="group" aria-label="Color Split-Screen Wipe">
-                  <button type="button" id="btn-color-split-wipe" class="btn btn-secondary btn-split-wipe is-active" aria-pressed="true" data-i18n="wipe.btn.toggle" title="Split Wipe (W / Ctrl+W)">Split Wipe</button>
-                  <button type="button" id="btn-color-wipe-mode" class="btn btn-mini" aria-pressed="false" data-i18n="color.wipe.modeBeforeAfter" title="Switch between Before/After and Ref/Match split wipe">Before/After</button>
-                  <label class="inline-label" for="cdl-wipe-slider" data-i18n="color.preview.wipe">Wipe</label>
-                  <input type="range" id="cdl-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="Color split wipe position">
-                  <span id="cdl-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
-                </div>
-                <button type="button" id="btn-color-chart-overlay" class="btn btn-secondary" aria-pressed="false" data-i18n="color.chart.overlayBtn" title="Toggle ColorChecker 24 overlay">Chart</button>
-                <button type="button" id="btn-color-shot-match" class="btn btn-secondary btn-shot-match" title="Shot Match &amp; Color Chart Auto-Balance (Shift+K)">
-                  <span data-i18n="color.shotMatch.btnShort">Shot Match</span>
-                  <span class="kbd-chip mono">Shift+K</span>
-                </button>
-                <button type="button" id="btn-color-qual-highlight" class="btn btn-secondary btn-qual-highlight" aria-pressed="false" title="Qualifier Highlight Matte (Shift+H)">
-                  <span data-i18n="color.qual.highlight">Highlight</span>
-                  <span class="kbd-chip mono">Shift+H</span>
-                </button>
-                <button type="button" id="btn-color-grab-still" class="btn btn-secondary btn-grab-still" title="Grab Still (Shift+S)">
-                  <span data-i18n="stills.btn.grab">Grab Still</span>
-                  <span class="kbd-chip mono">Shift+S</span>
-                </button>
-                <button type="button" id="btn-cdl-reset" class="btn btn-secondary" data-i18n="color.btn.reset">Reset All</button>
-              </div>
-            </div>
-            <div class="pane-body">
-              <div class="viewer-well">
-                <canvas id="color-preview-canvas" class="studio-canvas" aria-label="Color grading before and after preview"></canvas>
-              </div>
-              <div class="preset-bar" role="group" aria-label="Cinematic color grade presets">
+      <!-- PAGE 05: COLOR (AUTHENTIC DAVINCI RESOLVE UiColorPanelLayout: GALLERY | VIEWER | NODES -> CLIPS -> 3-COL PALETTE) -->
+      <section id="panel-color" class="workspace-panel is-hidden resolve-color-page" role="tabpanel" aria-labelledby="tab-color">
+        <div class="resolve-page-subbar color-subbar">
+          <div class="subbar-group">
+            <button type="button" id="btn-color-toggle-gallery" class="subbar-toggle-btn is-active" aria-pressed="true">Gallery</button>
+            <button type="button" id="btn-color-toggle-luts" class="subbar-toggle-btn is-active" aria-pressed="true">LUTs</button>
+          </div>
+          <div class="color-subbar-presets">
+<div class="preset-bar" role="group" aria-label="Cinematic color grade presets">
                 <span class="pill-label" data-i18n="color.presets.label">PRESETS</span>
                 <button type="button" class="btn btn-chip color-preset-btn is-active" data-grade-preset="rec709_clean" aria-pressed="true" data-i18n="color.preset.rec709">Rec.709 Clean</button>
                 <button type="button" class="btn btn-chip color-preset-btn" data-grade-preset="teal_orange" aria-pressed="false" data-i18n="color.preset.tealOrange">Teal &amp; Orange</button>
@@ -2998,52 +3010,82 @@
                 <button type="button" id="btn-color-camera-shake-studio" class="btn btn-chip cs-studio-btn" data-i18n="csStudio.entryBtn" title="Open Camera Shake, Handheld Motion &amp; Lens Distortion Studio (Shift+J)">Camera Shake</button>
                 <span id="color-of-badge" class="nle-tag mono" aria-live="polite">FLARE OFF</span>
               </div>
-              <div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div>
-            </div>
-          </section>
-
-          <section class="nle-pane">
-            <div class="pane-header">
-              <h2 data-i18n="color.scopes.title">Live Broadcast Scopes</h2>
-              <div class="viewer-controls">
-                <div class="scope-switch" role="group" aria-label="Broadcast video scope mode">
-                  <button type="button" id="btn-scope-parade" class="scope-btn is-active" data-scope-mode="parade" aria-pressed="true" data-i18n="color.scopes.parade">RGB Parade</button>
-                  <button type="button" id="btn-scope-waveform" class="scope-btn" data-scope-mode="waveform" aria-pressed="false" data-i18n="color.scopes.waveform">Luma Waveform</button>
-                  <button type="button" id="btn-scope-vectorscope" class="scope-btn" data-scope-mode="vectorscope" aria-pressed="false" data-i18n="color.scopes.vectorscope">Vectorscope</button>
-                  <button type="button" id="btn-scope-histogram" class="scope-btn" data-scope-mode="histogram" aria-pressed="false" data-i18n="color.scopes.histogram">IRE Hist</button>
-                </div>
-                <span class="nle-tag mono">Rec.709</span>
-              </div>
-            </div>
-            <div class="pane-body">
-              <div class="viewer-well">
-                <canvas id="color-scope-canvas" class="studio-canvas" aria-label="Live broadcast video scope"></canvas>
-              </div>
-            </div>
-          </section>
+          </div>
+          <div class="subbar-group">
+            <button type="button" id="btn-color-toggle-clips" class="subbar-toggle-btn is-active" aria-pressed="true">Clips</button>
+            <button type="button" id="btn-color-toggle-nodes" class="subbar-toggle-btn is-active" aria-pressed="true">Nodes</button>
+          </div>
         </div>
 
-        <section id="color-clips-strip-pane" class="nle-pane color-clips-strip-pane" aria-label="Color Timeline Clips Filmstrip">
-          <div class="pane-header">
-            <h2>Clips Filmstrip</h2>
-            <span id="color-filmstrip-count" class="nle-tag mono">0 SHOTS</span>
-          </div>
-          <div id="color-clips-filmstrip" class="color-clips-filmstrip" role="list"></div>
-        </section>
-
-        <div class="nle-color-bottom">
-          <!-- DAVINCI COLOR WHEELS + LUMETRI TONE CONTROLS -->
-          <section class="nle-pane">
-            <div class="pane-header">
-              <h2 data-i18n="color.controls.title">Color Grading Panel (Lift / Gamma / Gain &amp; Tone)</h2>
-              <div class="viewer-controls">
-                <span id="color-preset-badge" class="nle-tag is-active mono">Rec.709 Clean</span>
-                <label class="inline-label" for="cdl-file-input" data-i18n="color.label.importCdl">Import .cdl</label>
-                <input type="file" id="cdl-file-input" class="input-control file-input-compact" accept=".cdl,.cc,.ccc,.xml">
-              </div>
+        <div class="color-upper-stage">
+          <aside id="color-left-drawer" class="nle-pane color-left-drawer">
+            <div class="resolve-subtabs" role="tablist" aria-label="Gallery and LUTs">
+              <button type="button" class="resolve-subtab-btn is-active" data-color-left-tab="gallery" aria-selected="true">Gallery</button>
+              <button type="button" class="resolve-subtab-btn" data-color-left-tab="luts" aria-selected="false">LUTs</button>
             </div>
             <div class="pane-body">
-              <div id="color-node-tree-dock" class="color-node-tree-dock" role="region" aria-label="Serial Color Node Tree">
+              <div id="color-left-pane-gallery"><div id="color-stills-gallery" class="stills-gallery-strip" aria-live="polite"></div></div>
+              <div id="color-left-pane-luts"><div id="color-lut-browser-dock" class="color-lut-browser-dock" role="region" aria-label="3D LUT Look Library">
+                  <div class="lut-browser-toolbar">
+                    <div class="lut-browser-title-group">
+                      <span class="pane-subheader-label" data-i18n="color.lutBrowser.title">3D LUT Library (.cube)</span>
+                      <span id="lut-browser-count-badge" class="nle-tag mono">8 LUTS</span>
+                    </div>
+                    <div id="lut-browser-category-strip" class="lut-category-strip" role="group" aria-label="LUT Category Filter">
+                      <button type="button" class="btn btn-mini lut-cat-btn is-active" data-lut-category="all" aria-pressed="true" data-i18n="color.lutBrowser.catAll">All</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="film_print" aria-pressed="false" data-i18n="color.lutBrowser.catFilm">Film Print</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="camera_log" aria-pressed="false" data-i18n="color.lutBrowser.catLog">Camera Log</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="creative_cinema" aria-pressed="false" data-i18n="color.lutBrowser.catCinema">Cinema</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="monochrome" aria-pressed="false" data-i18n="color.lutBrowser.catMono">Mono</button>
+                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="custom" aria-pressed="false" data-i18n="color.lutBrowser.catCustom">Custom</button>
+                    </div>
+                  </div>
+                  <div id="color-lut-browser-grid" class="color-lut-browser-grid" role="list" aria-label="Studio 3D LUT presets"></div>
+                </div></div>
+            </div>
+          </aside>
+
+          <section class="nle-pane color-viewer-pane">
+            <div class="pane-header">
+              <div class="viewer-controls">
+                <h2 data-i18n="color.preview.title">Color Viewer</h2>
+<div id="color-split-wipe-group" class="split-wipe-group is-enabled" role="group" aria-label="Color Split-Screen Wipe">
+                  <button type="button" id="btn-color-split-wipe" class="btn btn-secondary btn-split-wipe is-active" aria-pressed="true" data-i18n="wipe.btn.toggle" title="Split Wipe (W / Ctrl+W)">Split Wipe</button>
+                  <button type="button" id="btn-color-wipe-mode" class="btn btn-mini" aria-pressed="false" data-i18n="color.wipe.modeBeforeAfter" title="Switch between Before/After and Ref/Match split wipe">Before/After</button>
+                  <label class="inline-label" for="cdl-wipe-slider" data-i18n="color.preview.wipe">Wipe</label>
+                  <input type="range" id="cdl-wipe-slider" class="wipe-range-slider" min="0" max="100" step="1" value="50" aria-label="Color split wipe position">
+                  <span id="cdl-wipe-label" class="mono nle-tag wipe-pct-tag">50%</span>
+                </div>
+              </div>
+              <div class="viewer-controls">
+                <button type="button" id="btn-color-chart-overlay" class="btn btn-mini" aria-pressed="false" data-i18n="color.chart.overlayBtn" title="Toggle ColorChecker 24 overlay">Chart</button>
+                <button type="button" id="btn-color-shot-match" class="btn btn-mini btn-shot-match" title="Shot Match (Shift+K)"><span data-i18n="color.shotMatch.btnShort">Match</span></button>
+                <button type="button" id="btn-color-qual-highlight" class="btn btn-mini btn-qual-highlight" aria-pressed="false" title="Highlight Matte (Shift+H)"><span data-i18n="color.qual.highlight">Highlight</span></button>
+                <button type="button" id="btn-color-grab-still" class="btn btn-mini btn-grab-still" title="Grab Still (Shift+S)"><span data-i18n="stills.btn.grab">Grab Still</span></button>
+                <button type="button" id="btn-cdl-reset" class="btn btn-mini" data-i18n="color.btn.reset">Reset All</button>
+              </div>
+            </div>
+            <div class="pane-body color-viewer-body">
+              <div class="viewer-well color-viewer-well">
+                <canvas id="color-preview-canvas" class="studio-canvas" aria-label="Color grading before and after preview"></canvas>
+              </div>
+              <div class="transport-bar color-transport-bar">
+                <div class="btn-row">
+                  <button type="button" id="btn-color-play" class="btn btn-mini mono" title="Play / Pause">Play</button>
+                </div>
+                <input type="range" id="color-playhead-slider" class="scrub-slider" min="0" max="500" step="1" value="0" aria-label="Color viewer playhead">
+                <span id="color-program-tc" class="tc-readout mono">00:00:00:00</span>
+              </div>
+            </div>
+          </section>
+
+          <aside id="color-nodes-pane" class="nle-pane color-nodes-pane" aria-label="Color Node Graph">
+            <div class="pane-header">
+              <h2>Nodes</h2>
+              <span class="nle-tag mono">Clip</span>
+            </div>
+            <div class="pane-body">
+<div id="color-node-tree-dock" class="color-node-tree-dock" role="region" aria-label="Serial Color Node Tree">
                 <div class="color-node-toolbar">
                   <div class="color-node-title-group">
                     <span class="pane-subheader-label" data-i18n="color.nodes.title">Serial Node Tree</span>
@@ -3078,8 +3120,30 @@
                   </div>
                 </div>
               </div>
+            </div>
+          </aside>
+        </div>
 
-              <div class="wheels-grid">
+<section id="color-clips-strip-pane" class="nle-pane color-clips-strip-pane" aria-label="Color Timeline Clips Filmstrip">
+          <div class="pane-header">
+            <h2>Clips Filmstrip</h2>
+            <span id="color-filmstrip-count" class="nle-tag mono">0 SHOTS</span>
+          </div>
+          <div id="color-clips-filmstrip" class="color-clips-filmstrip" role="list"></div>
+        </section>
+
+        <div class="color-palette-deck">
+          <section class="nle-pane color-primaries-col">
+            <div class="pane-header">
+              <h2 data-i18n="color.controls.title">Primaries - Color Wheels</h2>
+              <div class="viewer-controls">
+                <span id="color-preset-badge" class="nle-tag is-active mono">Rec.709 Clean</span>
+                <label class="inline-label" for="cdl-file-input" data-i18n="color.label.importCdl">.cdl</label>
+                <input type="file" id="cdl-file-input" class="input-control file-input-compact" accept=".cdl,.cc,.ccc,.xml">
+              </div>
+            </div>
+            <div class="pane-body color-primaries-body">
+<div class="wheels-grid">
                 <!-- LIFT (SHADOWS) WHEEL -->
                 <div class="wheel-dock">
                   <div class="wheel-head">
@@ -3157,80 +3221,173 @@
                     </div>
                   </div>
                 </div>
-              </div>
+              
+                <!-- OFFSET (MASTER) WHEEL -->
+                <div class="wheel-dock">
+                  <div class="wheel-head">
+                    <span class="wheel-title">Offset</span>
+                    <button type="button" id="btn-reset-offset" class="btn btn-mini" aria-label="Reset Offset">Rst</button>
+                  </div>
+                  <canvas id="wheel-offset" class="wheel-canvas" aria-label="Offset Master Color Wheel"></canvas>
+                  <div class="wheel-bars mono">
+                    <div class="cdl-slider-row">
+                      <label class="ch-r" for="offset-r-range">R</label>
+                      <input type="range" id="offset-r-range" min="-0.4" max="0.4" step="0.01" value="0.00">
+                      <input type="number" id="offset-r-num" class="input-num" min="-0.4" max="0.4" step="0.01" value="0.00" aria-label="Offset Red">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-g" for="offset-g-range">G</label>
+                      <input type="range" id="offset-g-range" min="-0.4" max="0.4" step="0.01" value="0.00">
+                      <input type="number" id="offset-g-num" class="input-num" min="-0.4" max="0.4" step="0.01" value="0.00" aria-label="Offset Green">
+                    </div>
+                    <div class="cdl-slider-row">
+                      <label class="ch-b" for="offset-b-range">B</label>
+                      <input type="range" id="offset-b-range" min="-0.4" max="0.4" step="0.01" value="0.00">
+                      <input type="number" id="offset-b-num" class="input-num" min="-0.4" max="0.4" step="0.01" value="0.00" aria-label="Offset Blue">
+                    </div>
+                  </div>
+                </div>
+</div>
+<div class="grade-tone-grid mono">
+                  <div class="grade-tone-row">
+                    <label for="grade-contrast-range" data-i18n="color.group.contrast">CONTRAST</label>
+                    <input type="range" id="grade-contrast-range" min="0" max="2" step="0.01" value="1.00">
+                    <input type="number" id="grade-contrast-num" class="input-num" min="0" max="2" step="0.01" value="1.00" aria-label="Contrast value">
+                    <button type="button" id="btn-reset-contrast" class="btn btn-mini" aria-label="Reset Contrast">Rst</button>
+                  </div>
+                  <div class="grade-tone-row">
+                    <label for="grade-saturation-range" data-i18n="color.group.sat">SATURATION</label>
+                    <input type="range" id="grade-saturation-range" min="0" max="3" step="0.01" value="1.00">
+                    <input type="number" id="grade-saturation-num" class="input-num" min="0" max="3" step="0.01" value="1.00" aria-label="Saturation value">
+                    <button type="button" id="btn-reset-saturation" class="btn btn-mini" aria-label="Reset Saturation">Rst</button>
+                  </div>
+                  <div class="grade-tone-row">
+                    <label for="grade-temperature-range" data-i18n="color.group.temperature">TEMPERATURE</label>
+                    <input type="range" id="grade-temperature-range" class="temp-slider" min="-1" max="1" step="0.01" value="0.00">
+                    <input type="number" id="grade-temperature-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Temperature value">
+                    <button type="button" id="btn-reset-temperature" class="btn btn-mini" aria-label="Reset Temperature">Rst</button>
+                  </div>
+                </div>
+            </div>
+          </section>
 
-              <div class="color-secondary-tools-stack">
-                <div id="color-lut-browser-dock" class="color-lut-browser-dock" role="region" aria-label="3D LUT Look Library">
-                  <div class="lut-browser-toolbar">
-                    <div class="lut-browser-title-group">
-                      <span class="pane-subheader-label" data-i18n="color.lutBrowser.title">3D LUT Library (.cube)</span>
-                      <span id="lut-browser-count-badge" class="nle-tag mono">8 LUTS</span>
+          <section class="nle-pane color-secondary-col">
+            <div class="resolve-subtabs color-tool-tabs" role="tablist" aria-label="Color Secondary Tools">
+              <button type="button" class="resolve-subtab-btn is-active" data-color-tool-tab="curves" aria-selected="true">Curves</button>
+              <button type="button" class="resolve-subtab-btn" data-color-tool-tab="warper" aria-selected="false">Warper</button>
+              <button type="button" class="resolve-subtab-btn" data-color-tool-tab="qualifier" aria-selected="false">Qualifier</button>
+              <button type="button" class="resolve-subtab-btn" data-color-tool-tab="window" aria-selected="false">Window</button>
+              <button type="button" class="resolve-subtab-btn" data-color-tool-tab="match" aria-selected="false">Shot Match</button>
+            </div>
+            <div class="pane-body color-secondary-body">
+              <div id="color-tool-pane-curves" class="color-tool-pane"><div id="color-curves-dock" class="color-curves-dock" role="region" aria-label="Custom YRGB and 6-Vector HSL Curves">
+                  <div class="curves-toolbar">
+                    <div class="curves-title-group">
+                      <span id="curves-dock-title" class="pane-subheader-label" data-i18n="color.curves.title">Custom Curves (YRGB)</span>
+                      <span id="curves-status-badge" class="nle-tag mono">LINEAR</span>
                     </div>
-                    <div id="lut-browser-category-strip" class="lut-category-strip" role="group" aria-label="LUT Category Filter">
-                      <button type="button" class="btn btn-mini lut-cat-btn is-active" data-lut-category="all" aria-pressed="true" data-i18n="color.lutBrowser.catAll">All</button>
-                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="film_print" aria-pressed="false" data-i18n="color.lutBrowser.catFilm">Film Print</button>
-                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="camera_log" aria-pressed="false" data-i18n="color.lutBrowser.catLog">Camera Log</button>
-                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="creative_cinema" aria-pressed="false" data-i18n="color.lutBrowser.catCinema">Cinema</button>
-                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="monochrome" aria-pressed="false" data-i18n="color.lutBrowser.catMono">Mono</button>
-                      <button type="button" class="btn btn-mini lut-cat-btn" data-lut-category="custom" aria-pressed="false" data-i18n="color.lutBrowser.catCustom">Custom</button>
+                    <div id="curves-mode-group" class="curves-mode-group" role="group" aria-label="Curve Mode">
+                      <button type="button" class="btn btn-mini curves-mode-btn is-active" data-curve-mode="yrgb" aria-pressed="true" data-i18n="color.curves.modeYrgb">YRGB</button>
+                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_hue" aria-pressed="false" data-i18n="color.curves.modeHueHue">Hue vs Hue</button>
+                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_sat" aria-pressed="false" data-i18n="color.curves.modeHueSat">Hue vs Sat</button>
+                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_lum" aria-pressed="false" data-i18n="color.curves.modeHueLum">Hue vs Lum</button>
+                    </div>
+                    <div id="curves-channel-group" class="curves-channel-group" role="group" aria-label="Curve Channel">
+                      <button type="button" class="btn btn-mini curves-ch-btn is-active" data-curve-channel="master" aria-pressed="true" data-i18n="color.curves.chMaster">YRGB</button>
+                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-red" data-curve-channel="red" aria-pressed="false">R</button>
+                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-green" data-curve-channel="green" aria-pressed="false">G</button>
+                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-blue" data-curve-channel="blue" aria-pressed="false">B</button>
+                    </div>
+                    <div id="hsl-vector-strip" class="hsl-vector-strip is-hidden" role="group" aria-label="HSL Hue Vector">
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-reds is-active" data-hsl-vector="reds" aria-pressed="true" title="Reds (0 deg)">R</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-yellows" data-hsl-vector="yellows" aria-pressed="false" title="Yellows (60 deg)">Y</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-greens" data-hsl-vector="greens" aria-pressed="false" title="Greens (120 deg)">G</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-cyans" data-hsl-vector="cyans" aria-pressed="false" title="Cyans (180 deg)">C</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-blues" data-hsl-vector="blues" aria-pressed="false" title="Blues (240 deg)">B</button>
+                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-magentas" data-hsl-vector="magentas" aria-pressed="false" title="Magentas (300 deg)">M</button>
+                    </div>
+                    <div class="curves-actions">
+                      <button type="button" id="btn-curves-delete-pt" class="btn btn-mini" disabled title="Remove selected interior knot (Delete)" data-i18n="color.curves.delPt">Del Pt</button>
+                      <button type="button" id="btn-curves-reset-ch" class="btn btn-mini" title="Reset active channel curve" data-i18n="color.curves.resetCh">Rst Ch</button>
+                      <button type="button" id="btn-curves-reset-all" class="btn btn-mini" title="Reset all curves" data-i18n="color.curves.resetAll">Rst All</button>
                     </div>
                   </div>
-                  <div id="color-lut-browser-grid" class="color-lut-browser-grid" role="list" aria-label="Studio 3D LUT presets"></div>
+                  <div class="curves-stage">
+                    <canvas id="color-curves-canvas" class="color-curves-canvas" tabindex="0" aria-label="Custom YRGB and HSL curve editor"></canvas>
+                    <div class="curves-meta-rail">
+                      <div id="curves-point-readout" class="curves-point-readout mono" aria-live="polite">PT -- | IN -- | OUT --</div>
+                      <div id="curves-preset-strip" class="curves-preset-strip" role="group" aria-label="Curve Presets">
+                        <button type="button" class="btn btn-chip curves-preset-btn is-active" data-curve-preset="linear" aria-pressed="true" data-i18n="color.curves.preset.linear">Linear</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="film_s_curve" aria-pressed="false" data-i18n="color.curves.preset.filmS">Film S-Curve</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="matte_lift" aria-pressed="false" data-i18n="color.curves.preset.matteLift">Matte Lift</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="crisp_contrast" aria-pressed="false" data-i18n="color.curves.preset.crisp">Crisp Contrast</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="warm_gold" aria-pressed="false" data-i18n="color.curves.preset.warmGold">Warm Gold</button>
+                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="cool_shadows" aria-pressed="false" data-i18n="color.curves.preset.coolShadows">Cool Shadows</button>
+                      </div>
+                      <div id="hsl-curves-preset-strip" class="curves-preset-strip is-hidden" role="group" aria-label="HSL Curve Presets">
+                        <button type="button" class="btn btn-chip hsl-preset-btn is-active" data-hsl-preset="neutral" aria-pressed="true" data-i18n="color.hsl.preset.neutral">Neutral</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="teal_orange_push" aria-pressed="false" data-i18n="color.hsl.preset.tealOrange">Teal &amp; Orange</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="skin_polish" aria-pressed="false" data-i18n="color.hsl.preset.skinPolish">Skin Polish</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="foliage_emerald" aria-pressed="false" data-i18n="color.hsl.preset.foliage">Emerald Foliage</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="sky_deepen" aria-pressed="false" data-i18n="color.hsl.preset.sky">Sky Polarizer</button>
+                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="muted_greens" aria-pressed="false" data-i18n="color.hsl.preset.mutedGreens">Muted Greens</button>
+                      </div>
+                      <div id="curves-hint-text" class="curves-hint mono" data-i18n="color.curves.hint">Click curve to add knot, drag to shape, double-click or Del to remove.</div>
+                    </div>
+                  </div>
+                </div></div>
+              <div id="color-tool-pane-warper" class="color-tool-pane"><div id="color-warper-dock" class="color-warper-dock" role="region" aria-label="Color Warper Hue-Saturation Spider Grid">
+                <div class="warper-toolbar">
+                  <div class="warper-title-group">
+                    <span class="pane-subheader-label" data-i18n="color.warper.title">Color Warper (Hue-Sat Grid)</span>
+                    <span id="warper-status-badge" class="nle-tag mono">IDENTITY</span>
+                  </div>
+                  <div id="warper-preset-strip" class="warper-preset-strip" role="group" aria-label="Color Warper Presets">
+                    <button type="button" class="btn btn-chip warper-preset-btn is-active" data-warper-preset="neutral" aria-pressed="true" data-i18n="color.warper.preset.neutral">Neutral</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="kodak_warm_skin" aria-pressed="false" data-i18n="color.warper.preset.kodak">Kodak Skin</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="teal_orange_warp" aria-pressed="false" data-i18n="color.warper.preset.tealOrange">Teal &amp; Orange</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="emerald_cinema" aria-pressed="false" data-i18n="color.warper.preset.emerald">Emerald</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="pastel_editorial" aria-pressed="false" data-i18n="color.warper.preset.pastel">Pastel</button>
+                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="cyber_neon" aria-pressed="false" data-i18n="color.warper.preset.cyber">Cyber Neon</button>
+                  </div>
+                  <div class="warper-actions">
+                    <button type="button" id="btn-warper-reset-pt" class="btn btn-mini" disabled title="Reset selected spider-grid vertex (Delete)" data-i18n="color.warper.resetPt">Rst Pt</button>
+                    <button type="button" id="btn-warper-reset-all" class="btn btn-mini" disabled title="Reset entire Color Warper grid" data-i18n="color.warper.resetAll">Rst All</button>
+                  </div>
                 </div>
-                <div id="color-power-window-dock" class="color-power-window-dock" role="region" aria-label="Power Window Shape Mask">
-                  <div class="pw-toolbar">
-                    <div class="pw-title-group">
-                      <span class="pane-subheader-label" data-i18n="color.window.title">Power Window</span>
-                      <span id="pw-status-badge" class="nle-tag mono">OFF</span>
-                      <span id="pw-track-link-badge" class="nle-tag is-blue mono is-hidden">TRACKED</span>
-                      <button type="button" id="btn-pw-unlink-track" class="btn btn-mini is-hidden" data-i18n="color.window.unlinkTrack">Unlink</button>
+                <div class="warper-stage">
+                  <canvas id="color-warper-canvas" class="color-warper-canvas" tabindex="0" aria-label="Color Warper 2D Hue-Saturation Spider Grid"></canvas>
+                  <div class="warper-meta-rail">
+                    <div id="warper-point-readout" class="warper-point-readout mono" aria-live="polite">PT R3 | H +0.0° | S +0.00</div>
+                    <div class="warper-axis-strip" role="group" aria-label="Select Hue Axis">
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-reds is-active" data-warper-hue="0" aria-pressed="true">R</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-yellows" data-warper-hue="1" aria-pressed="false">Y</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-greens" data-warper-hue="2" aria-pressed="false">G</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-cyans" data-warper-hue="3" aria-pressed="false">C</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-blues" data-warper-hue="4" aria-pressed="false">B</button>
+                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-magentas" data-warper-hue="5" aria-pressed="false">M</button>
+                      <span class="warper-ring-sep" aria-hidden="true">|</span>
+                      <button type="button" class="btn btn-mini warper-ring-btn" data-warper-ring="0" aria-pressed="false">33%</button>
+                      <button type="button" class="btn btn-mini warper-ring-btn" data-warper-ring="1" aria-pressed="false">67%</button>
+                      <button type="button" class="btn btn-mini warper-ring-btn is-active" data-warper-ring="2" aria-pressed="true">100%</button>
                     </div>
-                    <div id="pw-shape-group" class="pw-shape-group" role="group" aria-label="Power Window shape">
-                      <button type="button" class="btn btn-mini pw-shape-btn is-active" data-pw-shape="off" aria-pressed="true" data-i18n="color.window.off">Off</button>
-                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="circle" aria-pressed="false" data-i18n="color.window.circle">Circle</button>
-                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="linear" aria-pressed="false" data-i18n="color.window.linear">Linear</button>
-                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="gradient" aria-pressed="false" data-i18n="color.window.gradient">Gradient</button>
+                    <div class="warper-param-grid mono">
+                      <div class="warper-param-row">
+                        <label for="warper-hue-range" data-i18n="color.warper.hueShift">Hue Shift (deg)</label>
+                        <input type="range" id="warper-hue-range" min="-60" max="60" step="0.5" value="0">
+                        <input type="number" id="warper-hue-num" class="input-num" min="-60" max="60" step="0.5" value="0.0" aria-label="Color Warper Hue Shift degrees">
+                      </div>
+                      <div class="warper-param-row">
+                        <label for="warper-sat-range" data-i18n="color.warper.satShift">Sat Shift</label>
+                        <input type="range" id="warper-sat-range" min="-0.60" max="0.60" step="0.01" value="0">
+                        <input type="number" id="warper-sat-num" class="input-num" min="-0.60" max="0.60" step="0.01" value="0.00" aria-label="Color Warper Saturation Shift">
+                      </div>
                     </div>
-                    <div class="pw-toggles">
-                      <button type="button" id="btn-pw-invert" class="btn btn-mini" aria-pressed="false" disabled data-i18n="color.window.invert">Invert</button>
-                      <button type="button" id="btn-pw-overlay" class="btn btn-mini is-active" aria-pressed="true" disabled data-i18n="color.window.overlay">Overlay</button>
-                      <button type="button" id="btn-pw-reset" class="btn btn-mini" disabled aria-label="Reset Power Window">Rst</button>
-                    </div>
-                  </div>
-                  <div id="color-pw-controls" class="pw-param-grid mono is-dimmed">
-                    <div class="pw-param-row">
-                      <label for="pw-cx-range" data-i18n="color.window.centerX">Center X (%)</label>
-                      <input type="range" id="pw-cx-range" min="0" max="100" step="1" value="50" disabled>
-                      <input type="number" id="pw-cx-num" class="input-num" min="0" max="100" step="1" value="50" aria-label="Power Window Center X percentage" disabled>
-                    </div>
-                    <div class="pw-param-row">
-                      <label for="pw-cy-range" data-i18n="color.window.centerY">Center Y (%)</label>
-                      <input type="range" id="pw-cy-range" min="0" max="100" step="1" value="50" disabled>
-                      <input type="number" id="pw-cy-num" class="input-num" min="0" max="100" step="1" value="50" aria-label="Power Window Center Y percentage" disabled>
-                    </div>
-                    <div class="pw-param-row">
-                      <label for="pw-w-range" data-i18n="color.window.width">Width (%)</label>
-                      <input type="range" id="pw-w-range" min="5" max="100" step="1" value="45" disabled>
-                      <input type="number" id="pw-w-num" class="input-num" min="5" max="100" step="1" value="45" aria-label="Power Window Width percentage" disabled>
-                    </div>
-                    <div class="pw-param-row">
-                      <label for="pw-h-range" data-i18n="color.window.height">Height (%)</label>
-                      <input type="range" id="pw-h-range" min="5" max="100" step="1" value="45" disabled>
-                      <input type="number" id="pw-h-num" class="input-num" min="5" max="100" step="1" value="45" aria-label="Power Window Height percentage" disabled>
-                    </div>
-                    <div class="pw-param-row">
-                      <label for="pw-rot-range" data-i18n="color.window.rotate">Rotate (deg)</label>
-                      <input type="range" id="pw-rot-range" min="-180" max="180" step="1" value="0" disabled>
-                      <input type="number" id="pw-rot-num" class="input-num" min="-180" max="180" step="1" value="0" aria-label="Power Window Rotation degrees" disabled>
-                    </div>
-                    <div class="pw-param-row">
-                      <label for="pw-soft-range" data-i18n="color.window.softness">Softness (%)</label>
-                      <input type="range" id="pw-soft-range" min="0" max="50" step="1" value="12" disabled>
-                      <input type="number" id="pw-soft-num" class="input-num" min="0" max="50" step="1" value="12" aria-label="Power Window Feather Softness percentage" disabled>
-                    </div>
+                    <div class="curves-hint mono" data-i18n="color.warper.hint">Drag any spider-grid node to warp Hue and Saturation simultaneously. Double-click node or Rst Pt to reset.</div>
                   </div>
                 </div>
-                <div id="color-qualifier-dock" class="color-qualifier-dock" role="region" aria-label="HSL Secondary Qualifier">
+              </div></div>
+              <div id="color-tool-pane-qualifier" class="color-tool-pane"><div id="color-qualifier-dock" class="color-qualifier-dock" role="region" aria-label="HSL Secondary Qualifier">
                   <div class="qual-toolbar">
                     <div class="qual-title-group">
                       <span class="pane-subheader-label" data-i18n="color.qual.title">HSL Qualifier</span>
@@ -3307,146 +3464,61 @@
                       <input type="number" id="qual-blur-num" class="input-num" min="0" max="8" step="0.5" value="0" aria-label="Qualifier matte blur radius" disabled>
                     </div>
                   </div>
-                </div>
-              </div>
-
-              <!-- DAVINCI CUSTOM YRGB CURVES + LUMETRI TONE CONTROLS -->
-              <div class="color-curves-tone-split">
-                <div id="color-curves-dock" class="color-curves-dock" role="region" aria-label="Custom YRGB and 6-Vector HSL Curves">
-                  <div class="curves-toolbar">
-                    <div class="curves-title-group">
-                      <span id="curves-dock-title" class="pane-subheader-label" data-i18n="color.curves.title">Custom Curves (YRGB)</span>
-                      <span id="curves-status-badge" class="nle-tag mono">LINEAR</span>
+                </div></div>
+              <div id="color-tool-pane-window" class="color-tool-pane"><div id="color-power-window-dock" class="color-power-window-dock" role="region" aria-label="Power Window Shape Mask">
+                  <div class="pw-toolbar">
+                    <div class="pw-title-group">
+                      <span class="pane-subheader-label" data-i18n="color.window.title">Power Window</span>
+                      <span id="pw-status-badge" class="nle-tag mono">OFF</span>
+                      <span id="pw-track-link-badge" class="nle-tag is-blue mono is-hidden">TRACKED</span>
+                      <button type="button" id="btn-pw-unlink-track" class="btn btn-mini is-hidden" data-i18n="color.window.unlinkTrack">Unlink</button>
                     </div>
-                    <div id="curves-mode-group" class="curves-mode-group" role="group" aria-label="Curve Mode">
-                      <button type="button" class="btn btn-mini curves-mode-btn is-active" data-curve-mode="yrgb" aria-pressed="true" data-i18n="color.curves.modeYrgb">YRGB</button>
-                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_hue" aria-pressed="false" data-i18n="color.curves.modeHueHue">Hue vs Hue</button>
-                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_sat" aria-pressed="false" data-i18n="color.curves.modeHueSat">Hue vs Sat</button>
-                      <button type="button" class="btn btn-mini curves-mode-btn" data-curve-mode="hue_vs_lum" aria-pressed="false" data-i18n="color.curves.modeHueLum">Hue vs Lum</button>
+                    <div id="pw-shape-group" class="pw-shape-group" role="group" aria-label="Power Window shape">
+                      <button type="button" class="btn btn-mini pw-shape-btn is-active" data-pw-shape="off" aria-pressed="true" data-i18n="color.window.off">Off</button>
+                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="circle" aria-pressed="false" data-i18n="color.window.circle">Circle</button>
+                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="linear" aria-pressed="false" data-i18n="color.window.linear">Linear</button>
+                      <button type="button" class="btn btn-mini pw-shape-btn" data-pw-shape="gradient" aria-pressed="false" data-i18n="color.window.gradient">Gradient</button>
                     </div>
-                    <div id="curves-channel-group" class="curves-channel-group" role="group" aria-label="Curve Channel">
-                      <button type="button" class="btn btn-mini curves-ch-btn is-active" data-curve-channel="master" aria-pressed="true" data-i18n="color.curves.chMaster">YRGB</button>
-                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-red" data-curve-channel="red" aria-pressed="false">R</button>
-                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-green" data-curve-channel="green" aria-pressed="false">G</button>
-                      <button type="button" class="btn btn-mini curves-ch-btn curves-ch-blue" data-curve-channel="blue" aria-pressed="false">B</button>
-                    </div>
-                    <div id="hsl-vector-strip" class="hsl-vector-strip is-hidden" role="group" aria-label="HSL Hue Vector">
-                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-reds is-active" data-hsl-vector="reds" aria-pressed="true" title="Reds (0 deg)">R</button>
-                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-yellows" data-hsl-vector="yellows" aria-pressed="false" title="Yellows (60 deg)">Y</button>
-                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-greens" data-hsl-vector="greens" aria-pressed="false" title="Greens (120 deg)">G</button>
-                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-cyans" data-hsl-vector="cyans" aria-pressed="false" title="Cyans (180 deg)">C</button>
-                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-blues" data-hsl-vector="blues" aria-pressed="false" title="Blues (240 deg)">B</button>
-                      <button type="button" class="btn btn-mini hsl-vec-btn hsl-vec-magentas" data-hsl-vector="magentas" aria-pressed="false" title="Magentas (300 deg)">M</button>
-                    </div>
-                    <div class="curves-actions">
-                      <button type="button" id="btn-curves-delete-pt" class="btn btn-mini" disabled title="Remove selected interior knot (Delete)" data-i18n="color.curves.delPt">Del Pt</button>
-                      <button type="button" id="btn-curves-reset-ch" class="btn btn-mini" title="Reset active channel curve" data-i18n="color.curves.resetCh">Rst Ch</button>
-                      <button type="button" id="btn-curves-reset-all" class="btn btn-mini" title="Reset all curves" data-i18n="color.curves.resetAll">Rst All</button>
+                    <div class="pw-toggles">
+                      <button type="button" id="btn-pw-invert" class="btn btn-mini" aria-pressed="false" disabled data-i18n="color.window.invert">Invert</button>
+                      <button type="button" id="btn-pw-overlay" class="btn btn-mini is-active" aria-pressed="true" disabled data-i18n="color.window.overlay">Overlay</button>
+                      <button type="button" id="btn-pw-reset" class="btn btn-mini" disabled aria-label="Reset Power Window">Rst</button>
                     </div>
                   </div>
-                  <div class="curves-stage">
-                    <canvas id="color-curves-canvas" class="color-curves-canvas" tabindex="0" aria-label="Custom YRGB and HSL curve editor"></canvas>
-                    <div class="curves-meta-rail">
-                      <div id="curves-point-readout" class="curves-point-readout mono" aria-live="polite">PT -- | IN -- | OUT --</div>
-                      <div id="curves-preset-strip" class="curves-preset-strip" role="group" aria-label="Curve Presets">
-                        <button type="button" class="btn btn-chip curves-preset-btn is-active" data-curve-preset="linear" aria-pressed="true" data-i18n="color.curves.preset.linear">Linear</button>
-                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="film_s_curve" aria-pressed="false" data-i18n="color.curves.preset.filmS">Film S-Curve</button>
-                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="matte_lift" aria-pressed="false" data-i18n="color.curves.preset.matteLift">Matte Lift</button>
-                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="crisp_contrast" aria-pressed="false" data-i18n="color.curves.preset.crisp">Crisp Contrast</button>
-                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="warm_gold" aria-pressed="false" data-i18n="color.curves.preset.warmGold">Warm Gold</button>
-                        <button type="button" class="btn btn-chip curves-preset-btn" data-curve-preset="cool_shadows" aria-pressed="false" data-i18n="color.curves.preset.coolShadows">Cool Shadows</button>
-                      </div>
-                      <div id="hsl-curves-preset-strip" class="curves-preset-strip is-hidden" role="group" aria-label="HSL Curve Presets">
-                        <button type="button" class="btn btn-chip hsl-preset-btn is-active" data-hsl-preset="neutral" aria-pressed="true" data-i18n="color.hsl.preset.neutral">Neutral</button>
-                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="teal_orange_push" aria-pressed="false" data-i18n="color.hsl.preset.tealOrange">Teal &amp; Orange</button>
-                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="skin_polish" aria-pressed="false" data-i18n="color.hsl.preset.skinPolish">Skin Polish</button>
-                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="foliage_emerald" aria-pressed="false" data-i18n="color.hsl.preset.foliage">Emerald Foliage</button>
-                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="sky_deepen" aria-pressed="false" data-i18n="color.hsl.preset.sky">Sky Polarizer</button>
-                        <button type="button" class="btn btn-chip hsl-preset-btn" data-hsl-preset="muted_greens" aria-pressed="false" data-i18n="color.hsl.preset.mutedGreens">Muted Greens</button>
-                      </div>
-                      <div id="curves-hint-text" class="curves-hint mono" data-i18n="color.curves.hint">Click curve to add knot, drag to shape, double-click or Del to remove.</div>
+                  <div id="color-pw-controls" class="pw-param-grid mono is-dimmed">
+                    <div class="pw-param-row">
+                      <label for="pw-cx-range" data-i18n="color.window.centerX">Center X (%)</label>
+                      <input type="range" id="pw-cx-range" min="0" max="100" step="1" value="50" disabled>
+                      <input type="number" id="pw-cx-num" class="input-num" min="0" max="100" step="1" value="50" aria-label="Power Window Center X percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-cy-range" data-i18n="color.window.centerY">Center Y (%)</label>
+                      <input type="range" id="pw-cy-range" min="0" max="100" step="1" value="50" disabled>
+                      <input type="number" id="pw-cy-num" class="input-num" min="0" max="100" step="1" value="50" aria-label="Power Window Center Y percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-w-range" data-i18n="color.window.width">Width (%)</label>
+                      <input type="range" id="pw-w-range" min="5" max="100" step="1" value="45" disabled>
+                      <input type="number" id="pw-w-num" class="input-num" min="5" max="100" step="1" value="45" aria-label="Power Window Width percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-h-range" data-i18n="color.window.height">Height (%)</label>
+                      <input type="range" id="pw-h-range" min="5" max="100" step="1" value="45" disabled>
+                      <input type="number" id="pw-h-num" class="input-num" min="5" max="100" step="1" value="45" aria-label="Power Window Height percentage" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-rot-range" data-i18n="color.window.rotate">Rotate (deg)</label>
+                      <input type="range" id="pw-rot-range" min="-180" max="180" step="1" value="0" disabled>
+                      <input type="number" id="pw-rot-num" class="input-num" min="-180" max="180" step="1" value="0" aria-label="Power Window Rotation degrees" disabled>
+                    </div>
+                    <div class="pw-param-row">
+                      <label for="pw-soft-range" data-i18n="color.window.softness">Softness (%)</label>
+                      <input type="range" id="pw-soft-range" min="0" max="50" step="1" value="12" disabled>
+                      <input type="number" id="pw-soft-num" class="input-num" min="0" max="50" step="1" value="12" aria-label="Power Window Feather Softness percentage" disabled>
                     </div>
                   </div>
-                </div>
-
-                <!-- LUMETRI TONE CONTROLS: CONTRAST / SATURATION / TEMPERATURE -->
-                <div class="grade-tone-grid mono">
-                  <div class="grade-tone-row">
-                    <label for="grade-contrast-range" data-i18n="color.group.contrast">CONTRAST</label>
-                    <input type="range" id="grade-contrast-range" min="0" max="2" step="0.01" value="1.00">
-                    <input type="number" id="grade-contrast-num" class="input-num" min="0" max="2" step="0.01" value="1.00" aria-label="Contrast value">
-                    <button type="button" id="btn-reset-contrast" class="btn btn-mini" aria-label="Reset Contrast">Rst</button>
-                  </div>
-                  <div class="grade-tone-row">
-                    <label for="grade-saturation-range" data-i18n="color.group.sat">SATURATION</label>
-                    <input type="range" id="grade-saturation-range" min="0" max="3" step="0.01" value="1.00">
-                    <input type="number" id="grade-saturation-num" class="input-num" min="0" max="3" step="0.01" value="1.00" aria-label="Saturation value">
-                    <button type="button" id="btn-reset-saturation" class="btn btn-mini" aria-label="Reset Saturation">Rst</button>
-                  </div>
-                  <div class="grade-tone-row">
-                    <label for="grade-temperature-range" data-i18n="color.group.temperature">TEMPERATURE</label>
-                    <input type="range" id="grade-temperature-range" class="temp-slider" min="-1" max="1" step="0.01" value="0.00">
-                    <input type="number" id="grade-temperature-num" class="input-num" min="-1" max="1" step="0.01" value="0.00" aria-label="Temperature value">
-                    <button type="button" id="btn-reset-temperature" class="btn btn-mini" aria-label="Reset Temperature">Rst</button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- DAVINCI COLOR WARPER (2D HUE-SATURATION SPIDER GRID) -->
-              <div id="color-warper-dock" class="color-warper-dock" role="region" aria-label="Color Warper Hue-Saturation Spider Grid">
-                <div class="warper-toolbar">
-                  <div class="warper-title-group">
-                    <span class="pane-subheader-label" data-i18n="color.warper.title">Color Warper (Hue-Sat Grid)</span>
-                    <span id="warper-status-badge" class="nle-tag mono">IDENTITY</span>
-                  </div>
-                  <div id="warper-preset-strip" class="warper-preset-strip" role="group" aria-label="Color Warper Presets">
-                    <button type="button" class="btn btn-chip warper-preset-btn is-active" data-warper-preset="neutral" aria-pressed="true" data-i18n="color.warper.preset.neutral">Neutral</button>
-                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="kodak_warm_skin" aria-pressed="false" data-i18n="color.warper.preset.kodak">Kodak Skin</button>
-                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="teal_orange_warp" aria-pressed="false" data-i18n="color.warper.preset.tealOrange">Teal &amp; Orange</button>
-                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="emerald_cinema" aria-pressed="false" data-i18n="color.warper.preset.emerald">Emerald</button>
-                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="pastel_editorial" aria-pressed="false" data-i18n="color.warper.preset.pastel">Pastel</button>
-                    <button type="button" class="btn btn-chip warper-preset-btn" data-warper-preset="cyber_neon" aria-pressed="false" data-i18n="color.warper.preset.cyber">Cyber Neon</button>
-                  </div>
-                  <div class="warper-actions">
-                    <button type="button" id="btn-warper-reset-pt" class="btn btn-mini" disabled title="Reset selected spider-grid vertex (Delete)" data-i18n="color.warper.resetPt">Rst Pt</button>
-                    <button type="button" id="btn-warper-reset-all" class="btn btn-mini" disabled title="Reset entire Color Warper grid" data-i18n="color.warper.resetAll">Rst All</button>
-                  </div>
-                </div>
-                <div class="warper-stage">
-                  <canvas id="color-warper-canvas" class="color-warper-canvas" tabindex="0" aria-label="Color Warper 2D Hue-Saturation Spider Grid"></canvas>
-                  <div class="warper-meta-rail">
-                    <div id="warper-point-readout" class="warper-point-readout mono" aria-live="polite">PT R3 | H +0.0° | S +0.00</div>
-                    <div class="warper-axis-strip" role="group" aria-label="Select Hue Axis">
-                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-reds is-active" data-warper-hue="0" aria-pressed="true">R</button>
-                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-yellows" data-warper-hue="1" aria-pressed="false">Y</button>
-                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-greens" data-warper-hue="2" aria-pressed="false">G</button>
-                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-cyans" data-warper-hue="3" aria-pressed="false">C</button>
-                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-blues" data-warper-hue="4" aria-pressed="false">B</button>
-                      <button type="button" class="btn btn-mini warper-hue-btn hsl-vec-magentas" data-warper-hue="5" aria-pressed="false">M</button>
-                      <span class="warper-ring-sep" aria-hidden="true">|</span>
-                      <button type="button" class="btn btn-mini warper-ring-btn" data-warper-ring="0" aria-pressed="false">33%</button>
-                      <button type="button" class="btn btn-mini warper-ring-btn" data-warper-ring="1" aria-pressed="false">67%</button>
-                      <button type="button" class="btn btn-mini warper-ring-btn is-active" data-warper-ring="2" aria-pressed="true">100%</button>
-                    </div>
-                    <div class="warper-param-grid mono">
-                      <div class="warper-param-row">
-                        <label for="warper-hue-range" data-i18n="color.warper.hueShift">Hue Shift (deg)</label>
-                        <input type="range" id="warper-hue-range" min="-60" max="60" step="0.5" value="0">
-                        <input type="number" id="warper-hue-num" class="input-num" min="-60" max="60" step="0.5" value="0.0" aria-label="Color Warper Hue Shift degrees">
-                      </div>
-                      <div class="warper-param-row">
-                        <label for="warper-sat-range" data-i18n="color.warper.satShift">Sat Shift</label>
-                        <input type="range" id="warper-sat-range" min="-0.60" max="0.60" step="0.01" value="0">
-                        <input type="number" id="warper-sat-num" class="input-num" min="-0.60" max="0.60" step="0.01" value="0.00" aria-label="Color Warper Saturation Shift">
-                      </div>
-                    </div>
-                    <div class="curves-hint mono" data-i18n="color.warper.hint">Drag any spider-grid node to warp Hue and Saturation simultaneously. Double-click node or Rst Pt to reset.</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- DAVINCI COLOR CHART AUTO-BALANCE & SHOT MATCH -->
-              <div id="color-shot-match-dock" class="color-shot-match-dock" role="region" aria-label="Shot Match and Color Chart Auto-Balance">
+                </div></div>
+              <div id="color-tool-pane-match" class="color-tool-pane"><div id="color-shot-match-dock" class="color-shot-match-dock" role="region" aria-label="Shot Match and Color Chart Auto-Balance">
                 <div class="shot-match-toolbar">
                   <div class="shot-match-title-group">
                     <span class="pane-subheader-label" data-i18n="color.shotMatch.title">Shot Match &amp; Color Chart</span>
@@ -3498,12 +3570,32 @@
                 </div>
                 <div id="shot-match-metrics-bar" class="shot-match-metrics-bar mono" aria-live="polite"></div>
                 <div id="shot-match-patch-grid" class="shot-match-patch-grid" role="list" aria-label="ColorChecker 24 target vs matched patch comparison"></div>
-              </div>
+              </div></div>
             </div>
           </section>
 
-          <!-- FFMPEG COLOR FILTERGRAPH & 3D .CUBE LUT BAKER DOCK -->
-          <aside class="nle-pane">
+          <section class="nle-pane color-scopes-col">
+            <div class="resolve-subtabs color-right-tabs" role="tablist" aria-label="Scopes and Export">
+              <button type="button" class="resolve-subtab-btn is-active" data-color-right-tab="scopes" aria-selected="true">Scopes</button>
+              <button type="button" class="resolve-subtab-btn" data-color-right-tab="baker" aria-selected="false">LUT / .cube</button>
+            </div>
+            <div class="pane-body color-scopes-body">
+              <div id="color-right-pane-scopes" class="color-right-pane">
+                <div class="color-scopes-bar">
+<div class="scope-switch" role="group" aria-label="Broadcast video scope mode">
+                  <button type="button" id="btn-scope-parade" class="scope-btn is-active" data-scope-mode="parade" aria-pressed="true" data-i18n="color.scopes.parade">RGB Parade</button>
+                  <button type="button" id="btn-scope-waveform" class="scope-btn" data-scope-mode="waveform" aria-pressed="false" data-i18n="color.scopes.waveform">Luma Waveform</button>
+                  <button type="button" id="btn-scope-vectorscope" class="scope-btn" data-scope-mode="vectorscope" aria-pressed="false" data-i18n="color.scopes.vectorscope">Vectorscope</button>
+                  <button type="button" id="btn-scope-histogram" class="scope-btn" data-scope-mode="histogram" aria-pressed="false" data-i18n="color.scopes.histogram">IRE Hist</button>
+                </div>
+                  <span class="nle-tag mono">Rec.709</span>
+                </div>
+                <div class="viewer-well color-scope-well">
+                  <canvas id="color-scope-canvas" class="studio-canvas" aria-label="Live broadcast video scope"></canvas>
+                </div>
+              </div>
+              <div id="color-right-pane-baker" class="color-right-pane">
+<aside class="nle-pane">
             <div class="pane-header">
               <h2 data-i18n="color.bake.title">FFmpeg Color Filter &amp; 3D .cube Baker</h2>
               <span id="cube-info-badge" class="nle-tag mono">33x33x33</span>
@@ -3546,9 +3638,11 @@
               <pre id="cube-preview-output" class="code-box mono" aria-live="polite"></pre>
             </div>
           </aside>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
-
       <!-- PAGE 06: FAIRLIGHT DAW (SAMPLE TIMELINE + 6-BAND EQ / DYNAMICS + CONSOLE MIXER) -->
       <section id="panel-fairlight" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-fairlight">
         <section class="nle-pane fairlight-topbar-pane">
@@ -3642,40 +3736,38 @@
         </div>
       </section>
 
-      <!-- PAGE 07: DELIVER / RENDER -->
-      <section id="panel-render" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-render">
-        <div class="deliver-top-ribbon">
-          <section class="nle-pane deliver-presets-pane">
-            <div class="pane-header">
-              <h2 data-i18n="render.presets.title">Quick-Export Presets (DaVinci Deliver)</h2>
-              <div class="viewer-controls">
-                <span id="render-active-preset-badge" class="nle-tag mono" data-i18n="render.presets.custom">Custom</span>
-                <button type="button" id="btn-deliver-open-qa" class="btn btn-mini btn-secondary">Broadcast QA Gate</button>
-              </div>
-            </div>
-            <div class="pane-body">
-              <div id="render-preset-strip" class="deliver-preset-strip" role="group" aria-label="Quick-Export Delivery Presets"></div>
-            </div>
-          </section>
-
-          <section class="nle-pane deliver-caps-pane">
-            <div class="pane-header">
-              <h2 data-i18n="render.caps.title">Host FFmpeg &amp; Hardware Encoder Probe</h2>
-              <button type="button" id="btn-verify-nvenc" class="btn btn-secondary" data-i18n="render.btn.verifyGpu">Verify GPU Runtime</button>
-            </div>
-            <div class="pane-body">
-              <div id="render-caps-strip" class="badge-strip mono"></div>
-            </div>
-          </section>
-        </div>
-
-        <div class="nle-two-col nle-deliver-grid">
+      <!-- PAGE 07: DELIVER (AUTHENTIC DAVINCI RESOLVE UiDeliverPanelWidgetLayout: SETTINGS | VIEWER | QUEUE + MINI TIMELINE) -->
+      <section id="panel-render" class="workspace-panel is-hidden resolve-deliver-page" role="tabpanel" aria-labelledby="tab-render">
+        <div class="deliver-main-stage">
           <section class="nle-pane deliver-settings-pane">
             <div class="pane-header">
-              <h2 data-i18n="render.config.title">Deliver Render Settings</h2>
-              <button type="button" id="btn-generate-sample-clip" class="btn btn-secondary" data-i18n="render.btn.genSample">Generate Test Clip</button>
+              <h2 data-i18n="render.config.title">Render Settings</h2>
+              <div class="viewer-controls">
+                <span id="render-active-preset-badge" class="nle-tag mono" data-i18n="render.presets.custom">Custom</span>
+                <button type="button" id="btn-generate-sample-clip" class="btn btn-mini" data-i18n="render.btn.genSample">Test Clip</button>
+              </div>
             </div>
-            <div id="render-settings-tabs" class="deliver-subtabs" role="tablist" aria-label="Deliver Render Settings Categories">
+            <div class="deliver-presets-carousel">
+              <div id="render-preset-strip" class="deliver-preset-strip" role="group" aria-label="Quick-Export Delivery Presets"></div>
+            </div>
+            <div class="deliver-quick-file-bar">
+              <div class="deliver-qf-row">
+                <label for="deliver-filename-input">File Name</label>
+                <input type="text" id="deliver-filename-input" class="input-control mono" value="delivery_web.mp4" placeholder="output.mp4">
+              </div>
+              <div class="deliver-qf-row">
+                <label for="deliver-location-input">Location</label>
+                <input type="text" id="deliver-location-input" class="input-control mono" value="renders" placeholder="renders">
+              </div>
+              <div class="deliver-qf-row">
+                <label>Render</label>
+                <div class="deliver-mode-pills" role="group" aria-label="Deliver Render Mode">
+                  <button type="button" id="btn-deliver-mode-timeline" class="btn btn-mini" data-deliver-mode="timeline" aria-pressed="false">Entire Timeline</button>
+                  <button type="button" id="btn-deliver-mode-single" class="btn btn-mini is-active" data-deliver-mode="single" aria-pressed="true">Single Clip</button>
+                </div>
+              </div>
+            </div>
+<div id="render-settings-tabs" class="deliver-subtabs" role="tablist" aria-label="Deliver Render Settings Categories">
               <button type="button" role="tab" id="render-tab-video" class="deliver-subtab-btn is-active" data-render-tab="video" aria-selected="true" aria-controls="render-tabpanel-video" tabindex="0">
                 <span data-i18n="render.tabs.video">Video</span>
                 <span class="deliver-subtab-dot is-hidden" aria-hidden="true"></span>
@@ -3694,7 +3786,7 @@
               </button>
             </div>
             <div class="pane-body deliver-settings-body">
-              <div class="deliver-tabs-scroll">
+<div class="deliver-tabs-scroll">
                 <div id="render-tabpanel-video" class="deliver-tabpanel" role="tabpanel" aria-labelledby="render-tab-video">
                   <div class="form-row-two">
                     <div class="form-row">
@@ -4225,7 +4317,7 @@
                   </div>
                 </div>
               </div>
-              <div class="deliver-actions-footer">
+<div class="deliver-actions-footer">
                 <div class="deliver-estimate-bar" role="status" aria-live="polite">
                   <div class="deliver-estimate-main">
                     <span class="deliver-estimate-label" data-i18n="render.estimate.label">Estimated Export Size</span>
@@ -4243,8 +4335,39 @@
             </div>
           </section>
 
-          <div class="deliver-side-stack">
-            <section class="nle-pane">
+          <section class="nle-pane deliver-center-stage">
+            <div class="pane-header deliver-viewer-header">
+              <div class="viewer-controls">
+                <h2>Deliver Viewer</h2>
+                <div id="render-caps-strip" class="badge-strip mono deliver-caps-inline"></div>
+              </div>
+              <div class="viewer-controls">
+                <button type="button" id="btn-verify-nvenc" class="btn btn-mini" data-i18n="render.btn.verifyGpu">GPU Probe</button>
+                <button type="button" id="btn-deliver-open-qa" class="btn btn-mini">Broadcast QA</button>
+              </div>
+            </div>
+
+            <div class="deliver-viewer-well">
+              <canvas id="deliver-program-canvas" class="studio-canvas" aria-label="Deliver Live Timeline Viewer"></canvas>
+            </div>
+
+            <div class="transport-bar deliver-transport-bar">
+              <div class="btn-row">
+                <button type="button" id="btn-deliver-play" class="btn btn-mini mono">Play</button>
+                <button type="button" id="btn-deliver-mark-in" class="btn btn-mini mono" title="Mark Render In (I)">In</button>
+                <button type="button" id="btn-deliver-mark-out" class="btn btn-mini mono" title="Mark Render Out (O)">Out</button>
+              </div>
+              <span id="deliver-range-readout" class="nle-tag mono">Entire Timeline</span>
+              <span id="deliver-program-tc" class="tc-readout mono">00:00:00:00</span>
+            </div>
+
+            <div class="resolve-subtabs deliver-drawer-tabs" role="tablist" aria-label="Deliver Telemetry">
+              <button type="button" class="resolve-subtab-btn is-active" data-deliver-drawer="plan" aria-selected="true">Render Plan &amp; CLI</button>
+              <button type="button" class="resolve-subtab-btn" data-deliver-drawer="chapters" aria-selected="false">Chapters / EDL / FCPXML</button>
+            </div>
+            <div class="deliver-center-drawer">
+              <div id="deliver-drawer-plan" class="deliver-drawer-pane">
+<section class="nle-pane">
               <div class="pane-header">
                 <h2 data-i18n="render.plan.title">Compiled Render Plan &amp; Queue Telemetry</h2>
                 <span id="render-encoder-badge" class="nle-tag mono">--</span>
@@ -4262,8 +4385,33 @@
                 </div>
               </div>
             </section>
+              </div>
+              <div id="deliver-drawer-chapters" class="deliver-drawer-pane">
+<section class="nle-pane deliver-chapters-pane">
+              <div class="pane-header">
+                <h2 data-i18n="render.chapters.title">Timeline Chapters &amp; Metadata Export</h2>
+                <span id="deliver-chapters-count" class="nle-tag mono">0 CHP</span>
+              </div>
+              <div class="pane-body">
+                <div class="pane-subheader">
+                  <span data-i18n="render.chapters.previewLabel">Live YouTube Chapters Preview (from Timeline Markers M)</span>
+                </div>
+                <pre id="deliver-chapters-preview" class="code-box deliver-chapters-preview mono" aria-live="polite"></pre>
+                <div class="btn-row deliver-chapters-actions">
+                  <button type="button" id="btn-export-yt-chapters" class="btn btn-secondary" data-i18n="render.chapters.exportYt">Export YouTube Chapters (.txt)</button>
+                  <button type="button" id="btn-export-ffmetadata" class="btn btn-secondary" data-i18n="render.chapters.exportFfmeta">Export FFMETADATA</button>
+                  <button type="button" id="btn-export-cmx-edl" class="btn btn-secondary" data-i18n="render.chapters.exportEdl">Export CMX 3600 (.edl)</button>
+                  <button type="button" id="btn-export-fcpxml" class="btn btn-secondary" data-i18n="render.chapters.exportFcpxml">Export FCPXML (.fcpxml)</button>
+                </div>
+                <div id="deliver-chapters-feedback" class="telemetry-note mono" aria-live="polite"></div>
+              </div>
+            </section>
+              </div>
+            </div>
+          </section>
 
-            <section id="deliver-queue-pane" class="nle-pane deliver-queue-pane" aria-labelledby="deliver-queue-title">
+          <aside class="deliver-queue-col">
+<section id="deliver-queue-pane" class="nle-pane deliver-queue-pane" aria-labelledby="deliver-queue-title">
               <div class="pane-header">
                 <h2 id="deliver-queue-title" data-i18n="render.queue.title">Batch Render Queue</h2>
                 <div class="viewer-controls">
@@ -4286,30 +4434,26 @@
                 <div id="render-queue-list" class="render-queue-list" role="list"></div>
               </div>
             </section>
-
-            <section class="nle-pane deliver-chapters-pane">
-              <div class="pane-header">
-                <h2 data-i18n="render.chapters.title">Timeline Chapters &amp; Metadata Export</h2>
-                <span id="deliver-chapters-count" class="nle-tag mono">0 CHP</span>
-              </div>
-              <div class="pane-body">
-                <div class="pane-subheader">
-                  <span data-i18n="render.chapters.previewLabel">Live YouTube Chapters Preview (from Timeline Markers M)</span>
-                </div>
-                <pre id="deliver-chapters-preview" class="code-box deliver-chapters-preview mono" aria-live="polite"></pre>
-                <div class="btn-row deliver-chapters-actions">
-                  <button type="button" id="btn-export-yt-chapters" class="btn btn-secondary" data-i18n="render.chapters.exportYt">Export YouTube Chapters (.txt)</button>
-                  <button type="button" id="btn-export-ffmetadata" class="btn btn-secondary" data-i18n="render.chapters.exportFfmeta">Export FFMETADATA</button>
-                  <button type="button" id="btn-export-cmx-edl" class="btn btn-secondary" data-i18n="render.chapters.exportEdl">Export CMX 3600 (.edl)</button>
-                  <button type="button" id="btn-export-fcpxml" class="btn btn-secondary" data-i18n="render.chapters.exportFcpxml">Export FCPXML (.fcpxml)</button>
-                </div>
-                <div id="deliver-chapters-feedback" class="telemetry-note mono" aria-live="polite"></div>
-              </div>
-            </section>
-          </div>
+          </aside>
         </div>
-      </section>
 
+        <section id="deliver-timeline-pane" class="nle-pane deliver-timeline-pane" aria-label="Deliver Render Range Timeline">
+          <div class="deliver-tl-toolbar">
+            <div class="viewer-controls">
+              <span class="mono">Render:</span>
+              <select id="deliver-range-select" class="input-control input-compact mono" aria-label="Render range mode">
+                <option value="entire" selected>Entire Timeline</option>
+                <option value="inout">In/Out Range</option>
+              </select>
+              <span id="deliver-duration-badge" class="nle-tag mono">00:00:00:00</span>
+            </div>
+            <span class="mono deliver-tl-hint">Scrub mini timeline to preview output frame</span>
+          </div>
+          <div class="deliver-tl-well">
+            <canvas id="deliver-timeline-canvas" class="studio-canvas" aria-label="Deliver multi-track mini timeline"></canvas>
+          </div>
+        </section>
+      </section>
       <!-- PAGE 4: BROADCAST QA GATE -->
       <section id="panel-qa" class="workspace-panel is-hidden" role="tabpanel" aria-labelledby="tab-qa">
         <section class="nle-pane">
@@ -7289,5 +7433,26 @@
   </dialog>
 
   <script type="module" src="./app.js"></script>
+
+  <dialog id="local-media-import-dialog" class="nle-dialog" aria-labelledby="local-media-import-title">
+    <div class="nle-dialog-header">
+      <div class="nle-dialog-title-group">
+        <h2 id="local-media-import-title">Import Local Media Folder</h2>
+        <p class="nle-dialog-subtitle">Scan a folder inside the active TaktCut workspace for videos, audio SFX, and images.</p>
+      </div>
+      <button type="button" id="btn-close-local-media-dialog" class="btn btn-mini">Close</button>
+    </div>
+    <div class="nle-dialog-body">
+      <div class="form-row">
+        <label for="local-media-folder-input">Workspace Folder Path (e.g. media or .)</label>
+        <input type="text" id="local-media-folder-input" class="input-control mono" value="media" placeholder="media">
+      </div>
+      <div class="btn-row">
+        <button type="button" id="btn-confirm-import-folder" class="btn btn-primary">Import Folder into Media Pool</button>
+        <button type="button" id="btn-cancel-import-folder" class="btn btn-secondary">Cancel</button>
+      </div>
+      <div id="local-media-import-status" class="telemetry-note mono" aria-live="polite"></div>
+    </div>
+  </dialog>
 </body>
 </html>

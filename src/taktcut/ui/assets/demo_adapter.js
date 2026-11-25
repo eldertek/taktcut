@@ -4937,6 +4937,42 @@ export function createApiClient() {
         return { document: doc, validation: validateTimelineClient(doc), resolve_project: null };
       }
       return requestJson("/api/resolve/open-project", { method: "POST", body: payload || {} });
+    },
+    async listLocalMedia() {
+      if (resolvedMode === "static-demo") {
+        return { assets: [], media_map: {} };
+      }
+      return requestJson("/api/media/list");
+    },
+    async importLocalMedia(payload) {
+      if (resolvedMode === "static-demo") {
+        throw new Error("Local media import requires the installed desktop TaktCut server.");
+      }
+      return requestJson("/api/media/import", { method: "POST", body: payload || {} });
+    },
+    async uploadLocalMedia(payload) {
+      if (resolvedMode === "static-demo") {
+        throw new Error("Local media upload requires the installed desktop TaktCut server.");
+      }
+      return requestJson("/api/media/upload", { method: "POST", body: payload || {} });
+    },
+    async renderTimeline(payload) {
+      if (resolvedMode === "static-demo") {
+        throw new Error("Multi-track FFmpeg rendering requires the installed desktop TaktCut app.");
+      }
+      return requestJson("/api/render/timeline", { method: "POST", body: payload || {} });
+    },
+    async getRenderProgress() {
+      if (resolvedMode === "static-demo") {
+        return { active: false, phase: "idle", percent: 0 };
+      }
+      return requestJson("/api/render/progress");
+    },
+    async saveProjectToWorkspace(payload) {
+      if (resolvedMode === "static-demo") {
+        throw new Error("Workspace project save requires the installed desktop TaktCut app.");
+      }
+      return requestJson("/api/project/save-path", { method: "POST", body: payload || {} });
     }
   };
 }

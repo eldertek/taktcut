@@ -1607,6 +1607,15 @@ class TimelineClip(BaseModel):
     media_offline: bool = False
     av_sync_offset_frames: int = Field(default=0, ge=-100000, le=100000)
     timecode_start: str = ""
+    composite_mode: str = "normal"
+    opacity: float = Field(default=100.0, ge=0.0, le=100.0)
+    clip_kind: str = ""
+    title_params: dict[str, Any] = Field(default_factory=dict)
+    generator_params: dict[str, Any] = Field(default_factory=dict)
+    resolve_fx: list[dict[str, Any]] = Field(default_factory=list)
+    audio_fx: list[dict[str, Any]] = Field(default_factory=list)
+    keyframes: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    color_grade: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("proxy_path", "timecode_start", mode="before")
     @classmethod

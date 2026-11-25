@@ -156,6 +156,11 @@ from taktcut.fx import (
     list_planar_tracker_presets,
     list_stabilizer_presets,
 )
+from taktcut.local_media import (
+    LocalMediaRegistry,
+    ensure_media_thumbnail,
+    extract_audio_peaks,
+)
 from taktcut.media_pool import (
     AV_SYNC_MAX_LAG_DEFAULT,
     DEFAULT_PROXY_DIR,
@@ -209,6 +214,7 @@ from taktcut.models import (
     ReelSlatePosition,
     RenderPlan,
     RenderProfile,
+    RenderResult,
     TimecodeBurnInPosition,
     TimelineClip,
     TimelineDocument,
@@ -454,6 +460,13 @@ from taktcut.timeline_edit import (
     resolve_three_point_range,
     three_point_edit,
 )
+from taktcut.timeline_render import (
+    TimelineRenderPlan,
+    TimelineRenderProgress,
+    TimelineRenderRequest,
+    build_timeline_render_plan,
+    execute_timeline_render_plan,
+)
 from taktcut.titles import (
     TITLE_ANIM_IN_MAX,
     TITLE_ANIM_IN_MIN,
@@ -607,6 +620,30 @@ class UiAppState:
     _remote_jobs_lock: threading.Lock = field(default_factory=threading.Lock)
     _remote_jobs: dict[str, _TrackedRemoteJob] = field(default_factory=dict)
     render_queue: BatchRenderQueue = field(default_factory=BatchRenderQueue)
+    _media_lock: threading.Lock = field(default_factory=threading.Lock)
+    _media_registry: LocalMediaRegistry | None = None
+    _progress_lock: threading.Lock = field(default_factory=threading.Lock)
+    _render_progress: TimelineRenderProgress = field(default_factory=TimelineRenderProgress)
+
+    def get_media_registry(self) -> LocalMediaRegistry:
+        with self._media_lock:
+            if self._media_registry is None:
+                cache_dir = self.workspace_root / ".taktcut-cache" / "media"
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    cache_dir = Path(tempfile.gettempdir()) / "taktcut-media-cache"
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                self._media_registry = LocalMediaRegistry(cache_dir)
+            return self._media_registry
+
+    def set_render_progress(self, progress: TimelineRenderProgress) -> None:
+        with self._progress_lock:
+            self._render_progress = progress
+
+    def get_render_progress(self) -> TimelineRenderProgress:
+        with self._progress_lock:
+            return self._render_progress.model_copy(deep=True)
 
     def track_remote_job(
         self,
@@ -1144,6 +1181,88 @@ def _compile_render_plan_from_payload(
         video_crf=video_crf,
         audio_bitrate_kbps=audio_bitrate_kbps,
         encoder_preset=encoder_preset,
+    )
+
+
+def _compile_timeline_render_plan_from_payload(
+    app_state: UiAppState,
+    payload: dict[str, Any],
+) -> TimelineRenderPlan:
+    doc = _resolve_timeline_from_payload(app_state, payload)
+    raw_out = str(payload.get("output_path") or "renders/timeline_export.mp4").strip()
+    out_file = confine_workspace_path(
+        app_state.workspace_root,
+        raw_out,
+        must_exist=False,
+        allowed_suffixes=MEDIA_SUFFIXES,
+    )
+    raw_profile = str(payload.get("profile") or "web_h264").strip()
+    profile_val = RenderProfile(raw_profile)
+    prefer_hw = bool(payload.get("prefer_hw", True))
+    caps, _err = app_state.get_capabilities(verify_nvenc_runtime=prefer_hw)
+    raw_lut = payload.get("lut_path")
+    lut_str: str | None = None
+    if isinstance(raw_lut, str) and raw_lut.strip():
+        lut_str = str(
+            confine_workspace_path(
+                app_state.workspace_root,
+                raw_lut,
+                must_exist=True,
+                allowed_suffixes=LUT_SUFFIXES,
+            )
+        )
+    reg = app_state.get_media_registry()
+    media_lookup: dict[str, Path] = {}
+    for a in reg.list_assets():
+        p_obj = Path(a.path)
+        media_lookup[a.path] = p_obj
+        if a.rel_path:
+            media_lookup[a.rel_path] = p_obj
+
+    req_obj = TimelineRenderRequest(
+        document=doc,
+        output_path=str(out_file),
+        width=int(payload.get("width", doc.width or 1920)),
+        height=int(payload.get("height", doc.height or 1080)),
+        fps_override=(
+            float(payload["fps_override"])
+            if payload.get("fps_override") not in (None, "", "source")
+            else None
+        ),
+        in_frame=(
+            int(payload["in_frame"])
+            if payload.get("in_frame") not in (None, "")
+            else None
+        ),
+        out_frame=(
+            int(payload["out_frame"])
+            if payload.get("out_frame") not in (None, "")
+            else None
+        ),
+        profile=profile_val,
+        video_crf=int(payload.get("video_crf", 17)),
+        audio_bitrate_kbps=int(payload.get("audio_bitrate_kbps", 256)),
+        encoder_preset=str(payload.get("encoder_preset", "medium")),
+        prefer_hw=prefer_hw,
+        audio_only_format=str(payload.get("audio_only_format", "off")),
+        loudness_preset=str(payload.get("loudness_preset", "off")),
+        color_grade=(
+            payload["color_grade"]
+            if isinstance(payload.get("color_grade"), dict)
+            else None
+        ),
+        lut_path=lut_str,
+        fusion_nodes=(
+            payload["fusion_nodes"]
+            if isinstance(payload.get("fusion_nodes"), list)
+            else []
+        ),
+    )
+    return build_timeline_render_plan(
+        req_obj,
+        workspace_root=app_state.workspace_root,
+        media_lookup=media_lookup,
+        caps=caps,
     )
 
 
@@ -1818,6 +1937,67 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
         encoded = json.dumps(data, ensure_ascii=True).encode("utf-8")
         self._send_bytes(status, "application/json; charset=utf-8", encoded)
 
+    def _send_file_range(self, file_path: Path, content_type: str) -> None:
+        if not file_path.is_file():
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": f"File not found: {file_path.name}"})
+            return
+        file_size = file_path.stat().st_size
+        range_hdr = self.headers.get("Range")
+        start = 0
+        end = max(0, file_size - 1)
+        status = HTTPStatus.OK
+
+        if range_hdr and range_hdr.startswith("bytes=") and file_size > 0:
+            spec = range_hdr[6:].split(",", 1)[0].strip()
+            if "-" in spec:
+                s_part, e_part = spec.split("-", 1)
+                try:
+                    if s_part == "" and e_part != "":
+                        suffix_len = int(e_part)
+                        start = max(0, file_size - suffix_len)
+                        end = file_size - 1
+                    else:
+                        start = max(0, int(s_part))
+                        end = int(e_part) if e_part else (file_size - 1)
+                    if start >= file_size:
+                        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                        self.send_header("Content-Range", f"bytes */{file_size}")
+                        self.send_header("Content-Length", "0")
+                        self._send_security_headers(cache_control="no-store")
+                        self.end_headers()
+                        return
+                    end = min(end, file_size - 1)
+                    if end >= start:
+                        status = HTTPStatus.PARTIAL_CONTENT
+                except ValueError:
+                    start = 0
+                    end = file_size - 1
+
+        length = (end - start + 1) if file_size > 0 else 0
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+        self._send_security_headers(cache_control="private, max-age=300")
+        self.end_headers()
+        if length == 0:
+            return
+        try:
+            with file_path.open("rb") as fh:
+                fh.seek(start)
+                remaining = length
+                chunk_size = 256 * 1024
+                while remaining > 0:
+                    buf = fh.read(min(chunk_size, remaining))
+                    if not buf:
+                        break
+                    self.wfile.write(buf)
+                    remaining -= len(buf)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+
     def _read_json_body(self) -> dict[str, Any]:
         raw_len = self.headers.get("Content-Length")
         if raw_len is None:
@@ -2426,6 +2606,87 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             except (RuntimeError, OSError) as exc:
                 self._send_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
+            return
+
+        if route == "/api/media/list":
+            reg = self.app_state.get_media_registry()
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "assets": [a.model_dump(mode="json") for a in reg.list_assets()],
+                    "media_map": reg.to_media_map(),
+                },
+            )
+            return
+
+        if route == "/api/media/stream":
+            qs = parse_qs(urlparse(self.path).query)
+            reg = self.app_state.get_media_registry()
+            mid = (qs.get("id") or [""])[0].strip()
+            raw_p = (qs.get("path") or [""])[0].strip()
+            asset = reg.get_by_id(mid) if mid else None
+            if asset is None and raw_p:
+                asset = reg.get_by_path(raw_p)
+                if asset is None:
+                    try:
+                        confined = confine_workspace_path(
+                            self.app_state.workspace_root,
+                            raw_p,
+                            must_exist=True,
+                            allowed_suffixes=MEDIA_SUFFIXES,
+                        )
+                        asset = reg.register_file(
+                            confined,
+                            workspace_root=self.app_state.workspace_root,
+                            generate_thumb=False,
+                            generate_peaks=False,
+                        )
+                    except (PathConfinementError, FileNotFoundError, ValueError):
+                        asset = None
+            if asset is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown media asset"})
+                return
+            self._send_file_range(Path(asset.path), asset.mime_type)
+            return
+
+        if route == "/api/media/thumb":
+            qs = parse_qs(urlparse(self.path).query)
+            reg = self.app_state.get_media_registry()
+            mid = (qs.get("id") or [""])[0].strip()
+            asset = reg.get_by_id(mid) if mid else None
+            if asset is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown media asset"})
+                return
+            thumb = ensure_media_thumbnail(asset, reg.cache_dir)
+            if thumb is None or not thumb.is_file():
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Thumbnail unavailable"})
+                return
+            self._send_bytes(
+                HTTPStatus.OK,
+                "image/jpeg",
+                thumb.read_bytes(),
+                cache_control="private, max-age=600",
+            )
+            return
+
+        if route == "/api/media/peaks":
+            qs = parse_qs(urlparse(self.path).query)
+            reg = self.app_state.get_media_registry()
+            mid = (qs.get("id") or [""])[0].strip()
+            asset = reg.get_by_id(mid) if mid else None
+            if asset is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown media asset"})
+                return
+            peaks = asset.peaks or extract_audio_peaks(asset, reg.cache_dir, num_bins=120)
+            asset.peaks = peaks
+            self._send_json(HTTPStatus.OK, {"media_id": asset.media_id, "peaks": peaks})
+            return
+
+        if route == "/api/render/progress":
+            self._send_json(
+                HTTPStatus.OK,
+                self.app_state.get_render_progress().model_dump(mode="json"),
+            )
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": f"Unknown route: {route}"})
@@ -4436,22 +4697,49 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             job_payload: dict[str, Any] = (
                 raw_job_obj if isinstance(raw_job_obj, dict) else payload
             )
-            plan = _compile_render_plan_from_payload(
-                self.app_state, job_payload, execute=False
+            is_tl_job = (
+                str(job_payload.get("mode") or "").lower() == "timeline"
+                or isinstance(job_payload.get("document"), dict)
             )
+            if is_tl_job:
+                tl_plan = _compile_timeline_render_plan_from_payload(
+                    self.app_state, job_payload
+                )
+                fps_rate = RationalFrameRate.from_str(str(round(tl_plan.fps)))
+                tl_prof = RenderProfile(str(job_payload.get("profile") or "web_h264"))
+                plan = RenderPlan(
+                    input_path=f"timeline:{tl_plan.output_path}",
+                    output_path=tl_plan.output_path,
+                    profile=tl_prof,
+                    encoder=tl_plan.encoder,
+                    fps=fps_rate,
+                    gop_frames=max(1, round(tl_plan.fps) * 2),
+                    pix_fmt="yuv420p",
+                    faststart=True,
+                    target_width=tl_plan.width,
+                    target_height=tl_plan.height,
+                    video_crf=int(job_payload.get("video_crf", 17)),
+                    audio_bitrate_kbps=int(job_payload.get("audio_bitrate_kbps", 256)),
+                    argv=tl_plan.argv,
+                )
+                dur_s = max(0.5, tl_plan.duration_s)
+            else:
+                plan = _compile_render_plan_from_payload(
+                    self.app_state, job_payload, execute=False
+                )
+                raw_dur = payload.get("duration_s", 10.0)
+                dur_s = (
+                    float(raw_dur)
+                    if isinstance(raw_dur, (int, float))
+                    and not isinstance(raw_dur, bool)
+                    and raw_dur > 0
+                    else 10.0
+                )
             raw_label = payload.get("label")
             label = (
                 raw_label.strip()
                 if isinstance(raw_label, str) and raw_label.strip()
                 else Path(plan.output_path).name
-            )
-            raw_dur = payload.get("duration_s", 10.0)
-            dur_s = (
-                float(raw_dur)
-                if isinstance(raw_dur, (int, float))
-                and not isinstance(raw_dur, bool)
-                and raw_dur > 0
-                else 10.0
             )
             est_w = plan.target_width or 1920
             est_h = plan.target_height or 1080
@@ -4543,14 +4831,65 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
         if route == "/api/render/queue/run":
             dry_run = bool(payload.get("dry_run", False))
-            jobs, summary = self.app_state.render_queue.run_queue(
-                dry_run=dry_run,
-                executor=execute_render_plan,
-                plan_resolver=lambda job_payload: _compile_render_plan_from_payload(
+            tl_plan_cache: dict[str, TimelineRenderPlan] = {}
+
+            def _resolve_queue_plan(job_payload: dict[str, Any]) -> RenderPlan:
+                is_tl = (
+                    str(job_payload.get("mode") or "").lower() == "timeline"
+                    or isinstance(job_payload.get("document"), dict)
+                )
+                if is_tl:
+                    tl_p = _compile_timeline_render_plan_from_payload(
+                        self.app_state, job_payload
+                    )
+                    tl_plan_cache[tl_p.output_path] = tl_p
+                    fps_rate = RationalFrameRate.from_str(str(round(tl_p.fps)))
+                    tl_prof = RenderProfile(str(job_payload.get("profile") or "web_h264"))
+                    return RenderPlan(
+                        input_path=f"timeline:{tl_p.output_path}",
+                        output_path=tl_p.output_path,
+                        profile=tl_prof,
+                        encoder=tl_p.encoder,
+                        fps=fps_rate,
+                        gop_frames=max(1, round(tl_p.fps) * 2),
+                        pix_fmt="yuv420p",
+                        faststart=True,
+                        target_width=tl_p.width,
+                        target_height=tl_p.height,
+                        video_crf=int(job_payload.get("video_crf", 17)),
+                        audio_bitrate_kbps=int(job_payload.get("audio_bitrate_kbps", 256)),
+                        argv=tl_p.argv,
+                    )
+                return _compile_render_plan_from_payload(
                     self.app_state,
                     job_payload,
                     execute=not dry_run,
-                ),
+                )
+
+            def _execute_queue_plan(plan_obj: RenderPlan) -> RenderResult:
+                if plan_obj.input_path.startswith("timeline:"):
+                    tl_p = tl_plan_cache.get(plan_obj.output_path)
+                    if tl_p is None:
+                        raise RuntimeError("Timeline render plan cache miss")
+                    tl_res = execute_timeline_render_plan(
+                        tl_p,
+                        progress_cb=self.app_state.set_render_progress,
+                        job_label=Path(tl_p.output_path).name,
+                    )
+                    return RenderResult(
+                        success=tl_res.success,
+                        output_path=tl_res.output_path,
+                        encoder=tl_res.encoder,
+                        returncode=tl_res.returncode,
+                        bytes_written=tl_res.bytes_written,
+                        stderr_tail=tl_res.stderr_tail,
+                    )
+                return execute_render_plan(plan_obj)
+
+            jobs, summary = self.app_state.render_queue.run_queue(
+                dry_run=dry_run,
+                executor=_execute_queue_plan,
+                plan_resolver=_resolve_queue_plan,
             )
             self._send_json(
                 HTTPStatus.OK,
@@ -4558,6 +4897,132 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     "dry_run": dry_run,
                     "jobs": [j.model_dump(mode="json") for j in jobs],
                     "summary": summary.model_dump(mode="json"),
+                    "progress": self.app_state.get_render_progress().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/media/import":
+            reg = self.app_state.get_media_registry()
+            raw_paths = payload.get("paths")
+            raw_folder = payload.get("folder")
+            import_targets: list[Path] = []
+            if isinstance(raw_folder, str) and raw_folder.strip():
+                folder_p = Path(raw_folder.strip())
+                joined = (
+                    folder_p
+                    if folder_p.is_absolute()
+                    else (self.app_state.workspace_root / folder_p)
+                )
+                resolved_dir = Path(os.path.realpath(joined))
+                root_real = Path(os.path.realpath(self.app_state.workspace_root))
+                try:
+                    resolved_dir.relative_to(root_real)
+                except ValueError as exc:
+                    raise PathConfinementError(
+                        f"Access denied: {raw_folder!r} resolves outside workspace"
+                    ) from exc
+                if not resolved_dir.is_dir():
+                    raise FileNotFoundError(f"Folder not found: {raw_folder}")
+                import_targets.append(resolved_dir)
+            if isinstance(raw_paths, list):
+                for item in raw_paths:
+                    if not isinstance(item, str) or not item.strip():
+                        continue
+                    confined = confine_workspace_path(
+                        self.app_state.workspace_root,
+                        item,
+                        must_exist=True,
+                        allowed_suffixes=MEDIA_SUFFIXES,
+                    )
+                    import_targets.append(confined)
+            if not import_targets:
+                raise ValueError("Provide 'paths' list or 'folder' inside workspace")
+            imported = reg.register_paths(
+                import_targets, workspace_root=self.app_state.workspace_root
+            )
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "imported": [a.model_dump(mode="json") for a in imported],
+                    "assets": [a.model_dump(mode="json") for a in reg.list_assets()],
+                    "media_map": reg.to_media_map(),
+                },
+            )
+            return
+
+        if route == "/api/media/upload":
+            reg = self.app_state.get_media_registry()
+            raw_fname = str(payload.get("filename") or "").strip()
+            raw_b64 = payload.get("content_base64")
+            if not raw_fname or not isinstance(raw_b64, str):
+                raise ValueError("filename and content_base64 are required")
+            ext = Path(raw_fname).suffix.lower()
+            if ext not in MEDIA_SUFFIXES:
+                raise ValueError(f"Unsupported media extension: {ext or '(none)'}")
+            decoded = base64.b64decode(raw_b64, validate=True)
+            if len(decoded) > MAX_REQUEST_BYTES:
+                raise ValueError("Uploaded media exceeds 32 MB inline limit; use /api/media/import")
+            safe_name = sanitize_download_filename(raw_fname, "media_clip", ext)
+            imports_dir = self.app_state.workspace_root / ".taktcut-imports"
+            imports_dir.mkdir(parents=True, exist_ok=True)
+            dest = imports_dir / safe_name
+            dest.write_bytes(decoded)
+            asset = reg.register_file(dest, workspace_root=self.app_state.workspace_root)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "asset": asset.model_dump(mode="json"),
+                    "assets": [a.model_dump(mode="json") for a in reg.list_assets()],
+                    "media_map": reg.to_media_map(),
+                },
+            )
+            return
+
+        if route == "/api/render/timeline":
+            tl_plan = _compile_timeline_render_plan_from_payload(self.app_state, payload)
+            execute_flag = bool(payload.get("execute", False))
+            tl_result = None
+            if execute_flag:
+                job_label = str(payload.get("label") or Path(tl_plan.output_path).name)
+                tl_result = execute_timeline_render_plan(
+                    tl_plan,
+                    progress_cb=self.app_state.set_render_progress,
+                    job_label=job_label,
+                )
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "plan": tl_plan.model_dump(mode="json"),
+                    "shell_command": shlex.join(tl_plan.argv),
+                    "result": tl_result.model_dump(mode="json") if tl_result else None,
+                    "progress": self.app_state.get_render_progress().model_dump(mode="json"),
+                },
+            )
+            return
+
+        if route == "/api/project/save-path":
+            raw_save = str(payload.get("path") or "project.taktcut.json").strip()
+            if not raw_save.lower().endswith(".json"):
+                raw_save = f"{raw_save}{PROJECT_FILE_SUFFIX}"
+            save_file = confine_workspace_path(
+                self.app_state.workspace_root,
+                raw_save,
+                must_exist=False,
+                allowed_suffixes=frozenset({".json"}),
+            )
+            raw_proj = payload.get("project")
+            proj_payload = raw_proj if isinstance(raw_proj, dict) else payload
+            json_text = export_project_json(proj_payload)
+            save_file.parent.mkdir(parents=True, exist_ok=True)
+            save_file.write_text(json_text, encoding="utf-8")
+            rel_saved = save_file.relative_to(self.app_state.workspace_root).as_posix()
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "saved_path": rel_saved,
+                    "absolute_path": str(save_file),
+                    "bytes_written": save_file.stat().st_size,
                 },
             )
             return

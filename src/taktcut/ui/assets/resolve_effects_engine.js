@@ -215,11 +215,32 @@ export function renderResolveGenerator(ctx, w, h, genStyle, progress = 0.5, para
         ctx.fillRect(px, py, sz, sz);
       }
     }
-  } else {
-    // Solid Color / Color Generator
-    ctx.fillStyle = params.color || "#1e3a5f";
-    ctx.fillRect(0, 0, w, h);
-  }
+    } else if (style === "vhs_static" || style === "noise" || style === "static") {
+      // Authentic monochrome VHS TV static burst with horizontal tracking tear bars
+      ctx.fillStyle = "#0b0b0e";
+      ctx.fillRect(0, 0, w, h);
+      let rng = ((Math.round(u * 120) + 73) * 2654435761) >>> 0;
+      const rand = () => {
+        rng = (Math.imul(1664525, rng) + 1013904223) >>> 0;
+        return rng / 4294967296;
+      };
+      const cell = Math.max(2, Math.round(w / 160));
+      for (let py = 0; py < h; py += cell) {
+        const tear = rand() > 0.92;
+        for (let px = 0; px < w; px += cell) {
+          const v = tear ? Math.round(145 + rand() * 110) : Math.round(rand() * 235);
+          ctx.fillStyle = `rgb(${v},${v},${v})`;
+          ctx.fillRect(px, py, cell, cell);
+        }
+      }
+      ctx.fillStyle = "rgba(255,255,255,0.22)";
+      const bandY = ((u * 3.7) % 1.0) * h;
+      ctx.fillRect(0, bandY, w, Math.max(4, h * 0.04));
+    } else {
+      // Solid Color / Color Generator
+      ctx.fillStyle = params.color || "#1e3a5f";
+      ctx.fillRect(0, 0, w, h);
+    }
   ctx.restore();
 }
 
@@ -360,11 +381,16 @@ export function renderResolveTitle(ctx, w, h, titleStyle, progress = 0.5, props 
     return;
   }
 
-  // Center / Fusion cinematic titles
-  const mainSize = Math.max(16, Math.round(h * 0.1 * fontScale));
+  // Center / Fusion cinematic titles (incl. Horror glowing / shaking / flickering Text+)
+  const rawSize = Number(props.font_size || 72);
+  const mainSize = Math.max(16, Math.round((rawSize / 1080) * h * 1.15));
   const subSize = Math.max(10, Math.round(h * 0.044 * fontScale));
-  const cx = w * 0.5;
-  const cy = h * 0.5;
+  const cx = w * Number(props.x_pct !== undefined ? props.x_pct : 0.5);
+  const cy = h * Number(props.y_pct !== undefined ? props.y_pct : 0.5);
+  const anim = String(props.animation || style || "").toLowerCase();
+  const fontFamily = String(props.font || "").toLowerCase().includes("anton")
+    ? "'Anton', 'Impact', 'Open Sans', sans-serif"
+    : "'Open Sans', 'Segoe UI', sans-serif";
 
   if (style === "letterbox") {
     const barH = h * 0.12 * ease;
@@ -373,13 +399,30 @@ export function renderResolveTitle(ctx, w, h, titleStyle, progress = 0.5, props 
     ctx.fillRect(0, h - barH, w, barH);
   }
 
-  ctx.translate(cx, cy);
+  let shakeX = 0;
+  let shakeY = 0;
+  if (anim.includes("shake") || Number(props.shake || 0) > 0) {
+    const amp = Math.max(2, Number(props.shake || 4)) * (w / 640);
+    shakeX = Math.sin(u * 131.7) * amp;
+    shakeY = Math.cos(u * 97.3) * amp * 0.7;
+  }
+
+  ctx.translate(cx + shakeX, cy + shakeY);
   if (style === "spin") ctx.rotate((1 - ease) * -0.45);
   else if (style === "stretch") ctx.scale(0.65 + ease * 0.35, 1.35 - ease * 0.35);
   else if (style === "drop_in") ctx.translate(0, (1 - ease) * -h * 0.22);
+  else if (anim.includes("zoom")) {
+    const z = 0.94 + u * 0.14;
+    ctx.scale(z, z);
+  }
 
-  ctx.globalAlpha = style === "neon" ? (0.65 + 0.35 * Math.abs(Math.sin(u * 26))) * ease : ease;
-  ctx.font = `700 ${mainSize}px 'Open Sans', 'Segoe UI', sans-serif`;
+  let alphaVal = ease;
+  if (style === "neon" || anim.includes("flicker") || props.flicker) {
+    const strobe = Math.sin(u * 53.0) * Math.cos(u * 29.0);
+    alphaVal = (strobe < -0.45 ? 0.18 : 0.82 + 0.18 * Math.abs(strobe)) * ease;
+  }
+  ctx.globalAlpha = clamp01(alphaVal);
+  ctx.font = `800 ${mainSize}px ${fontFamily}`;
   ctx.textAlign = "center";
 
   if (style === "dark_box" || style === "bg_reveal" || style === "headline") {
@@ -396,29 +439,44 @@ export function renderResolveTitle(ctx, w, h, titleStyle, progress = 0.5, props 
     ctx.fillRect(-lineW * 0.5, mainSize * 0.46, lineW, 2.5);
   }
 
-  if (style === "glitch") {
-    const off = Math.sin(u * 35) * 4;
-    ctx.fillStyle = "rgba(255, 60, 80, 0.85)";
-    ctx.fillText(text, -off, -1);
-    ctx.fillStyle = "rgba(60, 220, 255, 0.85)";
-    ctx.fillText(text, off, 1);
+  const lines = text.split("\n");
+  const lineH = mainSize * 1.14;
+  const startY = -((lines.length - 1) * lineH) * 0.5 - (sub ? subSize * 0.45 : 0);
+
+  if (style === "glitch" || anim.includes("glitch")) {
+    const off = Math.sin(u * 35) * 4.5;
+    lines.forEach((ln, idx) => {
+      const ly = startY + idx * lineH;
+      ctx.fillStyle = "rgba(255, 45, 65, 0.85)";
+      ctx.fillText(ln, -off, ly - 1);
+      ctx.fillStyle = "rgba(60, 220, 255, 0.85)";
+      ctx.fillText(ln, off, ly + 1);
+    });
   }
 
+  const glowAmt = Number(props.glow ?? (style === "neon" || style === "horror" ? 1 : 0));
   if (style === "neon") {
     ctx.shadowColor = "#39c5cf";
     ctx.shadowBlur = 16;
+  } else if (glowAmt > 0) {
+    ctx.shadowColor = props.glow_color || (color.toLowerCase() === "#ffffff" ? "rgba(255, 255, 255, 0.92)" : color);
+    ctx.shadowBlur = Math.max(8, Math.round(18 * glowAmt * (h / 360)));
   } else {
     ctx.shadowColor = "rgba(0, 0, 0, 0.78)";
     ctx.shadowBlur = 8;
   }
   ctx.fillStyle = style === "neon" ? "#b4f8ff" : color;
-  ctx.fillText(text, 0, sub ? -subSize * 0.45 : 0);
+  lines.forEach((ln, idx) => {
+    const ly = startY + idx * lineH;
+    if (glowAmt > 0.3) ctx.fillText(ln, 0, ly);
+    ctx.fillText(ln, 0, ly);
+  });
 
   if (sub) {
     ctx.shadowBlur = 4;
-    ctx.font = `400 ${subSize}px 'Open Sans', 'Segoe UI', sans-serif`;
+    ctx.font = `500 ${subSize}px 'Open Sans', 'Segoe UI', sans-serif`;
     ctx.fillStyle = "#d8dce6";
-    ctx.fillText(sub, 0, mainSize * 0.62);
+    ctx.fillText(sub, 0, startY + lines.length * lineH + subSize * 0.15);
   }
   ctx.restore();
 }

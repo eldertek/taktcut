@@ -971,11 +971,20 @@ function drawBaseProgramScene(ctx, w, h, doc, playheadFrame, cdl, activeClips) {
       return;
     }
     if (ck === "title") {
-      renderResolveTitle(ctx, w, h, topClip.clip.title_style || "text", localProg, topClip.clip.title_props || { text: topClip.clip.name });
+      const mergedTitleProps = {
+        text: topClip.clip.name,
+        ...(topClip.clip.title_params || {}),
+        ...(topClip.clip.title_props || {})
+      };
+      renderResolveTitle(ctx, w, h, topClip.clip.title_style || mergedTitleProps.style || "text", localProg, mergedTitleProps);
       return;
     }
     if (ck === "generator") {
-      renderResolveGenerator(ctx, w, h, topClip.clip.generator_style || "solid", localProg, topClip.clip.generator_params || {});
+      const genStyle =
+        topClip.clip.generator_style ||
+        (topClip.clip.generator_params && topClip.clip.generator_params.kind) ||
+        "solid";
+      renderResolveGenerator(ctx, w, h, genStyle, localProg, topClip.clip.generator_params || {});
       applyGradeLutToRegion(ctx, w, h, cdl);
       return;
     }
@@ -2410,14 +2419,16 @@ function applyChromaKeyOnBuffer(bctx, bw, bh, ckState, matteView) {
 }
 
 function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, clips, framingMode, srcAspect, targetAspect, ckState = null) {
-  const renderSceneLayer = (layerClips, allowKeyerPlate) => {
+  const renderSceneLayer = (layerClips, allowKeyerPlate, clearLetterbox = true) => {
     if (allowKeyerPlate && ckState && ckState.enabled) {
       drawStudioKeyerPlate(targetCtx, bufW, bufH, doc, playheadFrame, cdl, layerClips, ckState);
       return;
     }
     if (framingMode === "fit" && Math.abs(targetAspect - srcAspect) > 0.015) {
-      targetCtx.fillStyle = "#000000";
-      targetCtx.fillRect(0, 0, bufW, bufH);
+      if (clearLetterbox) {
+        targetCtx.fillStyle = "#000000";
+        targetCtx.fillRect(0, 0, bufW, bufH);
+      }
       let innerW = bufW;
       let innerH = innerW / srcAspect;
       if (innerH > bufH) {
@@ -2457,32 +2468,40 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
     const tf = evaluateClipTransformAtTime(layer && layer.clip ? layer.clip : null, clipLocalTimeS);
     const fadeEnv =
       layer && layer.clip ? evaluateClipFadeEnvelope(layer.clip, playheadFrame, fpsRate) : 1.0;
-    const alpha = clamp01((tf.opacity_pct / 100.0) * fadeEnv);
+    const rawDirectOp =
+      layer && layer.clip && layer.clip.opacity !== undefined && layer.clip.opacity !== null
+        ? Number(layer.clip.opacity)
+        : 100.0;
+    const clipDirectOpacity = clamp01(rawDirectOp > 1.0 ? rawDirectOp / 100.0 : rawDirectOp);
+    const alpha = clamp01((tf.opacity_pct / 100.0) * clipDirectOpacity * fadeEnv);
     if (alpha <= 0.0001) {
       continue;
     }
 
     const compositeOpMap = {
-      Normal: "source-over",
-      Add: "lighter",
-      Color: "color",
-      "Color Burn": "color-burn",
-      "Color Dodge": "color-dodge",
-      Darken: "darken",
-      Difference: "difference",
-      Exclusion: "exclusion",
-      "Hard Light": "hard-light",
-      Hue: "hue",
-      Lighten: "lighten",
-      Luminosity: "luminosity",
-      Multiply: "multiply",
-      Overlay: "overlay",
-      Saturation: "saturation",
-      Screen: "screen",
-      "Soft Light": "soft-light"
+      normal: "source-over",
+      add: "lighter",
+      color: "color",
+      "color burn": "color-burn",
+      "color dodge": "color-dodge",
+      darken: "darken",
+      difference: "difference",
+      exclusion: "exclusion",
+      "hard light": "hard-light",
+      hue: "hue",
+      lighten: "lighten",
+      luminosity: "luminosity",
+      multiply: "multiply",
+      overlay: "overlay",
+      saturation: "saturation",
+      screen: "screen",
+      "soft light": "soft-light"
     };
-    const compMode = tf.composite_mode || "Normal";
-    const gco = compositeOpMap[compMode] || "source-over";
+    const rawCompMode =
+      (layer && layer.clip && layer.clip.composite_mode && layer.clip.composite_mode !== "normal"
+        ? layer.clip.composite_mode
+        : tf.composite_mode) || "Normal";
+    const gco = compositeOpMap[String(rawCompMode).trim().toLowerCase()] || "source-over";
     const scaleX = ((tf.zoom_pct ?? 100) / 100.0) * (tf.flip_h ? -1 : 1);
     const scaleY = ((tf.zoom_y_pct ?? tf.zoom_pct ?? 100) / 100.0) * (tf.flip_v ? -1 : 1);
     const skewPitch = Number(tf.pitch || 0) * 0.35;
@@ -2527,7 +2546,7 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
         );
       }
 
-      renderSceneLayer(clips.slice(0, idx + 1), isTop);
+      renderSceneLayer(clips.slice(0, idx + 1), isTop, idx === 0);
       targetCtx.restore();
       continue;
     }
@@ -2536,7 +2555,7 @@ function drawFramedBaseScene(targetCtx, bufW, bufH, doc, playheadFrame, cdl, cli
     if (!_dveLayerScratch) {
       targetCtx.save();
       targetCtx.globalAlpha *= alpha;
-      renderSceneLayer(clips.slice(0, idx + 1), isTop);
+      renderSceneLayer(clips.slice(0, idx + 1), isTop, idx === 0);
       targetCtx.restore();
       continue;
     }
@@ -3139,12 +3158,26 @@ export function drawProgramMonitorCanvas(
     };
   }
 
-  // Merge global FX stack + per-clip FX (and Adjustment Clip FX on higher tracks) + live hover preview FX
+  // Merge global FX stack + per-clip FX (both clip_fx and resolve_fx) + live hover preview FX
   const perClipFxNodes = [];
   for (const entry of activeClips) {
-    if (entry && entry.clip && Array.isArray(entry.clip.clip_fx)) {
+    if (!entry || !entry.clip) continue;
+    if (Array.isArray(entry.clip.clip_fx)) {
       for (const n of entry.clip.clip_fx) {
         if (n && n.enabled !== false) perClipFxNodes.push(n);
+      }
+    }
+    if (Array.isArray(entry.clip.resolve_fx)) {
+      for (const n of entry.clip.resolve_fx) {
+        if (n && n.enabled !== false) {
+          const effName = String(n.effect || n.kind || n.fxStyle || "").toLowerCase();
+          perClipFxNodes.push({
+            effect: effName,
+            fxStyle: effName,
+            enabled: true,
+            params: n.params || n
+          });
+        }
       }
     }
   }
@@ -7216,11 +7249,67 @@ function renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels
   }
 }
 
+function collectActiveVideoClipsForColor(doc, playheadFrame) {
+  const out = [];
+  if (!doc || !Array.isArray(doc.tracks)) return out;
+  const f = Math.max(0, Math.round(playheadFrame || 0));
+  for (const trk of doc.tracks) {
+    if (trk.kind !== "video") continue;
+    for (const c of trk.clips || []) {
+      if (c.enabled === false) continue;
+      if (f >= (c.start_frame || 0) && f < (c.start_frame || 0) + Math.max(1, c.duration_frames || 1)) {
+        out.push({ track: `V${trk.index}`, clip: c });
+      }
+    }
+  }
+  return out;
+}
+
+function renderColorPreviewSourceFrame(ctx, width, height, cdl, graded, showLabels, sceneOpts = null) {
+  const doc = sceneOpts && sceneOpts.doc ? sceneOpts.doc : null;
+  const forceChart = Boolean(sceneOpts && sceneOpts.forceTestChart);
+  if (doc && !forceChart) {
+    const f = Number(sceneOpts.playheadFrame || 0);
+    const activeClips = collectActiveVideoClipsForColor(doc, f);
+    const hasRealVisual =
+      activeClips.length > 0 &&
+      (Boolean(_clipMediaProviders.isActive && _clipMediaProviders.isActive()) ||
+        activeClips.some(
+          ({ clip }) =>
+            clip &&
+            (clip.clip_kind === "title" ||
+              clip.clip_kind === "generator" ||
+              Boolean(_clipMediaProviders.hasEntry && _clipMediaProviders.hasEntry(clip)))
+        ));
+    if (hasRealVisual) {
+      const srcAspect = doc.width > 0 && doc.height > 0 ? doc.width / doc.height : 16 / 9;
+      ctx.fillStyle = "#0a0a0d";
+      ctx.fillRect(0, 0, width, height);
+      drawFramedBaseScene(
+        ctx,
+        width,
+        height,
+        doc,
+        f,
+        graded ? cdl : null,
+        activeClips,
+        "fit",
+        srcAspect,
+        width / Math.max(1, height),
+        null
+      );
+      return true;
+    }
+  }
+  renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels);
+  return false;
+}
+
 function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels, sceneOpts = null) {
   const showHighlight = Boolean(graded && sceneOpts && sceneOpts.qualifierHighlight);
   const hasMasks = Boolean(graded && hasActiveNodeMaskInChain(cdl));
   if (!showHighlight && !hasMasks) {
-    renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels);
+    renderColorPreviewSourceFrame(ctx, width, height, cdl, graded, showLabels, sceneOpts);
     return;
   }
 
@@ -7239,11 +7328,11 @@ function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels, sc
   const baseCtx = _pwBaseCanvas.getContext("2d", { willReadFrequently: true });
   const outCtx = _pwOutCanvas.getContext("2d");
   if (!baseCtx || !outCtx) {
-    renderColorPreviewBaseChart(ctx, width, height, cdl, graded, showLabels);
+    renderColorPreviewSourceFrame(ctx, width, height, cdl, graded, showLabels, sceneOpts);
     return;
   }
 
-  renderColorPreviewBaseChart(baseCtx, pwW, pwH, null, false, false);
+  const usedTimeline = renderColorPreviewSourceFrame(baseCtx, pwW, pwH, null, false, false, sceneOpts);
   const srcImg = baseCtx.getImageData(0, 0, pwW, pwH);
   const outImg = outCtx.createImageData(pwW, pwH);
   const s = srcImg.data;
@@ -7278,7 +7367,7 @@ function renderColorPreviewScene(ctx, width, height, cdl, graded, showLabels, sc
   }
   outCtx.putImageData(outImg, 0, 0);
   ctx.drawImage(_pwOutCanvas, 0, 0, width, height);
-  if (showLabels && !showHighlight) {
+  if (showLabels && !showHighlight && !usedTimeline) {
     drawColorPreviewSwatchLabels(ctx, width, height);
   }
 }
@@ -7674,7 +7763,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   }
   const srcBufCtx = srcBuf.getContext("2d", { willReadFrequently: true });
   if (srcBufCtx) {
-    renderColorPreviewBaseChart(srcBufCtx, pickW, pickH, null, false, false);
+    renderColorPreviewSourceFrame(srcBufCtx, pickW, pickH, null, false, false, splitOpts);
   }
 
   // Maintain a clean full-frame graded buffer of #color-preview-canvas for real ImageData scopes
@@ -7690,7 +7779,7 @@ export function drawColorPreviewCanvas(canvas, cdl, wipeRatio, splitOpts = null)
   }
   const gradedCtx = gradedBuf.getContext("2d", { willReadFrequently: true });
   if (gradedCtx) {
-    renderColorPreviewScene(gradedCtx, scopeW, scopeH, cdl, true, false);
+    renderColorPreviewScene(gradedCtx, scopeW, scopeH, cdl, true, false, splitOpts);
     if (bmConfig && bmConfig.limiter_enabled && bmConfig.broadcast_standard !== "bypass") {
       applyBroadcastMonitorPixelPass(gradedCtx, 0, 0, scopeW, scopeH, {
         ...bmConfig,

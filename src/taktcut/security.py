@@ -13,6 +13,7 @@ CONTENT_SECURITY_POLICY: str = (
     "script-src 'self'; "
     "style-src 'self'; "
     "img-src 'self' data: blob:; "
+    "media-src 'self' blob: data:; "
     "connect-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
@@ -27,9 +28,16 @@ LUT_SUFFIXES: frozenset[str] = frozenset({".cube"})
 CDL_SUFFIXES: frozenset[str] = frozenset({".cdl", ".cc", ".ccc", ".xml"})
 SUBTITLE_SUFFIXES: frozenset[str] = frozenset({".srt", ".vtt", ".ass"})
 PROJECT_SUFFIXES: frozenset[str] = frozenset({".json"})
-MEDIA_SUFFIXES: frozenset[str] = frozenset(
-    {".mp4", ".mov", ".m4v", ".mkv", ".mxf", ".webm", ".wav", ".aac", ".mp3"}
+IMAGE_SUFFIXES: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 )
+AUDIO_SUFFIXES: frozenset[str] = frozenset(
+    {".wav", ".aac", ".mp3", ".flac", ".ogg", ".m4a", ".aif", ".aiff"}
+)
+VIDEO_SUFFIXES: frozenset[str] = frozenset(
+    {".mp4", ".mov", ".m4v", ".mkv", ".mxf", ".webm", ".avi", ".mts"}
+)
+MEDIA_SUFFIXES: frozenset[str] = VIDEO_SUFFIXES | AUDIO_SUFFIXES | IMAGE_SUFFIXES
 
 _SKIP_DIRS: frozenset[str] = frozenset(
     {

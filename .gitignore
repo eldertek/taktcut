@@ -13,3 +13,5 @@ htmlcov/
 *.mov
 *.mkv
 *.wav
+*.spec
+.font_cache/

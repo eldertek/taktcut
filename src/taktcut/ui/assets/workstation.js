@@ -10,14 +10,14 @@ import {
 } from "./effects_library.js";
 
 const FUSION_DEFAULT_NODES = [
-  { id: "mediain1", label: "MediaIn1", kind: "io", x: 36, y: 34, enabled: true, v1: true, v2: false, action: null },
-  { id: "deltakeyer1", label: "DeltaKeyer1", kind: "matte", x: 186, y: 34, enabled: true, v1: false, v2: false, action: "keyer" },
-  { id: "planartracker1", label: "PlanarTracker1", kind: "tracker", x: 344, y: 34, enabled: true, v1: false, v2: false, action: "tracker" },
-  { id: "transform1", label: "Transform1", kind: "xform", x: 506, y: 34, enabled: true, v1: false, v2: false, action: "spline" },
-  { id: "opticalglow1", label: "OpticalGlow1", kind: "fx", x: 664, y: 10, enabled: true, v1: false, v2: false, action: "glow" },
-  { id: "camerashake1", label: "CameraShake1", kind: "fx", x: 664, y: 58, enabled: false, v1: false, v2: false, action: "shake" },
-  { id: "merge1", label: "Merge1", kind: "merge", x: 824, y: 34, enabled: true, v1: false, v2: false, action: null },
-  { id: "mediaout1", label: "MediaOut1", kind: "io", x: 970, y: 34, enabled: true, v1: false, v2: true, action: null }
+  { id: "mediain1", label: "MediaIn1", kind: "io", x: 32, y: 84, enabled: true, v1: true, v2: false, action: null },
+  { id: "deltakeyer1", label: "DeltaKeyer1", kind: "matte", x: 186, y: 84, enabled: true, v1: false, v2: false, action: "keyer" },
+  { id: "planartracker1", label: "PlanarTracker1", kind: "tracker", x: 344, y: 84, enabled: true, v1: false, v2: false, action: "tracker" },
+  { id: "transform1", label: "Transform1", kind: "xform", x: 506, y: 84, enabled: true, v1: false, v2: false, action: "spline" },
+  { id: "opticalglow1", label: "SoftGlow1", kind: "fx", x: 664, y: 42, enabled: true, v1: false, v2: false, action: "glow" },
+  { id: "camerashake1", label: "CameraShake1", kind: "fx", x: 664, y: 126, enabled: false, v1: false, v2: false, action: "shake" },
+  { id: "merge1", label: "Merge1", kind: "merge", x: 824, y: 84, enabled: true, v1: false, v2: false, action: null },
+  { id: "mediaout1", label: "MediaOut1", kind: "io", x: 970, y: 84, enabled: true, v1: false, v2: true, action: null }
 ];
 
 const FAIRLIGHT_STRIPS = [
@@ -1219,8 +1219,8 @@ export function createWorkstationController(ctx) {
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    const w = Math.max(320, Math.round(rect.width || 960));
-    const h = Math.max(88, Math.round(rect.height || 92));
+    const w = Math.max(320, Math.round(rect.width || 1100));
+    const h = Math.max(195, Math.round(rect.height || 220));
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
@@ -1231,18 +1231,18 @@ export function createWorkstationController(ctx) {
     g.scale(dpr, dpr);
 
     // Resolve Fusion matte dark dot-grid flow background
-    g.fillStyle = "#161619";
+    g.fillStyle = "#18181c";
     g.fillRect(0, 0, w, h);
-    g.fillStyle = "#26262e";
-    for (let x = 12; x < w; x += 20) {
-      for (let y = 12; y < h; y += 20) {
-        g.fillRect(x, y, 1, 1);
+    g.fillStyle = "#2b2b34";
+    for (let x = 14; x < w; x += 22) {
+      for (let y = 14; y < h; y += 22) {
+        g.fillRect(x, y, 1.2, 1.2);
       }
     }
 
     const scaleX = w / 1110;
-    const nodeW = Math.max(88, Math.round(118 * scaleX));
-    const nodeH = 26;
+    const nodeW = Math.max(96, Math.round(124 * scaleX));
+    const nodeH = 30;
     const byNodeId = {};
     for (const n of ws.fusionNodes) {
       byNodeId[n.id] = {
@@ -1773,8 +1773,83 @@ export function createWorkstationController(ctx) {
       });
     } else if (state.activeTab === "fx") {
       drawFusionFlowGraph();
+      const v1Canvas = byId("fusion-viewer-1-canvas");
+      if (v1Canvas) {
+        drawProgramMonitorCanvas(
+          v1Canvas,
+          state.timelineDoc,
+          state.playheadFrame,
+          null,
+          { nodes: [], bypassAll: true },
+          getEffectiveTitleState(false),
+          getEffectiveFramingState(),
+          getEffectiveSubtitleState(false),
+          null,
+          null,
+          { dveOverlay: false }
+        );
+      }
+      const v1Node = ws.fusionNodes.find((n) => n.v1) || ws.fusionNodes[0];
+      const v2Node = ws.fusionNodes.find((n) => n.v2) || ws.fusionNodes[ws.fusionNodes.length - 1];
+      const v1Lbl = byId("fusion-v1-label");
+      const v2Lbl = byId("fusion-v2-label");
+      if (v1Lbl && v1Node) v1Lbl.textContent = v1Node.label;
+      if (v2Lbl && v2Node) v2Lbl.textContent = v2Node.label;
+      const v1Res = byId("fusion-v1-res");
+      if (v1Res && state.timelineDoc) {
+        v1Res.textContent = `${state.timelineDoc.width || 1920}x${state.timelineDoc.height || 1080}`;
+      }
     } else if (state.activeTab === "color") {
       renderColorClipsFilmstrip();
+      const colTc = byId("color-program-tc");
+      if (colTc) colTc.textContent = tcStr;
+      const colSlider = byId("color-playhead-slider");
+      if (colSlider) {
+        colSlider.max = String(Math.max(1, state.timelineMaxFrame || 500));
+        colSlider.value = String(Math.round(state.playheadFrame || 0));
+      }
+    } else if (state.activeTab === "render") {
+      const delTc = byId("deliver-program-tc");
+      if (delTc) delTc.textContent = tcStr;
+      const delDur = byId("deliver-duration-badge");
+      if (delDur) delDur.textContent = formatTc(state.timelineMaxFrame || 0);
+      const delRange = byId("deliver-range-readout");
+      if (delRange) {
+        const rangeMode = byId("deliver-range-select") ? byId("deliver-range-select").value : "entire";
+        if (rangeMode === "inout" && state.ioRange && state.ioRange.in_frame !== null && state.ioRange.out_frame !== null) {
+          delRange.textContent = `I/O ${formatTc(state.ioRange.in_frame)} - ${formatTc(state.ioRange.out_frame)}`;
+        } else {
+          delRange.textContent = "Entire Timeline";
+        }
+      }
+      const delViewer = byId("deliver-program-canvas");
+      if (delViewer) {
+        drawProgramMonitorCanvas(
+          delViewer,
+          state.timelineDoc,
+          state.playheadFrame,
+          activeColorChain,
+          getEffectiveFxState(),
+          getEffectiveTitleState(false),
+          getEffectiveFramingState(),
+          getEffectiveSubtitleState(false),
+          null,
+          null,
+          { dveOverlay: false }
+        );
+      }
+      const delTl = byId("deliver-timeline-canvas");
+      if (delTl) {
+        drawTimelineCanvas(delTl, state.timelineDoc, state.timelineValidation, {
+          zoom: 1,
+          viewStartFrame: 0,
+          selected: state.timelineSelected,
+          playheadFrame: state.playheadFrame,
+          tool: "select",
+          ioRange: state.ioRange,
+          fillHeight: 92
+        });
+      }
     } else if (state.activeTab === "fairlight") {
       drawFairlightWaveformTimeline();
       renderFairlightEqCurveCanvas(byId("fairlight-page-eq-canvas"), state.fairlightRack, state.fairlightRackBandId);
@@ -2066,43 +2141,278 @@ export function createWorkstationController(ctx) {
     wireCanvasScrub("cut-overview-canvas");
     wireCanvasScrub("cut-detail-canvas");
 
-    // Fusion Flow Canvas click & shelf
+    // Fusion Flow Canvas click, drag & viewer routing dots (1 / 2)
     const fusionCanvas = byId("fusion-flow-canvas");
     if (fusionCanvas) {
-      fusionCanvas.addEventListener("click", (ev) => {
+      let dragNode = null;
+      let dragOffX = 0;
+      let dragOffY = 0;
+      const syncSelectedFusionInspector = (node) => {
+        if (!node) return;
+        const titleEl = byId("fusion-insp-node-title");
+        const metaEl = byId("fusion-selected-node-meta");
+        if (titleEl) titleEl.textContent = `Inspector - ${node.label}`;
+        if (metaEl) {
+          metaEl.textContent = `Node: ${node.label} [${node.kind.toUpperCase()}] | ${node.enabled ? "ACTIVE" : "BYPASSED"} | V1:${node.v1 ? "ON" : "off"} V2:${node.v2 ? "ON" : "off"}`;
+        }
+      };
+      fusionCanvas.addEventListener("pointerdown", (ev) => {
         const rect = fusionCanvas.getBoundingClientRect();
         const x = ev.clientX - rect.left;
         const y = ev.clientY - rect.top;
         const boxes = fusionCanvas._fusionHitboxes || [];
+        const scaleX = Math.max(320, rect.width || 960) / 1110;
         for (const b of boxes) {
           if (x >= b.px && x <= b.px + b.pw && y >= b.py && y <= b.py + b.ph) {
+            const realNode = ws.fusionNodes.find((n) => n.id === b.id);
             ws.selectedFusionNodeId = b.id;
-            drawFusionFlowGraph();
-            const map = {
-              keyer: () => { const p = byId("fx-keyer-pane"); if (p) p.scrollIntoView({ behavior: "smooth" }); },
-              tracker: () => { const p = byId("fx-tracker-pane"); if (p) p.scrollIntoView({ behavior: "smooth" }); },
-              spline: () => openMotionSplineStudioDialog(),
-              glow: () => openOpticalGlowStudioDialog(),
-              shake: () => openCameraShakeStudioDialog()
-            };
-            if (b.action && map[b.action] && ev.detail >= 2) {
-              map[b.action]();
+            // Check click on Viewer 1 or Viewer 2 indicator dots
+            if (y >= b.py + b.ph - 10 && x >= b.px + 4 && x <= b.px + 14 && realNode) {
+              for (const n of ws.fusionNodes) n.v1 = n.id === realNode.id;
+              redrawWorkstationCanvases();
+              syncSelectedFusionInspector(realNode);
+              return;
             }
+            if (y >= b.py + b.ph - 10 && x >= b.px + 14 && x <= b.px + 25 && realNode) {
+              for (const n of ws.fusionNodes) n.v2 = n.id === realNode.id;
+              redrawWorkstationCanvases();
+              syncSelectedFusionInspector(realNode);
+              return;
+            }
+            if (realNode) {
+              dragNode = realNode;
+              dragOffX = x / scaleX - realNode.x;
+              dragOffY = y - realNode.y;
+              if (fusionCanvas.setPointerCapture) fusionCanvas.setPointerCapture(ev.pointerId);
+              syncSelectedFusionInspector(realNode);
+            }
+            drawFusionFlowGraph();
             break;
           }
         }
       });
+      fusionCanvas.addEventListener("pointermove", (ev) => {
+        if (!dragNode) return;
+        const rect = fusionCanvas.getBoundingClientRect();
+        const scaleX = Math.max(320, rect.width || 960) / 1110;
+        dragNode.x = Math.max(8, Math.min(1000, Math.round((ev.clientX - rect.left) / scaleX - dragOffX)));
+        dragNode.y = Math.max(8, Math.min(Math.max(40, rect.height - 34), Math.round(ev.clientY - rect.top - dragOffY)));
+        drawFusionFlowGraph();
+      });
+      const stopDrag = () => { dragNode = null; };
+      fusionCanvas.addEventListener("pointerup", stopDrag);
+      fusionCanvas.addEventListener("pointercancel", stopDrag);
+      fusionCanvas.addEventListener("dblclick", () => {
+        const b = ws.fusionNodes.find((n) => n.id === ws.selectedFusionNodeId);
+        if (!b || !b.action) return;
+        const switchFusionInsp = (tabId) => {
+          const tabBtn = document.querySelector(`[data-fusion-insp-tab="${tabId}"]`);
+          if (tabBtn) tabBtn.click();
+        };
+        if (b.action === "keyer") switchFusionInsp("keyer");
+        else if (b.action === "tracker") switchFusionInsp("tracker");
+        else if (b.action === "spline") openMotionSplineStudioDialog();
+        else if (b.action === "glow") openOpticalGlowStudioDialog();
+        else if (b.action === "shake") openCameraShakeStudioDialog();
+      });
     }
+
+    // Fusion Subbar Toggles & Inspector Tabs
+    const wireToggleDock = (btnId, dockId) => {
+      const btn = byId(btnId);
+      const dock = byId(dockId);
+      if (!btn || !dock) return;
+      btn.addEventListener("click", () => {
+        const collapsed = dock.classList.toggle("is-collapsed-dock");
+        btn.classList.toggle("is-active", !collapsed);
+        btn.setAttribute("aria-pressed", !collapsed ? "true" : "false");
+        redrawActiveCanvases();
+      });
+    };
+    wireToggleDock("btn-fusion-toggle-effects", "fusion-effects-dock");
+    wireToggleDock("btn-fusion-toggle-inspector", "fusion-inspector-dock");
+    wireToggleDock("btn-fusion-toggle-nodes", "fusion-flow-pane");
+    wireToggleDock("btn-color-toggle-clips", "color-clips-strip-pane");
+    wireToggleDock("btn-color-toggle-nodes", "color-nodes-pane");
+
+    const wireTabGroup = (attr, panePrefix) => {
+      const btns = Array.from(document.querySelectorAll(`[${attr}]`));
+      btns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const key = btn.getAttribute(attr);
+          btns.forEach((b) => {
+            const act = b === btn;
+            b.classList.toggle("is-active", act);
+            b.setAttribute("aria-selected", act ? "true" : "false");
+          });
+          for (const b of btns) {
+            const pId = `${panePrefix}${b.getAttribute(attr)}`;
+            const p = byId(pId);
+            if (p) p.classList.toggle("is-hidden", b !== btn);
+          }
+          redrawActiveCanvases();
+        });
+      });
+    };
+    const wireScrollTabGroup = (attr, panePrefix) => {
+      const btns = Array.from(document.querySelectorAll(`[${attr}]`));
+      btns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const key = btn.getAttribute(attr);
+          btns.forEach((b) => {
+            const act = b === btn;
+            b.classList.toggle("is-active", act);
+            b.setAttribute("aria-selected", act ? "true" : "false");
+          });
+          const pane = byId(`${panePrefix}${key}`);
+          if (pane && pane.parentElement) {
+            pane.classList.remove("is-hidden");
+            const parent = pane.parentElement;
+            parent.scrollTop = Math.max(0, pane.offsetTop - parent.offsetTop);
+          }
+          redrawActiveCanvases();
+        });
+      });
+    };
+    wireScrollTabGroup("data-fusion-insp-tab", "fusion-insp-pane-");
+    wireScrollTabGroup("data-color-left-tab", "color-left-pane-");
+    wireScrollTabGroup("data-color-tool-tab", "color-tool-pane-");
+    wireScrollTabGroup("data-color-right-tab", "color-right-pane-");
+    wireScrollTabGroup("data-deliver-drawer", "deliver-drawer-");
+
+    // Color Gallery / LUTs left drawer subbar buttons
+    const openColorLeftTab = (tabKey, triggerId) => {
+      const btn = byId(triggerId);
+      const drawer = byId("color-left-drawer");
+      if (!btn || !drawer) return;
+      btn.addEventListener("click", () => {
+        const wasOpen = !drawer.classList.contains("is-collapsed-dock");
+        const activeTab = document.querySelector("[data-color-left-tab].is-active");
+        const sameTab = activeTab && activeTab.getAttribute("data-color-left-tab") === tabKey;
+        if (wasOpen && sameTab) {
+          drawer.classList.add("is-collapsed-dock");
+          btn.classList.remove("is-active");
+          btn.setAttribute("aria-pressed", "false");
+        } else {
+          drawer.classList.remove("is-collapsed-dock");
+          const tabBtn = document.querySelector(`[data-color-left-tab="${tabKey}"]`);
+          if (tabBtn) tabBtn.click();
+          for (const id of ["btn-color-toggle-gallery", "btn-color-toggle-luts"]) {
+            const b = byId(id);
+            if (b) {
+              const on = id === triggerId;
+              b.classList.toggle("is-active", on);
+              b.setAttribute("aria-pressed", on ? "true" : "false");
+            }
+          }
+        }
+        redrawActiveCanvases();
+      });
+    };
+    openColorLeftTab("gallery", "btn-color-toggle-gallery");
+    openColorLeftTab("luts", "btn-color-toggle-luts");
+
+    // Color & Deliver viewer transport wiring
+    const btnColPlay = byId("btn-color-play");
+    if (btnColPlay) btnColPlay.addEventListener("click", () => clickIfPresent(byId, "btn-tc-play"));
+    const colSlider = byId("color-playhead-slider");
+    if (colSlider) colSlider.addEventListener("input", () => setPlayhead(Number(colSlider.value)));
+    const btnDelPlay = byId("btn-deliver-play");
+    if (btnDelPlay) btnDelPlay.addEventListener("click", () => clickIfPresent(byId, "btn-tc-play"));
+    const btnDelIn = byId("btn-deliver-mark-in");
+    if (btnDelIn) btnDelIn.addEventListener("click", () => clickIfPresent(byId, "btn-tc-mark-in"));
+    const btnDelOut = byId("btn-deliver-mark-out");
+    if (btnDelOut) btnDelOut.addEventListener("click", () => clickIfPresent(byId, "btn-tc-mark-out"));
+    const delRangeSel = byId("deliver-range-select");
+    if (delRangeSel) delRangeSel.addEventListener("change", () => redrawWorkstationCanvases());
+    wireCanvasScrub("deliver-timeline-canvas");
+
+    // Deliver File Name + Location two-way sync with #render-output-path
+    const fnInp = byId("deliver-filename-input");
+    const locInp = byId("deliver-location-input");
+    const outPathInp = byId("render-output-path");
+    const syncDeliverQuickToOutput = () => {
+      if (!fnInp || !locInp || !outPathInp) return;
+      const loc = locInp.value.trim().replace(/[\\/]+$/g, "");
+      const fn = fnInp.value.trim().replace(/^[\\/]+/g, "") || "export.mp4";
+      outPathInp.value = loc ? `${loc}/${fn}` : fn;
+      outPathInp.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const syncOutputToDeliverQuick = () => {
+      if (!fnInp || !locInp || !outPathInp) return;
+      const parts = outPathInp.value.trim().replace(/\\/g, "/").split("/");
+      const fn = parts.pop() || "export.mp4";
+      const loc = parts.join("/");
+      if (document.activeElement !== fnInp) fnInp.value = fn;
+      if (document.activeElement !== locInp) locInp.value = loc;
+    };
+    if (fnInp && locInp && outPathInp) {
+      syncOutputToDeliverQuick();
+      fnInp.addEventListener("input", syncDeliverQuickToOutput);
+      locInp.addEventListener("input", syncDeliverQuickToOutput);
+      outPathInp.addEventListener("change", syncOutputToDeliverQuick);
+    }
+
+    for (const modeBtn of document.querySelectorAll("[data-deliver-mode]")) {
+      modeBtn.addEventListener("click", () => {
+        const mode = modeBtn.getAttribute("data-deliver-mode") || "timeline";
+        state.deliverRenderMode = mode;
+        for (const b of document.querySelectorAll("[data-deliver-mode]")) {
+          const on = b === modeBtn;
+          b.classList.toggle("is-active", on);
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+        }
+        showBanner(mode === "timeline" ? "Deliver Mode: Entire Multi-Track Timeline" : "Deliver Mode: Single Clip", "info");
+      });
+    }
+
     for (const shelfBtn of document.querySelectorAll("[data-fusion-tool]")) {
       shelfBtn.addEventListener("click", () => {
         const tool = shelfBtn.dataset.fusionTool;
         if (tool === "spline") openMotionSplineStudioDialog();
-        else if (tool === "glow") openOpticalGlowStudioDialog();
-        else if (tool === "flare") openOpticalFlareStudioDialog();
-        else if (tool === "shake") openCameraShakeStudioDialog();
-        else if (tool === "keyer") { const p = byId("fx-keyer-pane"); if (p) p.scrollIntoView({ behavior: "smooth" }); }
-        else if (tool === "tracker") { const p = byId("fx-tracker-pane"); if (p) p.scrollIntoView({ behavior: "smooth" }); }
-        else if (tool === "bypass") {
+        else if (tool === "glow") {
+          addFxNode("glow");
+          const tab = document.querySelector('[data-fusion-insp-tab="tools"]');
+          if (tab) tab.click();
+        } else if (tool === "flare") openOpticalFlareStudioDialog();
+        else if (tool === "shake") {
+          addFxNode("camera_shake");
+          const tab = document.querySelector('[data-fusion-insp-tab="tools"]');
+          if (tab) tab.click();
+        } else if (tool === "glitch") {
+          addFxNode("rgb_split");
+          const tab = document.querySelector('[data-fusion-insp-tab="tools"]');
+          if (tab) tab.click();
+        } else if (tool === "vhs") {
+          addFxNode("film_damage");
+          const tab = document.querySelector('[data-fusion-insp-tab="tools"]');
+          if (tab) tab.click();
+        } else if (tool === "bg" || tool === "fastnoise" || tool === "textplus" || tool === "merge") {
+          const labelMap = { bg: "Background", fastnoise: "FastNoise", textplus: "TextPlus", merge: "Merge" };
+          const kindMap = { bg: "io", fastnoise: "fx", textplus: "fx", merge: "merge" };
+          const idx = ws.fusionNodes.length + 1;
+          const newNode = {
+            id: `${tool}${idx}`,
+            label: `${labelMap[tool]}${idx}`,
+            kind: kindMap[tool] || "fx",
+            x: 340 + ((idx * 48) % 420),
+            y: 36 + ((idx * 26) % 90),
+            enabled: true,
+            v1: false,
+            v2: false,
+            action: null
+          };
+          ws.fusionNodes.push(newNode);
+          ws.selectedFusionNodeId = newNode.id;
+          drawFusionFlowGraph();
+          showBanner(`Added Fusion node ${newNode.label}`, "success");
+        } else if (tool === "keyer") {
+          const tab = document.querySelector('[data-fusion-insp-tab="keyer"]');
+          if (tab) tab.click();
+        } else if (tool === "tracker") {
+          const tab = document.querySelector('[data-fusion-insp-tab="tracker"]');
+          if (tab) tab.click();
+        } else if (tool === "bypass") {
           const n = ws.fusionNodes.find((x) => x.id === ws.selectedFusionNodeId);
           if (n && n.kind !== "io") {
             n.enabled = !n.enabled;

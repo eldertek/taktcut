@@ -16677,3 +16677,900 @@ pre, code, .code-box, textarea.code-box {
 }
 
 
+
+/* ============================================================================
+   AUTHENTIC DAVINCI RESOLVE STUDIO 21 LAYOUTS: FUSION, COLOR & DELIVER
+   Derived from Resolve.exe IDA QSS Blocks 10 (Deliver), 12 (Color), 26 (Scopes)
+   ============================================================================ */
+
+.resolve-page-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 8px;
+  background: #212126;
+  border-bottom: 1px solid #090909;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.resolve-page-subbar .subbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.subbar-toggle-btn {
+  padding: 2px 8px;
+  min-height: 21px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: #9e9ea8;
+  font: 600 11px var(--font-sans);
+  cursor: pointer;
+}
+
+.subbar-toggle-btn:hover {
+  color: #ececf2;
+  background: #2c2c34;
+}
+
+.subbar-toggle-btn.is-active {
+  color: #f4f4f8;
+  background: #33333c;
+  border-color: #464654;
+}
+
+.subbar-sep {
+  width: 1px;
+  height: 14px;
+  background: #34343e;
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+.resolve-subtabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: #212126;
+  border-bottom: 1px solid #090909;
+  flex: 0 0 auto;
+}
+
+.resolve-subtab-btn {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  min-height: 26px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #9696a2;
+  font: 600 11px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.resolve-subtab-btn:hover {
+  color: #e4e4ec;
+  background: #292930;
+}
+
+.resolve-subtab-btn.is-active {
+  color: #ffffff;
+  background: #28282e;
+  border-bottom-color: #e64b3d;
+}
+
+/* ---------- PAGE 04: FUSION (DUAL VIEWERS + TOOLBAR + FULL-WIDTH FLOW + INSPECTOR) ---------- */
+#panel-fx.resolve-fusion-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #090909;
+  overflow: hidden;
+}
+
+.fusion-studio-launchers {
+  overflow-x: auto;
+  max-width: 58vw;
+  scrollbar-width: none;
+}
+
+.fusion-studio-launchers .btn {
+  padding: 2px 6px;
+  min-height: 20px;
+  font-size: 10px;
+}
+
+.fusion-upper-stage {
+  flex: 1 1 56%;
+  min-height: 260px;
+  display: flex;
+  gap: 1px;
+  background: #090909;
+  overflow: hidden;
+}
+
+.fusion-effects-dock {
+  flex: 0 0 226px;
+  width: 226px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fusion-effects-dock.is-collapsed-dock {
+  display: none;
+}
+
+.fusion-effects-dock > .pane-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.fusion-viewers-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #18181c;
+  overflow: hidden;
+}
+
+.fusion-dual-viewers {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  background: #090909;
+}
+
+.fusion-viewer-slot {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #141418;
+}
+
+.fusion-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 8px;
+  background: #212126;
+  border-bottom: 1px solid #090909;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.fusion-viewer-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #3a3a44;
+  color: #dcdce4;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.fusion-viewer-dot.is-on {
+  background: #f4f4f8;
+  color: #141418;
+}
+
+.fusion-viewer-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #e0e0e8;
+}
+
+.fusion-viewer-pill,
+.fusion-viewer-meta {
+  font-size: 10px;
+  color: #90909e;
+  padding: 1px 5px;
+  background: #18181c;
+  border-radius: 2px;
+}
+
+.fusion-viewer-well {
+  flex: 1 1 0;
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0e0e11;
+  padding: 4px;
+}
+
+.fusion-viewer-well > canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.fusion-transport-bar {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  background: #212126;
+  border-top: 1px solid #090909;
+}
+
+.fusion-inspector-dock {
+  flex: 0 0 310px;
+  width: 310px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #28282e;
+  overflow: hidden;
+}
+
+.fusion-inspector-dock.is-collapsed-dock {
+  display: none;
+}
+
+.fusion-insp-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.fusion-insp-pane {
+  flex: 0 0 auto;
+  scroll-margin-top: 4px;
+}
+
+#fusion-insp-pane-tools {
+  min-height: 100%;
+}
+
+.fusion-insp-pane + .fusion-insp-pane {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #16161b;
+}
+
+.fusion-node-inspector-card {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 3px;
+  background: #1b1b20;
+  border: 1px solid #32323c;
+  color: #d6d6e0;
+  font-size: 10.5px;
+}
+
+.fusion-node-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 10px;
+  background: #212126;
+  border-top: 1px solid #090909;
+  border-bottom: 1px solid #090909;
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+
+.fusion-tb-btn {
+  padding: 2px 8px;
+  min-height: 22px;
+  border: 1px solid #353540;
+  border-radius: 3px;
+  background: #2a2a31;
+  color: #dcdce6;
+  font: 600 10.5px var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fusion-tb-btn:hover {
+  background: #383844;
+  border-color: #e64b3d;
+  color: #ffffff;
+}
+
+.fusion-tb-hint {
+  font-size: 10px;
+  color: #7c7c8a;
+  white-space: nowrap;
+}
+
+#panel-fx .fusion-flow-pane {
+  flex: 1 1 44%;
+  min-height: 195px;
+  display: flex;
+  flex-direction: column;
+  background: #18181c;
+}
+
+#panel-fx .fusion-flow-body {
+  flex: 1 1 0;
+  min-height: 0;
+  background: #18181c;
+}
+
+#panel-fx .fusion-flow-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 190px;
+  display: block;
+}
+
+/* ---------- PAGE 05: COLOR (UiColorPanelLayout: GALLERY | VIEWER | NODES -> CLIPS -> 3-COL PALETTE) ---------- */
+#panel-color.resolve-color-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: #090909;
+  overflow: hidden;
+}
+
+.color-subbar-presets {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.color-subbar-presets .preset-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.color-subbar-presets .btn-chip {
+  padding: 1px 6px;
+  min-height: 19px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.color-upper-stage {
+  flex: 1 1 46%;
+  min-height: 220px;
+  display: flex;
+  gap: 1px;
+  background: #090909;
+  overflow: hidden;
+}
+
+.color-left-drawer {
+  flex: 0 0 202px;
+  width: 202px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.color-left-drawer.is-collapsed-dock {
+  display: none;
+}
+
+.color-left-drawer > .pane-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.color-viewer-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #141418;
+}
+
+.color-viewer-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.color-viewer-well {
+  flex: 1 1 0;
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0c0c0f;
+}
+
+#panel-color.resolve-color-page #color-preview-canvas {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+.color-transport-bar {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+}
+
+.color-nodes-pane {
+  flex: 0 0 385px;
+  width: 385px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1f1f24;
+  overflow: hidden;
+}
+
+.color-nodes-pane.is-collapsed-dock {
+  display: none;
+}
+
+.color-nodes-pane > .pane-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  background: #1b1b20;
+}
+
+#panel-color.resolve-color-page #color-clips-strip-pane {
+  flex: 0 0 auto;
+}
+
+#panel-color.resolve-color-page #color-clips-strip-pane.is-collapsed-dock {
+  display: none;
+}
+
+.color-palette-deck {
+  flex: 0 0 268px;
+  min-height: 248px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.38fr) minmax(0, 1.02fr) minmax(255px, 0.72fr);
+  gap: 1px;
+  background: #090909;
+  overflow: hidden;
+}
+
+.color-primaries-col,
+.color-secondary-col,
+.color-scopes-col {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #28282e;
+  overflow: hidden;
+}
+
+.color-primaries-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 5px 7px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 5px;
+}
+
+#panel-color.resolve-color-page .wheels-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+#panel-color.resolve-color-page .wheel-dock {
+  padding: 4px 5px;
+  gap: 3px;
+}
+
+#panel-color.resolve-color-page .wheel-canvas {
+  width: min(86px, 100%);
+  margin: 0 auto;
+}
+
+#panel-color.resolve-color-page .wheel-bars .cdl-slider-row {
+  gap: 3px;
+}
+
+#panel-color.resolve-color-page .wheel-bars .input-num {
+  width: 40px;
+  font-size: 9.5px;
+  padding: 1px 2px;
+}
+
+#panel-color.resolve-color-page .grade-tone-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px 6px;
+  background: #1d1d22;
+  border: 1px solid #2e2e36;
+  border-radius: 3px;
+}
+
+#panel-color.resolve-color-page .grade-tone-row {
+  display: grid;
+  grid-template-columns: auto minmax(34px, 1fr) 54px auto;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+}
+
+.color-secondary-body,
+.color-scopes-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 5px 7px;
+  display: flex;
+  flex-direction: column;
+}
+
+.color-tool-pane,
+.color-right-pane {
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  scroll-margin-top: 4px;
+}
+
+#color-tool-pane-curves,
+#color-right-pane-scopes {
+  min-height: 100%;
+}
+
+.color-tool-pane + .color-tool-pane,
+.color-right-pane + .color-right-pane {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #16161b;
+}
+
+#color-left-pane-luts {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #18181e;
+}
+
+.color-scopes-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.color-scope-well {
+  flex: 1 1 0;
+  min-height: 168px;
+  background: #0d0d10;
+  display: flex;
+  align-items: stretch;
+}
+
+#panel-color.resolve-color-page #color-scope-canvas {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+
+/* ---------- PAGE 07: DELIVER (UiDeliverPanelWidgetLayout: SETTINGS | VIEWER | QUEUE + MINI TIMELINE) ---------- */
+#panel-render.resolve-deliver-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: #090909;
+  overflow: hidden;
+}
+
+.deliver-main-stage {
+  flex: 1 1 74%;
+  min-height: 360px;
+  display: grid;
+  grid-template-columns: 356px minmax(0, 1fr) 320px;
+  gap: 1px;
+  background: #090909;
+  overflow: hidden;
+}
+
+#panel-render.resolve-deliver-page .deliver-settings-pane {
+  height: 100%;
+  min-height: 0;
+  background: #28282e;
+  overflow: hidden;
+}
+
+.deliver-presets-carousel {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  background: #212126;
+  border-bottom: 1px solid #090909;
+  overflow-x: auto;
+}
+
+.deliver-presets-carousel .deliver-preset-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+}
+
+.deliver-presets-carousel .deliver-preset-strip > button {
+  flex: 0 0 auto;
+  min-width: 82px;
+  padding: 5px 7px;
+  font-size: 10.5px;
+}
+
+.deliver-quick-file-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  background: #232329;
+  border-bottom: 1px solid #090909;
+  flex: 0 0 auto;
+}
+
+.deliver-qf-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.deliver-qf-row > label {
+  font-size: 10.5px;
+  color: #a6a6b4;
+  text-align: right;
+}
+
+.deliver-mode-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.deliver-center-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #161619;
+  overflow: hidden;
+}
+
+.deliver-caps-inline {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 3px;
+  max-width: 280px;
+  overflow: hidden;
+}
+
+.deliver-viewer-well {
+  flex: 1 1 56%;
+  min-height: 170px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d0d10;
+  padding: 6px;
+}
+
+#deliver-program-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.deliver-transport-bar {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  background: #212126;
+  border-top: 1px solid #090909;
+  border-bottom: 1px solid #090909;
+}
+
+.deliver-center-drawer {
+  flex: 0 1 36%;
+  min-height: 120px;
+  overflow-y: auto;
+  background: #1d1d22;
+  display: flex;
+  flex-direction: column;
+}
+
+.deliver-drawer-pane {
+  flex: 0 0 auto;
+  scroll-margin-top: 4px;
+}
+
+#deliver-drawer-plan {
+  min-height: 100%;
+}
+
+.deliver-drawer-pane + .deliver-drawer-pane {
+  margin-top: 10px;
+  border-top: 1px solid #121216;
+}
+
+.deliver-drawer-pane > .nle-pane {
+  border: 0;
+}
+
+.deliver-queue-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: #28282e;
+}
+
+.deliver-queue-col > #deliver-queue-pane {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.deliver-queue-col > #deliver-queue-pane > .pane-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.deliver-queue-col #render-queue-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.deliver-queue-col .deliver-queue-actions {
+  order: 10;
+  padding-top: 6px;
+  border-top: 1px solid #353540;
+}
+
+.deliver-timeline-pane {
+  flex: 0 0 132px;
+  min-height: 122px;
+  display: flex;
+  flex-direction: column;
+  background: #18181c;
+}
+
+.deliver-tl-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 10px;
+  background: #212126;
+  border-bottom: 1px solid #090909;
+}
+
+.deliver-tl-hint {
+  font-size: 10px;
+  color: #7d7d8b;
+}
+
+.deliver-tl-well {
+  flex: 1 1 0;
+  min-height: 86px;
+  background: #141418;
+}
+
+#deliver-timeline-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: pointer;
+}
+
+/* Responsive collapse <= 1180px (Zero horizontal overflow on tablet/mobile 375x812) */
+@media (max-width: 1180px) {
+  #panel-fx.resolve-fusion-page,
+  #panel-color.resolve-color-page,
+  #panel-render.resolve-deliver-page {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .fusion-upper-stage,
+  .color-upper-stage,
+  .deliver-main-stage {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    min-height: auto;
+    overflow: visible;
+  }
+  .fusion-dual-viewers,
+  .color-palette-deck {
+    grid-template-columns: minmax(0, 1fr);
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .fusion-effects-dock,
+  .fusion-inspector-dock,
+  .color-left-drawer,
+  .color-nodes-pane,
+  .deliver-queue-col {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+  #panel-color.resolve-color-page .wheels-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #panel-color.resolve-color-page .grade-tone-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fusion-studio-launchers {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .color-subbar-presets .btn-chip,
+  .subbar-toggle-btn,
+  .resolve-subtab-btn,
+  .fusion-tb-btn,
+  .deliver-presets-carousel .deliver-preset-strip > button,
+  #panel-color .btn-chip,
+  #panel-color .btn-mini,
+  #panel-fx .btn-chip,
+  #panel-render .btn-chip {
+    min-height: 44px;
+    padding: 6px 10px;
+  }
+  .color-palette-deck {
+    height: auto;
+    min-height: 0;
+  }
+  .color-secondary-body,
+  .color-scopes-body {
+    overflow: visible;
+  }
+  #color-tool-pane-curves,
+  #color-right-pane-scopes {
+    min-height: auto;
+  }
+}

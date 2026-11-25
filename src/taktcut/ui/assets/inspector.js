@@ -433,15 +433,48 @@ export function createResolveInspectorController(ctx) {
 
     // 0. Title or Generator Properties (when a Resolve Title or Generator clip is selected)
     if (clip.clip_kind === "title") {
-      if (!clip.title_props) clip.title_props = { text: clip.name || "Title", subtitle: "", font_size: 46, color: "#ffffff", accent: "#e64b3d" };
+      if (!clip.title_props) {
+        clip.title_props = {
+          text: (clip.title_params && clip.title_params.text) || clip.name || "Title",
+          subtitle: (clip.title_params && clip.title_params.subtitle) || "",
+          font: (clip.title_params && clip.title_params.font) || "Anton",
+          font_size: (clip.title_params && clip.title_params.font_size) || 96,
+          color: (clip.title_params && clip.title_params.color) || "#ffffff",
+          glow: (clip.title_params && clip.title_params.glow) ?? 1.0,
+          glow_color: (clip.title_params && clip.title_params.glow_color) || "#ffffff",
+          animation: (clip.title_params && clip.title_params.animation) || "glow",
+          accent: "#e64b3d"
+        };
+      }
       const tp = clip.title_props;
+      const syncTitleParams = () => {
+        clip.title_params = {
+          ...(clip.title_params || {}),
+          text: tp.text || "",
+          subtitle: tp.subtitle || "",
+          font: tp.font || "Anton",
+          font_size: Number(tp.font_size || 96),
+          color: tp.color || "#ffffff",
+          glow: Number(tp.glow ?? 1.0),
+          glow_color: tp.glow_color || tp.color || "#ffffff",
+          animation: tp.animation || "glow",
+          flicker: tp.animation === "flicker" || Boolean(tp.flicker),
+          shake: tp.animation === "shake" ? 6 : Number(tp.shake || 0)
+        };
+      };
+      syncTitleParams();
       if (uiState.expanded.clip_title === undefined) uiState.expanded.clip_title = true;
-      const tSec = makeAccordion("clip_title", "Title", {
+      const tSec = makeAccordion("clip_title", "Title (Text+)", {
         onReset: () => {
           tp.text = clip.name || "Title";
           tp.subtitle = "";
-          tp.font_size = 46;
+          tp.font = "Anton";
+          tp.font_size = 96;
           tp.color = "#ffffff";
+          tp.glow = 1.0;
+          tp.glow_color = "#ffffff";
+          tp.animation = "glow";
+          syncTitleParams();
           render();
           redrawActiveCanvases();
         }
@@ -452,7 +485,7 @@ export function createResolveInspectorController(ctx) {
       inpTxt.type = "text";
       inpTxt.className = "insp-text-input";
       inpTxt.value = tp.text || "";
-      inpTxt.addEventListener("input", () => { tp.text = inpTxt.value; redrawActiveCanvases(); });
+      inpTxt.addEventListener("input", () => { tp.text = inpTxt.value; syncTitleParams(); redrawActiveCanvases(); });
       rTxt.appendChild(inpTxt);
       tSec.body.appendChild(rTxt);
 
@@ -462,28 +495,55 @@ export function createResolveInspectorController(ctx) {
       inpSub.type = "text";
       inpSub.className = "insp-text-input";
       inpSub.value = tp.subtitle || "";
-      inpSub.addEventListener("input", () => { tp.subtitle = inpSub.value; redrawActiveCanvases(); });
+      inpSub.addEventListener("input", () => { tp.subtitle = inpSub.value; syncTitleParams(); redrawActiveCanvases(); });
       rSub.appendChild(inpSub);
       tSec.body.appendChild(rSub);
 
+      tSec.body.appendChild(makeSelectRow("Font", ["Anton", "Open Sans"], tp.font || "Anton", (v) => {
+        tp.font = v;
+        syncTitleParams();
+        redrawActiveCanvases();
+      }));
+
+      tSec.body.appendChild(makeSelectRow("Animation", ["none", "glow", "flicker", "shake", "glitch", "zoom"], tp.animation || "glow", (v) => {
+        tp.animation = v;
+        syncTitleParams();
+        redrawActiveCanvases();
+      }));
+
       tSec.body.appendChild(makeSliderRow({
         label: "Size",
-        value: tp.font_size || 46,
-        min: 14,
-        max: 140,
-        step: 1,
+        value: tp.font_size || 96,
+        min: 18,
+        max: 220,
+        step: 2,
         decimals: 0,
-        defaultValue: 46,
-        onChange: (v) => { tp.font_size = v; redrawActiveCanvases(); }
+        defaultValue: 96,
+        onChange: (v) => { tp.font_size = v; syncTitleParams(); redrawActiveCanvases(); }
+      }));
+
+      tSec.body.appendChild(makeSliderRow({
+        label: "Glow",
+        value: tp.glow ?? 1.0,
+        min: 0,
+        max: 2.5,
+        step: 0.1,
+        decimals: 1,
+        defaultValue: 1.0,
+        onChange: (v) => { tp.glow = v; syncTitleParams(); redrawActiveCanvases(); }
       }));
 
       const rCol = el("div", "insp-param-row");
-      rCol.appendChild(el("span", "insp-param-label", "Color"));
+      rCol.appendChild(el("span", "insp-param-label", "Color / Glow"));
       const inpCol = document.createElement("input");
       inpCol.type = "color";
       inpCol.value = tp.color || "#ffffff";
-      inpCol.addEventListener("input", () => { tp.color = inpCol.value; redrawActiveCanvases(); });
-      rCol.appendChild(inpCol);
+      inpCol.addEventListener("input", () => { tp.color = inpCol.value; syncTitleParams(); redrawActiveCanvases(); });
+      const inpGlowCol = document.createElement("input");
+      inpGlowCol.type = "color";
+      inpGlowCol.value = tp.glow_color || "#ffffff";
+      inpGlowCol.addEventListener("input", () => { tp.glow_color = inpGlowCol.value; syncTitleParams(); redrawActiveCanvases(); });
+      rCol.append(inpCol, inpGlowCol);
       tSec.body.appendChild(rCol);
       host.appendChild(tSec.section);
     } else if (clip.clip_kind === "generator") {
@@ -703,22 +763,35 @@ export function createResolveInspectorController(ctx) {
 
     // 4. Composite
     const comp = makeAccordion("composite", "Composite", {
-      onReset: () => { tf.composite_mode = "Normal"; updateTf("opacity_pct", 100, true); render(); }
+      onReset: () => {
+        tf.composite_mode = "Normal";
+        clip.composite_mode = "normal";
+        clip.opacity = 1.0;
+        updateTf("opacity_pct", 100, true);
+        render();
+      }
     });
-    comp.body.appendChild(makeSelectRow("Composite Mode", COMPOSITE_MODES, tf.composite_mode || "Normal", (v) => {
+    const curCompLabel = COMPOSITE_MODES.find(
+      (m) => m.toLowerCase() === String(clip.composite_mode || tf.composite_mode || "Normal").toLowerCase()
+    ) || "Normal";
+    comp.body.appendChild(makeSelectRow("Composite Mode", COMPOSITE_MODES, curCompLabel, (v) => {
       tf.composite_mode = v;
+      clip.composite_mode = String(v || "Normal").toLowerCase();
       redrawActiveCanvases();
-    }, () => { tf.composite_mode = "Normal"; render(); redrawActiveCanvases(); }));
+    }, () => { tf.composite_mode = "Normal"; clip.composite_mode = "normal"; render(); redrawActiveCanvases(); }));
     comp.body.appendChild(makeSliderRow({
       label: "Opacity",
-      value: tf.opacity_pct ?? 100,
+      value: clip.opacity !== undefined && clip.opacity !== null ? Math.round(Number(clip.opacity) * 100) : (tf.opacity_pct ?? 100),
       min: 0,
       max: 100,
       step: 1,
       decimals: 2,
       defaultValue: 100,
-      onChange: (v, c) => updateTf("opacity_pct", v, c),
-      onReset: () => { updateTf("opacity_pct", 100, true); render(); }
+      onChange: (v, c) => {
+        clip.opacity = Math.max(0, Math.min(1, v / 100));
+        updateTf("opacity_pct", v, c);
+      },
+      onReset: () => { clip.opacity = 1.0; updateTf("opacity_pct", 100, true); render(); }
     }));
     host.appendChild(comp.section);
 
@@ -808,21 +881,101 @@ export function createResolveInspectorController(ctx) {
     const clip = selInfo && selInfo.clip ? normalizeInspectorMeta(selInfo.clip) : null;
     const aud = clip ? clip.audio : { volume_db: rack.gain_db ?? 0, pitch_semi: 0, pitch_cents: 0, pan: 0, voice_iso_on: false, voice_iso_amt: 65, lvl_on: false, lvl_mix: 50, eq_on: true };
 
-    const vol = makeAccordion("audio_volume", "Volume", {
-      onReset: () => { aud.volume_db = 0; if (updateAudioRackField) updateAudioRackField("gain_db", 0); render(); }
+    const vol = makeAccordion("audio_volume", "Volume & Fades", {
+      onReset: () => {
+        aud.volume_db = 0;
+        if (clip) {
+          clip.audio_gain_db = 0;
+          clip.fade_in_s = 0;
+          clip.fade_out_s = 0;
+        }
+        if (updateAudioRackField) updateAudioRackField("gain_db", 0);
+        render();
+      }
     });
     vol.body.appendChild(makeSliderRow({
       label: "Volume",
-      value: aud.volume_db ?? 0,
+      value: clip && clip.audio_gain_db !== undefined ? Number(clip.audio_gain_db) : (aud.volume_db ?? 0),
       min: -60,
       max: 12,
       step: 0.5,
       decimals: 2,
       unit: "dB",
       defaultValue: 0,
-      onChange: (v) => { aud.volume_db = v; if (updateAudioRackField) updateAudioRackField("gain_db", v); }
+      onChange: (v) => {
+        aud.volume_db = v;
+        if (clip) clip.audio_gain_db = v;
+        if (updateAudioRackField) updateAudioRackField("gain_db", v);
+      }
     }));
+    if (clip) {
+      vol.body.appendChild(makeSliderRow({
+        label: "Fade In",
+        value: Number(clip.fade_in_s || 0),
+        min: 0,
+        max: 5,
+        step: 0.05,
+        decimals: 2,
+        unit: "s",
+        defaultValue: 0,
+        onChange: (v) => { clip.fade_in_s = v; redrawActiveCanvases(); }
+      }));
+      vol.body.appendChild(makeSliderRow({
+        label: "Fade Out",
+        value: Number(clip.fade_out_s || 0),
+        min: 0,
+        max: 5,
+        step: 0.05,
+        decimals: 2,
+        unit: "s",
+        defaultValue: 0,
+        onChange: (v) => { clip.fade_out_s = v; redrawActiveCanvases(); }
+      }));
+    }
     host.appendChild(vol.section);
+
+    if (clip) {
+      const afxQuick = el("div", "insp-fx-quickbar");
+      const afxSel = document.createElement("select");
+      afxSel.className = "insp-select";
+      const afxOptions = [
+        ["", "+ Add Fairlight Audio FX..."],
+        ["reverb", "Fairlight FX: Dark Reverb"],
+        ["pitch_shift", "Fairlight FX: Pitch Shift (Deep Voice)"],
+        ["distortion", "Fairlight FX: Distortion / Overdrive"],
+        ["radio", "Fairlight FX: Radio / VHS Bandpass"],
+        ["echo", "Fairlight FX: Horror Echo"],
+        ["bass_boost", "Fairlight FX: Sub-Bass Boost"],
+        ["reverse", "Fairlight FX: Reverse Audio"]
+      ];
+      for (const [val, txt] of afxOptions) {
+        const o = document.createElement("option");
+        o.value = val;
+        o.textContent = txt;
+        afxSel.appendChild(o);
+      }
+      afxSel.addEventListener("change", () => {
+        const kind = afxSel.value;
+        if (!kind) return;
+        if (!Array.isArray(clip.audio_fx)) clip.audio_fx = [];
+        const defaults = {
+          reverb: { name: "Dark Reverb", params: { decay: 0.55, delay_ms: 85 } },
+          pitch_shift: { name: "Pitch Shift", params: { semitones: -4 } },
+          distortion: { name: "Distortion", params: { drive: 0.65 } },
+          radio: { name: "Radio / VHS", params: { low_hz: 320, high_hz: 2800 } },
+          echo: { name: "Horror Echo", params: { delay_ms: 240, decay: 0.45 } },
+          bass_boost: { name: "Sub-Bass Boost", params: { gain_db: 7 } },
+          reverse: { name: "Reverse Audio", params: {} }
+        };
+        const spec = defaults[kind] || { name: kind, params: {} };
+        clip.audio_fx.push({ id: `${kind}_${Date.now()}`, kind, name: spec.name, enabled: true, params: { ...spec.params } });
+        afxSel.value = "";
+        render();
+        redrawActiveCanvases();
+      });
+      afxQuick.appendChild(afxSel);
+      host.appendChild(afxQuick);
+    }
 
     const pit = makeAccordion("audio_pitch", "Pitch", {
       onReset: () => { aud.pitch_semi = 0; aud.pitch_cents = 0; render(); }
@@ -904,6 +1057,11 @@ export function createResolveInspectorController(ctx) {
     addSel.className = "insp-select";
     const quickEffects = [
       ["", "+ Add Resolve FX..."],
+      ["analog_damage", "Resolve FX Texture: Analog Damage / VHS"],
+      ["digital_glitch", "Resolve FX Stylize: Digital Glitch"],
+      ["rgb_split", "Resolve FX Stylize: RGB Split"],
+      ["flicker", "Resolve FX Light: Strobe Flicker"],
+      ["horror_red", "Resolve FX Color: Crimson Horror"],
       ["glow", "Resolve FX Light: Glow"],
       ["halation", "Resolve FX Film: Halation"],
       ["lens_flare", "Resolve FX Light: Lens Flare"],
@@ -928,7 +1086,16 @@ export function createResolveInspectorController(ctx) {
     }
     addSel.addEventListener("change", () => {
       if (!addSel.value) return;
-      if (addFxNode) addFxNode(addSel.value);
+      const eff = addSel.value;
+      if (selClip && ["analog_damage", "digital_glitch", "rgb_split", "flicker", "horror_red", "glow", "halation", "camera_shake", "vignette", "film_grain"].includes(eff)) {
+        if (!Array.isArray(selClip.resolve_fx)) selClip.resolve_fx = [];
+        selClip.resolve_fx.push({ effect: eff, kind: eff, enabled: true, intensity: 0.75, params: { intensity: 0.75, strength: 0.75 } });
+        if (!Array.isArray(selClip.clip_fx)) selClip.clip_fx = [];
+        selClip.clip_fx.push({ effect: eff, fxStyle: eff, displayName: eff.replace(/_/g, " "), enabled: true, params: { intensity: 0.75, strength: 0.75 } });
+        redrawActiveCanvases();
+      } else if (addFxNode) {
+        addFxNode(eff);
+      }
       addSel.value = "";
       render();
     });
