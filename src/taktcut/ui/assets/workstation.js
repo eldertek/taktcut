@@ -781,7 +781,7 @@ export function createWorkstationController(ctx) {
       grid.appendChild(card);
     }
 
-    for (const dproj of WEB_DEMO_PROJECTS) {
+    for (const dproj of api && api.isStaticDemo() ? WEB_DEMO_PROJECTS : []) {
       if (ws.projectLibraryTab !== "local") continue;
       if (q && !`${dproj.name} ${dproj.archive} ${dproj.credit}`.toLowerCase().includes(q)) continue;
       const card = el("button", "pm-project-card");
