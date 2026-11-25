@@ -1656,3 +1656,197 @@ def execute_timeline_render_plan(
         returncode=rc,
         stderr_tail=tail,
     )
+
+
+CHUNKED_RENDER_CLIP_THRESHOLD = 30
+CHUNKED_RENDER_MIN_DURATION_S = 20.0
+CHUNKED_RENDER_SEGMENT_S = 15.0
+
+
+def should_use_chunked_render(plan: TimelineRenderPlan) -> bool:
+    """Return True when a multi-track timeline is large enough to benefit from chunked rendering."""
+    return (
+        (plan.video_clip_count + plan.audio_clip_count) > CHUNKED_RENDER_CLIP_THRESHOLD
+        and plan.duration_s > CHUNKED_RENDER_MIN_DURATION_S
+    )
+
+
+def execute_chunked_timeline_render(
+    req: TimelineRenderRequest,
+    *,
+    workspace_root: Path | None = None,
+    media_lookup: dict[str, Path] | None = None,
+    caps: HardwareCapabilities | None = None,
+    progress_cb: Callable[[TimelineRenderProgress], None] | None = None,
+    job_label: str = "Timeline Render",
+    chunk_seconds: float = CHUNKED_RENDER_SEGMENT_S,
+) -> RenderResult:
+    """Render a large multi-track timeline in sequential GOP-aligned chunks and lossless-concat.
+
+    Avoids opening 100+ simultaneous 4K decoders in RAM inside a single FFmpeg process and keeps
+    Windows command lines compact even for feature-length multi-track timelines.
+    """
+    doc = req.document
+    fps = float(req.fps_override) if req.fps_override else doc.fps.as_float
+    fps = max(1.0, min(120.0, fps))
+
+    max_frame = 1
+    for trk in doc.tracks:
+        for clp in trk.clips:
+            if clp.enabled:
+                max_frame = max(max_frame, clp.start_frame + clp.duration_frames)
+
+    start_f = req.in_frame if req.in_frame is not None else 0
+    end_f = req.out_frame if req.out_frame is not None else max_frame
+    if end_f <= start_f:
+        end_f = start_f + max(1, round(fps))
+
+    total_dur_s = max(0.08, (end_f - start_f) / fps)
+    chunk_frames = max(round(fps * 4.0), round(fps * max(4.0, chunk_seconds)))
+
+    ranges: list[tuple[int, int]] = []
+    cur = start_f
+    while cur < end_f:
+        nxt = min(end_f, cur + chunk_frames)
+        if end_f - nxt < round(fps * 2.0):
+            nxt = end_f
+        ranges.append((cur, nxt))
+        cur = nxt
+
+    out_file = Path(req.output_path).resolve()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    suffix = out_file.suffix or ".mp4"
+    ffmpeg_bin = caps.ffmpeg_path if caps else (shutil.which("ffmpeg") or "ffmpeg")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="taktcut_chunks_"))
+    chunk_files: list[Path] = []
+    used_encoder = "libx264"
+    try:
+        for seg_idx, (seg_in, seg_out) in enumerate(ranges):
+            seg_path = tmp_dir / f"chunk_{seg_idx:04d}{suffix}"
+            seg_req = req.model_copy(
+                update={
+                    "output_path": str(seg_path),
+                    "in_frame": seg_in,
+                    "out_frame": seg_out,
+                }
+            )
+            seg_plan = build_timeline_render_plan(
+                seg_req,
+                workspace_root=workspace_root,
+                media_lookup=media_lookup,
+                caps=caps,
+            )
+            used_encoder = seg_plan.encoder
+            seg_base_s = (seg_in - start_f) / fps
+
+            def _seg_progress(
+                p: TimelineRenderProgress,
+                base_s: float = seg_base_s,
+                idx_seg: int = seg_idx,
+            ) -> None:
+                if not progress_cb:
+                    return
+                global_t = min(total_dur_s, base_s + p.out_time_s)
+                global_pct = min(98.0, (global_t / max(0.01, total_dur_s)) * 100.0)
+                progress_cb(
+                    TimelineRenderProgress(
+                        active=True,
+                        job_label=f"{job_label} [{idx_seg + 1}/{len(ranges)}]",
+                        output_path=req.output_path,
+                        percent=round(global_pct, 1),
+                        out_time_s=round(global_t, 2),
+                        total_duration_s=round(total_dur_s, 2),
+                        speed=p.speed,
+                        fps_encoding=p.fps_encoding,
+                        status="rendering",
+                    )
+                )
+
+            seg_res = execute_timeline_render_plan(
+                seg_plan,
+                progress_cb=_seg_progress if progress_cb else None,
+                job_label=f"{job_label} [{seg_idx + 1}/{len(ranges)}]",
+            )
+            if not seg_res.success or not seg_path.is_file():
+                if progress_cb:
+                    progress_cb(
+                        TimelineRenderProgress(
+                            active=False,
+                            job_label=job_label,
+                            output_path=req.output_path,
+                            percent=0.0,
+                            total_duration_s=round(total_dur_s, 2),
+                            status="failed",
+                            error=seg_res.stderr_tail
+                            or f"Chunk {seg_idx + 1}/{len(ranges)} failed",
+                        )
+                    )
+                return RenderResult(
+                    success=False,
+                    output_path=req.output_path,
+                    encoder=seg_res.encoder,
+                    bytes_written=0,
+                    returncode=seg_res.returncode,
+                    stderr_tail=seg_res.stderr_tail,
+                )
+            used_encoder = seg_res.encoder
+            chunk_files.append(seg_path)
+
+        concat_list = tmp_dir / "concat.txt"
+        concat_lines = [
+            f"file '{str(cf).replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'"
+            for cf in chunk_files
+        ]
+        concat_list.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
+
+        concat_cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-hide_banner",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-c",
+            "copy",
+        ]
+        if suffix.lower() in (".mp4", ".mov", ".m4v"):
+            concat_cmd.extend(["-movflags", "+faststart"])
+        concat_cmd.append(str(out_file))
+
+        proc = subprocess.run(
+            concat_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        bytes_written = out_file.stat().st_size if out_file.exists() else 0
+        success = proc.returncode == 0 and bytes_written > 0
+        tail = "\n".join(proc.stderr.splitlines()[-20:])
+        if progress_cb:
+            progress_cb(
+                TimelineRenderProgress(
+                    active=False,
+                    job_label=job_label,
+                    output_path=req.output_path,
+                    percent=100.0 if success else 0.0,
+                    out_time_s=round(total_dur_s, 2) if success else 0.0,
+                    total_duration_s=round(total_dur_s, 2),
+                    status="completed" if success else "failed",
+                    error="" if success else (tail or f"FFmpeg concat exited {proc.returncode}"),
+                )
+            )
+        return RenderResult(
+            success=success,
+            output_path=req.output_path,
+            encoder=used_encoder,
+            bytes_written=bytes_written,
+            returncode=proc.returncode,
+            stderr_tail=tail,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

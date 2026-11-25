@@ -465,7 +465,9 @@ from taktcut.timeline_render import (
     TimelineRenderProgress,
     TimelineRenderRequest,
     build_timeline_render_plan,
+    execute_chunked_timeline_render,
     execute_timeline_render_plan,
+    should_use_chunked_render,
 )
 from taktcut.titles import (
     TITLE_ANIM_IN_MAX,
@@ -1184,10 +1186,10 @@ def _compile_render_plan_from_payload(
     )
 
 
-def _compile_timeline_render_plan_from_payload(
+def _build_timeline_render_context_from_payload(
     app_state: UiAppState,
     payload: dict[str, Any],
-) -> TimelineRenderPlan:
+) -> tuple[TimelineRenderRequest, dict[str, Path], HardwareCapabilities | None]:
     doc = _resolve_timeline_from_payload(app_state, payload)
     raw_out = str(payload.get("output_path") or "renders/timeline_export.mp4").strip()
     out_file = confine_workspace_path(
@@ -1261,6 +1263,14 @@ def _compile_timeline_render_plan_from_payload(
             else []
         ),
     )
+    return req_obj, media_lookup, caps
+
+
+def _compile_timeline_render_plan_from_payload(
+    app_state: UiAppState,
+    payload: dict[str, Any],
+) -> TimelineRenderPlan:
+    req_obj, media_lookup, caps = _build_timeline_render_context_from_payload(app_state, payload)
     return build_timeline_render_plan(
         req_obj,
         workspace_root=app_state.workspace_root,
@@ -4834,7 +4844,15 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
         if route == "/api/render/queue/run":
             dry_run = bool(payload.get("dry_run", False))
-            tl_plan_cache: dict[str, TimelineRenderPlan] = {}
+            tl_plan_cache: dict[
+                str,
+                tuple[
+                    TimelineRenderPlan,
+                    TimelineRenderRequest,
+                    dict[str, Path],
+                    HardwareCapabilities | None,
+                ],
+            ] = {}
 
             def _resolve_queue_plan(job_payload: dict[str, Any]) -> RenderPlan:
                 is_tl = (
@@ -4842,10 +4860,16 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
                     or isinstance(job_payload.get("document"), dict)
                 )
                 if is_tl:
-                    tl_p = _compile_timeline_render_plan_from_payload(
+                    req_obj, media_lookup, caps = _build_timeline_render_context_from_payload(
                         self.app_state, job_payload
                     )
-                    tl_plan_cache[tl_p.output_path] = tl_p
+                    tl_p = build_timeline_render_plan(
+                        req_obj,
+                        workspace_root=self.app_state.workspace_root,
+                        media_lookup=media_lookup,
+                        caps=caps,
+                    )
+                    tl_plan_cache[tl_p.output_path] = (tl_p, req_obj, media_lookup, caps)
                     fps_rate = RationalFrameRate.from_str(str(round(tl_p.fps)))
                     tl_prof = RenderProfile(str(job_payload.get("profile") or "web_h264"))
                     return RenderPlan(
@@ -4871,14 +4895,25 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
 
             def _execute_queue_plan(plan_obj: RenderPlan) -> RenderResult:
                 if plan_obj.input_path.startswith("timeline:"):
-                    tl_p = tl_plan_cache.get(plan_obj.output_path)
-                    if tl_p is None:
+                    cached_tl = tl_plan_cache.get(plan_obj.output_path)
+                    if cached_tl is None:
                         raise RuntimeError("Timeline render plan cache miss")
-                    tl_res = execute_timeline_render_plan(
-                        tl_p,
-                        progress_cb=self.app_state.set_render_progress,
-                        job_label=Path(tl_p.output_path).name,
-                    )
+                    tl_p, req_obj, media_lookup, caps = cached_tl
+                    if should_use_chunked_render(tl_p):
+                        tl_res = execute_chunked_timeline_render(
+                            req_obj,
+                            workspace_root=self.app_state.workspace_root,
+                            media_lookup=media_lookup,
+                            caps=caps,
+                            progress_cb=self.app_state.set_render_progress,
+                            job_label=Path(tl_p.output_path).name,
+                        )
+                    else:
+                        tl_res = execute_timeline_render_plan(
+                            tl_p,
+                            progress_cb=self.app_state.set_render_progress,
+                            job_label=Path(tl_p.output_path).name,
+                        )
                     return RenderResult(
                         success=tl_res.success,
                         output_path=tl_res.output_path,
@@ -4983,16 +5018,34 @@ class TaktcutRequestHandler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/render/timeline":
-            tl_plan = _compile_timeline_render_plan_from_payload(self.app_state, payload)
+            req_obj, media_lookup, caps = _build_timeline_render_context_from_payload(
+                self.app_state, payload
+            )
+            tl_plan = build_timeline_render_plan(
+                req_obj,
+                workspace_root=self.app_state.workspace_root,
+                media_lookup=media_lookup,
+                caps=caps,
+            )
             execute_flag = bool(payload.get("execute", False))
             tl_result = None
             if execute_flag:
                 job_label = str(payload.get("label") or Path(tl_plan.output_path).name)
-                tl_result = execute_timeline_render_plan(
-                    tl_plan,
-                    progress_cb=self.app_state.set_render_progress,
-                    job_label=job_label,
-                )
+                if should_use_chunked_render(tl_plan):
+                    tl_result = execute_chunked_timeline_render(
+                        req_obj,
+                        workspace_root=self.app_state.workspace_root,
+                        media_lookup=media_lookup,
+                        caps=caps,
+                        progress_cb=self.app_state.set_render_progress,
+                        job_label=job_label,
+                    )
+                else:
+                    tl_result = execute_timeline_render_plan(
+                        tl_plan,
+                        progress_cb=self.app_state.set_render_progress,
+                        job_label=job_label,
+                    )
             self._send_json(
                 HTTPStatus.OK,
                 {

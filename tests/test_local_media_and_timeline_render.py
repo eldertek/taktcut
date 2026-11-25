@@ -640,3 +640,77 @@ def test_resolve_archive_nested_media_nfc_and_image_sequence(tmp_path: Path) -> 
     assert out_mp4.is_file() and res.bytes_written > 2000
 
 
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg/ffprobe required")
+def test_chunked_timeline_render_multi_segment_concat(tmp_path: Path) -> None:
+    """Verify chunked multi-segment rendering + lossless concat preserves duration & streams."""
+    from taktcut.timeline_render import execute_chunked_timeline_render
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    c1 = _make_sample_video(media_dir / "seg_a.mp4", duration_s=4.5, color="0x123045")
+    c2 = _make_sample_video(media_dir / "seg_b.mp4", duration_s=4.5, color="0x451220")
+
+    doc = TimelineDocument(
+        name="Sentinel_Chunked_TL",
+        source_format="drt",
+        fps=RationalFrameRate(num=25, den=1),
+        width=320,
+        height=180,
+        tracks=[
+            TimelineTrack(
+                index=1,
+                kind="video",
+                name="V1",
+                clips=[
+                    TimelineClip(
+                        name="SegA",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=0,
+                        duration_frames=100,
+                        source_path="media/seg_a.mp4",
+                    ),
+                    TimelineClip(
+                        name="SegB",
+                        track_index=1,
+                        media_type="video",
+                        start_frame=100,
+                        duration_frames=100,
+                        source_path="media/seg_b.mp4",
+                    ),
+                ],
+            )
+        ],
+    )
+    out_mp4 = tmp_path / "renders" / "chunked_out.mp4"
+    req = TimelineRenderRequest(
+        document=doc,
+        output_path=str(out_mp4),
+        width=320,
+        height=180,
+        profile=RenderProfile.WEB_H264,
+        prefer_hw=False,
+    )
+    events: list[float] = []
+    res = execute_chunked_timeline_render(
+        req,
+        workspace_root=tmp_path,
+        media_lookup={"media/seg_a.mp4": c1, "media/seg_b.mp4": c2},
+        progress_cb=lambda p: events.append(p.percent),
+        job_label="sentinel-chunked",
+        chunk_seconds=4.0,
+    )
+    assert res.success, f"Chunked render failed: {res.stderr_tail}"
+    assert out_mp4.is_file() and res.bytes_written > 4000
+    assert any(p >= 100.0 for p in events)
+
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(out_mp4)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    dur = float(json.loads(probe.stdout)["format"]["duration"])
+    assert 7.5 <= dur <= 8.5
+
+
