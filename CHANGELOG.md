@@ -4,6 +4,28 @@ All notable changes to TaktCut Studio are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-26
+
+Production DaVinci Resolve Studio 21 `.dra` / `.drp` parity release validated end-to-end on real multi-camera 4K Sony FX3 S-Log3 + ProRes 4444 archives (21 video tracks, 7 audio tracks, 234 video clips, 87 audio clips, 0 offline media).
+
+### Added
+- **Resolve 21 `EffectFiltersBA` Full Inspector Decoding** (`src/taktcut/resolve_db.py`, `src/taktcut/resolve_archive.py`):
+  - Decodes Resolve 21 Zstd/protobuf `EffectFiltersBA` envelopes with signed zigzag varints for Composite Mode (`Normal`, `Add`, `Subtract`, `Difference`, `Multiply`, `Screen`, `Overlay`, `Hard Light`, `Soft Light`, `Darken`, `Lighten`, `Exclusion`), Opacity, 2D Transform (`Zoom X/Y`, `Position X/Y` with Resolve Y-up to TaktCut Y-down coordinate conversion, `Rotation`), Inspector Crop (`Left/Right/Top/Bottom`), Video Fades, and Audio Volume/Fades.
+- **Resolve 21 Color Page `VersionBody` Decoding & Per-Clip Camera Log CST** (`src/taktcut/resolve_db.py`, `src/taktcut/models.py`, `src/taktcut/timeline_render.py`):
+  - Decodes Resolve `ProtoVersion.VersionBody` serial node graphs including `colorspacetransformv2` chains (e.g. Sony S-Log3 / S-Gamut3.Cine -> DaVinci Wide Gamut -> Rec.709 Gamma 2.4 with Forward OOTF middle-grey calibration), unmasked Primary Corrector wheels (`Lift`, `Gamma`, `Gain`, `Offset`, `Contrast`, `Saturation`, `Temperature`), RGB Mixer diagonal boosts, HDR Zones (`Global`, `Dark`, `Light`, `Highlight`), and Film Look Creator, while automatically skipping Power Window and HSL Qualifier localized nodes.
+  - Bakes and caches per-clip 33x33x33 `.cube` 3D LUTs on demand before per-clip color grades in Deliver renders.
+- **Automatic Chunked Multi-Segment Rendering** (`src/taktcut/timeline_render.py`, `src/taktcut/ui/server.py`):
+  - Automatically splits very large multi-track timelines (20+ tracks, 150+ clips) into bounded FFmpeg segments (`<= 2 GB` RAM peak) and concatenates them losslessly via FFmpeg concat demuxer, enabling full 4K feature/clip exports without memory exhaustion or Win32 command-line overflow.
+
+### Fixed
+- **DaVinci `.dra` Nested `MediaFiles/**`, NFC Accents & Image Sequences** (`src/taktcut/resolve_archive.py`, `src/taktcut/timeline_render.py`):
+  - Recursively indexes nested `MediaFiles/**` folders with Unicode NFC/NFD normalization (solving macOS NFD accented filenames like `Théo.mov` and `Léonard.mov` on Windows), resolves Resolve `[start-end]` PNG/EXR image sequences, computes `_hour_offset` from positive video starts, and compacts FFmpeg filtergraphs via `-filter_complex_script` on Windows.
+- **Nested `<OriginalClip>` Ghost Clip Exclusion** (`src/taktcut/resolve_archive.py`):
+  - Parses only direct track items under `Items/Element` instead of recursing into Resolve's `<OriginalClip>` backup subtrees, eliminating duplicate compound/fusion ghost clips overlapping active timeline edits.
+- **Unified RGBA 2D Transform & Alpha-Preserving Blend Compositing** (`src/taktcut/timeline_render.py`):
+  - Replaces separate zoom-in/zoom-out branches with exact RGBA canvas intersection geometry (`scale` -> `crop` -> `format=rgba` -> Inspector crop -> `rotate` -> exact `(ox, oy)` intersection + transparent `pad`), supporting all zooms (`10%..300%`) and off-edge translations without opaque black boxes.
+  - Upgrades blend modes (`screen`, `add`, `multiply`, `overlay`, `hardlight`, `softlight`, `lighten`, `darken`, `difference`, `subtract`, `exclusion`, `divide`) to alpha-preserving W3C compositing (`Cr = (1 - a) * Cb + a * B(Cb, Cs)`) and guards ProRes 4444 / PNG alpha channels against YUV-only FFmpeg `eq` filters.
+
 ## [0.2.0] - 2026-11-25
 
 Major milestone introducing full DaVinci Resolve Studio 21 interface parity across all 7 pages, a local multi-track FFmpeg/NVENC timeline rendering engine, the Resolve Cinema Pack (real Deliver transitions, 2.39:1 Output Blanking, Dynamic Zoom, cinema `Text+` tracking, Kodak 2383 / highlight-targeted 35mm Halation, Fairlight Tape-Stop), and standalone 1-click desktop binaries.

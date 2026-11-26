@@ -714,3 +714,246 @@ def test_chunked_timeline_render_multi_segment_concat(tmp_path: Path) -> None:
     assert 7.5 <= dur <= 8.5
 
 
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg/ffprobe required")
+def test_resolve_drp_composite_transform_cst_grade_and_blend_render(tmp_path: Path) -> None:
+    """Verify Resolve 21 EffectFiltersBA + VersionBody CST/grade decode & alpha-safe blend."""
+    import struct
+    import zipfile
+
+    import zstandard as zstd
+
+    from taktcut.resolve_archive import parse_resolve_archive
+
+    def _varint(val: int) -> bytes:
+        out = bytearray()
+        while True:
+            b = val & 0x7F
+            val >>= 7
+            if val:
+                out.append(b | 0x80)
+            else:
+                out.append(b)
+                break
+        return bytes(out)
+
+    def _zz(n: int) -> int:
+        return (n << 1) ^ (n >> 63)
+
+    def _field_v(fnum: int, val: int) -> bytes:
+        return _varint((fnum << 3) | 0) + _varint(val)
+
+    def _field_b(fnum: int, raw: bytes) -> bytes:
+        return _varint((fnum << 3) | 2) + _varint(len(raw)) + raw
+
+    def _field_f64(fnum: int, val: float) -> bytes:
+        return _varint((fnum << 3) | 1) + struct.pack("<d", val)
+
+    def _field_f32(fnum: int, val: float) -> bytes:
+        return _varint((fnum << 3) | 5) + struct.pack("<f", val)
+
+    def _wrap_zstd(pb_payload: bytes) -> str:
+        comp = zstd.ZstdCompressor().compress(pb_payload)
+        env = b"\x00\x00\x00\x02" + struct.pack(">I", len(comp) + 1) + b"\x81" + comp
+        return env.hex()
+
+    def _effect_param_double(dbid: int, val: float) -> bytes:
+        variant = _field_f64(2, val)
+        epv = _field_b(1, variant)
+        return _field_v(1, dbid) + _field_b(3, epv)
+
+    def _effect_param_sint(dbid: int, val: int) -> bytes:
+        variant = _field_v(1, _zz(val))
+        epv = _field_b(1, variant)
+        return _field_v(1, dbid) + _field_b(3, epv)
+
+    # Filter 1 (Composite: mode=5 Screen, op=92%) + Filter 2 (Transform: zoom=0.58)
+    flt_comp = (
+        _field_v(1, _zz(1))
+        + _field_v(2, 1)
+        + _field_b(9, _effect_param_sint(0, 5))
+        + _field_b(9, _effect_param_double(1, 92.0))
+    )
+    flt_xform = (
+        _field_v(1, _zz(2))
+        + _field_v(2, 1)
+        + _field_b(9, _effect_param_double(40, -0.24))
+        + _field_b(9, _effect_param_double(41, -0.18))
+        + _field_b(9, _effect_param_double(42, 0.58))
+        + _field_b(9, _effect_param_double(43, 0.58))
+    )
+    ef_hex = _wrap_zstd(_field_b(1, flt_comp) + _field_b(1, flt_xform))
+
+    # VersionBody: Node 1 (CST S-Log3->DWG), Node 2 (Temp/Contrast), Node 3 (CST DWG->Rec709)
+    def _ofx_str_param(name: str, val: str) -> bytes:
+        return _field_b(1, name.encode()) + _field_b(2, _field_b(5, val.encode()))
+
+    def _cst_node(disp_idx: int, in_cs: str, in_g: str, out_cs: str, out_g: str) -> bytes:
+        ofx_msg = (
+            _field_b(2, b"com.blackmagicdesign.resolvefx.colorspacetransformv2")
+            + _field_v(4, 1)
+            + _field_b(5, _ofx_str_param("inputColorSpace", in_cs))
+            + _field_b(5, _ofx_str_param("inputGamma", in_g))
+            + _field_b(5, _ofx_str_param("outputColorSpace", out_cs))
+            + _field_b(5, _ofx_str_param("outputGamma", out_g))
+        )
+        prm = _field_v(1, 0xC0000087) + _field_b(2, _field_b(21, ofx_msg))
+        return _field_v(2, disp_idx) + _field_b(10, _field_b(1, prm))
+
+    grade_params = (
+        _field_b(3, _field_v(1, 0x86000115) + _field_b(2, _field_f32(1, -600.0)))
+        + _field_b(3, _field_v(1, 0x860000C1) + _field_b(2, _field_f32(1, 1.15)))
+    )
+    mark_with_off = _field_v(1, 0) + _field_b(2, grade_params)
+    mark_tl = _field_v(1, 1) + _field_b(6, mark_with_off)
+    grade_node = _field_v(2, 2) + _field_b(9, _field_b(1, mark_tl))
+
+    graph_msg = (
+        _field_b(
+            7,
+            _cst_node(
+                1,
+                "SGAMUT3CINE_COLORSPACE",
+                "SONY_SLOG3_GAMMA",
+                "DWG_COLORSPACE",
+                "DAV_INTER_OETF_GAMMA",
+            ),
+        )
+        + _field_b(7, grade_node)
+        + _field_b(
+            7,
+            _cst_node(
+                3,
+                "DWG_COLORSPACE",
+                "DAV_INTER_OETF_GAMMA",
+                "REC709_COLORSPACE",
+                "TWOPOINTFOUR_GAMMA",
+            ),
+        )
+    )
+    body_hex = _wrap_zstd(_field_b(1, graph_msg))
+
+    dra_dir = tmp_path / "ParityClip.dra"
+    media_dir = dra_dir / "MediaFiles"
+    media_dir.mkdir(parents=True)
+    _make_sample_video(media_dir / "fx3_log.mp4", duration_s=1.5, color="0x555555")
+    _make_sample_video(media_dir / "title_ov.mp4", duration_s=1.5, color="0xcc2222")
+
+    seq_id = "22222222-3333-4444-5555-666666666666"
+    fps_hex = "0000000000003940"
+    res_hex = f"{320:016x}{180:016x}"
+    mp_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Sm2MpFolder>
+  <Sm2MpTimelineClip DbId="tl-1">
+    <Name>Main</Name>
+    <Sm2Timeline><Name>Main</Name></Sm2Timeline>
+    <Sm2Sequence DbId="{seq_id}">
+      <FrameRate>{fps_hex}</FrameRate>
+      <Resolution>{res_hex}</Resolution>
+    </Sm2Sequence>
+  </Sm2MpTimelineClip>
+</Sm2MpFolder>"""
+    seq_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Sm2SequenceContainer>
+  <Sequence>{seq_id}</Sequence>
+  <VideoTrackVec>
+    <Element>
+      <Sm2TiTrack>
+        <Items>
+          <Sm2TiVideoClip>
+            <Name>fx3_log.mp4</Name>
+            <Start>90000</Start>
+            <Duration>25</Duration>
+            <In>0</In>
+            <MediaFilePath>/Volumes/Disk/fx3_log.mp4</MediaFilePath>
+            <MediaFrameRate>{fps_hex}</MediaFrameRate>
+            <pLmVerTable>
+              <ListMgt::LmVersionTable>
+                <pActive>v-1</pActive>
+                <Locals>
+                  <Element>
+                    <ListMgt::LmVersion DbId="v-1">
+                      <HasCorrection>true</HasCorrection>
+                      <Body>{body_hex}</Body>
+                    </ListMgt::LmVersion>
+                  </Element>
+                </Locals>
+              </ListMgt::LmVersionTable>
+            </pLmVerTable>
+            <OriginalClip>
+              <Sm2TiVideoClip>
+                <Name>GhostOriginalClip</Name>
+                <Start>90000</Start>
+                <Duration>25</Duration>
+                <In>0</In>
+                <MediaFilePath>/Volumes/Disk/ghost.mp4</MediaFilePath>
+              </Sm2TiVideoClip>
+            </OriginalClip>
+          </Sm2TiVideoClip>
+        </Items>
+      </Sm2TiTrack>
+    </Element>
+    <Element>
+      <Sm2TiTrack>
+        <Items>
+          <Element>
+            <Sm2TiVideoClip>
+              <Name>title_ov.mp4</Name>
+              <Start>90005</Start>
+              <Duration>20</Duration>
+              <In>0</In>
+              <MediaFilePath>/Volumes/Disk/title_ov.mp4</MediaFilePath>
+              <MediaFrameRate>{fps_hex}</MediaFrameRate>
+              <EffectFiltersBA>{ef_hex}</EffectFiltersBA>
+            </Sm2TiVideoClip>
+          </Element>
+        </Items>
+      </Sm2TiTrack>
+    </Element>
+  </VideoTrackVec>
+</Sm2SequenceContainer>"""
+
+    with zipfile.ZipFile(dra_dir / "project.drp", "w") as zf:
+        zf.writestr("MediaPool/Master/MpFolder.xml", mp_xml)
+        zf.writestr(f"SeqContainer/{seq_id}.xml", seq_xml)
+
+    doc = parse_resolve_archive(dra_dir)
+    assert len(doc.tracks[0].clips) == 1, "Nested OriginalClip backup must not be duplicated"
+    c_base = doc.tracks[0].clips[0]
+    c_ov = doc.tracks[1].clips[0]
+
+    assert c_base.cst_config.get("enabled") is True
+    assert c_base.cst_config.get("input_space") == "sony_slog3"
+    assert c_base.cst_config.get("output_space") == "rec709_gamma24"
+    assert c_base.cst_config.get("exposure_ev") == pytest.approx(-0.35)
+    assert c_base.color_grade.get("contrast", 1.0) > 1.10
+    assert c_base.color_grade.get("temperature", 0.0) < -0.05
+
+    assert c_ov.composite_mode == "screen"
+    assert c_ov.opacity == pytest.approx(92.0)
+    assert c_ov.transform is not None
+    assert c_ov.transform.zoom_pct == pytest.approx(58.0)
+    assert c_ov.transform.pos_x_pct == pytest.approx(-24.0)
+    assert c_ov.transform.pos_y_pct == pytest.approx(18.0)
+
+    out_mp4 = tmp_path / "renders" / "parity_out.mp4"
+    plan = build_timeline_render_plan(
+        TimelineRenderRequest(
+            document=doc,
+            output_path=str(out_mp4),
+            width=320,
+            height=180,
+            profile=RenderProfile.WEB_H264,
+            prefer_hw=False,
+        ),
+        workspace_root=dra_dir,
+    )
+    assert "lut3d=" in plan.filter_complex
+    assert "blend=all_mode=screen" in plan.filter_complex
+    assert "alphamerge" in plan.filter_complex
+    assert "pad=320:180:" in plan.filter_complex
+
+    res = execute_timeline_render_plan(plan, job_label="sentinel-drp-parity")
+    assert res.success, f"Parity render failed: {res.stderr_tail}"
+    assert out_mp4.is_file() and res.bytes_written > 2000
+
+

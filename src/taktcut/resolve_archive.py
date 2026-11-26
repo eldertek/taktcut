@@ -397,9 +397,28 @@ def _compound_preview_sources(archive: ResolveArchive) -> dict[str, str]:
     return previews
 
 
+def _active_color_version_body_hex(clip_el: Element) -> str:
+    """Extract the active ListMgt::LmVersion Body hex string from a Resolve clip element."""
+    ver_table = clip_el.find(".//ListMgt__LmVersionTable")
+    if ver_table is None:
+        return ""
+    active_id = _text(ver_table, "pActive")
+    versions = ver_table.findall("Locals/Element/ListMgt__LmVersion")
+    if not versions:
+        return ""
+    chosen = next((v for v in versions if v.attrib.get("DbId") == active_id), versions[0])
+    if _text(chosen, "HasCorrection").lower() == "false":
+        return ""
+    return _text(chosen, "Body")
+
+
 def parse_resolve_archive(path: Path, timeline_name: str | None = None) -> TimelineDocument:
     """Parse a real Resolve ``.dra`` archive (or its ``project.drp``) into a TimelineDocument."""
-    from taktcut.resolve_db import decode_effect_filters
+    from taktcut.resolve_db import (
+        decode_clip_effect_filters,
+        decode_resolve_color_version,
+        decode_timemap_speed,
+    )
 
     archive = load_resolve_archive(path)
     info = _pick_timeline(archive, timeline_name)
@@ -420,7 +439,14 @@ def parse_resolve_archive(path: Path, timeline_name: str | None = None) -> Timel
             items: list[dict[str, Any]] = []
             transitions: list[tuple[int, int, str]] = []
             items_el = track_el.find("Items")
-            for item in [] if items_el is None else list(items_el.iter()):
+            direct_items: list[Element] = []
+            if items_el is not None:
+                for child in list(items_el):
+                    if child.tag == "Element":
+                        direct_items.extend(list(child))
+                    else:
+                        direct_items.append(child)
+            for item in direct_items:
                 tag = item.tag
                 if tag == "Sm2TiTransition":
                     transitions.append(
@@ -449,6 +475,8 @@ def parse_resolve_archive(path: Path, timeline_name: str | None = None) -> Timel
     offset = _hour_offset(offset_ref, fps)
     tracks: list[TimelineTrack] = []
     warnings: list[str] = []
+    doc_lut_refs: list[str] = []
+    doc_color_tags: list[str] = []
     for kind, idx, items, transitions in raw_tracks:
         clips: list[TimelineClip] = []
         for entry in items:
@@ -461,13 +489,29 @@ def parse_resolve_archive(path: Path, timeline_name: str | None = None) -> Timel
             if not source_path and media_ref in compound_previews:
                 source_path = compound_previews[media_ref]
                 name = timeline_names.get(media_ref, name)
-            transform = None
             effects_hex = _text(el, "EffectFiltersBA")
-            if effects_hex:
-                try:
-                    transform = decode_effect_filters(_hex_bytes(effects_hex))
-                except (ValueError, struct.error):
-                    transform = None
+            decoded_fx = decode_clip_effect_filters(
+                _hex_bytes(effects_hex) if effects_hex else b"",
+                fps=fps.as_float,
+            )
+            cst_config: dict[str, Any] = {}
+            color_grade: dict[str, Any] = {}
+            if kind == "video":
+                body_hex = _active_color_version_body_hex(el)
+                if body_hex:
+                    decoded_grade = decode_resolve_color_version(_hex_bytes(body_hex))
+                    cst_config = decoded_grade.cst_config
+                    color_grade = decoded_grade.color_grade
+                    for lut_r in decoded_grade.lut_refs:
+                        if lut_r not in doc_lut_refs:
+                            doc_lut_refs.append(lut_r)
+                    for ctag in decoded_grade.color_tags:
+                        if ctag not in doc_color_tags:
+                            doc_color_tags.append(ctag)
+            tm_hex = _text(el, "MediaTimemapBA")
+            speed_rate, ramp_points = (
+                decode_timemap_speed(_hex_bytes(tm_hex)) if tm_hex else (1.0, [])
+            )
             clip_fps = decode_hex_fps(_text(el, "MediaFrameRate"))
             source_in = max(0, _int(_text(el, "In")))
             try:
@@ -493,7 +537,17 @@ def parse_resolve_archive(path: Path, timeline_name: str | None = None) -> Timel
                     media_ref=media_ref,
                     source_fps=clip_fps,
                     enabled=_int(_text(el, "Flags")) != 2,
-                    transform=transform,
+                    audio_gain_db=decoded_fx.audio_gain_db if kind == "audio" else 0.0,
+                    fade_in_s=decoded_fx.fade_in_s,
+                    fade_out_s=decoded_fx.fade_out_s,
+                    speed_rate=speed_rate,
+                    retime_ramp_preset="custom" if ramp_points else "constant",
+                    retime_ramp_points=ramp_points,
+                    transform=decoded_fx.transform if kind == "video" else None,
+                    composite_mode=decoded_fx.composite_mode if kind == "video" else "normal",
+                    opacity=decoded_fx.opacity if kind == "video" else 100.0,
+                    color_grade=color_grade,
+                    cst_config=cst_config,
                     media_offline=bool(media_path) and not source_path.startswith("MediaFiles/"),
                 )
             )
@@ -533,5 +587,7 @@ def parse_resolve_archive(path: Path, timeline_name: str | None = None) -> Timel
         start_frame=0,
         tracks=tracks,
         markers=[],
+        color_space_tags=doc_color_tags,
+        lut_refs=doc_lut_refs,
         warnings=warnings,
     )

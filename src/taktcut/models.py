@@ -1630,6 +1630,7 @@ class TimelineClip(BaseModel):
     audio_fx: list[dict[str, Any]] = Field(default_factory=list)
     keyframes: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     color_grade: dict[str, Any] = Field(default_factory=dict)
+    cst_config: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("proxy_path", "timecode_start", mode="before")
     @classmethod

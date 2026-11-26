@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import math
 import os
 import re
@@ -23,6 +25,7 @@ from taktcut.color import (
     compile_color_grade_filter,
     escape_ffmpeg_filter_path,
 )
+from taktcut.color_cst import CstConfig, bake_cst_to_cube
 from taktcut.models import (
     HardwareCapabilities,
     RenderProfile,
@@ -140,6 +143,72 @@ _FONT_SEARCH_CANDIDATES: dict[str, tuple[str, ...]] = {
         "C:/Windows/Fonts/courbd.ttf",
     ),
 }
+
+
+def _ensure_cst_cube_lut(cst_cfg: dict[str, Any]) -> Path | None:
+    """Bake & cache an ASCII-safe 33x33x33 .cube 3D LUT for a clip's CST pipeline."""
+    if not cst_cfg:
+        return None
+    try:
+        cfg = CstConfig.model_validate(cst_cfg)
+    except Exception:
+        return None
+    if not cfg.enabled:
+        return None
+
+    key_json = json.dumps(cfg.model_dump(mode="json"), sort_keys=True)
+    digest = hashlib.sha256(key_json.encode("utf-8")).hexdigest()[:16]
+    fname = f"cst_{cfg.input_space}_{cfg.output_space}_{digest}.cube"
+
+    cache_dirs: list[Path] = []
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        if str(exe_dir).isascii():
+            cache_dirs.append(exe_dir / ".taktcut_cst_cache")
+    prog_data = os.environ.get("PROGRAMDATA", "")
+    if prog_data and prog_data.isascii():
+        cache_dirs.append(Path(prog_data) / "TaktCut" / "cst_cache")
+    tmp_cand = Path(tempfile.gettempdir()) / "taktcut_cst_cache"
+    if str(tmp_cand).isascii():
+        cache_dirs.append(tmp_cand)
+    cache_dirs.append(Path("C:/Workspace/05_Ressources/taktcut/.cst_cache"))
+
+    for cdir in cache_dirs:
+        try:
+            cdir.mkdir(parents=True, exist_ok=True)
+            dest = cdir / fname
+            if not dest.is_file() or dest.stat().st_size < 1024:
+                bake_cst_to_cube(cfg, dest, size=33, title=f"taktcut_{cfg.input_space}")
+            if dest.is_file() and str(dest).isascii():
+                return dest
+        except OSError:
+            continue
+    return None
+
+
+def _compile_alpha_safe_grade(grade_dict: dict[str, Any]) -> tuple[str, bool]:
+    """Return (ffmpeg_filter_str, strips_alpha) for a per-clip ColorGradeParams dict."""
+    if not grade_dict:
+        return "", False
+    try:
+        cg_obj = ColorGradeParams.model_validate(grade_dict)
+    except Exception:
+        return "", False
+    if cg_obj.is_identity():
+        return "", False
+    needs_eq = abs(cg_obj.contrast - 1.0) > 0.005 or abs(cg_obj.saturation - 1.0) > 0.005
+    if not needs_eq:
+        shadows, midtones, highlights = cg_obj.effective_colorbalance()
+        pl_flag = 1 if cg_obj.preserve_lightness else 0
+        cb = (
+            "colorbalance="
+            f"rs={shadows[0]:.4f}:gs={shadows[1]:.4f}:bs={shadows[2]:.4f}:"
+            f"rm={midtones[0]:.4f}:gm={midtones[1]:.4f}:bm={midtones[2]:.4f}:"
+            f"rh={highlights[0]:.4f}:gh={highlights[1]:.4f}:bh={highlights[2]:.4f}:"
+            f"pl={pl_flag}"
+        )
+        return cb, False
+    return compile_color_grade_filter(cg_obj), True
 
 
 def _ensure_ascii_font_path(font_path: Path) -> Path:
@@ -968,17 +1037,24 @@ def build_timeline_render_plan(
                     )
 
                 chain: list[str] = []
-                # Scale cover + crop to timeline raster (or zoom/position transform)
                 zoom_pct = 100.0
                 pos_x_pct = 0.0
                 pos_y_pct = 0.0
                 rot_deg = 0.0
+                crop_l_pct = 0.0
+                crop_r_pct = 0.0
+                crop_t_pct = 0.0
+                crop_b_pct = 0.0
                 dz_mode = "off"
                 if clip.transform is not None:
                     zoom_pct = float(clip.transform.zoom_pct)
                     pos_x_pct = float(clip.transform.pos_x_pct)
                     pos_y_pct = float(clip.transform.pos_y_pct)
                     rot_deg = float(clip.transform.rotation_deg)
+                    crop_l_pct = float(clip.transform.crop_left_pct)
+                    crop_r_pct = float(clip.transform.crop_right_pct)
+                    crop_t_pct = float(clip.transform.crop_top_pct)
+                    crop_b_pct = float(clip.transform.crop_bottom_pct)
                     dz_mode = str(clip.transform.dynamic_zoom or "off").strip().lower()
 
                 if not is_image and abs(speed - 1.0) > 0.005:
@@ -986,25 +1062,86 @@ def build_timeline_render_plan(
                 if not is_image and clip.reverse:
                     chain.append("reverse")
 
-                # Scale to fill timeline frame cleanly (supports 4:5 -> 16:9 crop or 16:9 -> 16:9)
+                # 1. Per-clip Camera Log CST (e.g. Sony S-Log3/S-Gamut3.Cine -> Rec.709)
+                cst_lut = _ensure_cst_cube_lut(clip.cst_config) if clip.cst_config else None
+                if cst_lut is not None:
+                    cst_esc = escape_ffmpeg_filter_path(cst_lut)
+                    chain.append("format=rgba")
+                    chain.append(f"lut3d=file='{cst_esc}'")
+
+                # 2. Per-clip Color Grade (before transparent canvas padding!)
+                cg_vf, cg_strips_alpha = (
+                    _compile_alpha_safe_grade(clip.color_grade)
+                    if clip.color_grade
+                    else ("", False)
+                )
+                is_alpha_container = (
+                    src_path is not None
+                    and src_path.suffix.lower() in (".mov", ".png", ".webp")
+                )
+                if cg_vf and (not cg_strips_alpha or not is_alpha_container):
+                    chain.append(cg_vf)
+                elif cg_vf:
+                    # Preserve alpha on ProRes 4444 / PNG clips when contrast/sat eq runs:
+                    # emit colorbalance only in single chain (safe & alpha-preserving).
+                    cg_obj_a = ColorGradeParams.model_validate(clip.color_grade)
+                    sh_a, md_a, hi_a = cg_obj_a.effective_colorbalance()
+                    chain.append(
+                        "colorbalance="
+                        f"rs={sh_a[0]:.4f}:gs={sh_a[1]:.4f}:bs={sh_a[2]:.4f}:"
+                        f"rm={md_a[0]:.4f}:gm={md_a[1]:.4f}:bm={md_a[2]:.4f}:"
+                        f"rh={hi_a[0]:.4f}:gh={hi_a[1]:.4f}:bh={hi_a[2]:.4f}:pl=0"
+                    )
+
+                # 3. Per-clip Resolve FX
+                fx_filters = _compile_resolve_fx_filters(clip.resolve_fx, w, h)
+                chain.extend(fx_filters)
+
+                # 4. Unified DaVinci Resolve 2D Transform (zoom 10%..300%, pos X/Y, crop, rotation)
+                # Always convert to RGBA before padding so outer canvas stays 100% transparent.
                 scale_mult = max(0.1, min(3.0, zoom_pct / 100.0))
                 sw = max(2, round(w * scale_mult) - (round(w * scale_mult) % 2))
                 sh = max(2, round(h * scale_mult) - (round(h * scale_mult) % 2))
                 chain.append(f"scale={sw}:{sh}:force_original_aspect_ratio=increase")
-                crop_x = f"(iw-{w})/2-({pos_x_pct / 100.0:.4f}*{w})"
-                crop_y = f"(ih-{h})/2-({pos_y_pct / 100.0:.4f}*{h})"
-                if sw >= w and sh >= h:
-                    chain.append(
-                        f"crop={w}:{h}:x='max(0,min(iw-{w},{crop_x}))':"
-                        f"y='max(0,min(ih-{h},{crop_y}))'"
-                    )
-                else:
-                    chain.append(
-                        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black@0.0"
-                    )
+                chain.append(f"crop={sw}:{sh}")
+                chain.append("format=rgba")
+
+                # Optional Resolve Inspector Crop (left/right/top/bottom %)
+                if (crop_l_pct + crop_r_pct + crop_t_pct + crop_b_pct) > 0.05:
+                    cl_px = round(sw * crop_l_pct / 100.0)
+                    cr_px = round(sw * crop_r_pct / 100.0)
+                    ct_px = round(sh * crop_t_pct / 100.0)
+                    cb_px = round(sh * crop_b_pct / 100.0)
+                    rem_w = max(2, sw - cl_px - cr_px)
+                    rem_h = max(2, sh - ct_px - cb_px)
+                    chain.append(f"crop={rem_w}:{rem_h}:{cl_px}:{ct_px}")
+                    chain.append(f"pad={sw}:{sh}:{cl_px}:{ct_px}:color=black@0.0")
+
                 if abs(rot_deg) > 0.05:
                     rad = rot_deg * math.pi / 180.0
                     chain.append(f"rotate={rad:.5f}:c=black@0.0")
+
+                # Exact canvas placement at (ox, oy) for zoom < 100%, >= 100%, & off-edge
+                dx_px = round((pos_x_pct / 100.0) * w)
+                dy_px = round((pos_y_pct / 100.0) * h)
+                ox = (w - sw) // 2 + dx_px
+                oy = (h - sh) // 2 + dy_px
+                dst_x0 = max(0, ox)
+                dst_y0 = max(0, oy)
+                dst_x1 = min(w, ox + sw)
+                dst_y1 = min(h, oy + sh)
+                vis_w = dst_x1 - dst_x0
+                vis_h = dst_y1 - dst_y0
+                if vis_w >= 2 and vis_h >= 2:
+                    src_x0 = dst_x0 - ox
+                    src_y0 = dst_y0 - oy
+                    if vis_w < sw or vis_h < sh:
+                        chain.append(f"crop={vis_w}:{vis_h}:{src_x0}:{src_y0}")
+                    if vis_w < w or vis_h < h:
+                        chain.append(f"pad={w}:{h}:{dst_x0}:{dst_y0}:color=black@0.0")
+                else:
+                    # Clip translated fully off-screen: render transparent canvas
+                    chain.append(f"crop=2:2:0:0,colorchannelmixer=aa=0,pad={w}:{h}:0:0:color=black@0.0")
 
                 chain.append(f"fps={fps:.4f}")
                 chain.append("setsar=1")
@@ -1041,19 +1178,6 @@ def build_timeline_render_plan(
                         )
                     chain.append(f"trim=duration={eff_dur:.4f},setpts=PTS-STARTPTS")
 
-                # Per-clip Color Grade
-                if clip.color_grade:
-                    try:
-                        cg_obj = ColorGradeParams.model_validate(clip.color_grade)
-                        cg_vf = compile_color_grade_filter(cg_obj)
-                        if cg_vf:
-                            chain.append(cg_vf)
-                    except Exception:
-                        pass
-
-                # Per-clip Resolve FX
-                fx_filters = _compile_resolve_fx_filters(clip.resolve_fx, w, h)
-                chain.extend(fx_filters)
                 chain.append("format=rgba")
 
                 base_src_lbl = f"{prefix}_src"
@@ -1142,25 +1266,51 @@ def build_timeline_render_plan(
             mode = (clip.composite_mode or "normal").strip().lower()
             en_expr = f"between(t,{rel_start:.4f},{rel_start + eff_dur:.4f})"
 
-            if mode in ("screen", "add", "addition", "multiply", "overlay", "lighten", "darken"):
-                ff_mode = "addition" if mode == "add" else mode
+            _blend_mode_map = {
+                "screen": "screen",
+                "add": "addition",
+                "addition": "addition",
+                "multiply": "multiply",
+                "overlay": "overlay",
+                "hardlight": "hardlight",
+                "softlight": "softlight",
+                "lighten": "lighten",
+                "darken": "darken",
+                "difference": "difference",
+                "subtract": "subtract",
+                "exclusion": "exclusion",
+                "divide": "divide",
+            }
+            if mode in _blend_mode_map:
+                ff_mode = _blend_mode_map[mode]
                 b_op = max(0.05, min(1.0, float(clip.opacity) / 100.0))
-                # Shift clip PTS, pad to timeline duration with transparent/black outside range
-                filter_parts.append(
-                    f"[{clip_lbl}]setpts=PTS-STARTPTS+{rel_start:.4f}/TB,format=rgb24[{shifted_lbl}]"
-                )
+                fg_s1 = f"{prefix}_fgs1"
+                fg_s2 = f"{prefix}_fgs2"
+                fg_rgb = f"{prefix}_fgrgb"
+                fg_a = f"{prefix}_fga"
                 b_copy = f"{prefix}_bcopy"
                 b_main = f"{prefix}_bmain"
                 b_rgb = f"{prefix}_brgb"
+                b_bld_rgb = f"{prefix}_bbldrgb"
                 b_bld = f"{prefix}_bbld"
+                # Alpha-preserving W3C blend compositing: Cr = (1 - a) * Cb + a * B(Cb, Cs).
+                # Blend straight RGB against current_v, re-attach foreground alpha mask,
+                # then overlay onto current_v so transparent padded areas and translucent
+                # edges preserve backdrop untouched without double-premultiplication.
+                filter_parts.append(
+                    f"[{clip_lbl}]setpts=PTS-STARTPTS+{rel_start:.4f}/TB,split[{fg_s1}][{fg_s2}]"
+                )
+                filter_parts.append(f"[{fg_s1}]format=rgb24[{fg_rgb}]")
+                filter_parts.append(f"[{fg_s2}]alphaextract[{fg_a}]")
                 filter_parts.append(f"[{current_v}]split[{b_main}][{b_copy}]")
                 filter_parts.append(f"[{b_copy}]format=rgb24[{b_rgb}]")
                 filter_parts.append(
-                    f"[{b_rgb}][{shifted_lbl}]blend=all_mode={ff_mode}:all_opacity={b_op:.3f}:"
-                    f"eof_action=pass,format=rgba[{b_bld}]"
+                    f"[{b_rgb}][{fg_rgb}]blend=all_mode={ff_mode}:all_opacity={b_op:.3f}:"
+                    f"eof_action=pass[{b_bld_rgb}]"
                 )
+                filter_parts.append(f"[{b_bld_rgb}][{fg_a}]alphamerge,format=rgba[{b_bld}]")
                 filter_parts.append(
-                    f"[{b_main}][{b_bld}]overlay=shortest=0:eof_action=pass:"
+                    f"[{b_main}][{b_bld}]overlay=0:0:shortest=0:eof_action=pass:"
                     f"enable='{en_expr}',format=rgba[{next_v}]"
                 )
             else:
